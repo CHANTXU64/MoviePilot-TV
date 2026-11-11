@@ -1,14 +1,91 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
 
 @MainActor
 final class SubscribeSeasonContentViewTests: XCTestCase {
-  func testHomeSubscriptionRefreshCanBypassCachedSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testHomeDeleteReturnsBusinessFailureWhenSubscriptionStillExists() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    await SubscriptionSnapshotURLProtocol.stub.setSubscriptionDeleteResponse(
+      #"{"success":false,"message":"delete rejected"}"#
+    )
+    let subscription = Subscribe(id: 501, name: "取消失败", type: "电影")
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshSubscriptions(forceRefresh: true)
+    let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
+    let deleteRequestCount =
+      await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/subscribe/501")
+    let subscriptionRefreshCount =
+      await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+
+    XCTAssertFalse(didDelete)
+    XCTAssertEqual(viewModel.movieSubscriptions.map(\.id), [501])
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertEqual(subscriptionRefreshCount, 2)
+  }
+
+  func testHomeDeleteTreatsMissingSubscriptionAfterRefreshAsConverged() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    await SubscriptionSnapshotURLProtocol.stub.setSubscriptionDeleteResponse(
+      #"{"success":false,"message":"already deleted"}"#
+    )
+    let subscription = Subscribe(id: 502, name: "远端已删除", type: "电影")
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshSubscriptions(forceRefresh: true)
+    let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
+
+    XCTAssertTrue(didDelete)
+    XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
+    XCTAssertEqual(notifications.count(), 1)
+    let deleteRequestCount =
+      await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/subscribe/502")
+    let subscriptionRefreshCount =
+      await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertGreaterThanOrEqual(subscriptionRefreshCount, 2)
+  }
+
+  func testHomeSubscriptionRefreshCanBypassCachedSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -17,7 +94,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 101, name: "航海王", type: "电视剧", season: 1, tmdbid: 12345)
     ])
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
@@ -32,10 +109,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   }
 
   func testHomeSubscriptionUpdateNotificationBypassesCachedSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -45,7 +122,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     ])
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
     try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
@@ -59,10 +136,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   }
 
   func testHomeSubscriptionRefreshIgnoresStaleSnapshotReturnedAfterMutation() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -75,7 +152,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
       Subscribe(id: 302, name: "新订阅", type: "电视剧", season: 2, tmdbid: 811001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
@@ -89,16 +166,16 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [302])
 
     await staleGate.open()
-    await staleRefresh.value
+    _ = await staleRefresh.value
 
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [302])
   }
 
   func testSeasonSubscriptionStatusIgnoresStaleSnapshotReturnedAfterMutation() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -111,11 +188,12 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
       Subscribe(id: 402, name: "新分季", type: "电视剧", season: 2, tmdbid: 812001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let viewModel = SubscribeSeasonViewModel(
-      mediaInfo: MediaInfo(tmdb_id: 812001, title: "分季状态", type: "电视剧")
+      mediaInfo: MediaInfo(tmdb_id: 812001, title: "分季状态", type: "电视剧"),
+      apiService: service
     )
     let staleRefresh = Task {
       await viewModel.checkSubscriptionStatus(forceRefresh: true)
@@ -134,48 +212,11 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(viewModel.errorMessage)
   }
 
-  func testFetchSubscriptionsRetriesWhenGenerationChangesAfterCachedSnapshotIsRead() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
-
-    let service = APIService.shared
-    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-
-    await SubscriptionSnapshotURLProtocol.stub.reset()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 501, name: "缓存旧订阅", type: "电视剧", season: 1, tmdbid: 813001)
-    ])
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 502, name: "缓存后新订阅", type: "电视剧", season: 2, tmdbid: 813001)
-    ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
-    configureSubscriptionSnapshotAccess(service)
-
-    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
-    XCTAssertEqual(cachedSubscriptions.map(\.id), [501])
-
-    var didInvalidate = false
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit = {
-      guard !didInvalidate else { return }
-      didInvalidate = true
-      _ = try? await service.deleteSubscription(id: 501)
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let subscriptions = try await service.fetchSubscriptions()
-
-    XCTAssertTrue(didInvalidate)
-    XCTAssertEqual(subscriptions.map(\.id), [502])
-    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
-    XCTAssertEqual(subscribeRequestCount, 2)
-  }
-
   func testChangingCurrentUserClearsCachedSubscriptionSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -186,7 +227,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
       Subscribe(id: 602, name: "新账号订阅", type: "电视剧", season: 2, tmdbid: 814001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service, userName: "first-user")
 
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
@@ -201,10 +242,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   }
 
   func testSearchSubscriptionClearsCachedSubscriptionSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -215,14 +256,25 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
       Subscribe(id: 902, name: "搜索后订阅", type: "电视剧", season: 2, tmdbid: 817001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
 
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
     XCTAssertEqual(cachedSubscriptions.map(\.id), [901])
 
     let searchSuccess = try await service.searchSubscription(id: 901)
     XCTAssertTrue(searchSuccess)
+    XCTAssertEqual(notifications.count(), 0)
     let subscriptions = try await service.fetchSubscriptions()
 
     XCTAssertEqual(subscriptions.map(\.id), [902])
@@ -230,45 +282,96 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testFetchSubscriptionsRetriesWhenGenerationChangesAfterSnapshotCacheStore() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testHomeSearchRefreshesItsListAndPublishesOneSubscriptionUpdate() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 601, name: "写缓存旧订阅", type: "电视剧", season: 1, tmdbid: 814001)
-    ])
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 602, name: "写缓存后新订阅", type: "电视剧", season: 2, tmdbid: 814001)
-    ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    let refreshedSubscriptions = [
+      Subscribe(id: 902, name: "搜索后订阅", type: "电视剧", season: 2, tmdbid: 817_001)
+    ]
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(refreshedSubscriptions)
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions(refreshedSubscriptions)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    var didInvalidate = false
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore = {
-      guard !didInvalidate else { return }
-      didInvalidate = true
-      _ = try? await service.deleteSubscription(id: 601)
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
     }
-    defer { service.subscriptionCacheTestHooks = .init() }
+    defer { NotificationCenter.default.removeObserver(observer) }
 
-    let subscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    let viewModel = HomeViewModel(apiService: service)
+    let success = try await viewModel.searchSubscribe(
+      subscribe: Subscribe(id: 901, name: "搜索前订阅", type: "电视剧")
+    )
 
-    XCTAssertTrue(didInvalidate)
-    XCTAssertEqual(subscriptions.map(\.id), [602])
+    XCTAssertTrue(success)
+    XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [902])
+    XCTAssertEqual(notifications.count(), 1)
+    let searchRequestCount = await SubscriptionSnapshotURLProtocol.stub.requestCount(
+      path: "/api/v1/subscribe/search/901")
+    XCTAssertEqual(searchRequestCount, 1)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(2)
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testConcurrentForcedSubscriptionRefreshStartsNewSnapshotRequest() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testHomeStatusAndResetEachPublishOneSubscriptionUpdate() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let subscriptions = [
+      Subscribe(id: 903, name: "状态订阅", type: "电视剧", season: 1, state: "R", tmdbid: 817_002)
+    ]
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions(subscriptions)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = HomeViewModel(apiService: service)
+    let statusResult = try await viewModel.toggleSubscribeStatus(subscribe: subscriptions[0])
+    XCTAssertTrue(statusResult.success)
+    XCTAssertEqual(notifications.count(), 1)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(2)
+    let statusRefreshCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(statusRefreshCount, 2)
+
+    let resetResult = try await viewModel.resetSubscribe(subscribe: subscriptions[0])
+    XCTAssertTrue(resetResult.success)
+    XCTAssertEqual(notifications.count(), 2)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(4)
+    let resetRefreshCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(resetRefreshCount, 4)
+  }
+
+  func testConcurrentForcedSubscriptionRefreshStartsNewSnapshotRequest() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -281,7 +384,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
       Subscribe(id: 702, name: "新强刷", type: "电视剧", season: 2, tmdbid: 815001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let firstRefresh = Task {
@@ -303,65 +406,13 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testOlderForcedSubscriptionRefreshCannotStoreSnapshotAfterNewerRefreshStarts()
-    async throws
-  {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
-
-    let service = APIService.shared
-    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-
-    await SubscriptionSnapshotURLProtocol.stub.reset()
-    let storeGate = SubscriptionSnapshotAsyncGate()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 703, name: "旧写缓存", type: "电视剧", season: 1, tmdbid: 815002)
-    ])
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 704, name: "新写缓存", type: "电视剧", season: 2, tmdbid: 815002)
-    ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
-    configureSubscriptionSnapshotAccess(service)
-
-    var didPauseBeforeStore = false
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
-      guard !didPauseBeforeStore else { return }
-      didPauseBeforeStore = true
-      await storeGate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let firstRefresh = Task {
-      try await service.fetchSubscriptions(forceRefresh: true)
-    }
-    await storeGate.waitForWaiter()
-
-    let secondRefresh = Task {
-      try await service.fetchSubscriptions(forceRefresh: true)
-    }
-    let secondSubscriptions = try await secondRefresh.value
-
-    let cachedSubscriptions = try await service.fetchSubscriptions()
-    await storeGate.open()
-
-    let firstSubscriptions = try await firstRefresh.value
-
-    XCTAssertTrue(didPauseBeforeStore)
-    XCTAssertEqual(firstSubscriptions.map(\.id), [704])
-    XCTAssertEqual(secondSubscriptions.map(\.id), [704])
-    XCTAssertEqual(cachedSubscriptions.map(\.id), [704])
-    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
-    XCTAssertEqual(subscribeRequestCount, 2)
-  }
-
   func testForcedSubscriptionRefreshDoesNotReuseInFlightSnapshotAfterOutOfBandRemoteChange()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -372,7 +423,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       waitFor: staleGate
     )
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let staleRefresh = Task {
@@ -398,10 +449,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   func testOlderForcedSubscriptionRefreshErrorDoesNotOverrideNewerSnapshot()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -409,7 +460,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let staleErrorGate = SubscriptionSnapshotAsyncGate()
     try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: staleErrorGate)
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let staleRefresh = Task {
@@ -431,131 +482,954 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testFetchSubscriptionsThrowsWhenCancelledAfterCachedSnapshotIsRead() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testLatestForcedSubscriptionRefreshPropagatesErrorWithoutRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 801, name: "缓存取消", type: "电视剧", season: 1, tmdbid: 816001)
-    ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError()
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
-    XCTAssertEqual(cachedSubscriptions.map(\.id), [801])
-
-    let cacheHitGate = SubscriptionSnapshotAsyncGate()
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit = {
-      await cacheHitGate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let cancelledRefresh = Task {
-      try await service.fetchSubscriptions()
-    }
-    await cacheHitGate.waitForWaiter()
-
-    cancelledRefresh.cancel()
-    await cacheHitGate.open()
-
     do {
-      _ = try await cancelledRefresh.value
-      XCTFail("A caller cancelled after reading a cached snapshot must not receive that snapshot.")
+      _ = try await service.fetchSubscriptions(forceRefresh: true)
+      XCTFail("The latest subscription snapshot failure must reach the caller.")
     } catch is CancellationError {
+      XCTFail("A server failure must not be converted into cancellation.")
+    } catch {
       // Expected.
     }
+
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 1)
   }
 
-  func testFetchSubscriptionsThrowsWhenCancelledAfterForcedSnapshotResponse() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testSharedSubscriptionSnapshotFailureReachesAllWaitersWithoutRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
     let responseGate = SubscriptionSnapshotAsyncGate()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 802, name: "强刷取消", type: "电视剧", season: 1, tmdbid: 816002)
-    ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: responseGate)
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
-      await responseGate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let cancelledRefresh = Task {
-      try await service.fetchSubscriptions(forceRefresh: true)
+    let firstWaiter = Task {
+      do {
+        _ = try await service.fetchSubscriptions()
+        return false
+      } catch {
+        return !(error is CancellationError)
+      }
     }
     await responseGate.waitForWaiter()
 
-    cancelledRefresh.cancel()
+    let secondWaiter = Task {
+      do {
+        _ = try await service.fetchSubscriptions()
+        return false
+      } catch {
+        return !(error is CancellationError)
+      }
+    }
+    await Task.yield()
     await responseGate.open()
 
-    do {
-      _ = try await cancelledRefresh.value
-      XCTFail("A cancelled waiter must not receive a shared subscription snapshot response.")
-    } catch is CancellationError {
-      // Expected.
-    }
+    let firstFailed = await firstWaiter.value
+    let secondFailed = await secondWaiter.value
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+
+    XCTAssertTrue(firstFailed)
+    XCTAssertTrue(secondFailed)
     XCTAssertEqual(subscribeRequestCount, 1)
   }
 
-  func testFetchSubscriptionsThrowsWhenCancelledAfterSnapshotCacheStore() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testStaleSnapshotFailureAfterMutationRereadsLatestSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
-    let storeGate = SubscriptionSnapshotAsyncGate()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: staleGate)
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
-      Subscribe(id: 803, name: "写缓存取消", type: "电视剧", season: 1, tmdbid: 816003)
+      Subscribe(id: 905, name: "变更后订阅", type: "电视剧", season: 1, tmdbid: 817_005)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore = {
-      await storeGate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let cancelledRefresh = Task {
+    let staleRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
     }
-    await storeGate.waitForWaiter()
+    await staleGate.waitForWaiter()
 
-    cancelledRefresh.cancel()
-    await storeGate.open()
+    let searchSuccess = try await service.searchSubscription(id: 905)
+    XCTAssertTrue(searchSuccess)
+    let latestSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    await staleGate.open()
 
-    do {
-      _ = try await cancelledRefresh.value
-      XCTFail("A caller cancelled after storing a snapshot must not receive that snapshot.")
-    } catch is CancellationError {
-      // Expected.
-    }
+    // 变更前发起的旧刷新随后失败时，调用方应重读到变更后的列表，而不是收到旧请求的错误。
+    let staleCallerSubscriptions = try await staleRefresh.value
+    XCTAssertEqual(latestSubscriptions.map(\.id), [905])
+    XCTAssertEqual(staleCallerSubscriptions.map(\.id), [905])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testPreloadedSeasonDataReusesCachedSubscriptionSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+  func testQueuedSubscriptionSnapshotLoadDoesNotRunUnderNewSession() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "first-user")
+
+    let firstSessionFetch = Task { () -> Bool in
+      do {
+        _ = try await service.fetchSubscriptions()
+        return false
+      } catch {
+        return error is CancellationError
+      }
+    }
+    // 调用方已创建共享加载任务、加载任务尚未执行时切换账号。
+    await Task.yield()
+    configureSubscriptionSnapshotAccess(service, userName: "second-user", userId: 2)
+
+    let wasCancelled = await firstSessionFetch.value
+    XCTAssertTrue(wasCancelled)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 0)
+  }
+
+  func testMultiSeasonDetailCanRefreshAfterSeasonSubscriptionFailure() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 901, name: "分季刷新重试", type: "电视剧", season: 1, tmdbid: 817_001)
+    ])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let detail = MediaInfo(tmdb_id: 817_001, title: "分季刷新重试", type: "电视剧")
+    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    preloadTask.fullDetail = detail
+    preloadTask.isDetailReady = true
+
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.preloadTask = preloadTask
+
+    let refreshedBeforeSeasonData = await MediaDetailView.applyReadyPreloadedDetail(
+      from: preloadTask,
+      to: viewModel,
+      hasRefreshedSubscription: false
+    )
+    XCTAssertFalse(refreshedBeforeSeasonData)
+    let requestCountBeforeSeasonData =
+      await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(requestCountBeforeSeasonData, 0)
+
+    preloadTask.seasonViewModel = SubscribeSeasonViewModel(
+      mediaInfo: detail,
+      apiService: service
+    )
+    let firstSeasonRefresh = await viewModel.refreshSubscriptionStatus()
+    let secondSeasonRefresh = await viewModel.refreshSubscriptionStatus()
+
+    XCTAssertFalse(firstSeasonRefresh)
+    XCTAssertTrue(secondSeasonRefresh)
+    XCTAssertEqual(preloadTask.seasonViewModel?.subscribedSeasons, Set([1]))
+    let requestCountAfterSeasonRefreshes =
+      await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(requestCountAfterSeasonRefreshes, 2)
+  }
+
+  func testInitialEpisodeGroupSeedsSeasonSelection() {
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 817_002, title: "剧集组导航", type: "电视剧"),
+      initialEpisodeGroup: "group-a"
+    )
+
+    XCTAssertEqual(viewModel.selectedGroupId, "group-a")
+  }
+
+  func testAniListPrimaryIdentityRejectsAuxiliaryTMDBEpisodeGroup() throws {
+    let media = MediaInfo(
+      tmdb_id: 817_002,
+      anilist_id: 154_587,
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: media,
+      initialEpisodeGroup: "group-a"
+    )
+
+    XCTAssertEqual(media.identity?.source, "anilist")
+    XCTAssertEqual(viewModel.selectedGroupId, "")
+    viewModel.selectedGroupId = "group-b"
+    viewModel.prepareSubscription(seasonNumber: 1)
+    XCTAssertNil(viewModel.sheetSubscribe?.episode_group)
+    XCTAssertEqual(try viewModel.seasonAvailabilityMedia().episode_group, "")
+  }
+
+  func testEpisodeGroupsRetryAutomaticallyWithoutBlockingDefaultSeasons() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await stub.setEpisodeGroupsGate(gate)
+    await stub.failEpisodeGroupRequests(1)
+    await stub.setEpisodeGroupsResponse(#"[{"id":"group-a","name":"Story Arc","group_count":2,"episode_count":10}]"#)
+    try await stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "episode-group-failure")
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_654,
+        source: "themoviedb",
+        media_id: "987654",
+        title: "剧集组失败",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+
+    async let catalog: Void = viewModel.loadEpisodeGroups()
+    await gate.waitForWaiter()
+    await viewModel.loadSeasonManagementData()
+
+    XCTAssertFalse(viewModel.hasSeasonLoadError)
+    XCTAssertEqual(viewModel.seasonInfos.compactMap(\.season_number), [1])
+    XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+    await gate.open()
+    try await catalog
+
+    XCTAssertEqual(viewModel.episodeGroups.map(\.id), ["group-a"])
+    let groupRequests = await stub.requestCount(path: "/api/v1/media/groups/987654")
+    XCTAssertEqual(groupRequests, 2)
+    let seasonsRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(seasonsRequests, 1)
+    let options = EpisodeGroupPickerOptions.make(viewModel.episodeGroups, defaultSeasons: viewModel.defaultSeasonInfos)
+    XCTAssertEqual(options.first(where: { $0.value.isEmpty })?.detail, "1 季 · 8 集")
+
+    viewModel.seasonSubscriptions = [
+      1: SeasonSubscriptionSummary(id: 61, season: 1, episodeGroup: "group-a")
+    ]
+    XCTAssertEqual(
+      viewModel.unsubscribeConfirmationMessage(for: 1),
+      "是否取消《剧集组失败》第 1 季订阅？\n当前订阅使用：故事线"
+    )
+
+    await stub.setGroupSeasons(groupId: "group-a", seasonNumber: 2)
+    viewModel.selectedGroupId = "group-a"
+    await viewModel.fetchSeasons()
+    XCTAssertEqual(viewModel.seasonInfos.compactMap(\.season_number), [2])
+    XCTAssertEqual(viewModel.defaultSeasonInfos.compactMap(\.season_number), [1])
+  }
+
+  func testSuccessfulEmptyEpisodeGroupCatalogDoesNotRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "no-episode-groups")
+
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+
+    XCTAssertTrue(catalog.groups.isEmpty)
+    let requests = await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/media/groups/987654")
+    XCTAssertEqual(requests, 1)
+  }
+
+  func testEpisodeGroupCatalogStopsAfterOneAutomaticRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.failEpisodeGroupRequests(3)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "episode-group-retry-limit")
+
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+
+    XCTAssertTrue(catalog.groups.isEmpty)
+    XCTAssertTrue(catalog.hasLoadFailed)
+    let requests = await stub.requestCount(path: "/api/v1/media/groups/987654")
+    XCTAssertEqual(requests, 2)
+  }
+
+  func testFailedEpisodeGroupCatalogShowsRetryAndRecoversManually() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.failEpisodeGroupRequests(2)
+    await stub.setEpisodeGroupsResponse(#"[{"id":"group-a","name":"Story Arc","group_count":2,"episode_count":10}]"#)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "episode-group-manual-retry")
+
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    let menu = EpisodeGroupMenu(catalog: catalog, selection: .constant(""))
+    XCTAssertFalse(menu.isVisible)
+    let session = service.sessionSnapshot()
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+    XCTAssertTrue(catalog.hasLoadFailed)
+    XCTAssertTrue(menu.isVisible, "连续失败后应显示重试入口")
+
+    let failedKey = catalog.loadKey(session: session)
+    catalog.retryLoad()
+    XCTAssertFalse(catalog.hasLoadFailed)
+    XCTAssertNotEqual(catalog.loadKey(session: session), failedKey, "手动重试必须让界面加载任务重新执行")
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+
+    XCTAssertEqual(catalog.groups.map(\.id), ["group-a"])
+    XCTAssertFalse(catalog.hasLoadFailed)
+    XCTAssertTrue(menu.isVisible)
+    let requests = await stub.requestCount(path: "/api/v1/media/groups/987654")
+    XCTAssertEqual(requests, 3)
+  }
+
+  func testEpisodeBrowserCompletesPartialDefaultSeasonsEvenWithASeasonHint() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setUnfilteredSeasonsResponse(#"[{"season_number":2,"episode_count":12}]"#)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "partial-episode-seasons")
+    let media = try JSONDecoder().decode(MediaInfo.self, from: Data("""
+      {"tmdb_id":987654,"type":"电视剧","season":1,"number_of_seasons":2,
+        "season_info":[{"season_number":0,"episode_count":1},{"season_number":1,"episode_count":8}]}
+      """.utf8))
+    let detail = MediaDetailEpisodeSeasons.selectable(try XCTUnwrap(media.season_info))
+    XCTAssertTrue(MediaDetailEpisodeSeasons.needsLookup(detail, media: media))
+
+    let seasons = try await MediaDetailEpisodeSeasons.fetch(
+      media: media, forceRefresh: false, apiService: service
+    )
+    XCTAssertEqual(seasons.compactMap(\.season_number), [0, 1, 2])
+    XCTAssertFalse(MediaDetailEpisodeSeasons.needsLookup(seasons, media: media))
+    let scopedSeasons = try await service.getMediaSeasons(media: media)
+    XCTAssertEqual(scopedSeasons.compactMap(\.season_number), [1])
+  }
+
+  func testEpisodeGroupCatalogDoesNotRetryAfterAccountSwitch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setEpisodeGroupsGate(gate)
+    await SubscriptionSnapshotURLProtocol.stub.failEpisodeGroupRequests(1)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-account-a", userId: 1)
+
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    let loadTask = Task { @MainActor in try await catalog.load(tmdbID: 987_655, apiService: service) }
+    await gate.waitForWaiter()
+
+    configureSubscriptionSnapshotAccess(service, userName: "season-account-b", userId: 2)
+    await gate.open()
+    do {
+      try await loadTask.value
+      XCTFail("切换账号应取消旧目录请求")
+    } catch is CancellationError {
+      XCTAssertTrue(catalog.groups.isEmpty)
+    }
+    let requests = await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/media/groups/987655")
+    XCTAssertEqual(requests, 1)
+  }
+
+  func testSeasonAvailabilityKeepsLoadedStateWhenSameAccountTokenRefreshCancelsRequest()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityGate(gate)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-account", userId: 1)
+    let originalUIIdentity = service.uiIdentity
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_657, title: "分季凭据刷新", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 0]
+    viewModel.isSeasonAvailabilityLoaded = true
+    let loadTask = Task { @MainActor in await viewModel.checkSeasonsStatus() }
+    await gate.waitForWaiter()
+
+    let refreshedUser = subscriptionSnapshotToken(
+      userName: "season-account",
+      userId: 1,
+      accessToken: "subscription-snapshot-token-refreshed"
+    )
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL,
+      token: refreshedUser.access_token,
+      currentUser: refreshedUser
+    )
+    XCTAssertEqual(service.uiIdentity, originalUIIdentity)
+    await gate.open()
+    await loadTask.value
+
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertEqual(viewModel.seasonsNotExisted[1], 0)
+  }
+
+  func testSeasonAvailabilityRefreshKeepsExistingBadgeUntilReplacementSucceeds()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityGate(gate)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-refresh", userId: 1)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_662, title: "分季后台刷新", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 2]
+    viewModel.isSeasonAvailabilityLoaded = true
+
+    let refreshTask = Task { @MainActor in await viewModel.checkSeasonsStatus() }
+    await gate.waitForWaiter()
+
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertEqual(viewModel.getStatusText(season: 1), "缺失")
+
+    await gate.open()
+    await refreshTask.value
+
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertEqual(viewModel.getStatusText(season: 1), "已入库")
+  }
+
+  func testSeasonAvailabilityRefreshFailureKeepsExistingBadge() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityResponse(
+      statusCode: 500,
+      json: #"{"detail":"season availability failed"}"#
+    )
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-refresh-error", userId: 1)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_663, title: "分季刷新失败", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 1]
+    viewModel.isSeasonAvailabilityLoaded = true
+
+    await viewModel.checkSeasonsStatus()
+
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertEqual(viewModel.seasonsNotExisted, [1: 1])
+    XCTAssertEqual(viewModel.getStatusText(season: 1), "部分缺失")
+  }
+
+  func testSeasonAvailabilityRefreshClearsOldBadgeWhenAccountAlreadyChanged() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityGate(gate)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-old-account", userId: 1)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_664, title: "分季切号刷新", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 2]
+    viewModel.isSeasonAvailabilityLoaded = true
+
+    configureSubscriptionSnapshotAccess(service, userName: "season-new-account", userId: 2)
+    let refreshTask = Task { @MainActor in await viewModel.checkSeasonsStatus() }
+    await gate.waitForWaiter()
+
+    XCTAssertFalse(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertTrue(viewModel.seasonsNotExisted.isEmpty)
+
+    await gate.open()
+    await refreshTask.value
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+  }
+
+  func testSeasonLoadKeepsLoadedAvailabilityWhenSameAccountTokenRefreshCancelsRequest()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityGate(gate)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-load-account", userId: 1)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_660,
+        title: "完整分季凭据刷新",
+        type: "电视剧",
+        season_info: [try makeSeason(number: 0)]
+      ),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 0]
+    viewModel.isSeasonAvailabilityLoaded = true
+    let loadTask = Task { @MainActor in
+      await viewModel.fetchSeasons()
+    }
+    await gate.waitForWaiter()
+
+    let refreshedUser = subscriptionSnapshotToken(
+      userName: "season-load-account",
+      userId: 1,
+      accessToken: "season-load-token-refreshed"
+    )
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL,
+      token: refreshedUser.access_token,
+      currentUser: refreshedUser
+    )
+    await gate.open()
+    await loadTask.value
+
+    XCTAssertTrue(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertEqual(viewModel.seasonsNotExisted[1], 0)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  func testSeasonLoadClearsLoadedAvailabilityWhenAccountChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setSeasonAvailabilityGate(gate)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "old-account", userId: 1)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_661,
+        title: "分季切换账号",
+        type: "电视剧",
+        season_info: [try makeSeason(number: 0)]
+      ),
+      apiService: service
+    )
+    viewModel.seasonsNotExisted = [1: 0]
+    viewModel.isSeasonAvailabilityLoaded = true
+    let loadTask = Task { @MainActor in
+      await viewModel.fetchSeasons()
+    }
+    await gate.waitForWaiter()
+
+    let newUser = subscriptionSnapshotToken(
+      userName: "new-account",
+      userId: 2,
+      accessToken: "new-account-token"
+    )
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL,
+      token: newUser.access_token,
+      currentUser: newUser
+    )
+    await gate.open()
+    await loadTask.value
+
+    XCTAssertFalse(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertTrue(viewModel.seasonsNotExisted.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  func testEpisodeGroupSeasonReadRecoversAfterCachedEmptyResult() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setEmptyGroupSeasons(groupId: "group-retry")
+
+    let initial = try await service.getGroupSeasons(groupId: "group-retry")
+    XCTAssertTrue(initial.isEmpty)
+    let initialRequests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-retry")
+    XCTAssertEqual(initialRequests, 1, "空结果按 Web 原样返回，不在同一次读取里重查")
+
+    await stub.setGroupSeasons(groupId: "group-retry", seasonNumber: 2)
+    let retried = try await service.getGroupSeasons(groupId: "group-retry")
+    let updated = try await service.getGroupSeasons(groupId: "group-retry")
+    XCTAssertEqual(retried.compactMap(\.season_number), [2])
+    XCTAssertEqual(updated.compactMap(\.season_number), [2])
+    let requests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-retry")
+    XCTAssertEqual(requests, 2)
+  }
+
+  func testSeasonManagementDoesNotRetryEmptyButRecoversOnReentry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setUnfilteredSeasonsResponse("[]")
+    try await stub.setDefaultSubscriptions([])
+    let media = MediaInfo(tmdb_id: 987_658, title: "分季订阅", type: "电视剧")
+
+    let firstVisit = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
+    await firstVisit.loadSeasonManagementData()
+
+    XCTAssertTrue(firstVisit.seasonInfos.isEmpty)
+    XCTAssertFalse(firstVisit.hasSeasonLoadError)
+    XCTAssertFalse(firstVisit.isLoading)
+    let firstVisitRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(firstVisitRequests, 1)
+
+    await stub.setUnfilteredSeasonsResponse(#"[{"season_number":2,"episode_count":12}]"#)
+    let secondVisit = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
+    await secondVisit.loadSeasonManagementData()
+
+    XCTAssertEqual(secondVisit.seasonInfos.compactMap(\.season_number), [2])
+    XCTAssertEqual(secondVisit.defaultSeasonInfos.compactMap(\.episode_count), [12])
+    XCTAssertFalse(secondVisit.hasSeasonLoadError)
+    let secondVisitRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(secondVisitRequests, 2)
+  }
+
+  func testSubscriptionRecoveryUpdatesEpisodeBrowsersSharedSeasonList() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setEmptyGroupSeasons(groupId: "group-a")
+    try await stub.setDefaultSubscriptions([])
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_658, title: "剧集组切换", type: "电视剧"),
+      apiService: service
+    )
+
+    viewModel.selectedGroupId = "group-a"
+    let episodeCatalog = viewModel.episodeGroupCatalog
+    try await episodeCatalog.loadSeasons(groupID: "group-a", apiService: service)
+    XCTAssertEqual(episodeCatalog.seasonsByGroup["group-a"], [])
+    await stub.setGroupSeasons(groupId: "group-a", seasonNumber: 2)
+    await viewModel.fetchSeasons()
+
+    XCTAssertEqual(viewModel.seasonInfos.compactMap(\.season_number), [2])
+    XCTAssertEqual(episodeCatalog.seasonsByGroup["group-a"]?.compactMap(\.season_number), [2])
+    XCTAssertFalse(viewModel.hasSeasonLoadError)
+    let requests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-a")
+    XCTAssertEqual(requests, 2)
+  }
+
+  func testSharedEpisodeSeasonsRecoverAfterSameAccountTokenRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "season-account", userId: 1)
+
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    let groupID = "group-session-refresh"
+    await stub.setGroupSeasons(groupId: groupID, seasonNumber: 1, waitFor: gate)
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    let originalSession = service.sessionSnapshot()
+    let interrupted = Task { try await catalog.loadSeasons(groupID: groupID, apiService: service) }
+    await gate.waitForWaiter()
+
+    let refreshedUser = subscriptionSnapshotToken(
+      userName: "season-account", userId: 1, accessToken: "season-refreshed"
+    )
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL, token: refreshedUser.access_token, currentUser: refreshedUser
+    )
+    XCTAssertEqual(service.uiIdentity, catalog.uiIdentity)
+    XCTAssertNotEqual(service.sessionSnapshot(), originalSession)
+    await stub.setGroupSeasons(groupId: groupID, seasonNumber: 2)
+    try await catalog.loadSeasons(groupID: groupID, apiService: service)
+    await gate.open()
+    do {
+      try await interrupted.value
+      XCTFail("旧会话的季表应被取消")
+    } catch is CancellationError {
+      // 旧请求不能覆盖新季表。
+    }
+    XCTAssertEqual(catalog.seasonsByGroup[groupID]?.compactMap(\.season_number), [2])
+  }
+
+  func testChangingEpisodeGroupPreventsOlderSeasonLoadFromOverwritingNewSelection()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setGroupSeasons(
+      groupId: "group-a",
+      seasonNumber: 1,
+      waitFor: staleGate
+    )
+    await SubscriptionSnapshotURLProtocol.stub.setGroupSeasons(
+      groupId: "group-b",
+      seasonNumber: 2
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_658, title: "剧集组切换", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.selectedGroupId = "group-a"
+    let staleLoad = Task { @MainActor in
+      await viewModel.fetchSeasons()
+    }
+    await staleGate.waitForWaiter()
+
+    viewModel.selectedGroupId = "group-b"
+    await viewModel.fetchSeasons()
+
+    let availabilityCountAfterCurrentLoad =
+      await SubscriptionSnapshotURLProtocol.stub.requestCount(
+        path: "/api/v1/mediaserver/notexists"
+      )
+    XCTAssertEqual(viewModel.seasonInfos.map(\.season_number), [2])
+    XCTAssertEqual(availabilityCountAfterCurrentLoad, 1)
+
+    await staleGate.open()
+    await staleLoad.value
+
+    let finalAvailabilityCount = await SubscriptionSnapshotURLProtocol.stub.requestCount(
+      path: "/api/v1/mediaserver/notexists"
+    )
+    XCTAssertEqual(viewModel.seasonInfos.map(\.season_number), [2])
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSeasonLoadError)
+    XCTAssertEqual(finalAvailabilityCount, 1)
+  }
+
+  func testChangingEpisodeGroupPreventsOlderSubscriptionRefreshFromPublishing()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    await SubscriptionSnapshotURLProtocol.stub.setGroupSeasons(
+      groupId: "group-a",
+      seasonNumber: 1
+    )
+    await SubscriptionSnapshotURLProtocol.stub.setGroupSeasons(
+      groupId: "group-b",
+      seasonNumber: 2
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
+      [Subscribe(id: 801, name: "旧剧集组", type: "电视剧", season: 1, tmdbid: 987_659)],
+      waitFor: staleGate
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 802, name: "新剧集组", type: "电视剧", season: 2, tmdbid: 987_659)
+    ])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 987_659, title: "订阅阶段切组", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.selectedGroupId = "group-a"
+    let staleLoad = Task { @MainActor in
+      await viewModel.loadData(forceRefreshSubscriptions: true)
+    }
+    await staleGate.waitForWaiter()
+
+    viewModel.selectedGroupId = "group-b"
+    await viewModel.retryLoadData(forceRefreshSubscriptions: true)
+
+    XCTAssertEqual(viewModel.seasonInfos.map(\.season_number), [2])
+    XCTAssertEqual(viewModel.subscribedSeasons, [2])
+    XCTAssertEqual(viewModel.seasonSubscriptions[2]?.id, 802)
+
+    await staleGate.open()
+    await staleLoad.value
+
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+    XCTAssertEqual(viewModel.seasonInfos.map(\.season_number), [2])
+    XCTAssertEqual(viewModel.subscribedSeasons, [2])
+    XCTAssertEqual(viewModel.seasonSubscriptions[2]?.id, 802)
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  func testSubscriptionNotificationRefreshStopsWhenAccountChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let gate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([], waitFor: gate)
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "preloader-account-a", userId: 1)
+
+    let preloader = MediaPreloader(apiService: service)
+    defer { preloader.clearAll() }
+    let media = MediaInfo(
+      tmdb_id: 987_656,
+      title: "通知切号",
+      type: "电视剧",
+      collection_id: 987_656
+    )
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.seasonViewModel = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
+    preloader.pin(key: media.id)
+
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    await gate.waitForWaiter()
+    configureSubscriptionSnapshotAccess(service, userName: "preloader-account-b", userId: 2)
+    await gate.open()
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 1)
+  }
+
+  func testPreloadedSeasonDataReusesCachedSubscriptionSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let preloader = MediaPreloader(apiService: service)
     preloader.clearAll()
     defer { preloader.clearAll() }
 
@@ -563,7 +1437,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
       Subscribe(id: 201, name: "预加载剧集", type: "电视剧", season: 1, tmdbid: 810001)
     ])
-    service.baseURL = "http://subscription-snapshot-tests.local"
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let firstTask = preloader.preload(
@@ -584,49 +1458,17 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(secondSubscribeRequestCount, 1)
   }
 
-  func testSubscriptionSnapshotCacheCanExpireWithoutRenewingOnRead() async {
-    let clock = APICacheTestClock(start: Date(timeIntervalSince1970: 0))
-    let cache = APICache<String, Int>(
-      defaultTTL: 10,
-      size: 1,
-      renewsTTLOnAccess: false,
-      now: clock.now
-    )
-
-    await cache.set("subscriptions", value: 1)
-
-    clock.advance(by: 9)
-    let cachedValueBeforeOriginalExpiry = await cache.get("subscriptions")
-    XCTAssertEqual(cachedValueBeforeOriginalExpiry, 1)
-
-    clock.advance(by: 2)
-    let cachedValueAfterOriginalExpiry = await cache.get("subscriptions")
-    XCTAssertNil(cachedValueAfterOriginalExpiry)
-  }
-
-  func testAPICacheRenewsTTLOnReadByDefault() async {
-    let clock = APICacheTestClock(start: Date(timeIntervalSince1970: 0))
-    let cache = APICache<String, Int>(
-      defaultTTL: 10,
-      size: 1,
-      now: clock.now
-    )
-
-    await cache.set("media-seasons", value: 1)
-
-    clock.advance(by: 9)
-    let cachedValueBeforeOriginalExpiry = await cache.get("media-seasons")
-    XCTAssertEqual(cachedValueBeforeOriginalExpiry, 1)
-
-    clock.advance(by: 2)
-    let cachedValueAfterOriginalExpiry = await cache.get("media-seasons")
-    XCTAssertEqual(cachedValueAfterOriginalExpiry, 1)
-  }
-
   func testSeasonSubscriptionSummaryIndexesMatchingMediaBySeason() {
     let media = MediaInfo(tmdb_id: 12345, type: "电视剧")
     let subscriptions = [
-      Subscribe(id: 11, name: "Target", type: "电视剧", season: 1, tmdbid: 12345, episode_group: "group-a"),
+      Subscribe(
+        id: 11,
+        name: "Target",
+        type: "电视剧",
+        season: 1,
+        tmdbid: 12345,
+        episode_group: "group-a"
+      ),
       Subscribe(id: 12, name: "Other Season", type: "电视剧", season: 2, tmdbid: 12345),
       Subscribe(id: 13, name: "Other Media", type: "电视剧", season: 3, tmdbid: 54321, episode_group: "group-b"),
       Subscribe(id: 14, name: "Movie", type: "电影", season: 4, tmdbid: 12345),
@@ -644,14 +1486,97 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(summaries[4])
   }
 
+  func testSeasonSubscriptionSummaryUsesWebIdentityFallbackOrder() {
+    let media = MediaInfo(
+      tmdb_id: 12_345,
+      douban_id: "douban-target",
+      bangumi_id: 13_579,
+      anilist_id: 24_680,
+      mediaid_prefix: "douban",
+      media_id: "douban-target",
+      type: "电视剧"
+    )
+    let subscriptions = [
+      Subscribe(id: 15, name: "Raw TMDB", type: "电视剧", season: 1, tmdbid: 12_345),
+      Subscribe(
+        id: 16,
+        name: "Canonical mismatch",
+        type: "电视剧",
+        season: 2,
+        tmdbid: 12_345,
+        media_source: "douban",
+        media_id: "douban-other"
+      ),
+      Subscribe(
+        id: 17,
+        name: "Legacy mismatch",
+        type: "电视剧",
+        season: 3,
+        tmdbid: 12_345,
+        mediaid: "tmdb:54321"
+      ),
+      Subscribe(
+        id: 18,
+        name: "Earlier raw mismatch",
+        type: "电视剧",
+        season: 4,
+        tmdbid: 54_321,
+        doubanid: "douban-target"
+      ),
+      Subscribe(
+        id: 19,
+        name: "Raw AniList",
+        type: "电视剧",
+        season: 5,
+        anilistid: 24_680
+      ),
+      Subscribe(
+        id: 20,
+        name: "Canonical match",
+        type: "电视剧",
+        season: 6,
+        media_source: "douban",
+        media_id: "douban-target"
+      ),
+      Subscribe(
+        id: 21,
+        name: "Raw Douban",
+        type: "电视剧",
+        season: 7,
+        doubanid: "douban-target"
+      ),
+      Subscribe(
+        id: 22,
+        name: "Raw Bangumi",
+        type: "电视剧",
+        season: 8,
+        bangumiid: 13_579
+      ),
+    ]
+
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: subscriptions,
+      matching: media
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 15)
+    XCTAssertNil(summaries[2])
+    XCTAssertNil(summaries[3])
+    XCTAssertNil(summaries[4])
+    XCTAssertEqual(summaries[5]?.id, 19)
+    XCTAssertEqual(summaries[6]?.id, 20)
+    XCTAssertEqual(summaries[7]?.id, 21)
+    XCTAssertEqual(summaries[8]?.id, 22)
+  }
+
   func testSeasonSubscriptionSummaryDisplaysRealEpisodeGroup() throws {
-    let groups = [try makeEpisodeGroup(id: "group-a", name: "司法岛篇")]
+    let groups = [try makeEpisodeGroup(id: "group-a", name: "Story Arc")]
     let defaultSummary = SeasonSubscriptionSummary(id: 1, season: 1, episodeGroup: nil)
     let namedSummary = SeasonSubscriptionSummary(id: 2, season: 2, episodeGroup: "group-a")
     let unknownSummary = SeasonSubscriptionSummary(id: 3, season: 3, episodeGroup: "group-x")
 
     XCTAssertEqual(defaultSummary.statusDisplayText(episodeGroups: groups), "已订阅 · 默认剧集组")
-    XCTAssertEqual(namedSummary.statusDisplayText(episodeGroups: groups), "已订阅 · 司法岛篇")
+    XCTAssertEqual(namedSummary.statusDisplayText(episodeGroups: groups), "已订阅 · 故事线")
     XCTAssertEqual(unknownSummary.statusDisplayText(episodeGroups: groups), "已订阅 · 剧集组：group-x")
   }
 
@@ -741,10 +1666,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribe.apiMediaId, "tmdb:12345")
   }
 
-  func testSubscribeApiMediaIdRejectsMalformedNumericFallbackIdentifiers() {
-    let invalidMediaIds = ["tmdb:-1", "tmdb:abc", "bangumi:-1", "bangumi:abc"]
+  func testSubscribeApiMediaIdKeepsOpaqueLegacyIdentifiersLikeWeb() {
+    let mediaIds = ["tmdb:-1", "tmdb:abc", "bangumi:-1", "bangumi:abc"]
 
-    for (offset, mediaId) in invalidMediaIds.enumerated() {
+    for (offset, mediaId) in mediaIds.enumerated() {
       let subscribe = Subscribe(
         id: 90 + offset,
         name: "Invalid",
@@ -753,7 +1678,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
         mediaid: mediaId
       )
 
-      XCTAssertNil(subscribe.apiMediaId, "Expected \(mediaId) to be rejected")
+      XCTAssertEqual(subscribe.apiMediaId, mediaId)
     }
   }
 
@@ -782,7 +1707,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(media.overview, "简介")
   }
 
-  func testSeasonSubscriptionSummaryIgnoresBlankAndZeroIdentifiers() {
+  func testSeasonSubscriptionSummaryMatchesLegacyZeroButSkipsRawZeroIdentifiers() {
     let media = MediaInfo(
       tmdb_id: 0,
       douban_id: "  ",
@@ -803,7 +1728,19 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       matching: media
     )
 
-    XCTAssertTrue(summaries.isEmpty)
+    XCTAssertEqual(summaries.count, 1)
+    XCTAssertEqual(summaries[4]?.id, 44)
+  }
+
+  func testSeasonSubscriptionSummaryKeepsNegativeRawIdentifiersLikeWeb() {
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: [
+        Subscribe(id: 45, name: "Negative TMDB", type: "电视剧", season: 1, tmdbid: -1)
+      ],
+      matching: MediaInfo(tmdb_id: -1, type: "电视剧")
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 45)
   }
 
   func testSeasonSubscriptionSummaryTreatsBlankEpisodeGroupAsDefault() {
@@ -813,18 +1750,89 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(summary.statusDisplayText(episodeGroups: []), "已订阅 · 默认剧集组")
   }
 
-  func testUnsubscribeConfirmationMessageUsesCurrentSubscriptionGroup() throws {
-    let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
-    let viewModel = SubscribeSeasonViewModel(mediaInfo: media)
-    viewModel.episodeGroups = [try makeEpisodeGroup(id: "group-a", name: "司法岛篇")]
-    viewModel.seasonSubscriptions = [
-      3: SeasonSubscriptionSummary(id: 61, season: 3, episodeGroup: "group-a")
-    ]
+  func testSingleSeasonUnsubscribeKeepsBusinessFailureMessage() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    XCTAssertEqual(
-      viewModel.unsubscribeConfirmationMessage(for: 3),
-      "是否取消《航海王》第 3 季订阅？\n当前订阅使用：司法岛篇"
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 61, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345)
+    ])
+    await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(
+      #"{"success":false,"message":"该季订阅正在处理"}"#
     )
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonSubscriptions = [
+      3: SeasonSubscriptionSummary(id: 61, season: 3, episodeGroup: nil)
+    ]
+    viewModel.subscribedSeasons = [3]
+
+    await viewModel.unsubscribeSeason(3)
+
+    XCTAssertEqual(viewModel.errorMessage, "该季订阅正在处理")
+    XCTAssertNotNil(viewModel.seasonSubscriptions[3])
+    XCTAssertTrue(viewModel.subscribedSeasons.contains(3))
+  }
+
+  func testSingleSeasonDeletePublishesBeforeFollowUpRefreshFails() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    let preloader = APIService.shared.mediaPreloader
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 62, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345)
+    ])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError()
+    await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(
+      #"{"success":true}"#
+    )
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
+      apiService: service
+    )
+    viewModel.seasonSubscriptions = [
+      3: SeasonSubscriptionSummary(id: 62, season: 3, episodeGroup: nil)
+    ]
+    viewModel.subscribedSeasons = [3]
+
+    await viewModel.unsubscribeSeason(3)
+
+    XCTAssertEqual(notifications.count(), 1)
+    XCTAssertNotNil(viewModel.errorMessage)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
   }
 
   func testHomeSubscriptionUnsubscribeConfirmationUsesSubscribeEpisodeGroup() {
@@ -865,6 +1873,95 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       ),
       "是否取消《夏日重现》特别篇订阅？\n当前订阅使用：默认剧集组"
     )
+  }
+
+  func testSeasonDisplayFormatterUsesUnifiedSeasonNameRules() {
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 0, rawName: nil),
+      "特别篇"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 0, rawName: "  特别篇名称  "),
+      "特别篇名称"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 2, rawName: "忽略的名称"),
+      "第 2 季"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: nil, rawName: "特别篇"),
+      "未知季"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: -1, rawName: nil),
+      "未知季"
+    )
+  }
+
+  func testSeasonDisplayFormatterTreatsWhitespaceOptionalTextAsMissing() {
+    XCTAssertNil(SeasonDisplayFormatter.nonEmpty(" \n\t"))
+    XCTAssertEqual(
+      SeasonDisplayFormatter.nonEmpty(" 2024-01-01 \n"),
+      "2024-01-01"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.cardTitle(
+        seasonNumber: 0,
+        rawName: " \n",
+        airDate: " \t"
+      ),
+      "特别篇"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.cardTitle(
+        seasonNumber: 2,
+        rawName: nil,
+        airDate: " 2024-01-01 "
+      ),
+      "第 2 季 · 2024"
+    )
+  }
+
+  func testSeasonDisplayFormatterLocalizesGenericGroupSeasonLabels() {
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("Season 3"), "第 3 季")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("season4"), "第 4 季")
+    XCTAssertEqual(SeasonDisplayFormatter.name(seasonNumber: 0, rawName: "Specials"), "特别篇")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("Season 3 - Arlong Park"), "第 3 季 · Arlong Park")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("S3 • Twelve Guardian Ninja"), "第 3 季 · Twelve Guardian Ninja")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("SP • Specials"), "特别篇")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("1997"), "1997")
+  }
+
+  func testSeasonCardAndDetailSheetUseSharedDisplayFormatter() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+    let source = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift"
+      ),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.cardTitle("))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.name("))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.air_date)"))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.overview)"))
+  }
+
+  /// 季详情正文：有简介时按空行分段；简介为空或只有空白时写「暂无简介」，不留空白页。
+  func testSeasonDetailBlocksUseOverviewOrPlaceholder() throws {
+    let withOverview = try JSONDecoder().decode(
+      TmdbSeason.self,
+      from: Data(#"{"season_number":1,"overview":"第一段。\n\n第二段。"}"#.utf8))
+    XCTAssertEqual(
+      SeasonDetailSheet.blocks(for: withOverview).map { String($0.text.characters) },
+      ["第一段。", "第二段。"])
+
+    let blank = try JSONDecoder().decode(
+      TmdbSeason.self, from: Data(#"{"season_number":1,"overview":"  "}"#.utf8))
+    let placeholder = SeasonDetailSheet.blocks(for: blank)
+    XCTAssertEqual(placeholder.map { String($0.text.characters) }, ["暂无简介"])
+    XCTAssertEqual(placeholder.first?.style, .secondary)
   }
 
   func testPrepareSubscriptionUsesSelectedPickerGroupForNewSubscriptionOnly() {
@@ -921,11 +2018,18 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(viewModel.sheetSubscribe?.best_version_full)
   }
 
-  func testOnlyMoviesCanDirectlySubscribe() {
+  func testOnlyTVUsesSeasonSubscriptionAndCollectionsCannotSubscribe() {
     XCTAssertTrue(MediaInfo(tmdb_id: 1, title: "电影", type: "电影").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(tmdb_id: 2, title: "TMDB 剧", type: "电视剧").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(douban_id: "douban-1", title: "豆瓣剧", type: "电视剧").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(bangumi_id: 3, title: "Bangumi 剧", type: "电视剧").canDirectlySubscribe)
+    XCTAssertFalse(
+      MediaInfo(tmdb_id: 4, title: "合集", type: "系列", collection_id: 40)
+        .canDirectlySubscribe
+    )
+    XCTAssertTrue(MediaInfo(tmdb_id: 5, title: "未知", type: "未知").canDirectlySubscribe)
+    XCTAssertTrue(MediaInfo(tmdb_id: 6, title: "无合集 ID 的系列", type: "系列").canDirectlySubscribe)
+    XCTAssertFalse(MediaInfo(source: "musicbrainz", media_id: "mb-1", title: "专辑", type: "音乐").canDirectlySubscribe)
   }
 
   func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {
@@ -1099,6 +2203,69 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(preparedSeason, 3)
   }
 
+  func testSeasonAvailabilityPayloadPreservesRawMediaFieldsWhenOverridingEpisodeGroup()
+    throws
+  {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "tmdb_id": 12345,
+          "source": "themoviedb",
+          "title": "插件扩展媒体",
+          "type": "电视剧",
+          "episode_group": "old-group",
+          "plugin_context": {
+            "provider": "custom",
+            "opaque_id": "keep-me"
+          }
+        }
+        """.utf8
+      )
+    )
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: media,
+      initialEpisodeGroup: "new-group"
+    )
+
+    let payload = try JSONDecoder().decode(
+      [String: JSONValue].self,
+      from: JSONEncoder().encode(viewModel.seasonAvailabilityMedia())
+    )
+
+    XCTAssertEqual(payload["episode_group"], .string("new-group"))
+    XCTAssertEqual(
+      payload["plugin_context"],
+      .object([
+        "provider": .string("custom"),
+        "opaque_id": .string("keep-me"),
+      ])
+    )
+  }
+
+  func testSeasonPosterUsesAbsoluteURLAndFallsBackToMainPoster() {
+    let service = APIService.shared
+    let previous = service.useImageCache
+    service.useImageCache = false
+    defer { service.useImageCache = previous }
+
+    XCTAssertEqual(
+      service.getSeasonPosterURL(
+        posterPath: "https://images.example/season.jpg",
+        mediaPosterPath: "https://images.example/main.jpg"
+      )?.absoluteString,
+      "https://images.example/season.jpg"
+    )
+    XCTAssertEqual(
+      service.getSeasonPosterURL(
+        posterPath: " ",
+        mediaPosterPath: "https://images.example/main.jpg"
+      )?.absoluteString,
+      "https://images.example/main.jpg"
+    )
+  }
+
   private func makeSeason(number: Int) throws -> TmdbSeason {
     let data = """
       {
@@ -1145,14 +2312,24 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   @MainActor
   private func configureSubscriptionSnapshotAccess(
     _ service: APIService,
-    userName: String = "subscription-snapshot"
+    userName: String = "subscription-snapshot",
+    userId: Int = 1
   ) {
-    service.currentUser = subscriptionSnapshotToken(userName: userName)
+    let user = subscriptionSnapshotToken(userName: userName, userId: userId)
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL,
+      token: user.access_token,
+      currentUser: user
+    )
   }
 
-  private func subscriptionSnapshotToken(userName: String) -> Token {
+  private func subscriptionSnapshotToken(
+    userName: String,
+    userId: Int,
+    accessToken: String = "subscription-snapshot-token"
+  ) -> Token {
     Token(
-      access_token: "subscription-snapshot-token",
+      access_token: accessToken,
       token_type: "bearer",
       super_user: FlexibleBool(false),
       permissions: [
@@ -1161,6 +2338,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
         UserPermissionKey.subscribe.rawValue: true,
         UserPermissionKey.manage.rawValue: false,
       ],
+      user_id: userId,
       user_name: userName,
       avatar: nil
     )
@@ -1193,9 +2371,9 @@ private struct SubscriptionSnapshotServiceSnapshot {
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -1229,27 +2407,6 @@ private struct SubscriptionSnapshotServiceSnapshot {
   }
 }
 
-private final class APICacheTestClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var currentDate: Date
-
-  init(start: Date) {
-    self.currentDate = start
-  }
-
-  func now() -> Date {
-    lock.lock()
-    defer { lock.unlock() }
-    return currentDate
-  }
-
-  func advance(by interval: TimeInterval) {
-    lock.lock()
-    currentDate = currentDate.addingTimeInterval(interval)
-    lock.unlock()
-  }
-}
-
 private struct SubscriptionSnapshotStubResponse: Sendable {
   let statusCode: Int
   let data: Data
@@ -1259,6 +2416,23 @@ private struct SubscriptionSnapshotStubResponse: Sendable {
     self.statusCode = statusCode
     self.data = data
     self.gate = gate
+  }
+}
+
+private final class SubscribeSeasonNotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
   }
 }
 
@@ -1305,19 +2479,43 @@ private actor SubscriptionSnapshotAsyncGate {
 private actor SubscriptionSnapshotURLProtocolStub {
   private var queuedResponses: [SubscriptionSnapshotStubResponse] = []
   private var defaultSubscriptionsData: Data?
+  private var mediaDeleteResponseData: Data?
+  private var subscriptionDeleteResponseData: Data?
   private var requestCounts: [String: Int] = [:]
+  private var episodeGroupFailuresRemaining = 0
+  private var episodeGroupsData = Data("[]".utf8)
+  private var episodeGroupsGate: SubscriptionSnapshotAsyncGate?
+  private var unfilteredSeasonsData: Data?
+  private var seasonAvailabilityGate: SubscriptionSnapshotAsyncGate?
+  private var seasonAvailabilityResponse = SubscriptionSnapshotStubResponse(
+    statusCode: 200,
+    data: Data("[]".utf8)
+  )
+  private var groupSeasonResponses: [String: SubscriptionSnapshotStubResponse] = [:]
 
   func reset() {
     queuedResponses.removeAll()
     defaultSubscriptionsData = nil
+    mediaDeleteResponseData = nil
+    subscriptionDeleteResponseData = nil
     requestCounts.removeAll()
+    episodeGroupFailuresRemaining = 0
+    episodeGroupsData = Data("[]".utf8)
+    episodeGroupsGate = nil
+    unfilteredSeasonsData = nil
+    seasonAvailabilityGate = nil
+    seasonAvailabilityResponse = SubscriptionSnapshotStubResponse(
+      statusCode: 200,
+      data: Data("[]".utf8)
+    )
+    groupSeasonResponses.removeAll()
   }
 
   func enqueueSubscriptions(
     _ subscriptions: [Subscribe],
     waitFor gate: SubscriptionSnapshotAsyncGate? = nil
   ) throws {
-    let data = try JSONEncoder().encode(subscriptions)
+    let data = try SubscribeResponseFixture.data(for: subscriptions)
     queuedResponses.append(SubscriptionSnapshotStubResponse(statusCode: 200, data: data, gate: gate))
   }
 
@@ -1331,22 +2529,120 @@ private actor SubscriptionSnapshotURLProtocolStub {
   }
 
   func setDefaultSubscriptions(_ subscriptions: [Subscribe]) throws {
-    defaultSubscriptionsData = try JSONEncoder().encode(subscriptions)
+    defaultSubscriptionsData = try SubscribeResponseFixture.data(for: subscriptions)
+  }
+
+  func setMediaDeleteResponse(_ json: String) {
+    mediaDeleteResponseData = Data(json.utf8)
+  }
+
+  func setSubscriptionDeleteResponse(_ json: String) {
+    subscriptionDeleteResponseData = Data(json.utf8)
+  }
+
+  func failEpisodeGroupRequests(_ count: Int) {
+    episodeGroupFailuresRemaining = count
+  }
+
+  func setEpisodeGroupsResponse(_ json: String) {
+    episodeGroupsData = Data(json.utf8)
+  }
+
+  func setUnfilteredSeasonsResponse(_ json: String) {
+    unfilteredSeasonsData = Data(json.utf8)
+  }
+
+  func setEpisodeGroupsGate(_ gate: SubscriptionSnapshotAsyncGate?) {
+    episodeGroupsGate = gate
+  }
+
+  func setSeasonAvailabilityGate(_ gate: SubscriptionSnapshotAsyncGate?) {
+    seasonAvailabilityGate = gate
+  }
+
+  func setSeasonAvailabilityResponse(statusCode: Int, json: String) {
+    seasonAvailabilityResponse = SubscriptionSnapshotStubResponse(
+      statusCode: statusCode,
+      data: Data(json.utf8)
+    )
+  }
+
+  func setEmptyGroupSeasons(groupId: String) {
+    groupSeasonResponses[groupId] = SubscriptionSnapshotStubResponse(
+      statusCode: 200,
+      data: Data("[]".utf8)
+    )
+  }
+
+  func setGroupSeasons(
+    groupId: String,
+    seasonNumber: Int,
+    waitFor gate: SubscriptionSnapshotAsyncGate? = nil
+  ) {
+    let data = Data(
+      """
+      [
+        {
+          "air_date": "2024-01-01",
+          "episode_count": 8,
+          "name": "Season \(seasonNumber)",
+          "overview": "",
+          "poster_path": null,
+          "season_number": \(seasonNumber),
+          "vote_average": 8.0
+        }
+      ]
+      """.utf8
+    )
+    groupSeasonResponses[groupId] = SubscriptionSnapshotStubResponse(
+      statusCode: 200,
+      data: data,
+      gate: gate
+    )
   }
 
   func subscribeRequestCount() -> Int {
     requestCounts["/api/v1/subscribe", default: 0] + requestCounts["/api/v1/subscribe/", default: 0]
   }
 
+  func waitForSubscribeRequestCount(_ expectedCount: Int) async {
+    for _ in 0..<2_000 {
+      if subscribeRequestCount() >= expectedCount { return }
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  func requestCount(path: String) -> Int {
+    requestCounts[path, default: 0]
+  }
+
   func response(for request: URLRequest) async throws -> SubscriptionSnapshotStubResponse {
     let path = request.url?.path ?? ""
     requestCounts[path, default: 0] += 1
 
+    if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/media/"),
+      let mediaDeleteResponseData
+    {
+      return SubscriptionSnapshotStubResponse(statusCode: 200, data: mediaDeleteResponseData)
+    }
+
     if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/") {
+      if let subscriptionDeleteResponseData {
+        return SubscriptionSnapshotStubResponse(statusCode: 200, data: subscriptionDeleteResponseData)
+      }
       return try jsonResponse(#"{"success":true}"#)
     }
 
-    if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/search/") {
+    if request.httpMethod == "POST", path.hasPrefix("/api/v1/subscribe/search/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
+    if request.httpMethod == "PUT", path.hasPrefix("/api/v1/subscribe/status/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
+    if request.httpMethod == "POST", path.hasPrefix("/api/v1/subscribe/reset/") {
       return try jsonResponse(#"{"success":true}"#)
     }
 
@@ -1365,19 +2661,49 @@ private actor SubscriptionSnapshotURLProtocolStub {
     }
 
     if path.hasPrefix("/api/v1/media/groups/") {
-      return try jsonResponse("[]")
+      if let episodeGroupsGate {
+        await episodeGroupsGate.wait()
+      }
+      if episodeGroupFailuresRemaining > 0 {
+        episodeGroupFailuresRemaining -= 1
+        return SubscriptionSnapshotStubResponse(statusCode: 503, data: Data("[]".utf8))
+      }
+      return SubscriptionSnapshotStubResponse(
+        statusCode: 200,
+        data: episodeGroupsData
+      )
     }
 
     if path == "/api/v1/media/seasons" {
+      let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems
+      if let unfilteredSeasonsData, query?.contains(where: { $0.name == "season" }) != true {
+        return SubscriptionSnapshotStubResponse(statusCode: 200, data: unfilteredSeasonsData)
+      }
       return try jsonResponse(Self.seasonsJSON)
     }
 
-    if path == "/api/v1/mediaserver/notexists" {
-      return try jsonResponse("[]")
+    if path.hasPrefix("/api/v1/media/group/seasons/"),
+      let groupId = request.url?.lastPathComponent,
+      let response = groupSeasonResponses[groupId]
+    {
+      if let gate = response.gate {
+        await gate.wait()
+      }
+      return response
     }
 
-    if path.hasPrefix("/api/v1/media/tmdb:") {
-      let tmdbId = request.url?.lastPathComponent.split(separator: ":").last.flatMap { Int($0) }
+    if path == "/api/v1/mediaserver/notexists" {
+      if let seasonAvailabilityGate {
+        await seasonAvailabilityGate.wait()
+      }
+      return seasonAvailabilityResponse
+    }
+
+    if path.hasPrefix("/api/v1/media/"),
+      let last = request.url?.lastPathComponent,
+      last != "search", last != "recognize", last != "seasons"
+    {
+      let tmdbId = Int(last)
       return try mediaDetailResponse(tmdbId: tmdbId)
     }
 

@@ -57,17 +57,17 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
     permissions: [String: Bool],
     operation: (HomeViewModel) async throws -> Void
   ) async throws {
-    XCTAssertTrue(URLProtocol.registerClass(HomePermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(HomePermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(HomePermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(HomePermissionURLProtocol.self) }
 
     await HomePermissionURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = HomePermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://home-permission-tests.local"
-    service.token = "token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://home-permission-tests.local"
+    service.tokenForTesting = "token"
+    service.currentUserForTesting = Token(
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -127,9 +127,9 @@ private struct HomePermissionServiceSnapshot {
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
     service.settings = settings
     service.useImageCache = useImageCache
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")

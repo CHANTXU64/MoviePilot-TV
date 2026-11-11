@@ -1,14 +1,149 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
 
 @MainActor
 final class MediaPreloadPermissionTests: XCTestCase {
-  func testRestrictedUserTvDetailDoesNotWaitForHiddenSeasonRow() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testNavigatedDetailRetriesPastPreloadLimitWithoutPublishingCardSeasons() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
 
-    let service = APIService.shared
+    let cardSeasons = try JSONDecoder().decode([TmdbSeason].self, from: Data(#"[{"season_number":7}]"#.utf8))
+    let media = MediaInfo(tmdb_id: 125, title: "卡片标题", type: "电视剧", season_info: cardSeasons)
+    let preloader = service.mediaPreloader
+    let owner = UUID()
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: media, owner: owner))
+    defer { preloader.tearDown() }
+
+    try await waitUntil("前台详情进入第 1 次重试") { task.detailRetryNumber == 1 }
+    XCTAssertNil(task.fullDetail)
+    XCTAssertNil(task.seasonViewModel)
+    XCTAssertFalse(task.isDetailReady)
+    XCTAssertFalse(stub.requestPaths().contains("/api/v1/mediaserver/notexists"))
+
+    try await waitUntil("前台详情进入第 2 次重试", timeoutNanoseconds: 4_000_000_000) {
+      task.detailRetryNumber == 2
+    }
+    try await waitUntil("前台详情进入第 3 次重试", timeoutNanoseconds: 5_000_000_000) {
+      task.detailRetryNumber == 3
+    }
+
+    try await waitUntil("前台详情跨过预载上限后恢复", timeoutNanoseconds: 14_000_000_000) {
+      task.isDetailReady && task.isSeasonDataLoaded
+    }
+    XCTAssertEqual(task.fullDetail?.title, "完整详情")
+    XCTAssertEqual(task.seasonViewModel?.seasonInfos.compactMap(\.season_number), [2, 3])
+    XCTAssertNil(task.detailRetryNumber)
+    XCTAssertFalse(task.isDetailFailed)
+  }
+
+  func testNavigatedDetailStopsOnClientErrorAndExplainsReason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 126, title: "不存在的详情", type: "电视剧")
+    let preloader = service.mediaPreloader
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: media, owner: UUID()))
+    defer { preloader.tearDown() }
+
+    try await waitUntil("4xx 直接终止") { task.isDetailFailed }
+    XCTAssertNil(task.detailRetryNumber)
+    XCTAssertEqual(task.detailFailureReason, "404: Not Found")
+    try await Task.sleep(for: .milliseconds(1700))
+    XCTAssertEqual(stub.requestPaths().filter { $0 == "/api/v1/media/126" }.count, 1)
+    XCTAssertTrue(preloader.preload(for: media) === task, "仍被导航持有的终态任务不重建")
+  }
+
+  func testDetailRetryPolicySeparatesTransientAndPermanentErrors() {
+    let retryable: [Error] = [
+      CancellationError(),
+      APIError.networkError(URLError(.timedOut)),
+      APIError.gatewayStatus(502, "502"),
+      APIService.serverMessageError(statusCode: 500, data: Data("{}".utf8)),
+      APIService.serverMessageError(statusCode: 429, data: Data()),
+    ]
+    for error in retryable {
+      XCTAssertTrue(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    let permanent: [Error] = [
+      APIError.invalidURL,
+      APIError.decodingError(URLError(.cannotDecodeContentData)),
+      APIError.authenticationChallenge(statusCode: 403, message: "无权访问"),
+      APIError.credentialsRejected,
+      APIError.mfaUnsupported,
+      APIError.unauthorized,
+      APIError.unknown,
+      APIService.serverMessageError(statusCode: 404, data: Data(#"{"detail":"Not Found"}"#.utf8)),
+      APIService.serverMessageError(statusCode: 422, data: Data()),
+      APIError.serverMessage("500 部影片未识别"),
+      APIError.serverMessage("Request failed"),
+    ]
+    for error in permanent {
+      XCTAssertFalse(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    XCTAssertEqual(
+      MediaPreloadTask.detailFailureReason(for: APIError.authenticationChallenge(statusCode: 403, message: nil)),
+      "HTTP 403"
+    )
+  }
+
+  func testPoppingRetryingDetailReactivatesSourceAndCancelsRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let preloader = service.mediaPreloader
+    let navigation = ImageNavigationCoordinator(apiService: service)
+    navigation.setStackForeground(true)
+    let source = navigation.push(ResourceSearchRequest(
+      keyword: "来源页面", type: nil, area: nil, title: nil,
+      year: nil, season: nil, mediaInfo: nil, sites: nil
+    ))
+    let sourceLifecycle = navigation.lifecycle(for: source)
+    let media = MediaInfo(tmdb_id: 125, title: "待重试详情", type: "电视剧")
+    let detail = navigation.push(media)
+    let detailLifecycle = navigation.lifecycle(for: detail)
+    let task = try XCTUnwrap(navigation.preloadTask(for: detail))
+    defer { preloader.tearDown() }
+    try await waitUntil("详情进入重试") { task.detailRetryNumber == 1 }
+    XCTAssertEqual(sourceLifecycle.phase, .adjacent)
+
+    navigation.path.removeLast()
+
+    XCTAssertEqual(navigation.topEntryID, source.id)
+    XCTAssertEqual(sourceLifecycle.phase, .active)
+    XCTAssertTrue(detailLifecycle.isRemoved)
+    XCTAssertTrue(preloader.isFocusPreloadSuppressed(for: media.id, stackID: navigation.id))
+
+    try await Task.sleep(for: .milliseconds(1600))
+    XCTAssertEqual(stub.requestPaths().filter { $0 == "/api/v1/media/125" }.count, 1)
+    XCTAssertNil(task.fullDetail)
+    XCTAssertNil(preloader.getTask(for: media))
+  }
+
+  func testRestrictedUserTvDetailDoesNotWaitForHiddenSeasonRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -16,10 +151,12 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let preloadTask = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     let viewModel = MediaDetailViewModel(
-      detail: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      detail: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     viewModel.preloadTask = preloadTask
 
@@ -33,10 +170,10 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testRestrictedUserTvPreloadDoesNotRequestSeasonSubscriptionState() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -44,7 +181,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     task.start()
 
@@ -56,15 +194,57 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/mediaserver/notexists"))
     XCTAssertFalse(paths.containsSubscribeListPath)
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/tmdb/123/") })
     XCTAssertNil(task.seasonViewModel)
     XCTAssertFalse(task.isSeasonDataLoaded)
   }
 
-  func testRestrictedSeasonStatusRefreshDoesNotRequestSubscribeSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testPreloadWarmsOneSeasonOnlyWhenEpisodesAreTheFirstRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    let episodePath = "/api/v1/tmdb/124/2"
 
-    let service = APIService.shared
+    for canSubscribe in [false, true] {
+      stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+      defer { snapshot.restore(to: service) }
+      if canSubscribe {
+        configureStandardSubscriber(service)
+      } else {
+        configureLimitedUser(service)
+      }
+      let cardSeasons = try JSONDecoder().decode(
+        [TmdbSeason].self, from: Data(#"[{"season_number":1}]"#.utf8)
+      )
+      let task = MediaPreloadTask(
+        partialMedia: MediaInfo(
+          tmdb_id: 124, title: "预览剧集", type: "电视剧", season: 1, season_info: cardSeasons
+        ),
+        apiService: service
+      )
+      task.start()
+      defer { task.cancel() }
+
+      if canSubscribe {
+        try await waitUntil("分季订阅行已就绪") { task.isSeasonDataLoaded }
+        XCTAssertEqual(task.seasonViewModel?.seasonInfos.count, 3)
+        XCTAssertFalse(stub.requestPaths().contains { $0.hasPrefix("/api/v1/tmdb/124/") })
+      } else {
+        try await waitUntil("剧集首行已发起预载") { stub.requestPaths().contains(episodePath) }
+        let episodes = try await service.fetchTmdbEpisodes(tmdbID: 124, season: 2, episodeGroup: nil)
+        XCTAssertEqual(episodes.map(\.name), ["第二季第一集"])
+        XCTAssertEqual(stub.requestPaths().filter { $0.hasPrefix("/api/v1/tmdb/124/") }, [episodePath])
+      }
+    }
+  }
+
+  func testRestrictedSeasonStatusRefreshDoesNotRequestSubscribeSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -72,7 +252,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let viewModel = SubscribeSeasonViewModel(
-      mediaInfo: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      mediaInfo: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
 
     let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
@@ -85,10 +266,10 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testRestrictedUserMoviePreloadDoesNotRequestSubscriptionLookup() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -96,7 +277,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 456, title: "Limited Movie", type: "电影")
+      partialMedia: MediaInfo(tmdb_id: 456, title: "Limited Movie", type: "电影"),
+      apiService: service
     )
     task.start()
 
@@ -109,11 +291,164 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
-  func testSubscriptionStatusPermissionFailureSurfacesAndDoesNotLogoutOrRetryLogin() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testFailedTMDBRecognitionFromFallbackSourceFinishesLoadingState() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "bangumi",
+        media_id: "987",
+        title: "无法识别的 Bangumi 条目",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+    task.start()
+    defer { task.cancel() }
+
+    try await waitUntil("TMDB recognition finishes") {
+      task.isTmdbRecognitionFinished && task.isDetailReady
+    }
+
+    XCTAssertNil(task.tmdbId)
+    XCTAssertEqual(task.fullDetail?.bangumi_id, 987)
+  }
+
+  // MARK: - F-221：partial 跳过识别后，full detail 补出 douban 身份须重评并落定终态
+
+  func testFullDetailAddedDoubanIdentitySettlesRecognitionWhenNoMatch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "custom",
+        media_id: "fixture-221a",
+        title: "AAA 无法识别的自定义条目",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+    task.start()
+    defer { task.cancel() }
+
+    // 修复前：partial custom（canJumpToTMDB=false）跳过识别，finished 永不落定 → 此处超时失败。
+    // full detail 补出 douban_id 后补识别并落定 finished，Header TMDB 按钮不再永久转圈。
+    try await waitUntil("full-detail douban recognition settles to finished") {
+      task.isDetailReady && task.isTmdbRecognitionFinished
+    }
+
+    XCTAssertNil(task.tmdbId)
+    XCTAssertEqual(task.fullDetail?.douban_id, "db-221a")
+  }
+
+  func testFullDetailAddedDoubanIdentityRecognitionPopulatesTmdbId() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "custom",
+        media_id: "fixture-221b",
+        title: "BBB 可识别的自定义条目",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+    task.start()
+    defer { task.cancel() }
+
+    // 补识别命中 search（BBB → tmdb 221）时填值，Header 按钮直接可跳。
+    try await waitUntil("full-detail douban recognition fills tmdbId") {
+      task.isDetailReady && task.isTmdbRecognitionFinished && task.tmdbId == 221
+    }
+
+    XCTAssertEqual(task.tmdbId, 221)
+    XCTAssertEqual(task.fullDetail?.douban_id, "db-221b")
+  }
+
+  func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(500)
+    configureStandardSubscriber(service)
+
+    let handler = SubscriptionHandler(apiService: service)
+    handler.handleSubscribe(
+      MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"),
+      expectedSubscribed: false
+    )
+
+    try await waitUntil("subscription handler finishes lookup") {
+      handler.sheetSubscribe != nil || handler.notificationSerial > 0
+    }
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertEqual(handler.notificationMessage, "暂时无法确认订阅状态，请稍后重试。")
+  }
+
+  func testMoviePreloadKeepsKnownSubscriptionStateWhenLookupFails() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(500)
+    configureStandardSubscriber(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"),
+      apiService: service
+    )
+    task.isSubscribed = true
+    task.start()
+    defer { task.cancel() }
+
+    try await waitUntil("subscription lookup is requested") {
+      MediaPreloadPermissionURLProtocol.stub.requestPaths().contains {
+        $0.hasPrefix("/api/v1/subscribe/media/")
+      }
+    }
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    XCTAssertEqual(task.isSubscribed, true)
+  }
+
+  func testSubscriptionStatusPermissionFailureKeepsSessionWithoutRelogin() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -128,23 +463,26 @@ final class MediaPreloadPermissionTests: XCTestCase {
         media: MediaInfo(tmdb_id: 456, title: "Subscriber Movie", type: "电影")
       )
       XCTFail("Expected subscription status permission failure to be surfaced.")
-    } catch APIError.serverMessage(let message) {
-      XCTAssertTrue(message.contains("403"))
+    } catch APIError.authenticationChallenge(let statusCode, _) {
+      XCTAssertEqual(statusCode, 403)
+    } catch {
+      XCTFail("Unexpected error: \(error)")
     }
 
     XCTAssertEqual(service.token, "subscriber-token")
     XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
+    XCTAssertEqual(paths.filter { $0.hasPrefix("/api/v1/subscribe/media/") }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testStandardSubscriberTvPreloadRequestsSeasonAvailabilityWithoutSuperUser() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -152,7 +490,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧"),
+      apiService: service
     )
     task.start()
 
@@ -167,11 +506,11 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertNotNil(task.seasonViewModel)
   }
 
-  func testSeasonAvailabilityPermissionFailureDoesNotLogoutSubscriber() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testSeasonAvailabilityPermissionFailureKeepsSessionWithoutReplay() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -183,10 +522,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
       _ = try await service.checkSeasonsNotExists(
         mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
       )
-      XCTFail("Expected season availability permission failure to surface as unauthorized")
-    } catch APIError.serverMessage(let message) {
-      XCTAssertTrue(message.contains("403"))
-      // Expected: optional status probe must not trigger logout.
+      XCTFail("Expected season availability permission failure to surface")
+    } catch APIError.authenticationChallenge(let statusCode, _) {
+      XCTAssertEqual(statusCode, 403)
     } catch {
       XCTFail("Unexpected error: \(error)")
     }
@@ -195,16 +533,18 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testSeasonAvailabilityPermissionFailureKeepsStatusUnknownAndDoesNotDefaultBestVersion()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -213,7 +553,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let viewModel = SubscribeSeasonViewModel(
-      mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+      mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧"),
+      apiService: service
     )
 
     await viewModel.checkSeasonsStatus()
@@ -225,16 +566,20 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let sheetSubscribe = try XCTUnwrap(viewModel.sheetSubscribe)
     XCTAssertNil(sheetSubscribe.best_version)
     XCTAssertNil(sheetSubscribe.best_version_full)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testSuperUserActionAPIsDoNotApplyLocalPermissionGate() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -256,6 +601,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
       status: FlexibleBool(false),
       errmsg: nil,
       src_fileitem: FileItem(name: "movie.mkv", path: "/downloads/movie.mkv", type: "file", size: nil),
+      dest_fileitem: nil,
       date: nil
     )
     let form = ReorganizeForm(
@@ -274,7 +620,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
       deleteSource: false,
       deleteDest: false
     )
-    _ = try? await service.aiRedoTransferHistory(ids: [history.id])
+    _ = try? await service.aiRedoTransferHistory(id: history.id)
     _ = try? await service.manualTransfer(
       form: form,
       background: false
@@ -282,31 +628,31 @@ final class MediaPreloadPermissionTests: XCTestCase {
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/history/transfer"))
-    XCTAssertTrue(paths.contains("/api/v1/history/transfer/ai-redo"))
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer/\(history.id)/ai-redo"))
     XCTAssertTrue(paths.contains("/api/v1/transfer/manual"))
   }
 
   func testStandardUserHiddenAdminSurfacesDoNotRequestSuperUserEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureStandardSubscriber(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
-    let transferViewModel = TransferHistoryViewModel()
+    let transferViewModel = TransferHistoryViewModel(apiService: service)
     await transferViewModel.refresh()
 
     XCTAssertNil(statusViewModel.statistic)
@@ -329,23 +675,23 @@ final class MediaPreloadPermissionTests: XCTestCase {
   func testManageUserEntrypointsRequestDownloadButNotDashboardOrLatestMediaEndpoints()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureManageUser(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
     XCTAssertNil(statusViewModel.statistic)
@@ -365,23 +711,23 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testSuperUserEntrypointsRequestDashboardDownloadAndLatestMediaEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureSuperUser(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
     XCTAssertEqual(statusViewModel.statistic?.movie_count, 2)
@@ -405,21 +751,21 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testNoSearchUserResourceActionsDoNotRequestSearchOrDownloadEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureNoSearchUser(service)
 
-    let settingsViewModel = SystemViewModel()
+    let settingsViewModel = SystemViewModel(apiService: service)
     settingsViewModel.defaultSearchSites = [1, 2]
     defer { settingsViewModel.defaultSearchSites = [] }
 
-    let resourceViewModel = ResourceResultViewModel(keyword: "Blocked")
+    let resourceViewModel = ResourceResultViewModel(keyword: "Blocked", apiService: service)
     await resourceViewModel.search()
 
     let addDownloadViewModel = AddDownloadViewModel(
@@ -440,14 +786,17 @@ final class MediaPreloadPermissionTests: XCTestCase {
         pri_order: nil,
         labels: nil,
         volume_factor: nil
-      )
+      ),
+      apiService: service
     )
     await addDownloadViewModel.loadData()
 
-    let siteFilterViewModel = SiteFilterViewModel()
+    let siteFilterViewModel = SiteFilterViewModel(apiService: service)
     await siteFilterViewModel.loadSites()
 
-    let normalizedSites = await SystemViewModel.normalizedDefaultSearchSitesString()
+    let normalizedSites = await SystemViewModel.normalizedDefaultSearchSitesString(
+      apiService: service
+    )
 
     XCTAssertTrue(resourceViewModel.results.isEmpty)
     XCTAssertTrue(addDownloadViewModel.downloaders.isEmpty)
@@ -463,9 +812,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureLimitedUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "limited-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = Token(
       access_token: "limited-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -481,9 +830,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureStandardSubscriber(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "subscriber-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "subscriber-token"
+    service.currentUserForTesting = Token(
       access_token: "subscriber-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -499,9 +848,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureManageUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "manage-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "manage-token"
+    service.currentUserForTesting = Token(
       access_token: "manage-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -517,9 +866,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureSuperUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "super-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "super-token"
+    service.currentUserForTesting = Token(
       access_token: "super-token",
       token_type: "bearer",
       super_user: FlexibleBool(true),
@@ -535,9 +884,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureNoSearchUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "no-search-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "no-search-token"
+    service.currentUserForTesting = Token(
       access_token: "no-search-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -595,6 +944,7 @@ private struct MediaPreloadPermissionServiceSnapshot {
   let usernameDefaults: String?
   let passwordKeychain: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> MediaPreloadPermissionServiceSnapshot {
@@ -610,15 +960,19 @@ private struct MediaPreloadPermissionServiceSnapshot {
       usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
       passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
+    service.restorePersistenceSnapshotForTesting(persistence)
     restoreUserDefaultsString(serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(
@@ -693,10 +1047,45 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
     lock.unlock()
 
     switch path {
-    case "/api/v1/media/tmdb:123":
+    case "/api/v1/media/123":
       return (200, jsonData(#"{"tmdb_id":123,"title":"Limited Show","type":"电视剧"}"#))
-    case "/api/v1/media/tmdb:456":
+    case "/api/v1/media/124":
+      return (
+        200, jsonData(#"""
+          {"tmdb_id":124,"title":"预览剧集","type":"电视剧","season":2,
+           "season_info":[{"season_number":0},{"season_number":1},{"season_number":2}]}
+          """#)
+      )
+    case "/api/v1/tmdb/124/2":
+      return (200, jsonData(#"[{"episode_number":1,"name":"第二季第一集"}]"#))
+    case "/api/v1/media/125":
+      switch requestPaths().filter({ $0 == path }).count {
+      case 1, 3: return (500, jsonData("{}"))
+      case 2: return (200, jsonData("{}"))
+      default:
+        return (200, jsonData(#"{"tmdb_id":125,"title":"完整详情","type":"电视剧","season_info":[{"season_number":2},{"season_number":3}]}"#))
+      }
+    case "/api/v1/media/126":
+      return (404, jsonData(#"{"detail":"Not Found"}"#))
+    case "/api/v1/media/456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
+    case "/api/v1/media/987":
+      return (200, jsonData(#"{"bangumi_id":987,"title":"无法识别的 Bangumi 条目","type":"电视剧"}"#))
+    case "/api/v1/media/fixture-221a":
+      // partial 为 custom（无可识别身份）；full detail 补出 douban_id（canJumpToTMDB 翻 true）但无 TMDB。
+      return (200, jsonData(#"{"douban_id":"db-221a","title":"AAA 无法识别的自定义条目","type":"电视剧"}"#))
+    case "/api/v1/media/fixture-221b":
+      return (200, jsonData(#"{"douban_id":"db-221b","title":"BBB 可识别的自定义条目","type":"电视剧"}"#))
+    case "/api/v1/media/search":
+      // 仅命中 "BBB 可识别的自定义条目"；AAA/Bangumi 标题不匹配 → 走 no-result。
+      return (200, jsonData(#"[{"title":"BBB 可识别的自定义条目","tmdb_id":221,"type":"电视剧"}]"#))
+    case "/api/v1/user/current":
+      return (
+        200,
+        jsonData(
+          #"{"id":17,"name":"subscriber","is_superuser":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":false}}"#
+        )
+      )
     case "/api/v1/media/groups/123",
       "/api/v1/media/seasons",
       "/api/v1/subscribe/":

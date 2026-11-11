@@ -1,18 +1,8 @@
 import SwiftUI
 
 struct LoginView: View {
-  @StateObject private var viewModel: LoginViewModel
+  @StateObject private var viewModel = LoginViewModel()
   @EnvironmentObject private var notificationManager: NotificationManager
-
-  init() {
-    _viewModel = StateObject(wrappedValue: LoginViewModel())
-  }
-
-  #if DEBUG
-  init(previewViewModel: LoginViewModel) {
-    _viewModel = StateObject(wrappedValue: previewViewModel)
-  }
-  #endif
 
   var body: some View {
     HStack {
@@ -23,8 +13,8 @@ struct LoginView: View {
           .frame(width: 500, height: 300)
 
         Text("MoviePilot")
-          .font(.largeTitle)
-          .fontWeight(.bold)
+          .font(.title)
+          .bold()
 
         VStack(spacing: 20) {
           TextField("服务器地址 (例如 http://192.168.1.5:3000)", text: $viewModel.serverURL)
@@ -36,7 +26,16 @@ struct LoginView: View {
           SecureField("密码", text: $viewModel.password)
             .textContentType(.password)
 
+          if viewModel.showsMFAUnsupportedNotice {
+            Text("当前账号已开启 MFA，TV 端暂不支持，请关闭 MFA 后重试")
+              .font(.callout)
+              .foregroundStyle(.red)
+          }
+
           Button(action: {
+            // 登录中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走；
+            // 点击在加载中被忽略，防重入由 guard 完成。
+            guard !viewModel.isLoading else { return }
             Task {
               await viewModel.login()
             }
@@ -49,12 +48,12 @@ struct LoginView: View {
             }
             .frame(maxWidth: .infinity)
           }
-          .disabled(viewModel.isLoading || viewModel.serverURL.isEmpty || viewModel.username.isEmpty || viewModel.password.isEmpty)
+          .disabled(viewModel.serverURL.isEmpty || viewModel.username.isEmpty || viewModel.password.isEmpty)
         }
         .frame(width: 600)
       }
     }
-    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
+    .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)
         viewModel.errorMessage = nil

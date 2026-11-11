@@ -4,64 +4,131 @@ import SwiftUI
 
 @MainActor
 class DownloadTaskViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var clients: [DownloaderConf] = []
   @Published var selectedClient: String = ""
   @Published var downloads: [DownloadingInfo] = []
+  @Published private(set) var loadedClient: String = ""
+  @Published private(set) var clientsLoadFailed = false
+  @Published var errorMessage: String?
 
-  private let apiService = APIService.shared
-  private var downloadLoadGeneration = 0
-
-  #if DEBUG
-  func installUIPreviewData(
-    clients: [DownloaderConf],
-    selectedClient: String,
-    downloads: [DownloadingInfo]
-  ) {
-    self.clients = clients
-    self.selectedClient = selectedClient
-    self.downloads = downloads
+  var canOperateDownloads: Bool {
+    !loadedClient.isEmpty && loadedClient == selectedClient
   }
-  #endif
+
+  private let apiService: APIService
+  private var downloadLoadGeneration = 0
+  private var presentationGeneration = 0
+  private var isPresentationActive = true
+  private var hasLoadedClients = false
+  private var consecutiveClientsFailures = 0
+  private var consecutiveDownloadsFailures = 0
+
+  private static let pollingFailureNotificationThreshold = 5
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
+
+  /// 主 Tab 生命周期门禁。generation 让“切走后又快速切回”的旧独立 Task 也无法写回。
+  func setPresentationActive(_ isActive: Bool) {
+    guard isPresentationActive != isActive else { return }
+    isPresentationActive = isActive
+    presentationGeneration &+= 1
+    downloadLoadGeneration &+= 1
+  }
 
   func initialLoad() async {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
-    #endif
-
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled else { return }
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
     }
-    if clients.isEmpty {
-      do {
-        clients = try await apiService.fetchDownloadClients()
-        if let first = clients.first(where: { $0.enabled?.value ?? false }) ?? clients.first {
-          selectedClient = first.name
-        }
-      } catch {
-        print("Error fetching clients: \(error)")
-      }
-    }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    await loadClientsIfNeeded()
+    guard isPresentationActive,
+      currentPresentationGeneration == presentationGeneration,
+      !Task.isCancelled,
+      apiService.isSessionUnchanged(from: sessionSnapshot)
+    else { return }
     await loadDownloads()
   }
 
-  func loadDownloads() async {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
-    #endif
+  func loadClientsIfNeeded() async {
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled, !hasLoadedClients else { return }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    do {
+      let loadedClients = try await apiService.fetchDownloadClients()
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled,
+        apiService.isSessionUnchanged(from: sessionSnapshot)
+      else { return }
+      hasLoadedClients = true
+      clientsLoadFailed = false
+      consecutiveClientsFailures = 0
+      clients = loadedClients
+      if let first = loadedClients.first(where: { $0.enabled?.value ?? false })
+        ?? loadedClients.first
+      {
+        selectedClient = first.name
+      }
+    } catch is CancellationError {
+      return
+    } catch {
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled
+      else { return }
+      clientsLoadFailed = true
+      consecutiveClientsFailures += 1
+      reportPollingFailureIfNeeded(
+        &consecutiveClientsFailures,
+        message: "下载器列表加载失败，正在自动重试。"
+      )
+      Logger.error("Error fetching clients: \(error)")
+    }
+  }
 
+  func loadDownloads() async {
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled else { return }
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
     }
+    await loadClientsIfNeeded()
+    guard isPresentationActive,
+      currentPresentationGeneration == presentationGeneration,
+      !Task.isCancelled
+    else { return }
     downloadLoadGeneration += 1
     let currentGeneration = downloadLoadGeneration
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {
-      let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
-      guard selectedClient == clientName, currentGeneration == downloadLoadGeneration else {
+      var newDownloads = try await apiService.fetchDownloading(clientName: clientName)
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled,
+        selectedClient == clientName,
+        currentGeneration == downloadLoadGeneration
+      else {
         return
+      }
+
+      if !apiService.canRequestSuperUserEndpoints {
+        if let userName = apiService.currentUser?.user_name {
+          newDownloads = newDownloads.filter {
+            $0.userid == userName || $0.username == userName
+          }
+        } else {
+          newDownloads = []
+        }
       }
 
       let newDownloadIds = Set(newDownloads.map { $0.id })
@@ -82,79 +149,107 @@ class DownloadTaskViewModel: ObservableObject {
           downloads.insert(newDownload, at: 0)
         }
       }
+      if loadedClient != clientName {
+        loadedClient = clientName
+      }
+      consecutiveDownloadsFailures = 0
+    } catch is CancellationError {
+      return
     } catch {
-      print("Error loading downloads: \(error)")
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled
+      else { return }
+      consecutiveDownloadsFailures += 1
+      reportPollingFailureIfNeeded(
+        &consecutiveDownloadsFailures,
+        message: "下载任务刷新失败，正在自动重试。"
+      )
+      Logger.error("Error loading downloads: \(error)")
     }
   }
 
   private func clearForRestrictedUser() {
     downloadLoadGeneration += 1
+    hasLoadedClients = false
+    clientsLoadFailed = false
     clients = []
     selectedClient = ""
     downloads = []
+    loadedClient = ""
   }
 
-  func stopDownload(hash: String) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
+  private func reportPollingFailureIfNeeded(
+    _ consecutiveFailures: inout Int,
+    message: String
+  ) {
+    guard consecutiveFailures > Self.pollingFailureNotificationThreshold else { return }
+    consecutiveFailures = 0
+    errorMessage = message
+  }
 
+  func stopDownload(clientName: String, hash: String) async -> Bool {
     guard apiService.canAccess(.manage) else { return false }
-    guard !selectedClient.isEmpty else { return false }
+    guard canOperateDownloads, loadedClient == clientName else { return false }
     do {
       let (success, message) = try await apiService.stopDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
-        print("Failed to stop download: \(message ?? "Unknown error")")
+        errorMessage = message ?? "暂停下载失败，请稍后重试。"
+        Logger.error("Failed to stop download: \(message ?? "Unknown error")")
       }
       return success
+    } catch is CancellationError {
+      return false
     } catch {
-      print("Error stopping download: \(error)")
+      errorMessage = "暂停下载失败，请稍后重试。"
+      Logger.error("Error stopping download: \(error)")
       return false
     }
   }
 
-  func startDownload(hash: String) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
+  func startDownload(clientName: String, hash: String) async -> Bool {
     guard apiService.canAccess(.manage) else { return false }
-    guard !selectedClient.isEmpty else { return false }
+    guard canOperateDownloads, loadedClient == clientName else { return false }
     do {
       let (success, message) = try await apiService.startDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
-        print("Failed to start download: \(message ?? "Unknown error")")
+        errorMessage = message ?? "启动下载失败，请稍后重试。"
+        Logger.error("Failed to start download: \(message ?? "Unknown error")")
       }
       return success
+    } catch is CancellationError {
+      return false
     } catch {
-      print("Error starting download: \(error)")
+      errorMessage = "启动下载失败，请稍后重试。"
+      Logger.error("Error starting download: \(error)")
       return false
     }
   }
 
   @MainActor
-  func deleteDownload(hash: String) async {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
-    #endif
-
+  func deleteDownload(clientName: String, hash: String) async {
     guard apiService.canAccess(.manage) else { return }
-    let clientName = selectedClient
-    guard !clientName.isEmpty else { return }
+    guard canOperateDownloads, loadedClient == clientName else { return }
     do {
       let (success, message) = try await apiService.deleteDownload(
         clientName: clientName, hash: hash)
-      guard selectedClient == clientName else { return }
+      guard canOperateDownloads, loadedClient == clientName else { return }
 
       if success, let index = downloads.firstIndex(where: { $0.hash == hash }) {
         downloads.remove(at: index)
       } else {
-        print("Failed to delete download: \(message ?? "Unknown error")")
+        errorMessage = message ?? "删除下载失败，请稍后重试。"
+        Logger.error("Failed to delete download: \(message ?? "Unknown error")")
       }
+    } catch is CancellationError {
+      return
     } catch {
-      print("Error deleting download: \(error)")
+      errorMessage = "删除下载失败，请稍后重试。"
+      Logger.error("Error deleting download: \(error)")
     }
   }
 }

@@ -14,7 +14,7 @@ concurrency:
 jobs:
   test:
     name: Build and test tvOS app
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
 
     steps:
@@ -32,37 +32,10 @@ jobs:
       - name: List available tvOS simulators
         run: xcrun simctl list devices tvOS available
 
-      - name: Resolve Swift packages
+      - name: Test scripts
         run: |
-          xcodebuild -resolvePackageDependencies \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -skipPackagePluginValidation
+          bash -n scripts/apple-tv-renew.sh
+          python3 -m unittest discover -s scripts/tests
 
-      - name: Build
-        run: |
-          xcodebuild clean build \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -configuration Debug \
-            -destination "generic/platform=tvOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            -skipPackagePluginValidation
-
-      - name: Test
-        run: |
-          xcodebuild test \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -configuration Debug \
-            -destination "platform=tvOS Simulator,name=Apple TV" \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            -skip-testing:MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests \
-            -skip-testing:MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            -skipPackagePluginValidation
+      - name: Build and test on a disposable tvOS 27.2 simulator
+        run: python3 scripts/test-tvos.py --full --runtime 27.2

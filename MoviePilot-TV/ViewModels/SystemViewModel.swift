@@ -1,8 +1,31 @@
 import Combine
 import Foundation
 
+/// 默认站点在发起搜索时读取，只有聚合搜索来源需要通知已打开的页面。
+struct SearchDefaultsChange {
+  let profileKey: String
+  let defaultMediaSearchSource: MediaSearchSource?
+
+  @MainActor
+  static func post(apiService: APIService) {
+    guard let profileKey = apiService.profileKey else { return }
+    NotificationCenter.default.post(
+      name: .searchDefaultsDidChange,
+      object: SearchDefaultsChange(
+        profileKey: profileKey,
+        defaultMediaSearchSource: SystemViewModel.currentDefaultMediaSearchSource(
+          apiService: apiService
+        )
+      )
+    )
+  }
+}
+
 @MainActor
 class SystemViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   enum StorageMechanism {
     case keychain
     case userDefaults
@@ -12,9 +35,6 @@ class SystemViewModel: ObservableObject {
   @Published var storageMechanism: StorageMechanism = .none
   @Published var storageDescription: String = "正在检查..."
 
-  private let keychainService = "MoviePilot-TV"
-  private let keychainAccount = "accessToken"
-
   @Published var isRefreshing: Bool = false
   @Published var refreshMessage: String? = nil
 
@@ -22,131 +42,191 @@ class SystemViewModel: ObservableObject {
   @Published var serverURL: String = ""
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
+  private let apiService: APIService
+  private var cancellables = Set<AnyCancellable>()
 
   var appVersion: String {
     AppVersionInfo.currentAppVersion()
   }
 
-  var compatibleMoviePilotVersion: String {
-    AppVersionInfo.compatibleMoviePilotVersion
+  var latestCompatibleMoviePilotVersion: String {
+    AppVersionInfo.latestCompatibleMoviePilotVersion
   }
 
   // MARK: - 详情页设置
 
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
+  private static let preloadTMDBDetailsKey = "preloadTMDBDetails"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
-
-  #if DEBUG
-  private static var isUIPreviewMode: Bool {
-    UIPreviewMode.isEnabled()
-  }
-
-  private var uiPreviewDefaultSearchSites: Set<Int> = []
-  private var uiPreviewHardFilterRuleId: String?
-  private var uiPreviewSoftFilterRuleId: String?
-  #endif
+  private static let homeMediaTapPlaysInAppKey = "homeMediaTapPlaysInApp"
 
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
   @Published var waitMediaDetailBackgroundImage: Bool = true {
     didSet {
-      #if DEBUG
-      guard !Self.isUIPreviewMode else { return }
-      #endif
       UserDefaults.standard.set(waitMediaDetailBackgroundImage, forKey: Self.waitMediaDetailBackgroundImageKey)
+    }
+  }
+
+  /// 是否在豆瓣/Bangumi 详情识别完成后预加载对应 TMDB 详情。默认开启。
+  @Published var preloadTMDBDetails: Bool = true {
+    didSet {
+      UserDefaults.standard.set(preloadTMDBDetails, forKey: Self.preloadTMDBDetailsKey)
     }
   }
 
   /// 新增订阅保存后是否立即触发一次手动搜索。默认开启，保持现有 TV 行为。
   @Published var autoSearchNewSubscriptions: Bool = true {
     didSet {
-      #if DEBUG
-      guard !Self.isUIPreviewMode else { return }
-      #endif
       UserDefaults.standard.set(autoSearchNewSubscriptions, forKey: Self.autoSearchNewSubscriptionsKey)
     }
+  }
+
+  /// 首页“最近添加”的电影和剧集点击后直接在应用内播放；关闭时跳转媒体服务器 App。默认关闭。
+  @Published var homeMediaTapPlaysInApp: Bool = false {
+    didSet {
+      UserDefaults.standard.set(homeMediaTapPlaysInApp, forKey: Self.homeMediaTapPlaysInAppKey)
+    }
+  }
+
+  /// 应用内播放开关，默认开；后端低于 v3.2.6 时设置页不让打开，入口也不显示（见 `InAppPlaybackAvailability`）。
+  @Published var inAppPlaybackEnabled: Bool = true {
+    didSet { PlaybackPreferences.setInAppPlaybackEnabled(inAppPlaybackEnabled) }
+  }
+
+  /// 播完自动播下一集，和播放界面工具栏的“自动播放”是同一个设置。
+  @Published var autoPlayNextEpisode: Bool = true {
+    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(autoPlayNextEpisode) }
+  }
+
+  /// 后端版本是否支持应用内播放。
+  var backendSupportsInAppPlayback: Bool {
+    InAppPlaybackAvailability.supports(backendVersion: apiService.settings?.BACKEND_VERSION)
+  }
+
+  /// 「播放」设置页的行。
+  enum PlaybackSettingRow: Equatable {
+    /// 后端版本不够：说明版本要求，按下重新读取后端版本（升级后不用重启 App）。
+    case versionRequirement
+    case inAppPlayback
+    case homeMediaTap
+    case autoPlayNextEpisode
+  }
+
+  var playbackSettingRows: [PlaybackSettingRow] {
+    Self.playbackSettingRows(
+      backendVersion: apiService.settings?.BACKEND_VERSION, inAppPlaybackEnabled: inAppPlaybackEnabled)
+  }
+
+  /// 后端低于 v3.2.6 时只有版本说明，开关打不开；开关关着时，只在应用内播放才有意义的两项不显示。
+  static func playbackSettingRows(backendVersion: String?, inAppPlaybackEnabled: Bool) -> [PlaybackSettingRow] {
+    guard InAppPlaybackAvailability.supports(backendVersion: backendVersion) else { return [.versionRequirement] }
+    return inAppPlaybackEnabled ? [.inAppPlayback, .homeMediaTap, .autoPlayNextEpisode] : [.inAppPlayback]
+  }
+
+  @Published private(set) var isCheckingBackendVersion = false
+  /// 上一次重新检查版本没有读到结果（请求失败），和“版本确实过低”区分开显示。
+  @Published private(set) var backendVersionCheckFailed = false
+
+  /// 重新读取后端版本：后端升级到支持的版本后，回到这里按一下就能设置应用内播放；「MoviePilot 版本」那一行也跟着更新。
+  func recheckBackendVersion() async {
+    guard !isCheckingBackendVersion else { return }
+    isCheckingBackendVersion = true
+    backendVersionCheckFailed = false
+    defer { isCheckingBackendVersion = false }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    do {
+      let settings = try await apiService.fetchSettings()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
+    } catch {
+      guard !(error is CancellationError), apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      Logger.warning("重新读取后端版本失败: \(error.localizedDescription)")
+      backendVersionCheckFailed = true
+    }
+  }
+
+  /// 进入「播放」设置页、或播放界面改了自动播放时重读。
+  func reloadPlaybackSettings() {
+    let enabled = PlaybackPreferences.isInAppPlaybackEnabled
+    if inAppPlaybackEnabled != enabled { inAppPlaybackEnabled = enabled }
+    let autoPlay = PlaybackPreferences.autoPlaysNextEpisode
+    if autoPlayNextEpisode != autoPlay { autoPlayNextEpisode = autoPlay }
+    let homeTap = Self.shouldPlayHomeMediaInApp
+    if homeMediaTapPlaysInApp != homeTap { homeMediaTapPlaysInApp = homeTap }
   }
 
   // MARK: - 站点设置
   @Published var availableSites: [Site] = []
   @Published var isLoadingSites: Bool = false
+  @Published private(set) var hasLoadedSites: Bool = false
+  /// 是否拿到了权威搜索站点域（/site/）。降级为订阅域（/site/rss）时不能用来裁剪默认搜索站点（F-210）。
+  @Published private(set) var loadedSitesAuthoritative: Bool = false
+  @Published private(set) var siteLoadError: String?
 
-  /// 默认搜索站点（绑定 URL + 用户名）
+  /// 资源搜索默认站点（绑定服务器 + 稳定用户 ID）
   var defaultSearchSites: Set<Int> {
+    get { storedSiteIDs(prefix: "defaultSearchSites") }
+    set { updateStoredSiteIDs(newValue, prefix: "defaultSearchSites") }
+  }
+
+  /// 字幕搜索默认站点。和资源搜索分开保存，避免资源站点把字幕搜索带空。
+  var defaultSubtitleSearchSites: Set<Int> {
+    get { storedSiteIDs(prefix: "defaultSubtitleSearchSites") }
+    set { updateStoredSiteIDs(newValue, prefix: "defaultSubtitleSearchSites") }
+  }
+
+  /// 聚合搜索默认来源（绑定服务器 + 稳定用户 ID）；nil 表示沿用后端设置。
+  var defaultMediaSearchSource: MediaSearchSource? {
     get {
-      #if DEBUG
-      if Self.isUIPreviewMode { return uiPreviewDefaultSearchSites }
-      #endif
-      let array = UserDefaults.standard.array(forKey: defaultSearchSitesUserDefaultsKey) as? [Int] ?? []
-      return Set(array)
+      guard let key = defaultMediaSearchSourceUserDefaultsKey else { return nil }
+      return UserDefaults.standard.string(forKey: key)
+        .flatMap(MediaSearchSource.init(rawValue:))
     }
     set {
-      let normalizedSites = normalizeDefaultSearchSites(newValue)
-      #if DEBUG
-      if Self.isUIPreviewMode {
-        uiPreviewDefaultSearchSites = normalizedSites
-        objectWillChange.send()
-        return
-      }
-      #endif
-      let array = normalizedSites.sorted()
-      if array.isEmpty {
-        UserDefaults.standard.removeObject(forKey: defaultSearchSitesUserDefaultsKey)
+      guard let key = defaultMediaSearchSourceUserDefaultsKey else { return }
+      if let newValue {
+        UserDefaults.standard.set(newValue.rawValue, forKey: key)
       } else {
-        UserDefaults.standard.set(array, forKey: defaultSearchSitesUserDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: key)
       }
       objectWillChange.send()
+      SearchDefaultsChange.post(apiService: apiService)
     }
   }
 
   // MARK: - 自定义过滤规则
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
+  /// 规则加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
+  @Published var rulesLoadFailed = false
 
-  /// 当前选中的硬过滤规则 ID（绑定 URL + 用户名）
+  /// 当前选中的硬过滤规则 ID（绑定服务器 + 稳定用户 ID）
   var selectedHardFilterRuleId: String? {
     get {
-      #if DEBUG
-      if Self.isUIPreviewMode { return uiPreviewHardFilterRuleId }
-      #endif
-      return UserDefaults.standard.string(forKey: hardFilterRuleUserDefaultsKey)
+      hardFilterRuleUserDefaultsKey.flatMap { UserDefaults.standard.string(forKey: $0) }
     }
     set {
-      #if DEBUG
-      if Self.isUIPreviewMode {
-        uiPreviewHardFilterRuleId = newValue
-        objectWillChange.send()
-        return
-      }
-      #endif
+      guard let key = hardFilterRuleUserDefaultsKey else { return }
       if let value = newValue {
-        UserDefaults.standard.set(value, forKey: hardFilterRuleUserDefaultsKey)
+        UserDefaults.standard.set(value, forKey: key)
       } else {
-        UserDefaults.standard.removeObject(forKey: hardFilterRuleUserDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: key)
       }
       objectWillChange.send()
     }
   }
 
-  /// 当前选中的软过滤规则 ID（绑定 URL + 用户名）
+  /// 当前选中的软过滤规则 ID（绑定服务器 + 稳定用户 ID）
   var selectedSoftFilterRuleId: String? {
     get {
-      #if DEBUG
-      if Self.isUIPreviewMode { return uiPreviewSoftFilterRuleId }
-      #endif
-      return UserDefaults.standard.string(forKey: softFilterRuleUserDefaultsKey)
+      softFilterRuleUserDefaultsKey.flatMap { UserDefaults.standard.string(forKey: $0) }
     }
     set {
-      #if DEBUG
-      if Self.isUIPreviewMode {
-        uiPreviewSoftFilterRuleId = newValue
-        objectWillChange.send()
-        return
-      }
-      #endif
+      guard let key = softFilterRuleUserDefaultsKey else { return }
       if let value = newValue {
-        UserDefaults.standard.set(value, forKey: softFilterRuleUserDefaultsKey)
+        UserDefaults.standard.set(value, forKey: key)
       } else {
-        UserDefaults.standard.removeObject(forKey: softFilterRuleUserDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: key)
       }
       objectWillChange.send()
     }
@@ -164,74 +244,64 @@ class SystemViewModel: ObservableObject {
     return customFilterRules.first { $0.id == ruleId }
   }
 
-  /// 构建绑定 baseURL + 用户名的 UserDefaults key
-  private static func userDefaultsKey(_ prefix: String) -> String {
-    let baseURL = APIService.shared.baseURL
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    return "\(prefix)_\(baseURL)_\(username)"
+  /// 构建绑定服务器与稳定用户 ID 的 UserDefaults key，并一次性迁移旧的用户名键。
+  private static func userDefaultsKey(
+    _ prefix: String,
+    apiService: APIService = .shared
+  ) -> String? {
+    let service = apiService
+    guard let profileKey = service.profileKey else { return nil }
+    let key = "\(prefix)_\(profileKey)"
+    let defaults = UserDefaults.standard
+    if defaults.object(forKey: key) == nil,
+      let username = service.currentUser?.user_name,
+      !username.isEmpty
+    {
+      let legacyKey = "\(prefix)_\(service.baseURL)_\(username)"
+      if let legacyValue = defaults.object(forKey: legacyKey) {
+        defaults.set(legacyValue, forKey: key)
+        defaults.removeObject(forKey: legacyKey)
+      }
+    }
+    return key
   }
 
-  private var hardFilterRuleUserDefaultsKey: String {
-    Self.userDefaultsKey("selectedCustomFilterRuleId")
+  private var hardFilterRuleUserDefaultsKey: String? {
+    Self.userDefaultsKey("selectedCustomFilterRuleId", apiService: apiService)
   }
 
-  private var softFilterRuleUserDefaultsKey: String {
-    Self.userDefaultsKey("selectedSoftFilterRuleId")
+  private var softFilterRuleUserDefaultsKey: String? {
+    Self.userDefaultsKey("selectedSoftFilterRuleId", apiService: apiService)
   }
 
-  private var defaultSearchSitesUserDefaultsKey: String {
-    Self.userDefaultsKey("defaultSearchSites")
+  private var defaultMediaSearchSourceUserDefaultsKey: String? {
+    Self.userDefaultsKey("defaultMediaSearchSource", apiService: apiService)
   }
 
-  init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
     waitMediaDetailBackgroundImage = Self.shouldWaitMediaDetailBackgroundImage
+    preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
+    homeMediaTapPlaysInApp = Self.shouldPlayHomeMediaInApp
+    inAppPlaybackEnabled = PlaybackPreferences.isInAppPlaybackEnabled
+    autoPlayNextEpisode = PlaybackPreferences.autoPlaysNextEpisode
     checkKeychainStatus()
+    apiService.$session
+      .sink { [weak self] session in
+        self?.updateStorageStatus(for: session)
+      }
+      .store(in: &cancellables)
+    // 播放界面工具栏也能改自动播放；设置页留在「播放」子页时切回来要显示新值。
+    NotificationCenter.default.publisher(for: PlaybackPreferences.autoPlayDidChangeNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reloadPlaybackSettings() }
+      .store(in: &cancellables)
   }
-
-  #if DEBUG
-  func installUIPreviewData(
-    storageDescription: String,
-    serverURL: String,
-    username: String,
-    backendVersion: String?,
-    availableSites: [Site],
-    customFilterRules: [CustomRule],
-    isRefreshing: Bool = false,
-    refreshMessage: String? = nil,
-    isLoadingSites: Bool = false,
-    isLoadingRules: Bool = false
-  ) {
-    self.storageDescription = storageDescription
-    self.serverURL = serverURL
-    self.username = username
-    self.backendVersion = backendVersion
-    self.availableSites = availableSites
-    self.customFilterRules = customFilterRules
-    self.isRefreshing = isRefreshing
-    self.refreshMessage = refreshMessage
-    self.isLoadingSites = isLoadingSites
-    self.isLoadingRules = isLoadingRules
-    uiPreviewDefaultSearchSites = []
-    uiPreviewHardFilterRuleId = customFilterRules.first?.id
-    uiPreviewSoftFilterRuleId = customFilterRules.dropFirst().first?.id ?? customFilterRules.first?.id
-  }
-  #endif
 
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
   func relogin() async {
     guard !isRefreshing else { return }
-
-    #if DEBUG
-    if Self.isUIPreviewMode {
-      refreshMessage = "刷新成功"
-      storageDescription = "已登录 (安全存储)"
-      return
-    }
-    #endif
 
     isRefreshing = true
     refreshMessage = nil
@@ -239,21 +309,10 @@ class SystemViewModel: ObservableObject {
       isRefreshing = false
     }
 
-    // 从 Keychain 获取保存的用户名密码
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-    let password =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password")
-      ?? UserDefaults.standard.string(forKey: "password")
-
-    guard let u = username, let p = password, !u.isEmpty, !p.isEmpty else {
-      refreshMessage = "未找到保存的凭据，请重新登录"
-      return
-    }
-
     do {
-      _ = try await APIService.shared.login(username: u, password: p)
+      _ = try await apiService.reloginStoredSession()
+      // 同账号重登不会改变 sessionUIIdentity，SystemView 不会因此重建；成功后主动刷新连接信息。
+      await loadSystemInfo()
       refreshMessage = "刷新成功"
       checkKeychainStatus()
     } catch {
@@ -262,22 +321,18 @@ class SystemViewModel: ObservableObject {
   }
 
   func logout() {
-    #if DEBUG
-    if Self.isUIPreviewMode {
-      storageMechanism = .none
-      storageDescription = "未登录"
-      refreshMessage = nil
-      return
-    }
-    #endif
-    APIService.shared.logout()
+    apiService.logout()
     checkKeychainStatus()
   }
 
   /// 检查凭证的实际存储方式 (Keychain 或降级的 UserDefaults)
   func checkKeychainStatus() {
+    updateStorageStatus(for: apiService.session)
+  }
+
+  private func updateStorageStatus(for session: APIServiceSessionState) {
     // 从单一事实来源 APIService 获取当前 App 生效的 token
-    guard let activeToken = APIService.shared.token, !activeToken.isEmpty else {
+    guard let activeToken = session.token, !activeToken.isEmpty else {
       // 如果没有生效的 token，则当前无任何凭证在使用
       self.storageMechanism = .none
       self.storageDescription = "未登录"
@@ -285,21 +340,14 @@ class SystemViewModel: ObservableObject {
     }
 
     // 尝试从 Keychain 中读取 token
-    let keychainToken = KeychainHelper.shared.read(
-      service: keychainService,
-      account: keychainAccount
-    )
-
-    // 核心验证：只有当 Keychain 里的 token 与当前 App 生效的 token 完全一致时，
-    // 才认为 Keychain 是"使用中"的。
-    if let keychainToken, keychainToken == activeToken {
+    if apiService.isSessionStoredInKeychain == true {
       self.storageMechanism = .keychain
-      self.storageDescription = "已登录 (安全存储)"
+      self.storageDescription = "已登录（Apple 钥匙串安全存储）"
     } else {
       // 否则，虽然 App 已登录（有 activeToken），但凭证并非来自 Keychain，
       // 这说明程序已降级到使用 UserDefaults。
       self.storageMechanism = .userDefaults
-      self.storageDescription = "已登录 (非安全模式)"
+      self.storageDescription = "已登录（密码明文非安全存储）"
     }
   }
 
@@ -307,34 +355,32 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载系统环境和用户信息
   func loadSystemInfo() async {
-    let sessionSnapshot = APIService.shared.sessionSnapshot()
-    self.serverURL = APIService.shared.baseURL
-    self.username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "未知"
-    let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
+    let sessionSnapshot = apiService.sessionSnapshot()
+    self.serverURL = apiService.baseURL
+    self.username = apiService.currentUser?.user_name ?? "未知"
+    let cachedBackendVersion = normalizedBackendVersion(apiService.settings?.BACKEND_VERSION)
     self.backendVersion = cachedBackendVersion
 
-    if APIService.shared.isLoggedIn && APIService.shared.canRequestSuperUserEndpoints {
+    if apiService.isLoggedIn && apiService.canRequestSuperUserEndpoints {
       do {
-        let env = try await APIService.shared.fetchSystemEnv()
-        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+        let env = try await apiService.fetchSystemEnv()
+        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
         if let envVersion = normalizedBackendVersion(env.VERSION) {
           self.backendVersion = envVersion
           return
         }
       } catch {
-        print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+        Logger.error("[SystemViewModel] 获取后端版本号失败: \(error)")
       }
     }
 
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
     do {
-      let settings = try await APIService.shared.fetchSettings()
-      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+      let settings = try await apiService.fetchSettings()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
-      print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
+      Logger.error("[SystemViewModel] 获取公开后端版本号失败: \(error)")
     }
   }
 
@@ -351,29 +397,30 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载站点列表
   func loadSites() async {
-    guard APIService.shared.canAccess(.search) else {
+    guard apiService.canAccess(.search) else {
       availableSites = []
+      siteLoadError = nil
       return
     }
     guard !isLoadingSites else { return }
-    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingSites = true
+    siteLoadError = nil
     defer {
       isLoadingSites = false
     }
     do {
-      let sites = try await APIService.shared.fetchSites()
-      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canAccess(.search)
-      else {
-        availableSites = []
-        return
-      }
+      let (sites, authoritative) = try await apiService.fetchSearchableSites()
       availableSites = sites
+      loadedSitesAuthoritative = authoritative
+      hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
-      print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
+      defaultSubtitleSearchSites = defaultSubtitleSearchSites
+      Logger.info("[SystemViewModel] 加载到 \(availableSites.count) 个站点\(authoritative ? "" : "（订阅域）")")
+    } catch is CancellationError {
+      return
     } catch {
-      print("❌ [SystemViewModel] 加载站点失败: \(error)")
+      siteLoadError = "站点加载失败，请重试"
+      Logger.error("[SystemViewModel] 加载站点失败: \(error)")
     }
   }
 
@@ -381,91 +428,103 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
-    guard APIService.shared.canRequestSuperUserEndpoints else {
+    guard apiService.canRequestSuperUserEndpoints else {
       customFilterRules = []
+      rulesLoadFailed = false
       return
     }
     guard !isLoadingRules else { return }
-    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingRules = true
     defer {
       isLoadingRules = false
     }
     do {
-      let rules = try await APIService.shared.fetchCustomFilterRules()
-      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canRequestSuperUserEndpoints
-      else {
-        customFilterRules = []
-        return
-      }
+      let rules = try await apiService.fetchCustomFilterRules()
       customFilterRules = rules
-      print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
+      rulesLoadFailed = false
+      Logger.info("[SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
       if let selectedHardId = selectedHardFilterRuleId,
         !customFilterRules.contains(where: { $0.id == selectedHardId })
       {
-        print("⚠️ [SystemViewModel] 选中的硬规则 \(selectedHardId) 已不存在，清除选择")
+        Logger.warning("[SystemViewModel] 选中的硬规则 \(selectedHardId) 已不存在，清除选择")
         selectedHardFilterRuleId = nil
       }
       if let selectedSoftId = selectedSoftFilterRuleId,
         !customFilterRules.contains(where: { $0.id == selectedSoftId })
       {
-        print("⚠️ [SystemViewModel] 选中的软规则 \(selectedSoftId) 已不存在，清除选择")
+        Logger.warning("[SystemViewModel] 选中的软规则 \(selectedSoftId) 已不存在，清除选择")
         selectedSoftFilterRuleId = nil
       }
+    } catch is CancellationError {
+      return
     } catch {
-      print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
+      rulesLoadFailed = true
+      Logger.error("[SystemViewModel] 加载自定义过滤规则失败: \(error)")
     }
   }
 
   // MARK: - 静态方法：供 ViewModel 层读取当前选中规则
 
   /// 获取当前用户+服务器绑定的硬过滤规则 ID
-  static func currentSelectedHardFilterRuleId() -> String? {
-    UserDefaults.standard.string(forKey: userDefaultsKey("selectedCustomFilterRuleId"))
+  static func currentSelectedHardFilterRuleId(apiService: APIService = .shared) -> String? {
+    userDefaultsKey("selectedCustomFilterRuleId", apiService: apiService)
+      .flatMap { UserDefaults.standard.string(forKey: $0) }
   }
 
   /// 获取当前用户+服务器绑定的软过滤规则 ID
-  static func currentSelectedSoftFilterRuleId() -> String? {
-    UserDefaults.standard.string(forKey: userDefaultsKey("selectedSoftFilterRuleId"))
+  static func currentSelectedSoftFilterRuleId(apiService: APIService = .shared) -> String? {
+    userDefaultsKey("selectedSoftFilterRuleId", apiService: apiService)
+      .flatMap { UserDefaults.standard.string(forKey: $0) }
   }
 
-  /// 获取当前用户+服务器绑定的默认搜索站点
-  static func currentDefaultSearchSites() -> Set<Int> {
-    let array = UserDefaults.standard.array(forKey: userDefaultsKey("defaultSearchSites")) as? [Int] ?? []
-    return Set(array)
+  /// 获取当前用户+服务器绑定的资源搜索默认站点
+  static func currentDefaultSearchSites(apiService: APIService = .shared) -> Set<Int> {
+    storedSiteIDs(prefix: "defaultSearchSites", apiService: apiService)
   }
 
-  /// 获取已按当前可用站点清理后的默认搜索站点。
-  static func normalizedCurrentDefaultSearchSites() async -> Set<Int> {
-    let storedSites = currentDefaultSearchSites()
-    guard !storedSites.isEmpty else { return [] }
-    guard APIService.shared.canAccess(.search) else { return [] }
+  /// 获取当前用户+服务器绑定的字幕搜索默认站点
+  static func currentDefaultSubtitleSearchSites(apiService: APIService = .shared) -> Set<Int> {
+    storedSiteIDs(prefix: "defaultSubtitleSearchSites", apiService: apiService)
+  }
 
+  /// 获取当前用户+服务器绑定的聚合搜索默认来源；nil 表示沿用后端设置。
+  static func currentDefaultMediaSearchSource(apiService: APIService = .shared) -> MediaSearchSource? {
+    userDefaultsKey("defaultMediaSearchSource", apiService: apiService)
+      .flatMap { UserDefaults.standard.string(forKey: $0) }
+      .flatMap(MediaSearchSource.init(rawValue:))
+  }
+
+  /// 获取已按当前可用站点清理后的资源搜索默认站点字符串。
+  static func normalizedDefaultSearchSitesString(
+    apiService: APIService = .shared
+  ) async -> String? {
+    await resolvedDefaultSearchSitesString(prefix: "defaultSearchSites", apiService: apiService)
+  }
+
+  /// 获取已按当前可用站点清理后的字幕搜索默认站点字符串。
+  static func normalizedDefaultSubtitleSearchSitesString(
+    apiService: APIService = .shared
+  ) async -> String? {
+    await resolvedDefaultSearchSitesString(prefix: "defaultSubtitleSearchSites", apiService: apiService)
+  }
+
+  private static func resolvedDefaultSearchSitesString(prefix: String, apiService: APIService) async -> String? {
+    guard apiService.canAccess(.search) else { return nil }
+    let snapshot = apiService.sessionSnapshot()
+    let selection = storedSiteIDs(prefix: prefix, apiService: apiService)
     do {
-      let availableSites = try await APIService.shared.fetchSites()
-      let availableSiteIds = Set(availableSites.map(\.id))
-      let normalizedSites = storedSites.intersection(availableSiteIds)
-      if normalizedSites != storedSites {
-        persistDefaultSearchSites(normalizedSites)
-      }
-      return normalizedSites
+      let (sites, authoritative) = try await apiService.fetchSearchableSites()
+      guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+      let scope = SearchSiteScope(sites: sites, authoritative: authoritative)
+      return scope.query(for: scope.normalized(selection))
+    } catch is CancellationError {
+      return nil
     } catch {
-      print("❌ [SystemViewModel] 默认搜索站点归一化失败: \(error)")
-      return storedSites
+      guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+      Logger.error("[SystemViewModel] 加载默认搜索站点失败: \(error)")
+      return SearchSiteScope(sites: [], authoritative: false).query(for: selection)
     }
-  }
-
-  /// 获取已按当前可用站点清理后的默认搜索站点字符串。
-  static func normalizedDefaultSearchSitesString() async -> String? {
-    siteIdsString(from: await normalizedCurrentDefaultSearchSites())
-  }
-
-  /// 获取默认搜索站点的逗号分隔字符串
-  @available(*, deprecated, message: "搜索前请使用 normalizedDefaultSearchSitesString()，避免发送已删除站点。")
-  static var defaultSearchSitesString: String? {
-    siteIdsString(from: currentDefaultSearchSites())
   }
 
   /// 当前是否等待 MediaDetail 背景/海报预加载完成。
@@ -476,6 +535,17 @@ class SystemViewModel: ObservableObject {
     return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
   }
 
+  static var shouldPreloadTMDBDetails: Bool {
+    guard UserDefaults.standard.object(forKey: preloadTMDBDetailsKey) != nil else {
+      return true
+    }
+    return UserDefaults.standard.bool(forKey: preloadTMDBDetailsKey)
+  }
+
+  static var shouldPlayHomeMediaInApp: Bool {
+    UserDefaults.standard.bool(forKey: homeMediaTapPlaysInAppKey)
+  }
+
   static var shouldAutoSearchNewSubscriptions: Bool {
     guard UserDefaults.standard.object(forKey: autoSearchNewSubscriptionsKey) != nil else {
       return true
@@ -483,23 +553,29 @@ class SystemViewModel: ObservableObject {
     return UserDefaults.standard.bool(forKey: autoSearchNewSubscriptionsKey)
   }
 
-  private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
-    guard !availableSites.isEmpty else { return sites }
-
-    let availableSiteIds = Set(availableSites.map(\.id))
-    return sites.intersection(availableSiteIds)
+  private func storedSiteIDs(prefix: String) -> Set<Int> {
+    Self.storedSiteIDs(prefix: prefix, apiService: apiService)
   }
 
-  private static func persistDefaultSearchSites(_ sites: Set<Int>) {
-    let array = sites.sorted()
+  private func updateStoredSiteIDs(_ sites: Set<Int>, prefix: String) {
+    guard let key = Self.userDefaultsKey(prefix, apiService: apiService) else { return }
+    let array = normalizeDefaultSearchSites(sites).sorted()
     if array.isEmpty {
-      UserDefaults.standard.removeObject(forKey: userDefaultsKey("defaultSearchSites"))
+      UserDefaults.standard.removeObject(forKey: key)
     } else {
-      UserDefaults.standard.set(array, forKey: userDefaultsKey("defaultSearchSites"))
+      UserDefaults.standard.set(array, forKey: key)
     }
+    objectWillChange.send()
   }
 
-  private static func siteIdsString(from sites: Set<Int>) -> String? {
-    sites.isEmpty ? nil : sites.sorted().map { String($0) }.joined(separator: ",")
+  private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
+    SearchSiteScope(sites: availableSites, authoritative: hasLoadedSites && loadedSitesAuthoritative)
+      .normalized(sites)
+  }
+
+  private static func storedSiteIDs(prefix: String, apiService: APIService) -> Set<Int> {
+    guard let key = userDefaultsKey(prefix, apiService: apiService) else { return [] }
+    let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
+    return Set(array)
   }
 }

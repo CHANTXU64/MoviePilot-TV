@@ -5,7 +5,111 @@ import SwiftUI
 enum SearchType: String, CaseIterable, Identifiable {
   case unified = "聚合搜索"
   case resource = "资源搜索"
+  case subtitle = "字幕搜索"
   var id: String { self.rawValue }
+}
+
+nonisolated enum MetadataSearchKind: Sendable {
+  case media
+  case collection
+  case person
+}
+
+/// 媒体数据源的规范标识。内置来源提供常量，插件来源由后端 `/media/source` 动态注册。
+nonisolated struct MediaSearchSource: RawRepresentable, Identifiable, Hashable, Sendable {
+  let rawValue: String
+
+  /// 与后端来源标识规则一致：去空白后转小写，只接受字母开头的短标识。
+  init?(rawValue: String) {
+    let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard normalized.range(of: #"^[a-z][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil
+    else { return nil }
+    self.rawValue = normalized
+  }
+
+  private init(builtin rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  static let themoviedb = Self(builtin: "themoviedb")
+  static let douban = Self(builtin: "douban")
+  static let bangumi = Self(builtin: "bangumi")
+  static let anilist = Self(builtin: "anilist")
+  static let imdb = Self(builtin: "imdb")
+  static let tvdb = Self(builtin: "tvdb")
+
+  /// 来源目录不可用时沿用的影视来源。
+  static let builtinMediaSources: [MediaSearchSource] = [.themoviedb, .douban, .bangumi, .anilist]
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch rawValue {
+    case "themoviedb": "TMDB"
+    case "douban": "豆瓣"
+    case "bangumi": "Bangumi"
+    case "anilist": "AniList"
+    case "imdb": "IMDb"
+    case "tvdb": "TVDB"
+    default: rawValue
+    }
+  }
+
+  /// 手动填写的媒体 ID 不符合 `isValidManualId` 时，各 Sheet 统一显示的提示。
+  static let invalidManualIdMessage = "媒体 ID 格式无效。"
+
+  /// 与 Web `isValidMediaSourceId` 一致：空值表示未填写；IMDb 有固定格式，其余来源只排除 "0"。
+  func isValidManualId(_ value: String?) -> Bool {
+    let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !normalized.isEmpty else { return true }
+    guard normalized != "0" else { return false }
+    if self == .imdb {
+      return normalized.range(of: #"^tt\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+    return true
+  }
+
+  static func allowed(for kind: MetadataSearchKind) -> [MediaSearchSource] {
+    switch kind {
+    case .media: builtinMediaSources
+    case .collection: [.themoviedb]
+    case .person: [.themoviedb, .douban]
+    }
+  }
+}
+
+/// `/media/source` 返回的来源目录项。
+nonisolated struct MediaSourceInfo: Decodable, Hashable, Sendable {
+  let name: String?
+  let media_source: String?
+  let media_types: [String]?
+
+  /// 声明了电影或电视剧能力的来源才进入影视来源选择。
+  var supportsVideo: Bool {
+    (media_types ?? []).contains {
+      ["电影", "电视剧", "movie", "tv"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+  }
+
+  /// 按后端顺序保留合法、去重的影视来源；目录为空或不可用时由调用方回退内置来源。
+  static func videoSources(from catalog: [MediaSourceInfo]) -> [MediaSourceOption] {
+    var seen = Set<MediaSearchSource>()
+    return catalog.compactMap { info in
+      guard info.supportsVideo, let source = info.media_source.flatMap(MediaSearchSource.init(rawValue:)),
+        seen.insert(source).inserted else { return nil }
+      return MediaSourceOption(source: source, title: MediaIdentifier.normalizedString(info.name) ?? source.title)
+    }
+  }
+}
+
+nonisolated struct MediaSourceOption: Identifiable, Hashable, Sendable {
+  let source: MediaSearchSource
+  let title: String
+  var id: MediaSearchSource { source }
+
+  static let builtinMedia = MediaSearchSource.builtinMediaSources.map {
+    MediaSourceOption(source: $0, title: $0.title)
+  }
 }
 
 enum BestResultItem: Identifiable, Hashable {
@@ -21,33 +125,93 @@ enum BestResultItem: Identifiable, Hashable {
 }
 
 /// 模糊匹配分值计算：用于给搜索结果进行初级排序
-/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配
-private func fuzzyMatchScore(text: String?, query: String) -> Int {
+/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配。
+/// 类别带宽互不重叠且长度罚分有上限，避免长标题的真实匹配被弱匹配挤出。
+func fuzzyMatchScore(text: String?, query: String) -> Int {
   guard let t = text?.lowercased(), !query.isEmpty else { return -1 }
   let q = query.lowercased()
 
   if t == q { return 1000 }  // 完全相等
-  if t.hasPrefix(q) { return 500 - t.count }  // 前缀匹配（标题越短权重越高）
-  if t.contains(q) { return 100 - t.count }  // 包含匹配
+  if t.hasPrefix(q) { return 700 - min(t.count, 100) }  // 前缀匹配（标题越短权重越高，罚分封顶）
+  if t.contains(q) { return 400 - min(t.count, 100) }  // 包含匹配
 
-  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"）
-  var qIndex = q.startIndex
-  for char in t {
-    if char == q[qIndex] {
-      qIndex = q.index(after: qIndex)
-      if qIndex == q.endIndex {
-        return 50 - t.count
+  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"），采用 fzf 风格加分
+  return subsequenceMatchScore(text: t, query: q)
+}
+
+/// 顺序匹配打分：匹配字符越靠词首、越连续得分越高，间隔与长度惩罚有界。
+/// 结果区间 [100, 299]，始终高于“不匹配(-1)”、低于“包含匹配”档。
+private func subsequenceMatchScore(text: String, query: String) -> Int {
+  var queryIndex = query.startIndex
+  var previousMatchOffset: Int?
+  var bonus = 0
+  var gapPenalty = 0
+  var offset = 0
+  let chars = Array(text)
+
+  for char in chars {
+    if char == query[queryIndex] {
+      // 词首加分：标题开头或前一个字符是分隔符/标点
+      if offset == 0 || !chars[offset - 1].isLetterOrNumber {
+        bonus += 24
       }
+      if let previous = previousMatchOffset {
+        let gap = offset - previous - 1
+        if gap == 0 {
+          bonus += 12  // 连续匹配
+        } else {
+          gapPenalty += min(gap * 3, 60)
+        }
+      }
+      previousMatchOffset = offset
+      queryIndex = query.index(after: queryIndex)
+      if queryIndex == query.endIndex { break }
     }
+    offset += 1
   }
-  return -1
+  guard queryIndex == query.endIndex else { return -1 }
+  return min(max(100 + bonus - gapPenalty - min(text.count, 99), 100), 299)
+}
+
+private extension Character {
+  var isLetterOrNumber: Bool {
+    isLetter || isNumber
+  }
+}
+
+/// 热度加分：按来源热度口径归一化，避免不同来源量级混算。
+/// - TMDB 热度指数（常见 0.5~1900）用 log10 基数 3；
+/// - AniList 收藏数（常见数千~数十万）用 log10 基数 6；
+/// - 其余来源无热度或口径不可比，返回 0。
+func popularityBoost(source: String?, popularity: Double) -> Int {
+  guard popularity > 0 else { return 0 }
+  let base: Double
+  switch source?.lowercased() {
+  case "themoviedb": base = 3
+  case "anilist": base = 6
+  default: return 0
+  }
+  let normalized = min(log10(1 + popularity) / base, 1)
+  return Int((normalized * 149).rounded())
 }
 
 @MainActor
 class SearchViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var query: String = ""
   @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
+  @Published var mediaSearchSource: MediaSearchSource? {
+    didSet {
+      guard
+        !isApplyingDefaultMediaSearchSource,
+        mediaSearchSource != oldValue
+      else { return }
+      followsDefaultMediaSearchSource = false
+    }
+  }
 
   // MARK: - Paginator 实例
 
@@ -74,24 +238,35 @@ class SearchViewModel: ObservableObject {
   ) -> [BestResultItem] {
     guard !submittedQuery.isEmpty else { return [] }
 
-    // 尝试从搜索词中提取年份 (4位数字)，用于辅助匹配（如搜索 "流浪地球 2019"）
-    let yearRegex = try? NSRegularExpression(pattern: "(19|20)\\d{2}")
+    // 尝试从搜索词中提取年份 (4位数字)，用于辅助匹配（如搜索 "流浪地球 2019"）。
+    //
+    // F-141：年份必须**跟前一个分隔符一起匹配**（空白或左括号），与后端
+    // `StringUtils.get_keyword` 的 `[\s(]+(\d{4})[\s)]*` 同构。原先用裸 `(19|20)\d{2}`
+    // 扫第一个四位串，`1917`、`2001: A Space Odyssey` 这类「数字片名」会被当成搜索年份：
+    // 一是把 `1917 (2019)` 的年份认成 1917，使真正的 2019 版《1917》被判为年份不符而
+    // 关掉回退、拿不到分；二是剥年份时只删数字、留下 `(2019)` 空壳当查询词。
+    // 现在整段（含前导分隔符与尾随右括号）一起删，`1917 (2019)` 干净地还原成 `1917`。
+    // 保留 `(19|20)` 前缀约束而不照搬后端的裸 `\d{4}`：年份只用于给候选补 `标题 + 年份`
+    // 变体与放宽回退，把 `1234` 之类当成年份只会引入新的误判。
+    let yearRegex = try? NSRegularExpression(pattern: "[\\s(]+((?:19|20)\\d{2})[\\s)]*")
     let nsQuery = submittedQuery as NSString
-    let queryYear: String? = {
-      if let match = yearRegex?.firstMatch(
-        in: submittedQuery, range: NSRange(location: 0, length: nsQuery.length))
-      {
-        return nsQuery.substring(with: match.range)
-      }
-      return nil
-    }()
+    let yearMatch = yearRegex?.firstMatch(
+      in: submittedQuery, range: NSRange(location: 0, length: nsQuery.length))
+    // 上式只有一个捕获组，匹配成功时 `range(at: 1)` 必然有效。
+    let queryYear: String? = yearMatch.map { nsQuery.substring(with: $0.range(at: 1)) }
 
     // 当搜索词包含年份时，生成去掉年份的纯标题查询词
     // 用于双重匹配：既匹配完整搜索词，也匹配纯标题，取最高分
     // 这确保了即使结果缺少 year 字段（如合集），标题仍能获得合理匹配分
-    let queryWithoutYear: String? = queryYear.map {
-      submittedQuery.replacingOccurrences(of: $0, with: "")
-        .trimmingCharacters(in: .whitespaces)
+    //
+    // F-141：剥完只剩空串时返回 nil（如查询词本就是 `(2019)`）。
+    // 这一条**不改变可观测行为** —— 空串在 `fuzzyMatchScore` 里恒为 -1，
+    // 进 `max` 会被原串分值盖掉。收在这里是为了让 `queryWithoutYear` 的含义
+    // 是「可用的回退查询词」而不是「可能为空串」。
+    let queryWithoutYear: String? = yearMatch.flatMap { match -> String? in
+      let remainder = nsQuery.replacingCharacters(in: match.range, with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      return remainder.isEmpty ? nil : remainder
     }
 
     // 计算候选标题集合的最佳匹配分值
@@ -106,7 +281,8 @@ class SearchViewModel: ObservableObject {
       }.max() ?? -1
     }
 
-    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double)] = []
+    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double, boost: Int)] = []
+    var candidateSources = Set<String>()
 
     // 1. 处理媒体搜索结果 (电影/电视剧)
     for mediaItem in media {
@@ -130,10 +306,12 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       // 过滤匹配度极低且无海报的结果，减少噪音
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -159,9 +337,11 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -175,10 +355,15 @@ class SearchViewModel: ObservableObject {
 
       let maxS = bestScore(Set(candidates), true)
       let pop = personItem.popularity ?? 0
-      let hasNoPoster = personItem.profile_path == nil || personItem.profile_path?.isEmpty == true
+      // F-055：准入与实际渲染同源。原先读 TMDB 专属 `profile_path`，
+      // 会把「有可渲染 avatar 但无 profile_path」的豆瓣等来源人物当成无图低质结果排除，
+      // 而同一人仍会出现在下方人物行（卡片用 source-aware 判定能渲染出图）。
+      let hasNoProfileImage = !personItem.hasUsableProfileImage
+      let boost = popularityBoost(source: personItem.source, popularity: pop)
 
-      if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop))
+      if !(hasNoProfileImage && maxS < 50 && pop < 1) {
+        if let source = personItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -190,19 +375,30 @@ class SearchViewModel: ObservableObject {
         !$0.isEmpty
       }
       let maxS = bestScore(Set(titles), true)
-      let pop = shareItem.popularity ?? 0  // 复用次数
+      // 订阅分享无真实热度（复用次数与媒体热度口径不同），固定小值参与加权。
+      let pop = 0.6
       let hasNoPoster = shareItem.poster_path == nil || shareItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: "themoviedb", popularity: pop)
 
       // 分享结果通常比较优质，放宽准入
       if !(hasNoPoster && maxS < 0) {
-        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop))
+        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
-    // 核心排序逻辑：优先按匹配分值倒序，分值相同时按热度 (Popularity) 倒序
+    // 候选池出现多个媒体来源（订阅分享不计）时热度口径不可比，全部不计算热度。
+    if candidateSources.count > 1 {
+      scoredItems = scoredItems.map {
+        (item: $0.item, score: $0.score, popularity: $0.popularity, boost: 0)
+      }
+    }
+
+    // 核心排序逻辑：按“匹配分值 + 热度加分”倒序，总分相同时按热度倒序
     scoredItems.sort {
-      if $0.score != $1.score {
-        return $0.score > $1.score
+      let lhsTotal = $0.score + $0.boost
+      let rhsTotal = $1.score + $1.boost
+      if lhsTotal != rhsTotal {
+        return lhsTotal > rhsTotal
       }
       return $0.popularity > $1.popularity
     }
@@ -221,14 +417,44 @@ class SearchViewModel: ObservableObject {
     return uniqueItems
   }
 
+  /// F-044：把搜索人物的 `job` 投影成**当前语言的显示文本**。
+  ///
+  /// 详情页的职员走 `StaffManager.processCrew` 才翻译职位，而搜索结果这条链路
+  /// 完全绕过它 —— `PersonCard` 与最佳结果卡片直接把 `person.job` 当副标题渲染，
+  /// 于是中文界面下同一个人在人物行显示 "Director"、在详情页显示「导演」。
+  /// 服务端返回的 job 即使是 canonical key 也会触发，与 F-041 的变体失配无关。
+  ///
+  /// `TranslationHelper.translateJobs` 对未登记的 key 原样返回且翻译后去重，
+  /// 因此对已翻译值（如「导演」）重复投影是幂等的；这里仍显式跳过无变化的情况，
+  /// 避免每次刷新都重建 Person 实例。
+  private static func translatingJobForDisplay(_ person: Person) -> Person {
+    guard let job = person.job, !job.isEmpty else { return person }
+    let translated = TranslationHelper.translateJobs(jobString: job)
+    guard !translated.isEmpty, translated != job else { return person }
+    var projected = person
+    projected.job = translated
+    return projected
+  }
+
   @Published var isLoading = false
   @Published var searchType: SearchType = .unified
 
+  /// 等待“订阅分享”可选行首屏的最长时长（纳秒）。超过即先行收口核心结果；
+  /// 不取消分享请求——它晚到返回只会补“订阅分享”行，不再回填已算好的最佳行。
+  /// 默认 3 秒；测试可注入更短值以稳定覆盖超时路径。
+  var subscriptionShareTimeoutNanoseconds: UInt64 = 3_000_000_000
+
+  var availableSearchTypes: [SearchType] {
+    SearchType.allCases.filter(canAccess)
+  }
+
+  @Published private(set) var pagedSearch: ResourceSearchSession?
+  @Published private(set) var subtitleSearch: SubtitleSearchSession?
   @Published var resourceResults: [Context] = []
   @Published var appliedFilterRuleName: String?
-  @Published var siteFilter = SiteFilterViewModel()
+  @Published var siteFilter: SiteFilterViewModel
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
   private var moviePaginatorCancellable: AnyCancellable?
   private var tvPaginatorCancellable: AnyCancellable?
@@ -240,20 +466,65 @@ class SearchViewModel: ObservableObject {
   private var searchStreamTask: Task<Void, Never>?
   private var searchGeneration: Int = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
+  private var followsDefaultMediaSearchSource = true
+  private var isApplyingDefaultMediaSearchSource = false
   
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
+  @Published var resourceErrorMessage: String?
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+    self.siteFilter = SiteFilterViewModel(apiService: apiService)
+    let defaultMediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(
+      apiService: apiService
+    )
+    self.mediaSearchSource = defaultMediaSearchSource
+    self.followsDefaultMediaSearchSource = true
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .searchDefaultsDidChange)
+      .compactMap { $0.object as? SearchDefaultsChange }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] change in
+        guard let self, change.profileKey == self.apiService.profileKey else { return }
+        guard self.followsDefaultMediaSearchSource else { return }
+        if self.mediaSearchSource != change.defaultMediaSearchSource {
+          self.isApplyingDefaultMediaSearchSource = true
+          self.mediaSearchSource = change.defaultMediaSearchSource
+          self.isApplyingDefaultMediaSearchSource = false
+        }
+      }
+      .store(in: &cancellables)
+  }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
-  func autoSearch() async {
-    guard !query.isEmpty else { return }
-    guard apiService.canAccess(.search) else { return }
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
-    #endif
+  func autoSearch(resourceKeyword: String? = nil) async {
+    // F-140：提交口先把搜索词规范化一次（去掉首尾空白与换行），之后**请求与本地评分
+    // 共用这一个串**。
+    //
+    // 后端 `StringUtils.get_keyword` 自己会 `.strip()`，所以发出去的请求本来就是干净的；
+    // 出问题的是 TV 自己的「最佳匹配」评分 —— 它读 `submittedQuery`，先前直接取用户原串。
+    // 于是搜 `Hamilton` 时手滑多留一个尾随空格，精确标题在 `fuzzyMatchScore` 里拿到 `-1`
+    // （低于任何模糊命中，会被 `Hamilton Musical` 这类带后缀的标题反超而掉到末位），
+    // 若恰好又无海报且热度 < 1，还会被 `hasNoPoster && maxS < 50 && pop < 1` 整条淘汰。
+    // 纯空白串也能绕过 `isEmpty` 守卫触发一次注定无果的全量搜索。
+    //
+    // 刻意不写回 `query`：搜索框保留用户输入原样，提交后就地改写文本更突兀。
+    // 也刻意只去首尾、不压缩内部空白 —— 内部空白的匹配质量属于评分层的分档问题，
+    // 不是「提交词身份」问题，动它会波及 `hasPrefix`/`contains` 的既有分档。
+    let searchQuery = (resourceKeyword ?? query).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !searchQuery.isEmpty else { return }
+    pagedSearch?.cancel()
+    pagedSearch = nil
+    subtitleSearch?.cancel()
+    subtitleSearch = nil
+    let currentSearchType = searchType
+    guard canAccess(currentSearchType) else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
-    let searchQuery = query
     let sessionSnapshot = apiService.sessionSnapshot()
     
     searchStreamTask?.cancel()
@@ -262,75 +533,122 @@ class SearchViewModel: ObservableObject {
     hasSearched = false
     submittedQuery = searchQuery
 
-    switch searchType {
+    switch currentSearchType {
     case .resource:
       // 资源搜索：查询站点种子信息
-      let sitesStr = siteFilter.sitesString
+      let sitesStr = siteFilter.sitesString(for: .resource)
+      if ResourceSearchQuery.supportsPaging(backendVersion: apiService.settings?.BACKEND_VERSION) {
+        let search = ResourceSearchSession(
+          query: ResourceSearchQuery(keyword: searchQuery, sites: sitesStr), apiService: apiService)
+        pagedSearch = search
+        isLoading = false
+        hasSearched = true
+        search.start()
+        return
+      }
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
+      resourceErrorMessage = nil
+      // 新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
+      resourceResults = []
       
       searchStreamTask = Task { @MainActor in
-        var accumulatedResults: [Context] = []
+        var collectedResults = ResourceSearchResultCollector()
+        // 只有收到端点认可的 done 才把结果按成功收尾发布；业务 error 与无终止 EOF 均不发布。
+        var receivedDone = false
+        defer {
+          self.finishSearchIfCurrent(
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType
+          )
+        }
         
         do {
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
-          let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
+          let stream = apiService.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
             
-            if let text = event.text {
+            if let text = event.text_i18n ?? event.text {
               self.searchProgressText = text
             }
             if let value = event.value {
               self.searchProgress = value
             }
             
-            if let items = event.items {
-              if event.type == "append" {
-                accumulatedResults.append(contentsOf: items)
-              } else if event.type == "replace" || event.type == "done" {
-                accumulatedResults = items
-              }
-            }
+            try collectedResults.receive(event)
             
             if event.type == "error" {
-              print("Search Stream Error: \(event.message ?? "未知错误")")
-              break
+              self.resourceErrorMessage =
+                event.localizedMessage ?? "未找到相关资源"
+              // 整次搜索失败：不发布已积累的部分结果。
+              return
             }
             
             if event.type == "done" {
+              receivedDone = true
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
               guard canPublishSearchResult(
-                generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+                generation: currentSearchGeneration,
+                sessionSnapshot: sessionSnapshot,
+                searchType: currentSearchType)
               else { return }
               break
             }
           }
           
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
+          // EOF 未收到 done 视为连接异常，不把部分结果按成功收尾发布。
+          guard receivedDone else {
+            throw URLError(.networkConnectionLost)
+          }
+          let accumulatedResults = collectedResults.items
 
-          // 应用自定义过滤规则
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
+            else { return }
+            self.resourceErrorMessage = error.localizedDescription
+            return
+          } catch {
+            Logger.error("[SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           self.resourceResults = filteredResults
-          self.isLoading = false
-          self.hasSearched = true
         } catch {
-          print("Stream Search error: \(error)")
+          Logger.error("Stream Search error: \(error)")
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           do {
@@ -339,30 +657,50 @@ class SearchViewModel: ObservableObject {
               sites: sitesStr
             )
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
 
-            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            do {
+              fallbackResults = try await self.applyCustomFilter(to: fallbackResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.resourceErrorMessage = error.localizedDescription
+              return
+            } catch {
+              Logger.error("[SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
 
             self.resourceResults = fallbackResults
           } catch {
-            print("Fallback Search error: \(error)")
+            Logger.error("Fallback Search error: \(error)")
+            self.resourceErrorMessage = error.localizedDescription
           }
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
-
-          self.isLoading = false
-          self.hasSearched = true
         }
       }
       return
 
     case .unified:
-      // 聚合搜索：创建代理 Fetcher 和 Paginators
+      defer {
+        finishSearchIfCurrent(
+          generation: currentSearchGeneration,
+          sessionSnapshot: sessionSnapshot,
+          searchType: currentSearchType
+        )
+      }
+      // 聚合搜索：新搜索开始即清空旧最佳结果，避免请求在途或失败时旧结果冒充新结果（与资源搜索分支对齐）。
+      self.bestResults = []
+      // 创建代理 Fetcher 和 Paginators
       setupPaginators(query: submittedQuery)
 
       guard let moviePag = moviePaginator,
@@ -377,15 +715,22 @@ class SearchViewModel: ObservableObject {
       let tvTask = Task { @MainActor in await tvPag.refresh() }
       let collectionTask = Task { @MainActor in await collectionPag.refresh() }
       let personTask = Task { @MainActor in await personPag.refresh() }
-      let shareTask = sharePag.map { paginator in
-        Task { @MainActor in await paginator.refresh() }
+      // “订阅分享”是可选锦上添花：与核心分类并发刷新，晚到结果只填充“订阅分享”行。
+      if let sharePag {
+        Task { @MainActor in await sharePag.refresh() }
       }
       _ = await (
         movieTask.value, tvTask.value, collectionTask.value, personTask.value
       )
-      await shareTask?.value
+      // 核心四类完成后最多再等“订阅分享”超时窗口即先行收口；不取消分享请求。
+      await waitForOptionalShareIfPresent(
+        sharePag,
+        timeoutNanoseconds: subscriptionShareTimeoutNanoseconds
+      )
       guard canPublishSearchResult(
-        generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+        generation: currentSearchGeneration,
+        sessionSnapshot: sessionSnapshot,
+        searchType: currentSearchType)
       else { return }
 
       // 基于第一页的结果计算"最佳结果"
@@ -396,41 +741,107 @@ class SearchViewModel: ObservableObject {
         persons: personPag.items,
         shares: sharePag?.items ?? []
       )
+
+    case .subtitle:
+      let search = SubtitleSearchSession(
+        request: SubtitleSearchRequest(
+          kind: .title(keyword: searchQuery),
+          sites: siteFilter.sitesString(for: .subtitle),
+          displayTitle: searchQuery,
+          mediaInfo: nil
+        ),
+        apiService: apiService
+      )
+      subtitleSearch = search
+      isLoading = false
+      hasSearched = true
+      search.start()
+      return
     }
-    guard canPublishSearchResult(
-      generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
-    else { return }
+  }
+
+  /// 等待可选的“订阅分享”首屏完成，最多等 timeoutNanoseconds。分页器 isLoading 期间
+  /// 表示其首屏请求仍在途；完成（成功或失败）即返回，其 items 已落位。超时放弃等待并
+  /// 返回，分享刷新保持后台运行——晚到结果只驱动“订阅分享”行，不回填已算好的最佳行。
+  /// 用轮询而非 task group：对 Task.value 的等待不可因组取消而中断，会让组作用域隐式等待挂起。
+  private func waitForOptionalShareIfPresent(
+    _ sharePaginator: Paginator<MediaInfo>?,
+    timeoutNanoseconds: UInt64
+  ) async {
+    guard let sharePaginator else { return }
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while sharePaginator.isLoading || sharePaginator.isFirstLoading {
+      if DispatchTime.now().uptimeNanoseconds >= deadline { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  private func finishSearchIfCurrent(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot,
+    searchType: SearchType
+  ) {
+    guard searchGeneration == generation else { return }
     isLoading = false
-    hasSearched = true
+    searchStreamTask = nil
+    hasSearched = !Task.isCancelled
+      && apiService.isSessionUnchanged(from: sessionSnapshot)
+      && self.searchType == searchType
+      && canAccess(searchType)
   }
 
   private func canPublishSearchResult(
     generation: Int,
-    sessionSnapshot: APIServiceSessionSnapshot
+    sessionSnapshot: APIServiceSessionSnapshot,
+    searchType: SearchType
   ) -> Bool {
     searchGeneration == generation
       && !Task.isCancelled
       && apiService.isSessionUnchanged(from: sessionSnapshot)
-      && apiService.canAccess(.search)
+      && self.searchType == searchType
+      && canAccess(searchType)
+  }
+
+  func normalizeSearchTypeForPermissions() {
+    guard !canAccess(searchType), let firstAvailable = availableSearchTypes.first else { return }
+    searchType = firstAvailable
+  }
+
+  private func canAccess(_ searchType: SearchType) -> Bool {
+    switch searchType {
+    case .unified:
+      apiService.canAccess(.discovery)
+    case .resource, .subtitle:
+      apiService.canAccess(.search)
+    }
+  }
+
+  func cancelPagedSearch() {
+    pagedSearch?.cancel()
+    pagedSearch = nil
+    hasSearched = false
+    isLoading = false
+  }
+
+  func cancelSubtitleSearch() {
+    subtitleSearch?.cancel()
+    subtitleSearch = nil
+    hasSearched = false
+    isLoading = false
   }
 
   // MARK: - Paginator 创建
 
   /// 为当前搜索词创建代理和各个 Paginator
   private func setupPaginators(query: String) {
-    moviePaginator?.cancel()
-    tvPaginator?.cancel()
-    collectionPaginator?.cancel()
-    personPaginator?.cancel()
-    subscriptionSharePaginator?.cancel()
+    resetPaginators()
 
-    moviePaginatorCancellable?.cancel()
-    tvPaginatorCancellable?.cancel()
-    collectionPaginatorCancellable?.cancel()
-    personPaginatorCancellable?.cancel()
-    subscriptionSharePaginatorCancellable?.cancel()
-
-    let fetcher = SharedMediaFetcher(query: query, apiService: apiService)
+    let selectedSource = mediaSearchSource
+    let fetcher = SharedMediaFetcher(
+      query: query,
+      source: selectedSource,
+      apiService: apiService
+    )
     self.sharedMediaFetcher = fetcher
 
     // --- Movie Paginator ---
@@ -446,7 +857,8 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in movieSeenKeys.removeAll() }
@@ -465,7 +877,8 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in tvSeenKeys.removeAll() }
@@ -476,7 +889,16 @@ class SearchViewModel: ObservableObject {
     let newCollectionPaginator = Paginator<MediaInfo>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.searchCollection(query: query, page: page)
+        if let selectedSource,
+          !MediaSearchSource.allowed(for: .collection).contains(selectedSource)
+        {
+          return []
+        }
+        return try await apiService.searchCollection(
+          query: query,
+          page: page,
+          source: selectedSource
+        )
       },
       processor: { @MainActor currentItems, newItems in
         let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &collectionSeenKeys)
@@ -484,7 +906,8 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in
@@ -493,24 +916,36 @@ class SearchViewModel: ObservableObject {
     )
 
     // --- Person Paginator ---
+    var personSeenIDs = Set<String>()
     let newPersonPaginator = Paginator<Person>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.searchPerson(query: query, page: page)
+        if let selectedSource,
+          !MediaSearchSource.allowed(for: .person).contains(selectedSource)
+        {
+          return []
+        }
+        return try await apiService.searchPerson(
+          query: query,
+          page: page,
+          source: selectedSource
+        )
       },
       processor: { @MainActor currentItems, newItems in
-        // 基于 raw_id 去重
-        let existingIds = Set(currentItems.compactMap { $0.raw_id })
-        let uniqueNewItems = newItems.filter {
-          $0.raw_id == nil || !existingIds.contains($0.raw_id!)
-        }
+        // F-044：人物行与最佳结果卡片都直接读 `job` 当副标题，搜索链路此前没有任何
+        // 翻译边界（详情页的职员才经 `StaffManager` 翻译）。在这里统一投影，
+        // 避免在 `PersonCard` / 最佳结果卡片两处各打一次补丁。
+        let uniqueNewItems = Person.deduplicate(
+          newItems.map(Self.translatingJobForDisplay), existingIDs: &personSeenIDs)
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
-      }
+      },
+      onReset: { @MainActor in personSeenIDs.removeAll() }
     )
 
     var newSubscriptionSharePaginator: Paginator<MediaInfo>?
@@ -531,7 +966,8 @@ class SearchViewModel: ObservableObject {
           currentItems.append(contentsOf: uniqueNewItems)
           return true
         },
-        imageURLsProvider: { item in
+        imageWarmer: apiService.imageWarmer,
+        imageWarmURLsProvider: { item in
           [item.imageURLs.poster].compactMap(\.self)
         },
         onReset: { @MainActor in
@@ -560,6 +996,32 @@ class SearchViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
   }
 
+  private func resetPaginators() {
+    moviePaginator?.cancel()
+    tvPaginator?.cancel()
+    collectionPaginator?.cancel()
+    personPaginator?.cancel()
+    subscriptionSharePaginator?.cancel()
+
+    moviePaginatorCancellable?.cancel()
+    tvPaginatorCancellable?.cancel()
+    collectionPaginatorCancellable?.cancel()
+    personPaginatorCancellable?.cancel()
+    subscriptionSharePaginatorCancellable?.cancel()
+
+    sharedMediaFetcher = nil
+    moviePaginator = nil
+    tvPaginator = nil
+    collectionPaginator = nil
+    personPaginator = nil
+    subscriptionSharePaginator = nil
+    moviePaginatorCancellable = nil
+    tvPaginatorCancellable = nil
+    collectionPaginatorCancellable = nil
+    personPaginatorCancellable = nil
+    subscriptionSharePaginatorCancellable = nil
+  }
+
   func mapMediaToSubscribe(_ media: MediaInfo) -> Subscribe {
     return Subscribe(
       id: nil,
@@ -573,6 +1035,9 @@ class SearchViewModel: ObservableObject {
       tmdbid: media.tmdb_id,
       doubanid: media.douban_id,
       bangumiid: media.bangumi_id,
+      anilistid: media.anilist_id,
+      media_source: media.identity?.source,
+      media_id: media.identity?.mediaId,
       best_version: nil,
       keyword: nil,
       total_episode: nil,
@@ -587,87 +1052,29 @@ class SearchViewModel: ObservableObject {
       downloader: nil,
       save_path: nil,
       filter_groups: nil,
-      custom_words: nil
+      custom_words: nil,
+      mediaid: media.apiMediaId
     )
   }
 
   // MARK: - 自定义过滤规则
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "SearchVM")
-    } catch {
-      print("❌ [SearchVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "SearchVM")
   }
-
-  #if DEBUG
-  func installUIPreviewUnifiedResults(
-    query: String,
-    movies: [MediaInfo],
-    tvShows: [MediaInfo],
-    collections: [MediaInfo],
-    persons: [Person],
-    shares: [MediaInfo],
-    bestResults: [BestResultItem],
-    isLoadingMore: Bool = false
-  ) {
-    searchStreamTask?.cancel()
-    searchStreamTask = nil
-    self.query = query
-    submittedQuery = query
-    searchType = .unified
-    hasSearched = true
-    isLoading = false
-    moviePaginator = .uiPreview(items: movies, isLoadingMore: isLoadingMore)
-    tvPaginator = .uiPreview(items: tvShows, isLoadingMore: isLoadingMore)
-    collectionPaginator = .uiPreview(items: collections, isLoadingMore: isLoadingMore)
-    personPaginator = .uiPreview(items: persons, isLoadingMore: isLoadingMore)
-    subscriptionSharePaginator = .uiPreview(items: shares, isLoadingMore: isLoadingMore)
-    self.bestResults = bestResults
-  }
-
-  func installUIPreviewUnifiedEmpty(query: String) {
-    installUIPreviewUnifiedResults(
-      query: query,
-      movies: [],
-      tvShows: [],
-      collections: [],
-      persons: [],
-      shares: [],
-      bestResults: []
-    )
-  }
-
-  func installUIPreviewResourceResults(
-    query: String,
-    results: [Context],
-    isLoading: Bool = false,
-    progressText: String = "",
-    progress: Double = 0
-  ) {
-    searchStreamTask?.cancel()
-    searchStreamTask = nil
-    self.query = query
-    submittedQuery = query
-    searchType = .resource
-    hasSearched = !isLoading
-    self.isLoading = isLoading
-    resourceResults = results
-    searchProgressText = progressText
-    searchProgress = progress
-  }
-  #endif
 }
 
 // MARK: - 共享分页抓取代理
 
 /// 负责统筹抓取 `searchMedia` API，并按需拆分给各自分页器
 actor SharedMediaFetcher {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private let query: String
+  private let source: MediaSearchSource?
   private let apiService: APIService
 
   private var apiPage: Int = 0
@@ -676,9 +1083,11 @@ actor SharedMediaFetcher {
   private var tvBuffer: [MediaInfo] = []
 
   private var currentFetchTask: Task<Void, Error>?
+  private var currentFetchTaskIdentity = 0
 
-  init(query: String, apiService: APIService) {
+  init(query: String, source: MediaSearchSource?, apiService: APIService) {
     self.query = query
+    self.source = source
     self.apiService = apiService
   }
 
@@ -735,11 +1144,22 @@ actor SharedMediaFetcher {
     let localPage = apiPage + 1
     let isInitialFetch = (apiPage == 0)
 
+    currentFetchTaskIdentity += 1
+    let identity = currentFetchTaskIdentity
+
     let task = Task {
+      // 无论成功或失败，都在完成时按 identity 退休自己的句柄；
+      // 保证唤醒任何等待者之前 currentFetchTask 已清空，避免合流方
+      // 重复 await 已完成任务导致游标不推进。
+      defer {
+        if self.currentFetchTaskIdentity == identity {
+          self.currentFetchTask = nil
+        }
+      }
       if isInitialFetch {
         // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
-        async let fetchPage1 = apiService.searchMedia(query: query, page: 1)
-        async let fetchPage2 = apiService.searchMedia(query: query, page: 2)
+        async let fetchPage1 = apiService.searchMedia(query: query, page: 1, source: source)
+        async let fetchPage2 = apiService.searchMedia(query: query, page: 2, source: source)
 
         let (page1Items, page2Items) = try await (fetchPage1, fetchPage2)
         let allItems = page1Items + page2Items
@@ -751,7 +1171,11 @@ actor SharedMediaFetcher {
           self.hasMore = false
         }
       } else {
-        let newItems = try await apiService.searchMedia(query: query, page: localPage)
+        let newItems = try await apiService.searchMedia(
+          query: query,
+          page: localPage,
+          source: source
+        )
 
         if newItems.isEmpty {
           self.hasMore = false
@@ -763,7 +1187,6 @@ actor SharedMediaFetcher {
     }
 
     self.currentFetchTask = task
-    defer { self.currentFetchTask = nil }
     try await task.value
   }
 

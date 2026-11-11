@@ -3,8 +3,21 @@ import Combine
 
 @MainActor
 class MediaActionHandler: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
+  private let apiService: APIService
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
+
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
+
+  func cancelPresentation() {
+    showTMDBNotFoundAlert = false
+  }
 
   func searchResourcesTarget(
     for item: MediaInfo, sites: String? = nil
@@ -21,43 +34,114 @@ class MediaActionHandler: ObservableObject {
     )
   }
 
-  func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      return searchResourcesTarget(for: item)
-    }
-    #endif
-
-    let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+  func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest? {
+    let snapshot = apiService.sessionSnapshot()
+    let sites = await SystemViewModel.normalizedDefaultSearchSitesString(apiService: apiService)
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
     return searchResourcesTarget(for: item, sites: sites)
   }
 
+  /// 有媒体身份时按精确字幕搜索。季号只沿用条目上已经存在的值，0 保留，缺失不补当前季。
+  func subtitleSearchRequest(for item: MediaInfo, sites: String?) -> SubtitleSearchRequest? {
+    guard SubtitleSearchRequest.supportsSubtitleSearch(item), let identity = item.identity else {
+      return nil
+    }
+    let season = item.season.flatMap { $0 >= 0 ? $0 : nil }
+    return SubtitleSearchRequest(
+      kind: .media(
+        source: identity.source,
+        mediaId: identity.mediaId,
+        type: item.type,
+        season: season,
+        episode: nil
+      ),
+      sites: sites,
+      displayTitle: item.title,
+      mediaInfo: item
+    )
+  }
+
+  /// 快捷入口共用：可选识别、默认站点、标题回退都属于同一次动作。
+  func subtitleSearchRequestUsingDefaultSites(
+    for item: MediaInfo, recognizeIfNeeded: Bool = false
+  ) async -> SubtitleSearchRequest? {
+    guard apiService.canAccess(.search), SubtitleSearchRequest.supportsSubtitleSearch(item) else { return nil }
+    let snapshot = apiService.sessionSnapshot()
+    var target = item
+    if recognizeIfNeeded, item.identity == nil,
+      let recognized = await getTMDBJumpTarget(for: item, notifyWhenUnrecognized: false)
+    {
+      target = recognized
+    }
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+    let sites = await SystemViewModel.normalizedDefaultSubtitleSearchSitesString(apiService: apiService)
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+    return subtitleSearchRequest(for: target, sites: sites)
+      ?? Self.titleSubtitleSearchRequest(keyword: item.title ?? "", sites: sites)
+  }
+
+  static func titleSubtitleSearchRequest(keyword: String, sites: String?) -> SubtitleSearchRequest? {
+    let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !keyword.isEmpty else { return nil }
+    return SubtitleSearchRequest(
+      kind: .title(keyword: keyword),
+      sites: sites,
+      displayTitle: keyword,
+      mediaInfo: nil
+    )
+  }
+
+  /// 解析出可用于跳转/搜索的 TMDB 目标。
+  ///
+  /// - Parameter notifyWhenUnrecognized: 真正无匹配时是否弹「未识别到此媒体的TMDB信息」。
+  ///   默认 `true`，适用于「TMDB详情页」这类**以 TMDB 为目标**的动作 —— 找不到就该告诉用户。
+  ///   取 `false` 适用于「搜索资源」这类**识别失败可自愈**的调用方：拿不到 ID 会退回按标题
+  ///   搜索，避免识别提示与结果跳转同时发生。
   func getTMDBJumpTarget(
-    for item: MediaInfo, targetTmdbId: Int? = nil
+    for item: MediaInfo,
+    targetTmdbId: Int? = nil,
+    notifyWhenUnrecognized: Bool = true
   ) async -> MediaInfo? {
+    let snapshot = apiService.sessionSnapshot()
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
 
-    #if DEBUG
-    if UIPreviewMode.isEnabled(), tmdbIdToUse == nil {
-      tmdbIdToUse = deterministicUIPreviewTMDBId(for: item.id)
-    }
-    #endif
-
     if tmdbIdToUse == nil {
+      let title = item.title?.trimmingCharacters(in: .whitespaces) ?? ""
+      // 无标题无法识别，不属于"媒体不存在"，直接返回不弹提示。
+      guard !title.isEmpty else { return nil }
       isRecognizingTmdb = true
-      tmdbIdToUse = await APIService.shared.recognizeTmdbId(
-        title: item.title ?? "",
-        year: item.year,
-        type: item.type
-      )
+      do {
+        tmdbIdToUse = try await apiService.recognizeTmdbId(
+          title: title,
+          year: item.year,
+          type: item.type
+        )
+      } catch is CancellationError {
+        isRecognizingTmdb = false
+        return nil
+      } catch {
+        // 网络/后端/解码失败不是"媒体不存在"，不弹误导提示。
+        Logger.error("TMDB 识别失败: \(error)")
+        isRecognizingTmdb = false
+        return nil
+      }
       isRecognizingTmdb = false
     }
 
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+
     guard let tmdbId = tmdbIdToUse else {
-      showTMDBNotFoundAlert = true
+      // 识别确实无匹配。但「搜索资源」这类调用方会自愈为标题搜索，弹窗只会拦住用户（F-122）。
+      if notifyWhenUnrecognized {
+        showTMDBNotFoundAlert = true
+      }
       return nil
     }
 
+    return Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
+  }
+
+  static func tmdbJumpTarget(for item: MediaInfo, tmdbId: Int) -> MediaInfo {
     return MediaInfo(
       tmdb_id: tmdbId,
       douban_id: nil,
@@ -78,6 +162,8 @@ class MediaActionHandler: ObservableObject {
       // 此处创建的 MediaInfo 是一个用于导航的“部分对象”。
       // 如果保留旧的 poster/backdrop 路径，新页面在加载完成前会短暂显示旧页面的图像，导致闪烁。
       // 将其设为 nil 可确保新页面在获取到自己的完整详情前不显示任何背景。
+      // 加载动画需要复用源海报时，由导航 entry 单独携带。
+      // 禁止为复用加载海报而修改这里的 nil，否则会重新引入旧图闪烁。
       poster_path: nil,
       backdrop_path: nil,
       overview: item.overview,
@@ -96,13 +182,4 @@ class MediaActionHandler: ObservableObject {
       category: item.category
     )
   }
-
-  #if DEBUG
-  private func deterministicUIPreviewTMDBId(for id: String) -> Int {
-    let seed = id.unicodeScalars.reduce(0) { partial, scalar in
-      (partial * 31 + Int(scalar.value)) % 100_000
-    }
-    return 900_000 + seed
-  }
-  #endif
 }

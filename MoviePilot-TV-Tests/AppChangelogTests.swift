@@ -1,0 +1,169 @@
+import XCTest
+
+@testable import MoviePilot_TV
+
+final class AppChangelogTests: XCTestCase {
+  func testHistoryContainsEveryPublishedVersionAndCompatibilityBaseline() {
+    let expectedVersions = [
+      "v0.4.2", "v0.4.1", "v0.4.0", "v0.3.9", "v0.3.8", "v0.3.7", "v0.3.6", "v0.3.5", "v0.3.4",
+      "v0.3.3", "v0.3.2", "v0.3.1", "v0.3.0", "v0.2.0", "v0.1.2", "v0.1.1", "v0.1.0",
+    ]
+    let expectedCompatibility = [
+      "v3.2.3", "v3.1.9", "v3.1.4", "v3.0.4", "v2.15.6", "v2.15.6", "v2.15.6", "v2.14.6",
+      "v2.14.4", "v2.14.0", "v2.13.14", "v2.13.2", "v2.10.9", "v2.9.13", "v2.9.13", "v2.9.13",
+      "v2.9.7",
+    ]
+
+    XCTAssertEqual(AppChangelog.entries.map(\.version), expectedVersions)
+    XCTAssertEqual(
+      AppChangelog.entries.map(\.compatibleMoviePilotVersion),
+      expectedCompatibility
+    )
+    XCTAssertEqual(AppChangelog.entries[3].highlights, ["兼容 MoviePilot 后端 v3.0.4。"])
+    XCTAssertTrue(AppChangelog.entries[5].highlights.contains(
+      "降低 77% 内存占用，减少 MoviePilot-TV 或其他 App 因内存压力被系统终止的情况。"
+    ))
+    XCTAssertFalse(AppChangelog.entries[4].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertFalse(AppChangelog.entries[5].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("探索页兼容 MoviePilot 探索来源插件。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("支持 AniList 媒体来源。"))
+    XCTAssertTrue(AppChangelog.entries[7].highlights.contains("兼容 MoviePilot 后端 v2.14.6。"))
+    XCTAssertTrue(AppChangelog.entries[8].highlights.contains("兼容 MoviePilot 后端 v2.14.4。"))
+    XCTAssertFalse(AppChangelog.entries[13].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[14].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertTrue(AppChangelog.entries[15].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[16].highlights.contains("兼容 MoviePilot 后端 v2.9.7。"))
+  }
+
+  func testLatestReleaseMatchesApprovedV042Notes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entries.first)
+    XCTAssertEqual(entry.version, "v0.4.2")
+    XCTAssertEqual(entry.releaseDate, "2026-11-03")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.2.3")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.0.4 至 v3.2.3。",
+      "媒体详情页新增豆瓣短评与影评。",
+      "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+    ])
+    XCTAssertEqual(entry.updates, [
+      "媒体详情页新增「短评 / 影评」区块：MoviePilot v3.2.1 及以上、带豆瓣 ID 的电影和电视剧可以查看豆瓣短评与影评；默认显示短评，短评为空时自动显示影评。",
+    ])
+    XCTAssertEqual(entry.fixes, [
+      "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+      "修复 Apple TV 真机无法保存本机日志的问题。",
+      "修复豆瓣等非 TMDB 来源的媒体详情页按钮行过宽、TMDB 跳转按钮折成两行的问题。",
+    ])
+    XCTAssertEqual(entry.optimizations, [
+      "编辑已有订阅并修改身份（类型、来源、季或剧集组等）时，MoviePilot v3.2.0 及以上会在保存前提示进度、优先级和搜索状态会被清空，可以取消。",
+      "媒体详情页的演员与职员合并为同一行，用胶囊切换，切换后按需加载。",
+      "人物简介、版本更新历史、日志详情和整理历史详情改为统一的大屏阅读面板，长内容可以分页翻看。",
+    ])
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertTrue(entry.updates.allSatisfy { !message.contains($0) })
+    XCTAssertTrue(
+      entry.fixes.filter { !entry.highlights.contains($0) }
+        .allSatisfy { !message.contains($0) }
+    )
+  }
+
+  func testV041ReleaseMatchesApprovedNotes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "v0.4.1"))
+    XCTAssertEqual(entry.version, "v0.4.1")
+    XCTAssertEqual(entry.releaseDate, "2026-10-23")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.1.9")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.0.4 至 v3.1.9。",
+      "新增字幕搜索与下载。",
+      "手动整理支持引用链接。",
+    ])
+    XCTAssertEqual(entry.updates, [
+      "搜索页、媒体详情、首页长按和媒体菜单可以搜索字幕并下载。设置页可以单独选择字幕的默认搜索站点。搜索过程中可以停止并查看已收到的结果。",
+      "手动整理在 MoviePilot v3.1.9 及以上可以选择引用链接，整理历史里也会显示。",
+      "添加下载可以选择媒体类型。",
+    ])
+    XCTAssertEqual(entry.fixes, [
+      "修复 AI 整理在服务暂时不可用时只显示「AI 整理失败」、看不到具体原因的问题。",
+    ])
+    XCTAssertTrue(entry.optimizations.isEmpty)
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertTrue(entry.updates.allSatisfy { !message.contains($0) })
+    XCTAssertTrue(entry.fixes.allSatisfy { !message.contains($0) })
+  }
+
+  func testV040ReleaseMatchesApprovedNotes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "v0.4.0"))
+    XCTAssertEqual(entry.version, "v0.4.0")
+    XCTAssertEqual(entry.releaseDate, "2026-10-11")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.1.4")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.1.4。",
+      "新增 Apple TV 主屏推荐，支持直接进入影片详情。",
+      "设置页新增本机日志查看。",
+      "支持向后兼容已登记的 MoviePilot 版本，最低为 v3.0.4。",
+    ])
+    XCTAssertEqual(entry.updates.count, 3)
+    XCTAssertEqual(entry.fixes.count, 8)
+    XCTAssertEqual(entry.optimizations.count, 3)
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertFalse(message.contains("分页"))
+    XCTAssertFalse(message.contains("停止搜索"))
+  }
+
+  func testV039ReleaseMatchesApprovedNotes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "v0.3.9"))
+
+    XCTAssertEqual(entry.version, "v0.3.9")
+    XCTAssertEqual(entry.releaseDate, "2026-09-18")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.0.4")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.0.4。",
+    ])
+    XCTAssertEqual(entry.fixes, [
+      "对齐 MoviePilot v3.0.4 的媒体数据、订阅编辑、站点与规则组保存等接口行为。",
+      "修复搜索词空白和年份识别导致的最佳匹配排序异常。",
+      "修复重复发起整理预览时可能展示旧结果的问题，并增强 SSE 进度连接恢复能力。",
+      "修复状态页遇到后端可选字段缺失时整页无法刷新的问题。",
+    ])
+    XCTAssertEqual(entry.optimizations, [
+      "订阅设置支持折叠基础选项，减少配置页面的滚动负担。",
+      "人物图片按实际显示尺寸下采样，改善详情页内存占用。",
+      "完善缺图占位、国家/季信息与转移失败原因的显示。",
+    ])
+    XCTAssertTrue(entry.updates.isEmpty)
+  }
+
+  func testUpdateNoticeIsShownOnceAndOnlyForANewerVersion() throws {
+    let suiteName = "AppChangelogTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let firstNotice = try XCTUnwrap(
+      AppChangelog.pendingUpdate(appVersion: "v0.3.7", defaults: defaults)
+    )
+    XCTAssertEqual(firstNotice.version, "v0.3.7")
+
+    AppChangelog.markPresented(firstNotice, defaults: defaults)
+    XCTAssertNil(AppChangelog.pendingUpdate(appVersion: "v0.3.7", defaults: defaults))
+    XCTAssertEqual(
+      AppChangelog.pendingUpdate(appVersion: "v0.3.8", defaults: defaults)?.version,
+      "v0.3.8"
+    )
+
+    defaults.set("v0.3.9", forKey: AppChangelog.presentedVersionKey)
+    XCTAssertNil(AppChangelog.pendingUpdate(appVersion: "v0.3.9", defaults: defaults))
+    XCTAssertNil(AppChangelog.pendingUpdate(appVersion: "v0.3.8", defaults: defaults))
+  }
+
+  func testUpdateNoticeOnlyUsesHighlightsAndPointsToFullHistory() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "0.3.9"))
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertTrue(message.contains("设置 > 版本更新历史"))
+    XCTAssertTrue(entry.fixes.allSatisfy { !message.contains($0) })
+  }
+}

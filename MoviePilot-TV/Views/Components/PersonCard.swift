@@ -2,15 +2,39 @@ import Kingfisher
 import SwiftUI
 
 struct PersonCard: View {
+  static let imageSize = CGSize(width: 210, height: 315)
+
+  /// 按卡片实际显示尺寸直接下采样，避免先完整解码人物原图再重绘缩小图。
+  static func imageProcessor(for size: CGSize = imageSize) -> any ImageProcessor {
+    DownsamplingImageProcessor(size: size)
+  }
+
   let person: Person
   var staffImageUrl: URL? = nil
-  let width: CGFloat = 210
-  let height: CGFloat = 315
+  let width: CGFloat
+  let height: CGFloat
+  var loadsImage: Bool = true
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
 
   @FocusState private var isFocused: Bool
+
+  init(
+    person: Person,
+    staffImageUrl: URL? = nil,
+    width: CGFloat = imageSize.width,
+    height: CGFloat = imageSize.height,
+    loadsImage: Bool = true,
+    action: (() -> Void)? = nil
+  ) {
+    self.person = person
+    self.staffImageUrl = staffImageUrl
+    self.width = width
+    self.height = height
+    self.loadsImage = loadsImage
+    self.action = action
+  }
 
   var body: some View {
     VStack(spacing: 10) {
@@ -39,7 +63,6 @@ struct PersonCard: View {
       VStack {
         Text(person.name ?? "未知")
           .font(.caption)
-          .fontWeight(.medium)
           .foregroundStyle(isFocused ? .primary : .secondary)
 
         if let subtitle = (person.job != nil && !person.job!.isEmpty)
@@ -62,22 +85,24 @@ struct PersonCard: View {
 
   private var posterContent: some View {
     let url = staffImageUrl ?? person.imageURLs.profile
-    return KFImage(url)
-      .requestModifier(AnyModifier.cookieModifier)
-      .placeholder {
-        Rectangle()
-          .fill(Color(white: 0.12))
-          .overlay(
-            Image(systemName: "person.fill")
-              .font(.largeTitle)
-              .foregroundColor(.gray)
-          )
-      }
-      .resizing(referenceSize: CGSize(width: 210, height: 315), mode: .aspectFill)
-      .resizable()
-      .fade(duration: 0.25)
-      .aspectRatio(contentMode: .fill)
-      .frame(width: width, height: height)
-      .clipped()
+    return ZStack {
+      Rectangle()
+        .fill(Color(white: 0.12))
+        .overlay(
+          Image(systemName: AppSymbol.person)
+            .font(.title2)
+            .foregroundColor(.gray)
+        )
+
+      PageManagedImage(
+        url: url,
+        processor: Self.imageProcessor(for: CGSize(width: width, height: height)),
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true
+      )
+    }
+    .frame(width: width, height: height)
+    .clipped()
   }
 }

@@ -3,36 +3,18 @@ import SwiftUI
 
 struct PersonDetailView: View {
   @StateObject private var viewModel: PersonDetailViewModel
-  @Binding var navigationPath: NavigationPath
-  #if DEBUG
-  private let presentsBiographySheetOnAppear: Bool
-  #endif
+  @ObservedObject private var apiService = APIService.shared
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
-  init(person: Person, navigationPath: Binding<NavigationPath>) {
+  init(person: Person, imageLifecycle: PageImageLifecycle) {
     _viewModel = StateObject(
       wrappedValue: PersonDetailViewModel(person: person))
-    _navigationPath = navigationPath
-    #if DEBUG
-    presentsBiographySheetOnAppear = false
-    #endif
+    self.imageLifecycle = imageLifecycle
   }
-
-  #if DEBUG
-  init(
-    previewViewModel: PersonDetailViewModel,
-    navigationPath: Binding<NavigationPath>,
-    showsBiographySheet: Bool = false
-  ) {
-    _viewModel = StateObject(wrappedValue: previewViewModel)
-    _navigationPath = navigationPath
-    presentsBiographySheetOnAppear = showsBiographySheet
-    _showFullBio = State(initialValue: false)
-  }
-  #endif
 
   @State private var showFullBio = false
   @State private var isImageFailed: Bool = false
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   @FocusState private var focusedElement: FocusField?
@@ -42,13 +24,14 @@ struct PersonDetailView: View {
 
   var body: some View {
     MediaGridView(
+      imageLifecycle: imageLifecycle,
+      listIdentity: viewModel.paginator.listIdentity,
       items: viewModel.paginator.items,
       isLoading: viewModel.isLoadingDetails || viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,
       onLoadMore: { currentItem in
         Task { await viewModel.paginator.loadMore(currentItem) }
       },
-      navigationPath: $navigationPath,
       header: {
         VStack(alignment: .leading, spacing: 40) {
           let person = viewModel.person
@@ -61,26 +44,26 @@ struct PersonDetailView: View {
               Rectangle()
                 .fill(Color(white: 0.12))
                 .overlay(
-                  Image(systemName: "person.fill")
-                    .font(.system(size: 100))
+                  Image(systemName: AppSymbol.person)
+                    .font(.title)
                     .foregroundColor(.gray)
                 )
 
-              if !isImageFailed, let validUrl = imageUrl {
-                KFImage(validUrl)
-                  .requestModifier(AnyModifier.cookieModifier)
-                  .onFailure { _ in
-                    isImageFailed = true
-                  }
-                  .placeholder {
-                    Rectangle()
-                      .fill(Color(white: 0.12))
-                      .overlay(ProgressView().tint(.gray))
-                  }
-                  .resizing(referenceSize: CGSize(width: 400, height: 600), mode: .aspectFill)
-                  .resizable()
-                  .aspectRatio(contentMode: .fill)
-              }
+              PageManagedImage(
+                url: imageUrl,
+                processor: ResizingImageProcessor(
+                  referenceSize: CGSize(width: 400, height: 600),
+                  mode: .aspectFill
+                ),
+                isEnabled: !isImageFailed,
+                role: .activePage,
+                participatesInPageLifecycle: true,
+                skipsMemoryCache: true,
+                fadeDuration: 0,
+                onFailure: {
+                  isImageFailed = true
+                }
+              )
             }
             .onChange(of: imageUrl) { _, _ in
               isImageFailed = false
@@ -91,7 +74,7 @@ struct PersonDetailView: View {
 
             VStack(alignment: .leading, spacing: 20) {
               Text(person.name ?? "未知")
-                .font(.title.bold())
+                .font(.title2.bold())
 
               if let originalName = person.original_name, originalName != person.name {
                 Text(originalName)
@@ -112,12 +95,11 @@ struct PersonDetailView: View {
               if viewModel.isLoadingDetails {
                 // 加载期间保持布局稳定的可聚焦占位符
                 Button(action: {}) {
-                  RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(height: 150)
-                    .overlay(ProgressView())
+                  ProgressView()
+                    .frame(maxWidth: 1100, minHeight: 150)
+                    .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               } else if let biography = person.biography, !biography.isEmpty {
                 Button(action: {
@@ -127,14 +109,14 @@ struct PersonDetailView: View {
                     Text("个人简介")
                       .font(.callout.bold())
 
-                    Text(biography)
+                    Text(Self.biographyText(biography, source: person.source))
                       .font(.caption)
                       .multilineTextAlignment(.leading)
                   }
-                  .frame(maxWidth: 1100)
+                  .frame(maxWidth: 1100, alignment: .leading)
                   .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               } else {
                 // 无简介时的可聚焦占位符 — 确保头部有焦点目标
@@ -145,7 +127,7 @@ struct PersonDetailView: View {
                     .frame(maxWidth: 1100, alignment: .leading)
                     .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               }
               Spacer(minLength: 0)
@@ -159,7 +141,7 @@ struct PersonDetailView: View {
           VStack(alignment: .leading, spacing: 20) {
             Text("参演作品")
               .font(.callout)
-              .fontWeight(.bold)
+              .bold()
               .foregroundStyle(.secondary)
               .padding(.leading, 8)
           }
@@ -169,42 +151,43 @@ struct PersonDetailView: View {
       contextMenu: { item in
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler
         )
       }
     )
     .task {
-      #if DEBUG
-      if UIPreviewMode.isEnabled() { return }
-      #endif
       await viewModel.loadInitialData()
     }
     .defaultFocus($focusedElement, .biography)
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person
       if let biography = person.biography {
-        VStack(alignment: .leading, spacing: 20) {
-          Text(person.name ?? "个人简介")
-            .font(.title2.bold())
+        ReadingSheet(
+          title: person.name ?? "个人简介",
+          blocks: ReadingSheetLayout.paragraphs(
+            Self.biographyText(biography, source: person.source)
+          ).map { ReadingBlock($0) }
+        )
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
+      subscriptionHandler = SubscriptionHandler()
+      showFullBio = false
+    }
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
+  }
 
-          Text(biography)
-            .font(.footnote)
-        }
-        .padding(50)
-        .frame(width: 1600)
-      }
+  static func biographyText(_ biography: String, source: String?) -> AttributedString {
+    guard source == "anilist",
+      let attributed = try? AttributedString(
+        markdown: biography,
+        options: .init(interpretedSyntax: .full)
+      )
+    else {
+      return AttributedString(biography)
     }
-    #if DEBUG
-    .onAppear {
-      guard presentsBiographySheetOnAppear else { return }
-      Task { @MainActor in
-        await Task.yield()
-        showFullBio = true
-      }
-    }
-    #endif
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
+    return attributed
   }
 }
 

@@ -1,0 +1,398 @@
+import Foundation
+import Security
+import TVServices
+
+nonisolated struct TopShelfRefreshConfiguration: Codable, Equatable, Sendable {
+  let sessionID: String
+  let baseURL: String
+  let useImageCache: Bool
+  let bangumiProxyEnabled: Bool
+  let bangumiImageDomain: String?
+
+  func imageURL(_ path: String?) -> URL? {
+    guard let path, !isDefaultPlaceholderImageURL(path) else { return nil }
+    return displayImageURL(
+      path,
+      baseURL: baseURL, useImageCache: useImageCache,
+      bangumiProxyEnabled: bangumiProxyEnabled, bangumiImageDomain: bangumiImageDomain
+    )
+  }
+}
+
+/// 扩展只共享当前会话的访问令牌；不保存登录密码，也不把令牌写入共享 JSON。
+nonisolated enum TopShelfCredentials {
+  static func query(_ sessionID: String, bundle: Bundle = .main) -> [String: Any]? {
+    guard let appGroupIdentifier = TopShelfSharedStore.appGroupIdentifier(in: bundle) else {
+      return nil
+    }
+    return [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "MoviePilot.TopShelf",
+      kSecAttrAccount as String: sessionID,
+      kSecAttrAccessGroup as String: appGroupIdentifier,
+    ]
+  }
+
+  static func save(_ token: String, sessionID: String) -> Bool {
+    guard let query = query(sessionID) else { return false }
+    let data = Data(token.utf8)
+    let result = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
+    if result == errSecSuccess { return true }
+    guard result == errSecItemNotFound else { return false }
+    var addition = query
+    addition[kSecValueData as String] = data
+    addition[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    return SecItemAdd(addition as CFDictionary, nil) == errSecSuccess
+  }
+
+  static func read(_ sessionID: String) -> String? {
+    guard var query = query(sessionID) else { return nil }
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+      let data = result as? Data
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  static func delete(_ sessionID: String) {
+    guard let query = query(sessionID) else { return }
+    SecItemDelete(query as CFDictionary)
+  }
+}
+
+nonisolated private struct TopShelfMediaRecord: Decodable {
+  let tmdb_id: Int?
+  let douban_id: String?
+  let bangumi_id: Int?
+  let anilist_id: Int?
+  let imdb_id: String?
+  let tvdb_id: Int?
+  let media_source: String?
+  let source: String?
+  let mediaid_prefix: String?
+  let media_id: String?
+  let title: String?
+  let type: String?
+  let year: String?
+  let season: Int?
+  let poster_path: String?
+  let backdrop_path: String?
+  let collection_id: Int?
+  let overview: String?
+  let vote_average: Double?
+
+  var identity: MediaIdentity? {
+    MediaIdentifier.resolve(
+      mediaIdPrefix: mediaid_prefix, source: media_source ?? source,
+      mediaId: media_id, tmdbId: tmdb_id, doubanId: douban_id, bangumiId: bangumi_id,
+      anilistId: anilist_id)
+  }
+
+  func payload(sessionID: String, entryOrigin: TopShelfEntryOrigin) -> TopShelfRoutePayload {
+    TopShelfRoutePayload(
+      sessionID: sessionID, entryOrigin: entryOrigin, source: media_source ?? source,
+      mediaID: media_id, mediaIDPrefix: mediaid_prefix, tmdbID: tmdb_id, doubanID: douban_id,
+      bangumiID: bangumi_id, anilistID: anilist_id, imdbID: imdb_id, tvdbID: tvdb_id,
+      title: title, type: type, year: year, season: season, posterPath: poster_path,
+      collectionID: collection_id, overview: overview, voteAverage: vote_average)
+  }
+}
+
+nonisolated enum TopShelfRefreshError: Error {
+  case invalidResponse
+  case invalidURL
+}
+
+/// 用与主 App 相同的媒体身份、图片地址和图片下载器准备整批卡片。
+nonisolated struct TopShelfRefreshClient: Sendable {
+  let store: TopShelfSharedStore
+  let transport: URLSession?
+  let readToken: @Sendable (String) -> String?
+
+  init(
+    store: TopShelfSharedStore, transport: URLSession? = nil,
+    readToken: @escaping @Sendable (String) -> String? = TopShelfCredentials.read
+  ) {
+    self.store = store
+    self.transport = transport
+    self.readToken = readToken
+  }
+
+  /// 在扩展请求的生命周期内完成有界刷新，网络过慢时保留当前会话的本地内容。
+  func loadPresentation(refreshTimeout: Duration = .seconds(10)) async -> TopShelfPresentation? {
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { try? await refresh() }
+      group.addTask { try? await Task.sleep(for: refreshTimeout) }
+      await group.next()
+      group.cancelAll()
+    }
+    return store.presentation(at: Date())
+  }
+
+  @concurrent
+  func refresh() async throws {
+    guard let expected = try store.loadState(), let configuration = expected.refreshConfiguration,
+      let selection = expected.selection, expected.activeSessionID == configuration.sessionID,
+      let token = readToken(configuration.sessionID)
+    else { return }
+    let resources = try store.beginResourcePreparation()
+    defer { try? resources.finish() }
+    let session: URLSession
+    if let transport {
+      session = transport
+    } else {
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.httpShouldSetCookies = false
+      configuration.httpCookieStorage = nil
+      configuration.urlCache = nil
+      session = URLSession(configuration: configuration)
+    }
+    defer { if transport == nil { session.invalidateAndCancel() } }
+    let context = RequestContext(configuration: configuration, token: token, transport: session)
+    let params = selection.isSubscriptionShare ? ["page": "1", "count": "30"] : ["page": "1"]
+    let raw = try await context.json(path: selection.requestPath, params: params)
+    guard let objects = raw as? [[String: Any]] else { throw TopShelfRefreshError.invalidResponse }
+    var items: [TopShelfSnapshotItem] = []
+    var seen = Set<String>()
+    for rawObject in objects {
+      if items.count == TopShelfSnapshot.maximumItems { break }
+      try Task.checkCancellation()
+      guard try store.loadState() == expected else { throw CancellationError() }
+      do {
+        let object = selection.isSubscriptionShare
+          ? Self.subscriptionShareMedia(rawObject) : rawObject
+        let media = try JSONDecoder().decode(
+          TopShelfMediaRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        guard let title = media.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !title.isEmpty,
+          let identifier = media.payload(
+            sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin).cardIdentifier
+        else { continue }
+        guard seen.insert(identifier).inserted else { continue }
+        var prepared: [String: Any]
+        let detail: TopShelfMediaRecord
+        if let collectionID = media.collection_id {
+          let children = try await context.json(
+            path: "tmdb/collection/\(collectionID)", params: ["page": "1", "title": title])
+          guard children is [[String: Any]] else { throw TopShelfRefreshError.invalidResponse }
+          detail = media
+          prepared = ["detail": object, "collectionItems": children]
+        } else if let identity = media.identity {
+          let allowed = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:")
+          guard let id = identity.mediaId.addingPercentEncoding(withAllowedCharacters: allowed)
+          else { continue }
+          let response = try await context.json(
+            path: "media/\(id)", params: ["media_source": identity.source, "type_name": media.type])
+          guard let object = response as? [String: Any] else {
+            throw TopShelfRefreshError.invalidResponse
+          }
+          detail = try JSONDecoder().decode(
+            TopShelfMediaRecord.self, from: JSONSerialization.data(withJSONObject: object))
+          guard detail.title != nil || detail.tmdb_id != nil || detail.douban_id != nil else {
+            continue
+          }
+          prepared = ["detail": object]
+        } else {
+          continue
+        }
+        let backdropPath = detail.backdrop_path ?? media.backdrop_path
+        let candidates: [ImageCandidate] = [
+          configuration.imageURL(backdropPath).map {
+            ImageCandidate(url: $0, isPoster: false, onlyAfterTooLarge: false)
+          },
+          configuration.imageURL(Self.reducedTMDBBackdropPath(backdropPath)).map {
+            ImageCandidate(url: $0, isPoster: false, onlyAfterTooLarge: true)
+          },
+          configuration.imageURL(detail.poster_path ?? media.poster_path).map {
+            ImageCandidate(url: $0, isPoster: true, onlyAfterTooLarge: false)
+          },
+        ].compactMap { $0 }
+        guard let picked = try await context.firstImage(of: candidates) else { continue }
+        let (image, chosen) = picked
+        try Task.checkCancellation()
+        guard try store.loadState() == expected else { throw CancellationError() }
+        // 扩展不缩放，卡片图与详情背景图是同一份原文件，只写一次。
+        let imagePath = try resources.writeImage(
+          image, cacheKey: "\(configuration.sessionID)|original|\(chosen.url.absoluteString)")
+        let detailPath = try resources.writeDetailData(
+          JSONSerialization.data(withJSONObject: prepared),
+          cacheKey: "\(configuration.sessionID)|\(identifier)")
+        items.append(
+          TopShelfSnapshotItem(
+            identifier: identifier, title: title, imageRelativePath: imagePath,
+            displayURL: try TopShelfDeepLink.url(
+              for: media.payload(
+                sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin)),
+            detailRelativePath: detailPath, backgroundRelativePath: imagePath,
+            backgroundIsPoster: chosen.isPoster))
+      } catch is CancellationError { throw CancellationError() } catch {
+        try Task.checkCancellation()
+        continue
+      }
+    }
+    try Task.checkCancellation()
+    guard !items.isEmpty else { return }
+    try resources.publish(
+      TopShelfSnapshot(
+        sessionID: configuration.sessionID, selection: selection,
+        generatedAt: Date(), items: items, refreshConfiguration: configuration), replacing: expected
+    )
+  }
+
+  /// 分享记录只提供对应媒体身份；分享人的标题和复用入口不进入主屏卡片。
+  static func subscriptionShareMedia(_ share: [String: Any]) -> [String: Any] {
+    let fields = [
+      "tmdbid": "tmdb_id", "doubanid": "douban_id", "bangumiid": "bangumi_id",
+      "anilistid": "anilist_id", "type": "type", "year": "year", "season": "season",
+      "poster": "poster_path", "backdrop": "backdrop_path", "vote": "vote_average",
+      "description": "overview",
+    ]
+    var media: [String: Any] = [:]
+    for (from, to) in fields { media[to] = share[from] }
+    media["title"] = (share["name"] as? String) ?? (share["share_title"] as? String)
+    if let source = MediaIdentifier.normalizeSource(share["media_source"] as? String), source != "0",
+      let id = MediaIdentifier.normalizedString(share["media_id"] as? String),
+      Int(id).map({ $0 > 0 }) ?? true
+    {
+      media["source"] = source
+      media["media_id"] = id
+    }
+    return media
+  }
+
+  /// 扩展内存上限约 25 MB，图片整张读入内存并原样写盘，单张上限取 2 MB。
+  /// 超限时依次改用 TMDB 小一档背景图和海报；都不可用的卡片跳过，不拖垮整批刷新。
+  static let maximumImageBytes = 2_000_000
+
+  /// TMDB 原尺寸背景图常超过扩展的单张上限。图片尺寸位于 `/t/p/<size>/` 路径段，
+  /// 只改写这一段为官方背景图尺寸 w1280；其它来源、host 与 query 保持原样。
+  static func reducedTMDBBackdropPath(_ path: String?) -> String? {
+    let original = "/t/p/original/"
+    guard let path, var components = URLComponents(string: path), components.host != nil,
+      let range = components.percentEncodedPath.range(of: original)
+    else { return nil }
+    components.percentEncodedPath.replaceSubrange(range, with: "/t/p/w1280/")
+    return components.string
+  }
+
+  nonisolated fileprivate struct ImageCandidate {
+    let url: URL
+    let isPoster: Bool
+    /// 只在前一张图片因超过字节上限失败时才尝试，其它失败不多发请求。
+    let onlyAfterTooLarge: Bool
+  }
+
+  nonisolated private struct RequestContext {
+    let configuration: TopShelfRefreshConfiguration
+    let token: String
+    let transport: URLSession
+    let cookieVault = ResourceCookieVault()
+
+    func json(path: String, params: [String: String?]) async throws -> Any {
+      guard var relative = URLComponents(string: path), relative.scheme == nil,
+        relative.host == nil,
+        !path.hasPrefix("//"), !relative.path.split(separator: "/").contains("..")
+      else { throw TopShelfRefreshError.invalidURL }
+      appendPercentEncodedQueryParams(to: &relative, params: params)
+      guard let relativeString = relative.string else { throw TopShelfRefreshError.invalidURL }
+      let endpoint =
+        relativeString.hasPrefix("/") ? String(relativeString.dropFirst()) : relativeString
+      guard let url = URL(string: "\(configuration.baseURL)/api/v1/\(endpoint)") else {
+        throw TopShelfRefreshError.invalidURL
+      }
+      var request = URLRequest(url: url, timeoutInterval: 10)
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+      request.setValue(cookieVault.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
+      let (data, response) = try await transport.data(
+        for: request,
+        delegate: TopShelfAPIRedirectDelegate(
+          baseURL: configuration.baseURL, token: token, cookieVault: cookieVault))
+      guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode)
+      else { throw TopShelfRefreshError.invalidResponse }
+      if let responseURL = response.url,
+        isMoviePilotAPIURL(responseURL, baseURL: configuration.baseURL)
+      {
+        cookieVault.update(from: response, for: responseURL)
+      }
+      let object = try JSONSerialization.jsonObject(with: data)
+      if let envelope = object as? [String: Any] {
+        if envelope["success"] as? Bool == false { throw TopShelfRefreshError.invalidResponse }
+        if let data = envelope["data"], !(data is NSNull) { return data }
+      }
+      return object
+    }
+
+    func image(_ url: URL) async throws -> TopShelfImageResource {
+      let isProtected = isProtectedMoviePilotImageURL(url, baseURL: configuration.baseURL)
+      var request = URLRequest(url: url, timeoutInterval: 10)
+      request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+      if isProtected {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(cookieVault.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
+      }
+      let delegate = TopShelfImageRedirectDelegate(
+        startedProtected: isProtected, baseURL: configuration.baseURL,
+        token: token, cookieHeader: { [cookieVault] in cookieVault.cookieHeader(for: $0) })
+      return try await TopShelfImageLoader.downloadTopShelfImage(
+        request: request, transport: transport,
+        redirectDelegate: delegate, maximumBytes: TopShelfRefreshClient.maximumImageBytes,
+        maximumPixels: 40_000_000)
+    }
+
+    /// 按顺序返回第一张可用图片；全部失败时抛出最后一个错误，没有候选时返回 nil。
+    func firstImage(of candidates: [ImageCandidate]) async throws
+      -> (TopShelfImageResource, ImageCandidate)?
+    {
+      var lastError: (any Error)?
+      for candidate in candidates {
+        if candidate.onlyAfterTooLarge,
+          (lastError as? TopShelfImageError) != .tooLarge
+        { continue }
+        do {
+          return (try await image(candidate.url), candidate)
+        } catch is CancellationError { throw CancellationError() } catch {
+          try Task.checkCancellation()
+          lastError = error
+        }
+      }
+      if let lastError { throw lastError }
+      return nil
+    }
+  }
+}
+
+nonisolated private final class TopShelfAPIRedirectDelegate: NSObject, URLSessionTaskDelegate,
+  Sendable
+{
+  private let baseURL: String
+  private let token: String
+  private let cookieVault: ResourceCookieVault
+
+  init(baseURL: String, token: String, cookieVault: ResourceCookieVault) {
+    self.baseURL = baseURL
+    self.token = token
+    self.cookieVault = cookieVault
+  }
+
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    guard let destination = request.url, isMoviePilotAPIURL(destination, baseURL: baseURL) else {
+      completionHandler(nil)
+      return
+    }
+    if let source = response.url, isMoviePilotAPIURL(source, baseURL: baseURL) {
+      cookieVault.update(from: response, for: source)
+    }
+    var redirected = request
+    redirected.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    redirected.setValue(cookieVault.cookieHeader(for: destination), forHTTPHeaderField: "Cookie")
+    completionHandler(redirected)
+  }
+}

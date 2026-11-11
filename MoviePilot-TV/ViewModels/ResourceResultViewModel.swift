@@ -4,6 +4,7 @@ import SwiftUI
 
 @MainActor
 class ResourceResultViewModel: ObservableObject {
+  @Published private(set) var pagedSearch: ResourceSearchSession?
   @Published var results: [Context] = []
   @Published var isLoading = false
   private var hasSearched = false
@@ -18,15 +19,18 @@ class ResourceResultViewModel: ObservableObject {
 
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
+  @Published var errorMessage: String?
 
   private var searchStreamTask: Task<Void, Never>?
+  private let runs: SearchRunGate
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   init(
     keyword: String, type: String? = nil, area: String? = nil, title: String? = nil,
-    year: String? = nil, season: Int? = nil, sites: String? = nil
+    year: String? = nil, season: Int? = nil, sites: String? = nil,
+    apiService: APIService = .shared
   ) {
     self.keyword = keyword
     self.type = type
@@ -35,6 +39,8 @@ class ResourceResultViewModel: ObservableObject {
     self.year = year
     self.season = season
     self.sites = sites
+    self.apiService = apiService
+    self.runs = SearchRunGate(apiService: apiService)
   }
 
   #if DEBUG
@@ -60,18 +66,23 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   func cancelSearch() {
+    pagedSearch?.cancel()
+    runs.end()
     searchStreamTask?.cancel()
     searchStreamTask = nil
     hasSearched = false
     isLoading = false
   }
 
+  /// 页面退场时立即使请求失效，但保留当前公开展示状态，避免 Pop 动画第一帧切换 UI。
   func cancelInFlightSearch() {
+    if let pagedSearch { pagedSearch.deactivate(); return }
     let wasInFlight = isLoading
+    runs.end()
     searchStreamTask?.cancel()
     searchStreamTask = nil
-    isLoading = false
     if wasInFlight {
+      // View 再次出现时允许 `.task` 重启搜索；`isLoading` 会保持到退场结束或新搜索接管。
       hasSearched = false
     }
   }
@@ -80,12 +91,27 @@ class ResourceResultViewModel: ObservableObject {
     guard apiService.canAccess(.search) else { return }
     guard !hasSearched else { return }
     hasSearched = true
+    let isMediaSearch = isResourceMediaSearchKeyword(keyword)
+    // 音乐媒体搜索仍返回旧 SSE 协议，不包含手动分页的来源事实。
+    if ResourceSearchQuery.supportsPaging(backendVersion: apiService.settings?.BACKEND_VERSION),
+      !(isMediaSearch && type == "音乐")
+    {
+      let search = ResourceSearchSession(query: ResourceSearchQuery(
+        keyword: keyword, type: type, area: area, title: title, year: year, season: season, sites: sites,
+        isMediaSearch: isMediaSearch
+      ), apiService: apiService)
+      pagedSearch = search
+      search.start()
+      return
+    }
     isLoading = true
+    let run = runs.begin()
 
     // 取消可能正在进行的流式搜索
     searchStreamTask?.cancel()
     searchProgressText = "正在搜索..."
     searchProgress = 0.0
+    errorMessage = nil
 
     let keyword = self.keyword
     let type = self.type
@@ -96,22 +122,24 @@ class ResourceResultViewModel: ObservableObject {
     let sites = self.sites
     let apiService = self.apiService
     let doneCloseDelay = searchStreamDoneCloseDelay
-    let sessionSnapshot = apiService.sessionSnapshot()
+    let runs = runs
 
     searchStreamTask = Task { @MainActor [weak self] in
-      var accumulatedResults: [Context] = []
+      var collectedResults = ResourceSearchResultCollector()
+      // 只有收到端点认可的 done 才允许 missingSites 补偿与发布；业务 error 与无终止 EOF 均不发布。
+      var receivedDone = false
+      defer { self?.finishSearchIfCurrent(run) }
 
-      let canContinue: @MainActor () -> Bool = {
-        apiService.isSessionUnchanged(from: sessionSnapshot)
-          && apiService.canAccess(.search)
-          && !Task.isCancelled
+      let canContinue: @MainActor () -> Bool = { [weak self] in
+        self != nil && runs.isCurrent(run)
       }
 
       do {
+        guard canContinue() else { return }
         let stream: AsyncThrowingStream<SearchStreamEvent, Error>
 
         // 判断是否为媒体搜索（如 "tmdb:1234"）
-        if keyword.contains(":") && keyword.prefix(while: { $0.isLetter }).count > 0 {
+        if isResourceMediaSearchKeyword(keyword) {
           stream = apiService.searchMediaStream(
             keyword: keyword,
             type: type,
@@ -128,27 +156,23 @@ class ResourceResultViewModel: ObservableObject {
         for try await event in stream {
           guard canContinue() else { return }
 
-          if let text = event.text {
+          if let text = event.text_i18n ?? event.text {
             self?.searchProgressText = text
           }
           if let value = event.value {
             self?.searchProgress = value
           }
 
-          if let items = event.items {
-            if event.type == "append" {
-              accumulatedResults.append(contentsOf: items)
-            } else if event.type == "replace" || event.type == "done" {
-              accumulatedResults = items
-            }
-          }
+          try collectedResults.receive(event)
 
           if event.type == "error" {
-            print("Search Stream Error: \(event.message ?? "未知错误")")
-            break
+            self?.errorMessage = event.localizedMessage ?? "未找到相关资源"
+            // 整次搜索失败：不发布已积累的部分结果，也不执行站点补偿。
+            return
           }
 
           if event.type == "done" {
+            receivedDone = true
             // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
             try? await Task.sleep(nanoseconds: doneCloseDelay)
             guard canContinue() else { return }
@@ -157,6 +181,11 @@ class ResourceResultViewModel: ObservableObject {
         }
 
         if canContinue() {
+          // 只有明确成功终止（done）才允许 missingSites 补偿与结果发布。
+          guard receivedDone else {
+            throw URLError(.networkConnectionLost)
+          }
+          var accumulatedResults = collectedResults.items
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
           if let specificSites = sites, !specificSites.isEmpty {
@@ -168,7 +197,7 @@ class ResourceResultViewModel: ObservableObject {
               guard canContinue() else { return }
               targetSites = Set(allSites)
             } catch {
-              print("Fetch indexer sites error: \(error)")
+              Logger.error("Fetch indexer sites error: \(error)")
             }
           }
 
@@ -195,23 +224,32 @@ class ResourceResultViewModel: ObservableObject {
               // 追加到原结果后面
               accumulatedResults.append(contentsOf: retryResults)
             } catch {
-              print("Search missing sites retry error: \(error)")
+              Logger.error("Search missing sites retry error: \(error)")
             }
           }
 
           guard canContinue() else { return }
 
-          // 应用自定义过滤规则
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
           guard let self else { return }
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canContinue() else { return }
+            self.errorMessage = error.localizedDescription
+            return
+          } catch {
+            Logger.error("[ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           
           guard canContinue() else { return }
 
           self.results = filteredResults
-          self.isLoading = false
         }
       } catch {
-        print("Search Stream error: \(error)")
+        Logger.error("Search Stream error: \(error)")
         if canContinue() {
           do {
             var searchResults = try await apiService.searchResources(
@@ -226,29 +264,40 @@ class ResourceResultViewModel: ObservableObject {
             guard canContinue() else { return }
 
             guard let self else { return }
-            searchResults = await self.applyCustomFilter(to: searchResults)
+            do {
+              searchResults = try await self.applyCustomFilter(to: searchResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.errorMessage = error.localizedDescription
+              return
+            } catch {
+              Logger.error("[ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canContinue() else { return }
 
             self.results = searchResults
           } catch {
-            print("Search fallback error: \(error)")
+            Logger.error("Search fallback error: \(error)")
+            guard canContinue() else { return }
+            self?.errorMessage = error.localizedDescription
           }
           guard canContinue() else { return }
-
-          self?.isLoading = false
         }
       }
     }
   }
 
-  /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "ResourceResultVM")
-    } catch {
-      print("❌ [ResourceResultVM] 加载过滤规则失败: \(error)")
-      return contexts
+  private func finishSearchIfCurrent(_ run: SearchRunGate.Run) {
+    guard runs.owns(run) else { return }
+    isLoading = false
+    searchStreamTask = nil
+    if !runs.isCurrent(run) {
+      hasSearched = false
     }
+  }
+
+  /// 应用自定义过滤规则
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "ResourceResultVM")
   }
 }

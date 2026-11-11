@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 class HomeViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   /// 媒体服务器最近播放/新增的项目
   @Published var latestMedia: [MediaServerPlayItem] = []
   /// 可选的媒体服务器（用于首页最近添加筛选）
@@ -20,20 +23,40 @@ class HomeViewModel: ObservableObject {
   @Published var movieSubscriptions: [Subscribe] = []
   /// 电视剧订阅列表
   @Published var tvSubscriptions: [Subscribe] = []
+  /// 最近播放加载失败标记（成功空视为有效结果；失败保留旧快照并置位）
+  @Published var latestLoadFailed = false
+  /// 订阅加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
+  @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
+  /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
+  @Published private(set) var inAppPlayableServers: Set<String> = []
 
   private let apiService: APIService
-  private let latestMediaSelectedServerKey = "home.latestMedia.selectedServer.v1"
+  private var latestMediaSelectedServerKey: String? {
+    apiService.profileKey.map { "home.latestMedia.selectedServer.v2_\($0)" }
+  }
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
   private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService? = nil) {
     self.apiService = apiService ?? APIService.shared
-    self.selectedLatestMediaServer =
-      UserDefaults.standard.string(
-        forKey: latestMediaSelectedServerKey
-      ) ?? ""
+    if let key = latestMediaSelectedServerKey {
+      let defaults = UserDefaults.standard
+      if defaults.object(forKey: key) == nil,
+        let legacyValue = defaults.string(forKey: "home.latestMedia.selectedServer.v1")
+      {
+        defaults.set(legacyValue, forKey: key)
+        defaults.removeObject(forKey: "home.latestMedia.selectedServer.v1")
+      }
+      self.selectedLatestMediaServer = defaults.string(forKey: key) ?? ""
+    }
+
+    // 设置里的应用内播放开关变了：重绘卡片的点击方式和长按菜单（是否能在应用内播放每次都现读）。
+    NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
 
     // 监听订阅变更通知，从其他页面订阅后首页立即刷新
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
@@ -45,25 +68,6 @@ class HomeViewModel: ObservableObject {
       }
       .store(in: &cancellables)
   }
-
-  #if DEBUG
-  func installUIPreviewData(
-    latestMediaByServer: [String: [MediaServerPlayItem]],
-    selectedServer: String,
-    movieSubscriptions: [Subscribe],
-    tvSubscriptions: [Subscribe],
-    isLoading: Bool = false
-  ) {
-    self.latestMediaByServer = latestMediaByServer
-    self.latestMediaServers = Array(latestMediaByServer.keys).sorted()
-    self.selectedLatestMediaServer = selectedServer
-    self.latestMedia = latestMediaByServer[selectedServer] ?? []
-    self.movieSubscriptions = movieSubscriptions
-    self.tvSubscriptions = tvSubscriptions
-    self.isLoading = isLoading
-    self.hasLoaded = true
-  }
-  #endif
 
   private var hasLoaded = false
 
@@ -79,6 +83,12 @@ class HomeViewModel: ObservableObject {
     }
 
     await refreshData()
+
+    // 页面 .task 被取消（切 Tab 等）后复位门闩，重新出现时能立即重试
+    if Task.isCancelled {
+      hasLoaded = false
+      return
+    }
 
     if isFirstLoad {
       isLoading = false
@@ -99,42 +109,73 @@ class HomeViewModel: ObservableObject {
     guard apiService.canRequestSuperUserEndpoints else {
       latestMediaByServer = [:]
       latestMediaServers = []
+      latestLoadFailed = false
+      if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
       if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
       if !latestMedia.isEmpty { latestMedia = [] }
       return
     }
+    let sessionSnapshot = apiService.sessionSnapshot()
 
     do {
-      // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
-      let servers = try await apiService.fetchMediaServers()
+      // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）；每次现拉并写回会话缓存，详情页和播放沿用同一份
+      let servers = try await apiService.fetchCachedMediaServers(forceRefresh: true)
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      let playableServers = Set(servers.filter(\.supportsInAppPlayback).map(\.name))
+      if inAppPlayableServers != playableServers { inAppPlayableServers = playableServers }
 
       // 只保留启用服务器（保持后端返回顺序）
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
 
       // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
-      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]).self) { group in
+      // 只有成功结果（含成功空）才覆盖对应服务器快照；
+      // 失败保留上一轮快照并置失败标记，取消保留快照但不视为失败。
+      let latestByServer = await withTaskGroup(of: (String, ServerLatestOutcome).self) {
+        group in
         for server in enabledServers {
           group.addTask {
             do {
               let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
-              return (server.name, items)
+              return (server.name, .success(items))
+            } catch is CancellationError {
+              return (server.name, .cancelled)
             } catch {
-              print("加载服务器 \(server.name) 最新媒体失败: \(error)")
-              return (server.name, [])
+              Logger.error("加载服务器 \(server.name) 最新媒体失败: \(error)")
+              return (server.name, .failed)
             }
           }
         }
 
-        // 收集各服务器结果
+        // 收集各服务器结果，仅保留成功项
         var byServer: [String: [MediaServerPlayItem]] = [:]
-        for await (serverName, items) in group {
-          byServer[serverName] = items
+        var anyFailed = false
+        var anyCancelled = false
+        for await (serverName, outcome) in group {
+          switch outcome {
+          case .success(let items):
+            byServer[serverName] = items
+          case .failed:
+            anyFailed = true
+          case .cancelled:
+            anyCancelled = true
+          }
+        }
+        // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
+        if !anyCancelled {
+          self.latestLoadFailed = anyFailed
         }
         return byServer
       }
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
 
       // 3. 更新筛选器和当前展示列表
-      self.latestMediaByServer = latestByServer
+      // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
+      let enabledServerNames = Set(enabledServers.map(\.name))
+      var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
+      for (serverName, items) in latestByServer {
+        nextByServer[serverName] = items
+      }
+      self.latestMediaByServer = nextByServer
       let newServerNames = enabledServers.map(\.name)
       if self.latestMediaServers != newServerNames {
         self.latestMediaServers = newServerNames
@@ -153,11 +194,18 @@ class HomeViewModel: ObservableObject {
       }
     } catch {
       if error is CancellationError {
-        print("加载最新媒体被取消")
+        Logger.debug("加载最新媒体被取消")
       } else {
-        print("加载最新媒体失败: \(error)")
+        Logger.error("加载最新媒体失败: \(error)")
+        latestLoadFailed = true
       }
     }
+  }
+
+  private enum ServerLatestOutcome {
+    case success([MediaServerPlayItem])
+    case failed
+    case cancelled
   }
 
   private func applyLatestMediaSelection() {
@@ -172,24 +220,21 @@ class HomeViewModel: ObservableObject {
   }
 
   private func persistSelectedLatestMediaServer() {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
-    #endif
-
-    UserDefaults.standard.set(selectedLatestMediaServer, forKey: latestMediaSelectedServerKey)
+    guard let key = latestMediaSelectedServerKey else { return }
+    UserDefaults.standard.set(selectedLatestMediaServer, forKey: key)
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
-  func refreshSubscriptions(forceRefresh: Bool = false) async {
+  @discardableResult
+  func refreshSubscriptions(forceRefresh: Bool = false) async -> Bool {
     guard apiService.canAccess(.subscribe) else {
       if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
       if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
-      return
+      subscriptionsLoadFailed = false
+      return true
     }
-
     do {
       let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
-
       let newMovies = subs.filter { $0.type == "电影" }
         .sorted { ($0.id ?? 0) > ($1.id ?? 0) }
       if self.movieSubscriptions != newMovies {
@@ -201,101 +246,86 @@ class HomeViewModel: ObservableObject {
       if self.tvSubscriptions != newTVs {
         self.tvSubscriptions = newTVs
       }
+      subscriptionsLoadFailed = false
+      return true
+    } catch is CancellationError {
+      Logger.debug("加载订阅被取消")
+      return false
     } catch {
-      if error is CancellationError {
-        print("加载订阅被取消")
-      } else {
-        print("加载订阅失败: \(error)")
-      }
+      Logger.error("加载订阅失败: \(error)")
+      subscriptionsLoadFailed = true
+      return false
     }
   }
 
   // MARK: - 订阅操作
 
   /// 切换订阅状态（运行/停止）
-  func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
+  func toggleSubscribeStatus(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
+    let sessionSnapshot = apiService.sessionSnapshot()
     // 前端逻辑：如果是 'S' (已停止) -> 切换到 'R' (运行)，否则 -> 'S' (停止)
     let newState = subscribe.state == "S" ? "R" : "S"
-    do {
-      let success = try await apiService.updateSubscriptionStatus(id: id, state: newState)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("切换订阅状态失败: \(error)")
-      return false
+    let result = try await apiService.updateSubscriptionStatus(id: id, state: newState)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return (false, nil) }
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return result
   }
 
   /// 重置订阅历史
-  func resetSubscribe(subscribe: Subscribe) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.resetSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("重置订阅失败: \(error)")
-      return false
+  func resetSubscribe(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let result = try await apiService.resetSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return (false, nil) }
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return result
   }
 
   /// 立即触发订阅搜索
-  func searchSubscribe(subscribe: Subscribe) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
+  func searchSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.searchSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅搜索已触发，远端状态可能变化
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("搜索订阅失败: \(error)")
-      return false
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let success = try await apiService.searchSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return false }
+    if success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return success
   }
 
   /// 删除订阅
-  func deleteSubscribe(subscribe: Subscribe) async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
+  func deleteSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.deleteSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅已变更
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("删除订阅失败: \(error)")
-      return false
-    }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let success = try await apiService.deleteSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let didRefresh = await refreshSubscriptions(forceRefresh: true)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let stillExists = movieSubscriptions.contains { $0.id == id }
+      || tvSubscriptions.contains { $0.id == id }
+    guard success || (didRefresh && !stillExists) else { return false }
+
+    // 通知其他页面（如详情页 preloadTask）订阅已变更
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    return true
   }
 
   private func validLinkValue(_ value: String?) -> String? {
@@ -308,9 +338,47 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
-  func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
+  /// 当前服务器“最近添加”里能在应用内播放的条目 ID；不能播放时为 nil。
+  func inAppPlaybackItemID(_ item: MediaServerPlayItem) -> String? {
+    Self.inAppPlaybackItemID(
+      item, server: selectedLatestMediaServer, playableServers: inAppPlayableServers,
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+  }
+
+  static func inAppPlaybackItemID(
+    _ item: MediaServerPlayItem, server: String, playableServers: Set<String>,
+    canRequestSuperUserEndpoints: Bool, backendVersion: String?
+  ) -> String? {
+    guard playableServers.contains(server),
+      InAppPlaybackAvailability.offers(
+        mediaType: item.type, canRequestSuperUserEndpoints: canRequestSuperUserEndpoints,
+        backendVersion: backendVersion)
+    else { return nil }
+    return trimmedNonEmpty([item.item_id?.value])
+  }
+
+  /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
+  static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
+    guard let serverType else { return true }
+    switch serverType {
+    case .jellyfin, .trimemedia, .ugreen, .zspace:
+      return false
+    default:
+      return true
+    }
+  }
+
+  func openMediaItem(
+    _ item: MediaServerPlayItem,
+    using openURL: OpenURLAction,
+    onFailure: @escaping (String) -> Void
+  ) {
     let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
-    guard originalUrl != nil || item.server_type == .emby else { return }
+    guard originalUrl != nil || item.server_type == .emby else {
+      onFailure("无法打开媒体库：链接无效")
+      return
+    }
 
     var finalUrl: URL? = nil
 
@@ -384,25 +452,32 @@ class HomeViewModel: ObservableObject {
       if finalUrl == nil { finalUrl = URL(string: "plex://") }
 
     case .jellyfin:
-      print("Jellyfin 暂不支持在 tvOS 打开媒体")
+      onFailure("Jellyfin 暂不支持在 tvOS 打开媒体")
+      return
     case .trimemedia:
-      print("飞牛 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("飞牛 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .ugreen:
-      print("绿联 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("绿联 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .zspace:
-      print("极空间 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("极空间 NAS 暂不支持在 tvOS 打开媒体")
+      return
     default:
       // 处理未来未知的服务器类型（item.server_type.rawValue）
-      print("未知的媒体服务器类型: \(item.server_type?.rawValue ?? "未知")，且 tvOS 无法直接打开网页")
+      onFailure(
+        "未知的媒体服务器类型\(item.server_type.map { "（\($0.rawValue)）" } ?? "")暂不支持在 tvOS 打开媒体")
+      return
     }
 
     if let finalUrl = finalUrl {
       openURL(finalUrl) { accepted in
-        print(accepted ? "成功打开深度链接: \(finalUrl)" : "无法打开深度链接: \(finalUrl)")
+        if !accepted {
+          onFailure("无法打开媒体库 App，请确认已安装后重试")
+        }
       }
     } else if let serverType = item.server_type {
-      let source = originalUrl?.absoluteString ?? item.link ?? "<无链接>"
-      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(source)")
+      onFailure("未能生成 \(serverType.rawValue) 的有效媒体库链接")
     }
   }
 }

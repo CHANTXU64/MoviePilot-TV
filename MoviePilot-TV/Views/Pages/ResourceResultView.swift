@@ -1,24 +1,17 @@
-import Kingfisher
 import SwiftUI
 
 struct ResourceResultView: View {
   @Environment(\.dismiss) private var dismiss
+  @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ResourceResultViewModel
+  @ObservedObject var imageLifecycle: PageImageLifecycle
   let title: String
   let mediaInfo: MediaInfo?
 
-  #if DEBUG
-  private let searchesOnAppear: Bool
-  private let torrentsPresentation: TorrentsResultUIPreviewPresentation?
-  #endif
-
-  init(request: ResourceSearchRequest) {
+  init(request: ResourceSearchRequest, imageLifecycle: PageImageLifecycle) {
     self.title = request.title ?? "资源搜索"
     self.mediaInfo = request.mediaInfo
-    #if DEBUG
-    self.searchesOnAppear = true
-    self.torrentsPresentation = nil
-    #endif
+    self.imageLifecycle = imageLifecycle
     _viewModel = StateObject(
       wrappedValue: ResourceResultViewModel(
         keyword: request.keyword,
@@ -32,24 +25,16 @@ struct ResourceResultView: View {
     )
   }
 
-  #if DEBUG
-  init(
-    title: String,
-    mediaInfo: MediaInfo?,
-    previewViewModel: ResourceResultViewModel,
-    torrentsPresentation: TorrentsResultUIPreviewPresentation? = nil
-  ) {
-    self.title = title
-    self.mediaInfo = mediaInfo
-    self.searchesOnAppear = false
-    self.torrentsPresentation = torrentsPresentation
-    _viewModel = StateObject(wrappedValue: previewViewModel)
-  }
-  #endif
-
   var body: some View {
     Group {
-      if viewModel.isLoading {
+      if let search = viewModel.pagedSearch {
+        PagedResourceResultsView(search: search, overrideMediaInfo: mediaInfo, onCancel: {
+          viewModel.cancelSearch()
+          dismiss()
+        }) {
+          if mediaInfo != nil { Text(title).font(.title2.bold()).foregroundColor(.secondary) }
+        }
+      } else if viewModel.isLoading {
         VStack(spacing: 20) {
           ProgressView(viewModel.searchProgressText)
           if viewModel.searchProgress > 0 {
@@ -64,60 +49,28 @@ struct ResourceResultView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
-        #if DEBUG
         TorrentsResultView(
           result: viewModel.results,
           overrideMediaInfo: mediaInfo,
-          uiPreviewPresentation: torrentsPresentation,
-          header: { resultHeader }
+          emptyDescription: viewModel.errorMessage,
+          header: {
+            if mediaInfo != nil {
+              Text(title)
+                .font(.title2.bold())
+                .foregroundColor(.secondary)
+            }
+          }
         )
-        #else
-        TorrentsResultView(
-          result: viewModel.results,
-          overrideMediaInfo: mediaInfo,
-          header: { resultHeader }
-        )
-        #endif
       }
     }
     .background {
-      if let mediaInfo = mediaInfo, let url = mediaInfo.imageURLs.backdrop {
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
-          .placeholder {
-            EmptyView()
-          }
-          .setProcessor(BlurImageProcessor(blurRadius: 60))
-          .resizing(
-            referenceSize: UIScreen.main.bounds.size,
-            mode: .aspectFill
-          )
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-          .opacity(0.3)
-          .ignoresSafeArea()
-      }
+      SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
     .task {
-      #if DEBUG
-      guard searchesOnAppear else { return }
-      #endif
       await viewModel.search()
     }
     .onDisappear {
-      #if DEBUG
-      guard searchesOnAppear else { return }
-      #endif
       viewModel.cancelInFlightSearch()
-    }
-  }
-
-  @ViewBuilder
-  private var resultHeader: some View {
-    if mediaInfo != nil {
-      Text(title)
-        .font(.largeTitle.bold())
-        .foregroundColor(.secondary)
     }
   }
 }

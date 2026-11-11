@@ -12,7 +12,9 @@
 .swiftpm/configuration/user.settings
 .build/
 /build
+/.test-tvos-cache/
 /renew.log
+__pycache__/
 .env
 .env.*
 !.env.example

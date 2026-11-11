@@ -1,0 +1,7 @@
+// Shared build settings; project/target differences belong in their owning configuration.
+#include "Debug.xcconfig"
+
+APP_BUNDLE_IDENTIFIER = org.chantxu.MoviePilot-TV.Testing
+APP_DISPLAY_NAME = MoviePilot TV Tests
+APP_URL_SCHEME = moviepilot-tv-tests
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = TESTING $(inherited)

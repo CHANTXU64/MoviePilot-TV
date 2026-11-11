@@ -1,4 +1,5 @@
 import Foundation
+import Kingfisher
 import UIKit
 import XCTest
 
@@ -30,6 +31,11 @@ private struct BackendCompatibilityAccountSnapshot {
   }
 }
 
+private struct BackendBangumiImageProxySettings: Sendable {
+  let enabled: Bool
+  let domain: String
+}
+
 private struct BackendCompatibilityConfig {
   let baseURL: String
   let username: String
@@ -39,15 +45,23 @@ private struct BackendCompatibilityConfig {
   let permissionBehaviorAccountsConfigured: Bool
   let permissionBehaviorPasswords: [String]
   var activeAccount: BackendCompatibilityAccountSnapshot?
+  var coverage: BackendCompatibilityCoverage?
   let mediaServer: String?
   let requireMediaServer: Bool
   let requireLatestMedia: Bool
   let metadataQueries: [String]
+  let personQueries: [String]
   let recognitionTitles: [String]
   let resourceQueries: [String]
   let resourceMediaIDs: [String]
   let resourceSites: String?
-  let requireResourceResults: Bool
+  let subtitleQueries: [String]
+  let subtitleMediaIDs: [String]
+  let subtitleSites: String?
+  let subtitleMediaType: String?
+  let subtitleSeason: Int?
+  let subtitleSeasonInvalid: Bool
+  let subtitleDownloadSavePath: String?
   let checkSeasonAvailability: Bool
   let collectionIDs: [Int]
   let testResourceSearchStreams: Bool
@@ -59,6 +73,7 @@ private struct BackendCompatibilityConfig {
   let sideEffectSubscriptionLimit: Int
   let testManualReorganize: Bool
   let testAIReorganize: Bool
+  let testSubtitleDownload: Bool
   let reorganizeHistoryLimit: Int
   let reorganizeConcurrentCount: Int
 
@@ -79,15 +94,23 @@ private struct BackendCompatibilityConfig {
       permissionBehaviorAccountsConfigured: false,
       permissionBehaviorPasswords: [],
       activeAccount: nil,
+      coverage: nil,
       mediaServer: nil,
       requireMediaServer: false,
       requireLatestMedia: false,
       metadataQueries: [],
+      personQueries: ["易中天"],
       recognitionTitles: [],
       resourceQueries: [],
       resourceMediaIDs: [],
       resourceSites: nil,
-      requireResourceResults: false,
+      subtitleQueries: [],
+      subtitleMediaIDs: [],
+      subtitleSites: nil,
+      subtitleMediaType: nil,
+      subtitleSeason: nil,
+      subtitleSeasonInvalid: false,
+      subtitleDownloadSavePath: nil,
       checkSeasonAvailability: false,
       collectionIDs: [],
       testResourceSearchStreams: false,
@@ -95,10 +118,11 @@ private struct BackendCompatibilityConfig {
       testSubscriptionSearch: true,
       testSubscriptionUpdate: true,
       testSubscriptionPauseResume: true,
-      testSubscriptionResetSearch: true,
+      testSubscriptionResetSearch: false,
       sideEffectSubscriptionLimit: 3,
       testManualReorganize: true,
       testAIReorganize: true,
+      testSubtitleDownload: false,
       reorganizeHistoryLimit: 2,
       reorganizeConcurrentCount: 2
     )
@@ -122,6 +146,14 @@ private struct BackendCompatibilityConfig {
       explicitQueries = [query]
     }
 
+    var personQueries = values["MOVIEPILOT_COMPAT_PERSON_QUERIES"]?.listValue ?? []
+    if personQueries.isEmpty, let query = values["MOVIEPILOT_COMPAT_PERSON_QUERY"]?.nilIfBlank {
+      personQueries = [query]
+    }
+    if personQueries.isEmpty {
+      personQueries = ["易中天"]
+    }
+
     let recognitionTitles =
       values["MOVIEPILOT_COMPAT_RECOGNITION_TITLES"]?.listValue
       ?? values["MOVIEPILOT_COMPAT_RECOGNITION_TITLE"]?.nilIfBlank.map { [$0] }
@@ -134,6 +166,16 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS"]?.listValue
       ?? values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
       ?? []
+    let subtitleQueries =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_QUERIES"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_QUERY"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleMediaIDs =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_IDS"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleSeasonRaw = values["MOVIEPILOT_COMPAT_SUBTITLE_SEASON"]?.nilIfBlank
+    let subtitleSeason = subtitleSeasonRaw?.intValue.flatMap { $0 >= 0 ? $0 : nil }
     let collectionIDs =
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
@@ -154,6 +196,11 @@ private struct BackendCompatibilityConfig {
       excludedAdditionalUsernames: Set(permissionBehaviorSpecs.map(\.username))
     )
 
+    let enableSideEffects =
+      values["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"]?.boolValue(
+        fallback: false
+      ) ?? false
+
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
@@ -165,39 +212,55 @@ private struct BackendCompatibilityConfig {
       permissionBehaviorPasswords: values["MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS"]?.listValue(
         preservingEmptyItems: true) ?? [],
       activeAccount: nil,
+      coverage: nil,
       mediaServer: values["MOVIEPILOT_COMPAT_MEDIA_SERVER"]?.nilIfBlank,
       requireMediaServer: values["MOVIEPILOT_COMPAT_REQUIRE_MEDIA_SERVER"]?.boolValue(
         fallback: false) ?? false,
       requireLatestMedia: values["MOVIEPILOT_COMPAT_REQUIRE_LATEST_MEDIA"]?.boolValue(
         fallback: false) ?? false,
       metadataQueries: explicitQueries,
+      personQueries: personQueries,
       recognitionTitles: recognitionTitles,
       resourceQueries: resourceQueries,
       resourceMediaIDs: resourceMediaIDs,
       resourceSites: values["MOVIEPILOT_COMPAT_RESOURCE_SITES"]?.nilIfBlank,
-      requireResourceResults: values["MOVIEPILOT_COMPAT_REQUIRE_RESOURCE_RESULTS"]?.boolValue(
-        fallback: false) ?? false,
+      subtitleQueries: subtitleQueries,
+      subtitleMediaIDs: subtitleMediaIDs,
+      subtitleSites: values["MOVIEPILOT_COMPAT_SUBTITLE_SITES"]?.nilIfBlank,
+      subtitleMediaType: values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_TYPE"]?.nilIfBlank,
+      subtitleSeason: subtitleSeason,
+      subtitleSeasonInvalid: subtitleSeasonRaw != nil && subtitleSeason == nil,
+      subtitleDownloadSavePath: values["MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH"]?.nilIfBlank,
       checkSeasonAvailability: values["MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY"]?.boolValue(
         fallback: false) ?? false,
       collectionIDs: collectionIDs,
       testResourceSearchStreams: values["MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS"]?
         .boolValue(fallback: false) ?? false,
-      enableSideEffects: values["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionUpdate: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionPauseResume: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
-        .boolValue(fallback: true) ?? true,
-      testSubscriptionResetSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
-        .boolValue(fallback: true) ?? true,
+      enableSideEffects: enableSideEffects,
+      testSubscriptionSearch: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH"]?.boolValue(
+          fallback: true) ?? true),
+      testSubscriptionUpdate: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE"]?.boolValue(
+          fallback: true) ?? true),
+      testSubscriptionPauseResume: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
+          .boolValue(fallback: true) ?? true),
+      testSubscriptionResetSearch: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
+          .boolValue(fallback: false) ?? false),
       sideEffectSubscriptionLimit: values["MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 3,
-      testManualReorganize: values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
-        fallback: true) ?? true,
-      testAIReorganize: values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
-        fallback: true) ?? true,
+      testManualReorganize: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
+          fallback: true) ?? true),
+      testAIReorganize: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
+          fallback: true) ?? true),
+      // 字幕下载会写入文件。总开关打开时仍默认关闭，必须单独设为 true。
+      testSubtitleDownload: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD"]?.boolValue(
+          fallback: false) ?? false),
       reorganizeHistoryLimit: values["MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 2,
       reorganizeConcurrentCount: values["MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT"]?
@@ -320,6 +383,13 @@ private struct BackendCompatibilityConfig {
   }
 
   @MainActor
+  func tracking(_ coverage: BackendCompatibilityCoverage) -> BackendCompatibilityConfig {
+    var config = self
+    config.coverage = coverage
+    return config
+  }
+
+  @MainActor
   var activeAccountDiagnostic: String {
     activeAccount?.diagnostic ?? "account=\(username), label=primary, permissions=n/a"
   }
@@ -343,6 +413,8 @@ private struct BackendCompatibilityConfig {
       return canRequestSuperUserEndpoints
     case .permission(let permission):
       return canAccess(permission)
+    case .permissions(let permissions):
+      return permissions.allSatisfy(canAccess)
     }
   }
 
@@ -359,6 +431,7 @@ private enum BackendCompatibilityAccessRequirement {
   case none
   case superUser
   case permission(UserPermissionKey)
+  case permissions([UserPermissionKey])
 
   var diagnosticDescription: String {
     switch self {
@@ -368,6 +441,30 @@ private enum BackendCompatibilityAccessRequirement {
       return "superuser"
     case .permission(let permission):
       return "permission \(permission.rawValue)"
+    case .permissions(let permissions):
+      return "permissions \(permissions.map(\.rawValue).joined(separator: ","))"
+    }
+  }
+}
+
+@MainActor
+private final class BackendCompatibilityCoverage {
+  private var executedLabels = Set<String>()
+
+  func recordExecution(_ label: String) {
+    executedLabels.insert(label)
+  }
+
+  func missingRequiredSteps(_ labels: [String]) -> [String] {
+    labels.filter { !executedLabels.contains($0) }.sorted()
+  }
+
+  func requireExecution(of labels: [String]) throws {
+    let missing = missingRequiredSteps(labels)
+    guard missing.isEmpty else {
+      throw XCTSkip(
+        "No configured backend compatibility account executed required step(s): \(missing.joined(separator: ", "))."
+      )
     }
   }
 }
@@ -385,13 +482,13 @@ private extension Error {
   var isBackendCompatibilityPermissionDenied: Bool {
     if let apiError = self as? APIError {
       switch apiError {
-      case .unauthorized:
+      case .unauthorized, .authenticationChallenge, .credentialsRejected, .mfaUnsupported:
         return true
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
           || message.localizedCaseInsensitiveContains("forbidden")
           || message.localizedCaseInsensitiveContains("unauthorized")
-      case .unknown:
+      case .unknown, .gatewayStatus:
         return false
       case .invalidURL, .networkError, .decodingError:
         return false
@@ -415,6 +512,42 @@ extension Collection {
 }
 
 final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
+  @MainActor
+  func testCompatibilityStepsPreserveResourceCookieOnlyForCurrentAccount() async throws {
+    let persistence = APIServicePersistenceSnapshot.capture()
+    defer { persistence.restore() }
+    let service = APIService.isolatedTestingInstance()
+    let cookie = try XCTUnwrap(HTTPCookie(properties: [
+      .domain: "backend-compatibility-tests.local", .path: "/api/v1",
+      .name: "resource_token", .value: "account-a-cookie", .secure: "TRUE",
+    ]))
+    let token = Token(access_token: "account-a-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_name: "account-a", avatar: nil)
+    let config = BackendCompatibilityConfig.testValue().activating(
+      account: BackendCompatibilityAccount(label: "primary", username: "account-a", password: "password"),
+      token: token)
+    service.replaceSessionForTesting(baseURL: config.baseURL, token: token.access_token,
+      currentUser: token, cookies: [cookie])
+    let url = try XCTUnwrap(URL(string: "\(config.baseURL)/api/v1/system/img/0"))
+    let epoch = service.sessionSnapshot().epoch
+    let observed: String? = await runBackendCompatibilityStep("resource cookie", service: service, config: config) {
+      XCTAssertEqual(service.sessionSnapshot().epoch, epoch)
+      return service.imageRequestModifier(for: url)?.modified(for: URLRequest(url: url))?
+        .value(forHTTPHeaderField: "Cookie") ?? "missing"
+    }
+    XCTAssertEqual(observed, "resource_token=account-a-cookie")
+    XCTAssertEqual(service.sessionSnapshot().epoch, epoch)
+
+    let other = Token(access_token: "account-b-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_name: "account-b", avatar: nil)
+    pinBackendCompatibilityAccount(service: service, config: config.activating(
+      account: BackendCompatibilityAccount(label: "additional", username: "account-b", password: "password"),
+      token: other))
+    XCTAssertEqual(service.token, other.access_token)
+    XCTAssertNil(service.imageRequestModifier(for: url)?.modified(for: URLRequest(url: url))?
+      .value(forHTTPHeaderField: "Cookie"))
+  }
+
   func testListValueKeepsEscapedCommasInsideItems() {
     let value = #"ordinary-password,pa\,ss\,word,another-password"#
 
@@ -572,7 +705,10 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
       user_name: "readonly",
       avatar: nil
     )
-    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+    let coverage = BackendCompatibilityCoverage()
+    let config = BackendCompatibilityConfig.testValue()
+      .activating(account: account, token: token)
+      .tracking(coverage)
 
     var didRunOperation = false
     let result: [Subscribe]? = await runBackendCompatibilityStep(
@@ -587,6 +723,47 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
 
     XCTAssertNil(result)
     XCTAssertFalse(didRunOperation)
+    XCTAssertEqual(coverage.missingRequiredSteps(["subscriptions"]), ["subscriptions"])
+  }
+
+  @MainActor
+  func testBackendCompatibilityStepRecordsOnlyExecutedOperation() async {
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "subscriber",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "subscriber-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["subscribe": true],
+      user_name: "subscriber",
+      avatar: nil
+    )
+    let coverage = BackendCompatibilityCoverage()
+    let config = BackendCompatibilityConfig.testValue()
+      .activating(account: account, token: token)
+      .tracking(coverage)
+
+    var didRunOperation = false
+    let result: [Subscribe]? = await runBackendCompatibilityStep(
+      "subscriptions",
+      service: service,
+      config: config,
+      requirement: .permission(.subscribe)
+    ) {
+      didRunOperation = true
+      return []
+    }
+
+    XCTAssertEqual(result, [])
+    XCTAssertTrue(didRunOperation)
+    XCTAssertTrue(coverage.missingRequiredSteps(["subscriptions"]).isEmpty)
   }
 }
 
@@ -626,7 +803,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
         service: service,
         config: config.activating(account: account.account, token: account.token)
       )
-      await assertTVPermissionBehavior(for: account)
+      await assertTVPermissionBehavior(for: account, service: service)
     }
   }
 
@@ -653,9 +830,9 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       )
 
       clearBackendCompatibilityStoredCredentials()
-      service.baseURL = config.baseURL
-      service.token = nil
-      service.currentUser = nil
+      service.baseURLForTesting = config.baseURL
+      service.tokenForTesting = nil
+      service.currentUserForTesting = nil
 
       let token = try await service.login(username: account.username, password: account.password)
       accounts.append(
@@ -671,7 +848,10 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
   }
 
   @MainActor
-  private func assertTVPermissionBehavior(for account: BackendPermissionBehaviorAccount) async {
+  private func assertTVPermissionBehavior(
+    for account: BackendPermissionBehaviorAccount,
+    service: APIService
+  ) async {
     let token = account.token
     let canDiscover = token.canAccess(.discovery)
     let canSubscribe = token.canAccess(.subscribe)
@@ -683,18 +863,67 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       "\(account.account.username) should only see tabs for \(account.expectedPermission.rawValue)"
     )
 
-    let explore = ExploreViewModel()
+    let explore = ExploreViewModel(apiService: service)
     XCTAssertEqual(
       explore.availableSources,
       expectedExploreSources(canDiscover: canDiscover, canSubscribe: canSubscribe)
     )
     if !canDiscover {
-      let recommend = RecommendViewModel()
+      let recommend = RecommendViewModel(apiService: service)
       try? await Task.sleep(nanoseconds: 200_000_000)
-      XCTAssertNil(recommend.paginator, "\(account.account.username) without discovery should not create recommendation pagination.")
-      XCTAssertNil(explore.paginator, "\(account.account.username) without discovery should not create exploration pagination.")
+      XCTAssertNil(
+        recommend.paginator,
+        "\(account.account.username) without discovery should not create recommendation pagination."
+      )
+      XCTAssertNil(
+        explore.paginator,
+        "\(account.account.username) without discovery should not create exploration pagination.")
     }
     XCTAssertEqual(canManage, account.expectedPermission == .manage)
+
+    switch account.expectedPermission {
+    case .discovery:
+      await explore.refreshSources()
+      let deadline = Date().addingTimeInterval(30)
+      while Date() < deadline {
+        if let paginator = explore.paginator,
+          !paginator.isLoading,
+          !paginator.isFirstLoading
+        {
+          XCTAssertFalse(
+            paginator.hasError,
+            "\(account.account.username) discovery page failed to load: \(String(describing: paginator.lastError))"
+          )
+          return
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+      }
+      XCTFail(
+        "\(account.account.username) discovery page did not finish loading within 30 seconds.")
+
+    case .search:
+      let siteFilter = SiteFilterViewModel(apiService: service)
+      await siteFilter.loadSites()
+      XCTAssertTrue(
+        siteFilter.hasLoadedSites,
+        "\(account.account.username) search page failed to load its site domain."
+      )
+
+    case .subscribe:
+      let home = HomeViewModel(apiService: service)
+      let loaded = await home.refreshSubscriptions(forceRefresh: true)
+      XCTAssertTrue(loaded, "\(account.account.username) subscription surface failed to load.")
+      XCTAssertFalse(home.subscriptionsLoadFailed)
+
+    case .manage:
+      let reorganize = ReorganizeViewModel(fileItem: nil, apiService: service)
+      await reorganize.loadConfig()
+      XCTAssertNil(
+        reorganize.loadErrorMessage,
+        "\(account.account.username) reorganize surface failed to load its configuration."
+      )
+      XCTAssertFalse(reorganize.isLoading)
+    }
   }
 
   private func expectedPermissionBehaviorAccountSpecs(config: BackendCompatibilityConfig)
@@ -708,7 +937,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
   private func expectedVisibleTabs(for permission: UserPermissionKey) -> [ContentViewModel.Tab] {
     switch permission {
     case .discovery:
-      return [.home, .recommend, .explore, .system]
+      return [.home, .recommend, .explore, .search, .system]
     case .search:
       return [.home, .search, .system]
     case .subscribe:
@@ -742,9 +971,9 @@ private func runBackendCompatibilityAccounts(
 
   for account in config.accounts {
     clearBackendCompatibilityStoredCredentials()
-    service.baseURL = config.baseURL
-    service.token = nil
-    service.currentUser = nil
+    service.baseURLForTesting = config.baseURL
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     let token: Token
     do {
@@ -800,8 +1029,10 @@ private func pinBackendCompatibilityAccount(
 ) {
   guard let token = config.activeAccount?.token else { return }
   clearBackendCompatibilityStoredCredentials()
-  service.token = token.access_token
-  service.currentUser = token
+  // 登录后的同一会话保留资源 Cookie；重建 runtime 会让 SSE 丢失认证。
+  guard service.baseURL != config.baseURL || service.token != token.access_token else { return }
+  service.replaceSessionForTesting(
+    baseURL: config.baseURL, token: token.access_token, currentUser: token)
 }
 
 @discardableResult
@@ -827,6 +1058,8 @@ private func runBackendCompatibilityStep<T>(
     return nil
   }
 
+  config.coverage?.recordExecution(label)
+
   do {
     return try await operation()
   } catch {
@@ -850,12 +1083,15 @@ private struct BackendServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
+  let loginDraft: LoginDraft?
   let settings: GlobalSettings?
   let useImageCache: Bool
+  let serverURLDefaults: String?
   let usernameKeychain: String?
   let passwordKeychain: String?
   let usernameDefaults: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> BackendServiceSnapshot {
@@ -863,8 +1099,10 @@ private struct BackendServiceSnapshot {
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
+      loginDraft: service.loginDraft,
       settings: service.settings,
       useImageCache: service.useImageCache,
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       usernameKeychain: KeychainHelper.shared.read(
         service: "MoviePilot-TV",
         account: "username"
@@ -874,17 +1112,27 @@ private struct BackendServiceSnapshot {
         account: "password"
       ),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
+    service.loginDraft = loginDraft
     service.settings = settings
     service.useImageCache = useImageCache
+    service.restorePersistenceSnapshotForTesting(persistence)
+    if let serverURLDefaults {
+      UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
+    } else {
+      UserDefaults.standard.removeObject(forKey: "serverURL")
+    }
     restoreCredential(
       account: "username",
       keychainValue: usernameKeychain,
@@ -963,31 +1211,10 @@ private struct BackendResponseEnvelope<T: Decodable>: Decodable {
   let message: String?
 }
 
-private struct BackendActionResponse: Decodable {
-  let success: Bool?
-  let message: String?
-}
-
 private struct BackendManualTransferResult: Sendable {
   let label: String
   let success: Bool
-  let message: String?
   let diagnostic: String
-}
-
-private struct BackendManualTransferRequest: Sendable {
-  let label: String
-  let url: URL
-  let token: String?
-  let body: Data
-}
-
-private struct BackendManualTransferError: Error, CustomStringConvertible {
-  let result: BackendManualTransferResult
-
-  var description: String {
-    result.diagnostic
-  }
 }
 
 private struct BackendStreamProbeResult: Sendable {
@@ -996,21 +1223,6 @@ private struct BackendStreamProbeResult: Sendable {
   let sawTerminalEvent: Bool
   let errorMessage: String?
   let timedOut: Bool
-}
-
-private struct BackendSSEEventProbe: Decodable, Sendable {
-  struct DataPayload: Decodable, Sendable {
-    let success: Bool?
-    let error: String?
-  }
-
-  struct ItemPayload: Decodable, Sendable {}
-
-  let type: String?
-  let enable: Bool?
-  let items: [ItemPayload]?
-  let message: String?
-  let data: DataPayload?
 }
 
 private enum BackendCompatibilityProbeError: Error, CustomStringConvertible {
@@ -1065,7 +1277,7 @@ private struct BackendCompatibilityCollector {
       record: record,
       field: "backdrop"
     )
-    addPeople(media.directors ?? [], surface: "\(surface) directors for \(record)")
+    addPeople(media.resolvedDirectors, surface: "\(surface) directors for \(record)")
     addPeople(media.actors ?? [], surface: "\(surface) actors for \(record)")
   }
 
@@ -1183,9 +1395,9 @@ private struct BackendCompatibilityCollector {
 
     switch components.path {
     case "/api/v1/system/img/0", "/api/v1/system/img/1":
-      return queryItems["imgurl"]?.nilIfBlank ?? fallback
+      return fallback?.nilIfBlank ?? queryItems["imgurl"]?.nilIfBlank
     case "/api/v1/system/cache/image":
-      return queryItems["url"]?.nilIfBlank ?? fallback
+      return fallback?.nilIfBlank ?? queryItems["url"]?.nilIfBlank
     default:
       return fallback ?? url.absoluteString
     }
@@ -1209,10 +1421,708 @@ private struct BackendCompatibilityCollector {
   }
 }
 
+@MainActor
+private final class BackendResourcePageProbe {
+  struct Finished: Error {}
+  var page: ResourceSearchPage
+
+  init(source: String?, page: Int) {
+    self.page = ResourceSearchPage(source: source, page: page)
+  }
+
+  func read(service: APIService, query: ResourceSearchQuery) async throws {
+    do {
+      try await service.readResourceSearchPage(
+        query: query, source: page.source, page: page.page,
+        maximumEventBytes: { 4 * 1024 * 1024 }
+      ) { event, _ in
+        try self.page.receive(event)
+        if self.page.isComplete { throw Finished() }
+      }
+      throw ResourceSearchFailure.incompletePage
+    } catch is Finished {
+      // 与生产搜索会话一样，完整最终包提交后即可关闭 SSE。
+    }
+  }
+}
+
+@MainActor
+private struct BackendSubtitleSearchSample {
+  let label: String
+  let request: SubtitleSearchRequest
+}
+
+private struct BackendSubtitleDownloadFolder {
+  let storage: String
+  let path: String
+  let savePath: String
+}
+
+private enum BackendSubtitleDownloadError: LocalizedError {
+  case unmatchedSavePath(String)
+  case missingDownloadPath
+  case remoteStorageUnsupported(String)
+  case storageRejected(String, String)
+  case cleanupUncertain(path: String, detail: String)
+
+  var errorDescription: String? {
+    switch self {
+    case .unmatchedSavePath(let available):
+      return "MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH does not match a /download/paths save_path. Available: \(available)"
+    case .missingDownloadPath:
+      return "The matched download directory has no download_path, so the isolated folder cannot be created."
+    case .remoteStorageUnsupported(let storage):
+      return "Subtitle download isolation only supports local storage. \(storage) needs the parent directory id, so this test will not create a folder there."
+    case .storageRejected(let action, let message):
+      return "Storage \(action) failed: \(message)"
+    case .cleanupUncertain(let path, let detail):
+      return "Subtitle directory cleanup is uncertain for \(path). \(detail)"
+    }
+  }
+}
+
+private struct BackendStorageActionEnvelope: Decodable {
+  let success: Bool?
+  let message: String?
+  let message_i18n: String?
+}
+
+private struct BackendStorageMutation: Sendable {
+  let success: Bool
+  let message: String
+  /// 请求已发出但没有拿到服务端响应时为 false。未发出请求也是 false。
+  let serverAnswered: Bool
+  let requestSent: Bool
+}
+
+private func localSubtitleDownloadStorage(_ storage: String?) throws -> String {
+  let value = storage?.nilIfBlank ?? "local"
+  guard value == "local" else {
+    throw BackendSubtitleDownloadError.remoteStorageUnsupported(value)
+  }
+  return value
+}
+
+/// 标题和媒体样本都走详情、首页使用的生产请求构造，不另写一套参数。
+@MainActor
+private func backendSubtitleSearchSamples(
+  titleQueries: [String],
+  mediaIDs: [String],
+  mediaType: String?,
+  season: Int?,
+  sites: String?
+) -> (samples: [BackendSubtitleSearchSample], rejectedMediaIDs: [String]) {
+  let handler = MediaActionHandler(apiService: .shared)
+  var samples: [BackendSubtitleSearchSample] = []
+  for query in titleQueries {
+    guard let request = MediaActionHandler.titleSubtitleSearchRequest(keyword: query, sites: sites) else {
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle title \(query)", request: request))
+  }
+  var rejectedMediaIDs: [String] = []
+  for mediaID in mediaIDs {
+    guard let identity = MediaIdentifier.identity(from: mediaID) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    let item = MediaInfo(
+      source: identity.source,
+      media_id: identity.mediaId,
+      title: mediaID,
+      type: mediaType,
+      season: season
+    )
+    guard let request = handler.subtitleSearchRequest(for: item, sites: sites) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle media \(mediaID)", request: request))
+  }
+  return (samples, rejectedMediaIDs)
+}
+
+@MainActor
+private func runSubtitleSearch(
+  service: APIService,
+  sample: BackendSubtitleSearchSample
+) async throws {
+  let session = SubtitleSearchSession(request: sample.request, apiService: service)
+  session.start()
+  if session.state == .idle {
+    XCTFail("\(sample.label) did not start.")
+    return
+  }
+  do {
+    try await waitForSubtitleSearch(session)
+  } catch {
+    session.deactivate()
+    throw error
+  }
+  assertSubtitleSearchCompleted(session, label: sample.label)
+}
+
+@MainActor
+private func waitForSubtitleSearch(
+  _ session: SubtitleSearchSession,
+  timeoutSeconds: Double = 180
+) async throws {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(timeoutSeconds))
+  while !session.didFinish {
+    try Task.checkCancellation()
+    if ContinuousClock.now >= deadline {
+      session.deactivate()
+      return
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+}
+
+@MainActor
+private func assertSubtitleSearchCompleted(
+  _ session: SubtitleSearchSession,
+  label: String,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) {
+  switch session.state {
+  case .completed:
+    break
+  case .failed(let message):
+    XCTFail("\(label) failed: \(message)", file: file, line: line)
+    return
+  default:
+    let detail = session.state == .interrupted
+      ? "timed out or was interrupted before a final subtitle list"
+      : "ended in \(subtitleSearchStateLabel(session.state))"
+    XCTFail("\(label) \(detail)", file: file, line: line)
+    return
+  }
+  XCTAssertFalse(
+    session.rows.isEmpty,
+    "\(label) completed without subtitles. The backend may have no subtitle-capable site for this query.",
+    file: file,
+    line: line
+  )
+  for (index, row) in session.rows.enumerated() {
+    if let issue = subtitleSearchCompatibilityIssue(row.subtitle) {
+      XCTFail("\(label) row \(index) \(issue)", file: file, line: line)
+    }
+  }
+  let languages = Set(session.rows.compactMap { MediaIdentifier.normalizedString($0.subtitle.language) })
+    .sorted()
+    .joined(separator: ",")
+  let missingLanguage = session.rows.filter {
+    MediaIdentifier.normalizedString($0.subtitle.language) == nil
+  }.count
+  let zeroSize = session.rows.filter { ($0.subtitle.size ?? 0) == 0 }.count
+  print(
+    "Subtitle search \(label): rows=\(session.rows.count), languages=\(languages), missingLanguage=\(missingLanguage), zeroSize=\(zeroSize)"
+  )
+}
+
+/// 语言和大小在后端合同里可缺省。真实结果只拒绝 HTTP 链接丢失签名片段；完整字段是否被解码丢掉由离线样本证明。
+private func subtitleSearchCompatibilityIssue(_ subtitle: SubtitleInfo) -> String? {
+  guard let enclosure = MediaIdentifier.normalizedString(subtitle.enclosure) else { return nil }
+  let scheme = enclosure.lowercased()
+  guard scheme.hasPrefix("http://") || scheme.hasPrefix("https://") else { return nil }
+  guard enclosure.contains("mp_sig=") else {
+    return "lost the signed enclosure fragment."
+  }
+  return nil
+}
+
+@MainActor
+private func subtitleSearchStateLabel(_ state: SubtitleSearchSession.State) -> String {
+  switch state {
+  case .idle: "idle"
+  case .searching: "searching"
+  case .interrupted: "interrupted"
+  case .completed: "completed"
+  case .cancelled: "cancelled"
+  case .invalidated: "invalidated"
+  case .failed(let message): "failed(\(message))"
+  }
+}
+
+@MainActor
+private func subtitleDownloadStateLabel(_ state: SubtitleDownloadViewModel.State) -> String {
+  switch state {
+  case .editing: "editing"
+  case .submitting(_): "submitting"
+  case .completed: "completed"
+  case .failed(let message): "failed(\(message))"
+  case .invalidated: "invalidated"
+  case .closed: "closed"
+  }
+}
+
+@MainActor
+private func makeSubtitleDownloadFolder(
+  service: APIService,
+  configuredSavePath: String
+) async throws -> BackendSubtitleDownloadFolder {
+  let directories = try await service.fetchDownloadDirectories()
+  guard let directory = directories.first(where: {
+    $0.save_path?.trimmingCharacters(in: .whitespacesAndNewlines) == configuredSavePath
+  }) else {
+    let available = directories.compactMap { $0.save_path?.nilIfBlank }.prefix(8).joined(separator: ", ")
+    throw BackendSubtitleDownloadError.unmatchedSavePath(available.isEmpty ? "<none>" : available)
+  }
+  guard let parentPath = directory.download_path?.nilIfBlank else {
+    throw BackendSubtitleDownloadError.missingDownloadPath
+  }
+  let storage = try localSubtitleDownloadStorage(directory.storage)
+  let name = "mp-tv-subtitle-compat-\(UUID().uuidString.lowercased())"
+  let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
+  let folder = BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: path)
+  return try await createPlannedSubtitleFolder(service: service, folder: folder, name: name, parentPath: parentPath)
+}
+
+/// 目录记录在 mkdir 发出前就固定。请求已发出但成功与否未知时，仍删除该路径并留下完整路径。
+@MainActor
+private func createPlannedSubtitleFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  name: String,
+  parentPath: String
+) async throws -> BackendSubtitleDownloadFolder {
+  let created = await mutateBackendStorage(
+    service: service, action: "mkdir", name: name, storage: folder.storage, path: parentPath)
+  guard created.success else {
+    try await throwAfterUnsuccessfulCreate(service: service, folder: folder, created: created)
+  }
+  return folder
+}
+
+@MainActor
+private func throwAfterUnsuccessfulCreate(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  created: BackendStorageMutation
+) async throws -> Never {
+  guard created.requestSent else {
+    throw BackendSubtitleDownloadError.storageRejected("mkdir", created.message)
+  }
+  let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
+  if created.serverAnswered && removed {
+    throw BackendSubtitleDownloadError.storageRejected(
+      "mkdir", "\(created.message) Checked \(folder.savePath)."
+    )
+  }
+  let delete = removed ? "delete request succeeded" : "delete request failed"
+  let reason = created.serverAnswered
+    ? "server rejected mkdir (\(created.message)) and \(delete)"
+    : "mkdir outcome unknown (\(created.message)); \(delete)"
+  throw BackendSubtitleDownloadError.cleanupUncertain(
+    path: folder.savePath,
+    detail: "\(reason). The server may still finish creating this directory. Check this path."
+  )
+}
+
+@MainActor
+private func removeSubtitleDownloadFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder
+) async -> Bool {
+  guard let request = storageMutationRequest(
+    service: service, action: "delete", name: nil, storage: folder.storage, path: folder.path
+  ) else {
+    print("Subtitle download cleanup failed for \(folder.savePath): missing access token or storage URL")
+    return false
+  }
+  let result = await performStorageRequestDespiteCancellation(request, timeoutSeconds: 60)
+  if !result.success {
+    print("Subtitle download cleanup failed for \(folder.savePath): \(result.message)")
+  }
+  return result.success
+}
+
+private enum SubtitleDownloadEnd: Equatable {
+  case accepted
+  case serverRejected(String)
+  /// requestSent 为 false 时下载请求还没发出，删除隔离目录就是最终清理。
+  case interrupted(String, requestSent: Bool)
+
+  var remoteFinished: Bool {
+    switch self {
+    case .accepted, .serverRejected, .interrupted(_, false): true
+    case .interrupted(_, true): false
+    }
+  }
+}
+
+private struct SubtitleIsolationCleanup: Equatable {
+  let path: String
+  let deleteSucceeded: Bool
+  let remoteFinished: Bool
+
+  var sceneRestored: Bool { remoteFinished && deleteSucceeded }
+
+  var logLine: String {
+    if !remoteFinished {
+      let delete = deleteSucceeded ? "delete request succeeded" : "delete request failed"
+      return "Subtitle cleanup is uncertain for \(path); \(delete). The server may still recreate this directory and write the subtitle. Check this path after the backend request ends."
+    }
+    if deleteSucceeded {
+      return "Subtitle isolation removed \(path)."
+    }
+    return "Failed to delete isolated subtitle directory \(path). Remove that directory on the backend."
+  }
+}
+
+private func finishSubtitleIsolation(
+  folder: BackendSubtitleDownloadFolder,
+  remoteFinished: Bool,
+  remove: () async -> Bool
+) async -> SubtitleIsolationCleanup {
+  let deleteSucceeded = await remove()
+  return SubtitleIsolationCleanup(
+    path: folder.savePath, deleteSucceeded: deleteSucceeded, remoteFinished: remoteFinished)
+}
+
+@MainActor
+private func downloadFirstSubtitle(
+  session: SubtitleSearchSession,
+  savePath: String
+) async -> SubtitleDownloadEnd {
+  guard let row = session.rows.first(where: {
+    MediaIdentifier.normalizedString($0.subtitle.enclosure) != nil
+  }) else {
+    return .interrupted(
+      "Subtitle search completed without a row that has an enclosure.", requestSent: false)
+  }
+  let model = session.downloadModel(for: row.subtitle)
+  await model.loadDirectories()
+  if let directoryError = model.directoryError {
+    return .interrupted("Subtitle download directories failed: \(directoryError)", requestSent: false)
+  }
+  model.selectSavePath(savePath)
+  guard model.canSubmit, let task = model.submit() else {
+    return .interrupted(
+      "Subtitle download did not start for media \(model.mediaSource.rawValue):\(model.mediaId).",
+      requestSent: false
+    )
+  }
+  let finished = await waitForVoidTask(task, seconds: 180)
+  // 等下载任务自己结束后再读 remoteExchange。超时取消和响应同时到达时，以接口是否已经返回为准。
+  if model.remoteExchange != .serverFinished {
+    model.close()
+    let reason = Task.isCancelled
+      ? "cancelled before the server response"
+      : (!finished
+        ? "timed out before the server response"
+        : "ended without a finished server response")
+    return .interrupted(reason, requestSent: true)
+  }
+  guard case .completed = model.state else {
+    return .serverRejected(
+      "Subtitle download ended in \(subtitleDownloadStateLabel(model.state)). \(model.failure ?? "")"
+    )
+  }
+  guard let enclosure = row.subtitle.enclosure else {
+    return .serverRejected("Downloaded subtitle row lost its enclosure.")
+  }
+  guard session.downloadedEnclosures.contains(enclosure) else {
+    return .serverRejected("A successful subtitle download must mark that enclosure as downloaded.")
+  }
+  return .accepted
+}
+
+private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -> Bool {
+  await withTaskCancellationHandler {
+    let finished = await withTaskGroup(of: Bool.self) { group in
+      group.addTask {
+        await task.value
+        return !task.isCancelled
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(seconds))
+        return false
+      }
+      let finished = await group.next() ?? false
+      if !finished {
+        task.cancel()
+      }
+      group.cancelAll()
+      return finished
+    }
+    if !finished {
+      await task.value
+    }
+    return finished && !task.isCancelled
+  } onCancel: {
+    task.cancel()
+  }
+}
+
+@MainActor
+private func mutateBackendStorage(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) async -> BackendStorageMutation {
+  guard let request = storageMutationRequest(
+    service: service, action: action, name: name, storage: storage, path: path
+  ) else {
+    let missingToken = service.token?.nilIfBlank == nil
+    return BackendStorageMutation(
+      success: false,
+      message: missingToken ? "missing access token" : "invalid storage URL",
+      serverAnswered: false,
+      requestSent: false
+    )
+  }
+  return await executeStorageRequest(request)
+}
+
+@MainActor
+private func storageMutationRequest(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) -> URLRequest? {
+  guard service.token?.nilIfBlank != nil else { return nil }
+  guard var components = URLComponents(string: "\(service.baseURL)/api/v1/storage/\(action)") else {
+    return nil
+  }
+  if let name {
+    components.queryItems = [URLQueryItem(name: "name", value: name)]
+  }
+  guard let url = components.url, let token = service.token?.nilIfBlank else { return nil }
+  var request = URLRequest(url: url)
+  request.httpMethod = "POST"
+  request.timeoutInterval = 60
+  request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+  request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+  request.httpBody = try? JSONSerialization.data(withJSONObject: [
+    "path": path,
+    "storage": storage,
+    "type": "dir",
+  ])
+  return request
+}
+
+private enum StorageRequestRace: Sendable {
+  case finished(BackendStorageMutation)
+  case timedOut
+}
+
+/// 父任务取消不能带走清理请求。请求在独立任务里发出，超时会取消该请求并等它结束。
+private func performStorageRequestDespiteCancellation(
+  _ request: URLRequest,
+  timeoutSeconds: Double
+) async -> BackendStorageMutation {
+  await Task.detached {
+    await withTaskGroup(of: StorageRequestRace.self) { group in
+      group.addTask {
+        .finished(await executeStorageRequest(request))
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(timeoutSeconds))
+        return .timedOut
+      }
+      let first = await group.next() ?? .timedOut
+      group.cancelAll()
+      if case .finished(let mutation) = first {
+        return mutation
+      }
+      return BackendStorageMutation(
+        success: false,
+        message: "storage request timed out",
+        serverAnswered: false,
+        requestSent: true
+      )
+    }
+  }.value
+}
+
+private func executeStorageRequest(_ request: URLRequest) async -> BackendStorageMutation {
+  // 调用 data(for:) 之前已经取消的，请求还没发出。进入 data(for:) 之后的取消仍算已发出。
+  if Task.isCancelled {
+    return BackendStorageMutation(
+      success: false,
+      message: "cancelled before the storage request started",
+      serverAnswered: false,
+      requestSent: false
+    )
+  }
+  do {
+    let (data, response) = try await URLSession.shared.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+    let envelope = try? JSONDecoder().decode(BackendStorageActionEnvelope.self, from: data)
+    let message = trimmedNonEmpty([envelope?.message_i18n, envelope?.message]) ?? "HTTP \(status)"
+    let success = (200...299).contains(status) && envelope?.success == true
+    return BackendStorageMutation(
+      success: success, message: message, serverAnswered: true, requestSent: true)
+  } catch {
+    return BackendStorageMutation(
+      success: false,
+      message: error.localizedDescription,
+      serverAnswered: false,
+      requestSent: true
+    )
+  }
+}
+
+@MainActor
+final class BackendSubtitleSearchSampleTests: XCTestCase {
+  func testTitleAndMediaSamplesUseProductionSubtitleRequests() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: ["流浪地球", "  "],
+      mediaIDs: ["tmdb:603", "not-an-id"],
+      mediaType: "电影",
+      season: 0,
+      sites: "1,2"
+    )
+    XCTAssertEqual(built.rejectedMediaIDs, ["not-an-id"])
+    XCTAssertEqual(
+      built.samples.map(\.label),
+      ["subtitle title 流浪地球", "subtitle media tmdb:603"]
+    )
+    guard built.samples.count == 2 else { return }
+    guard case .title(let keyword) = built.samples[0].request.kind else {
+      return XCTFail("Expected a title subtitle search.")
+    }
+    XCTAssertEqual(keyword, "流浪地球")
+    XCTAssertEqual(built.samples[0].request.sites, "1,2")
+    XCTAssertNil(built.samples[0].request.initialMediaIdentity)
+    guard case .media(let source, let mediaId, let type, let season, let episode) =
+      built.samples[1].request.kind
+    else {
+      return XCTFail("Expected a media subtitle search.")
+    }
+    XCTAssertEqual(source, "themoviedb")
+    XCTAssertEqual(mediaId, "603")
+    XCTAssertEqual(type, "电影")
+    XCTAssertEqual(season, 0)
+    XCTAssertNil(episode)
+    XCTAssertEqual(built.samples[1].request.sites, "1,2")
+  }
+
+  func testCollectionMediaIsNotASubtitleSample() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: [],
+      mediaIDs: ["douban:123"],
+      mediaType: "合集",
+      season: nil,
+      sites: nil
+    )
+    XCTAssertTrue(built.samples.isEmpty)
+    XCTAssertEqual(built.rejectedMediaIDs, ["douban:123"])
+  }
+
+  func testCompleteSubtitleFieldsSurviveDecodingAndSparseRowsStayCompatible() throws {
+    let complete = try decodeSubtitleFixture(
+      #"{"site":1,"title":"流浪地球","language":"中文","size":1200,"enclosure":"https://example.test/a.srt#mp_sig=abc"}"#
+    )
+    XCTAssertEqual(complete.site, 1)
+    XCTAssertEqual(complete.title, "流浪地球")
+    XCTAssertEqual(complete.language, "中文")
+    XCTAssertEqual(complete.size, 1200)
+    XCTAssertEqual(complete.enclosure, "https://example.test/a.srt#mp_sig=abc")
+    XCTAssertNil(subtitleSearchCompatibilityIssue(complete))
+
+    let sparse = try decodeSubtitleFixture(
+      #"{"language":null,"size":0.0,"title":null,"enclosure":"magnet:?xt=urn:btih:abc"}"#
+    )
+    XCTAssertNil(sparse.language)
+    XCTAssertNil(sparse.title)
+    XCTAssertEqual(sparse.size, 0)
+    XCTAssertNil(subtitleSearchCompatibilityIssue(sparse))
+
+    let unsigned = try decodeSubtitleFixture(#"{"enclosure":"https://example.test/a.srt"}"#)
+    XCTAssertEqual(
+      subtitleSearchCompatibilityIssue(unsigned),
+      "lost the signed enclosure fragment."
+    )
+  }
+
+  func testSubtitleDownloadIsolationRejectsCloudStorageBeforeCreatingAFolder() {
+    XCTAssertEqual(try localSubtitleDownloadStorage(nil), "local")
+    XCTAssertEqual(try localSubtitleDownloadStorage(" local "), "local")
+    XCTAssertThrowsError(try localSubtitleDownloadStorage("u115")) { error in
+      XCTAssertEqual(
+        (error as? BackendSubtitleDownloadError)?.errorDescription,
+        "Subtitle download isolation only supports local storage. u115 needs the parent directory id, so this test will not create a folder there."
+      )
+    }
+  }
+
+  private func decodeSubtitleFixture(_ json: String) throws -> SubtitleInfo {
+    try JSONDecoder().decode(SubtitleInfo.self, from: Data(json.utf8))
+  }
+}
+
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
+  func testReadOnlyOpenAPIContractCompatibility() async throws {
+    let config = try BackendCompatibilityConfig.loadOrSkip()
+
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = config.baseURL
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
+
+    var verifiedBackendVersion: String?
+    do {
+      // OpenAPI 是否可用不能反过来证明后端身份；先从业务全局设置核实精确版本。
+      let settings = try await service.fetchSettings()
+      let backendVersion = try XCTUnwrap(
+        settings.BACKEND_VERSION?.nilIfBlank,
+        "\u{002F}system\u{002F}global 未返回 BACKEND_VERSION，不能判定 OpenAPI 404 的语义。"
+      )
+      verifiedBackendVersion = backendVersion
+      let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
+      guard status == .registered else {
+        XCTFail(
+          "OpenAPI 检查前端点版本必须是已登记精确版本：\(backendVersion)，状态为 \(status.rawValue)。"
+        )
+        return
+      }
+
+      let fetched = try await OpenAPIContractSupport.fetchOpenAPI(baseURL: config.baseURL)
+      let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
+      let exceptions = try OpenAPIContractSupport.loadExceptions()
+      let report = OpenAPIContractChecker.check(
+        live: fetched.document,
+        baseline: baseline,
+        catalog: TVAPIContractCatalog.operations(backendVersion: backendVersion),
+        exceptions: exceptions,
+        sourceGaps: TVAPIContractSourceScanner.coverageGaps()
+      )
+      print(report.formattedDescription)
+      print(
+        "OpenAPI contract backend version=\(fetched.version ?? "unknown"); document title=\(fetched.document.title ?? "unknown")"
+      )
+      if report.hasBlockingFindings {
+        XCTFail(report.formattedDescription)
+      }
+    } catch let skip as XCTSkip {
+      throw skip
+    } catch {
+      if case let OpenAPIFetchError.httpStatus(statusCode, isJSON) = error,
+        statusCode == 404, isJSON
+      {
+        let version = verifiedBackendVersion ?? "unknown"
+        XCTFail(
+          "\(version) 的 OpenAPI 文档端点返回 JSON 404。兼容检查要求开启 API 文档，不能跳过。"
+        )
+        return
+      }
+      XCTFail("OpenAPI 契约检查未完成，不能当作通过：\(error)")
+    }
+  }
+
+  @MainActor
   func testReadOnlySystemEnvCompatibility() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(requiring: ["/system/env"]) { service, config in
       await runBackendCompatibilityStep(
         "/system/env",
         service: service,
@@ -1226,7 +2136,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   @MainActor
   func testReadOnlyDashboardCompatibility() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(requiring: ["dashboard endpoints"]) { service, config in
       await runBackendCompatibilityStep(
         "dashboard endpoints",
         service: service,
@@ -1245,12 +2155,30 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   @MainActor
   func testReadOnlySystemAndConfigurationCompatibility() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(
+      requiring: [
+        "global settings",
+        "settings page backend version",
+        "sites",
+        "media-server settings",
+        "filter-rule groups",
+        "custom filter rules",
+        "indexer sites",
+        "storages",
+        "directories",
+        "download clients",
+      ]
+    ) { service, config in
       await runBackendCompatibilityStep("global settings", service: service, config: config) {
         let settings = try await service.fetchSettings()
-        XCTAssertNotNil(
+        let backendVersion = try XCTUnwrap(
           settings.BACKEND_VERSION?.nilIfBlank,
           "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
+        )
+        let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
+        XCTAssertEqual(
+          status, .registered,
+          "Backend \(backendVersion) must be a registered compatible version for \(config.activeAccountDiagnostic); status: \(status.rawValue)."
         )
       }
       await runBackendCompatibilityStep(
@@ -1314,7 +2242,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   @MainActor
   func testReadOnlyOperationalStateCompatibility() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(requiring: ["transfer history"]) { service, config in
       for title in config.recognitionTitles {
         do {
           _ = try await service.recognizeMedia(title: title)
@@ -1322,7 +2250,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           XCTFail("Failed to recognize read-only title sample \(title): \(error)")
         }
 
-        let tmdbID = await service.recognizeTmdbId(title: title)
+        let tmdbID = try await service.recognizeTmdbId(title: title)
         XCTAssertGreaterThanOrEqual(
           tmdbID ?? 0,
           0,
@@ -1344,8 +2272,160 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  func testReadOnlyReorganizePreviewCompatibility() async throws {
+    var didRunPreview = false
+    try await withReadOnlyBackend(requiring: ["manual reorganize preview"]) { service, config in
+      let didRunForAccount = await runBackendCompatibilityStep(
+        "manual reorganize preview",
+        service: service,
+        config: config,
+        requirement: .permission(.manage)
+      ) {
+        let historyResponse = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
+        guard
+          let history = historyResponse.list.first(where: { $0.src_fileitem != nil }),
+          let sourceFileItem = history.src_fileitem
+        else {
+          print(
+            "Skipping manual reorganize preview for \(config.activeAccountDiagnostic): no transfer history with a source file item."
+          )
+          return false
+        }
+
+        let viewModel = ReorganizeViewModel(
+          logIds: [history.id],
+          fileItem: sourceFileItem,
+          targetStorage: history.dest_storage?.nilIfBlank,
+          apiService: service
+        )
+        let submittedForm = viewModel.preparedSingleSubmissionForm()
+        XCTAssertNil(
+          submittedForm.media_source,
+          "Automatic reorganize preview must omit media_source when media_id is empty."
+        )
+        XCTAssertNil(
+          submittedForm.media_id,
+          "Automatic reorganize preview must omit both halves of the optional media identity."
+        )
+
+        _ = await viewModel.preview()
+        let preview = try XCTUnwrap(viewModel.previewData)
+        XCTAssertFalse(
+          preview.items.contains { ($0.message ?? "").contains("422") },
+          "Production ViewModel preview path must pass MoviePilot request validation."
+        )
+
+        XCTAssertEqual(
+          preview.summary.total,
+          preview.items.count,
+          "Preview total must match the returned item count."
+        )
+        XCTAssertGreaterThanOrEqual(preview.summary.success, 0)
+        XCTAssertGreaterThanOrEqual(preview.summary.failed, 0)
+        XCTAssertEqual(
+          preview.summary.success + preview.summary.failed,
+          preview.summary.total,
+          "Preview success and failure counts must cover every returned item."
+        )
+        XCTAssertEqual(
+          preview.items.filter(\.success).count,
+          preview.summary.success,
+          "Preview successful-item count must match the response summary."
+        )
+        XCTAssertEqual(
+          preview.items.filter { !$0.success }.count,
+          preview.summary.failed,
+          "Preview failed-item count must match the response summary."
+        )
+        return true
+      }
+      didRunPreview = didRunPreview || didRunForAccount == true
+    }
+    if !didRunPreview {
+      throw XCTSkip(
+        "No accessible backend compatibility account has transfer history with a source file item."
+      )
+    }
+  }
+
+  @MainActor
+  func testReadOnlyResourceTitlePagingCompatibility() async throws {
+    try await assertResourcePagingCompatibility(mediaSearch: false)
+  }
+
+  @MainActor
+  func testReadOnlyResourceMediaPagingCompatibility() async throws {
+    try await assertResourcePagingCompatibility(mediaSearch: true)
+  }
+
+  @MainActor
+  private func assertResourcePagingCompatibility(mediaSearch: Bool) async throws {
+    let label = mediaSearch ? "resource media paging" : "resource title paging"
+    try await withReadOnlyBackend(requiring: [label]) { service, config in
+      guard config.testResourceSearchStreams else {
+        throw XCTSkip("Enable MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS to verify manual paging.")
+      }
+      let keywords = uniqueStrings(mediaSearch ? config.resourceMediaIDs : config.resourceQueries)
+      let settings = try await service.fetchSettings()
+      guard ResourceSearchQuery.supportsPaging(backendVersion: settings.BACKEND_VERSION) else {
+        throw XCTSkip("TV uses legacy search on backend \(settings.BACKEND_VERSION ?? "unknown").")
+      }
+      print("Manual paging backend=\(settings.BACKEND_VERSION ?? "unknown"), entry=\(label)")
+      await runBackendCompatibilityStep(label, service: service, config: config, requirement: .permission(.search)) {
+        guard !keywords.isEmpty else {
+          XCTFail("Manual paging is enabled but resource \(mediaSearch ? "media IDs" : "title queries") are missing; coverage is incomplete.")
+          return
+        }
+        for keyword in keywords {
+          let query = ResourceSearchQuery(
+            keyword: keyword, sites: config.resourceSites, isMediaSearch: mediaSearch)
+          let initial = try await readResourcePage(service: service, query: query, source: nil, page: 0)
+          assertResourceSearchResults(initial.finalItems, label: "\(label) initial page")
+          let sources = try XCTUnwrap(initial.sources)
+          let successful = sources.filter { $0.error == nil }
+          let source = try XCTUnwrap(
+            successful.first(where: \.can_continue) ?? successful.first,
+            "Initial page must contain a successful source for \(label).")
+          let requestedPage = source.can_continue ? source.page + 1 : source.page
+          let page = try await readResourcePage(
+            service: service, query: query, source: source.source, page: requestedPage)
+          // source 原样回传；同来源、同页重试应读取同一页摘要，不推进游标。
+          let replay = try await readResourcePage(
+            service: service, query: query, source: source.source, page: requestedPage)
+          XCTAssertEqual(replay.sources, page.sources, "Same-page retry changed source/page state.")
+          XCTAssertTrue(replay.finalItems.map(\.id) == page.finalItems.map(\.id),
+            "Same-page retry changed the cached result identities or order.")
+          print("Manual paging entry=\(label), initialItems=\(initial.finalItems.count), "
+            + "sources=\(sources.count), sourceErrors=\(sources.count - successful.count), "
+            + "requestedPage=\(requestedPage), pageItems=\(page.finalItems.count), replay=verified, "
+            + "continuation=\(source.can_continue ? "verified" : "unavailable; all successful sources exhausted")")
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func readResourcePage(
+    service: APIService, query: ResourceSearchQuery, source: String?, page: Int
+  ) async throws -> ResourceSearchPage {
+    let probe = BackendResourcePageProbe(source: source, page: page)
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+        try await probe.read(service: service, query: query)
+      }
+      group.addTask {
+        try await Task.sleep(for: .seconds(180))
+        throw URLError(.timedOut)
+      }
+      defer { group.cancelAll() }
+      try await group.next()
+    }
+    return probe.page
+  }
+
+  @MainActor
   func testReadOnlyResourceSearchCompatibility() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(requiring: ["resource search"]) { service, config in
       let titleQueries = uniqueStrings(config.resourceQueries)
       let mediaIDs = uniqueStrings(config.resourceMediaIDs)
 
@@ -1365,8 +2445,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           let results = try await service.searchResources(keyword: query, sites: config.resourceSites)
           assertResourceSearchResults(
             results,
-            label: "resource title search \(query)",
-            requireResults: config.requireResourceResults
+            label: "resource title search \(query)"
           )
         }
 
@@ -1374,8 +2453,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           let results = try await service.searchResources(keyword: mediaID, sites: config.resourceSites)
           assertResourceSearchResults(
             results,
-            label: "resource media-id search \(mediaID)",
-            requireResults: config.requireResourceResults
+            label: "resource media-id search \(mediaID)"
           )
         }
 
@@ -1387,25 +2465,199 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
-  func testReadOnlyPersonSearchDecodesKnownDoubanImagePayloads() async throws {
-    try await withReadOnlyBackend { service, _ in
-      let query = "易中天"
+  func testReadOnlySubtitleSearchCompatibility() async throws {
+    try await withReadOnlyBackend(requiring: ["subtitle search"]) { service, config in
+      let titleQueries = uniqueStrings(config.subtitleQueries)
+      let mediaIDs = uniqueStrings(config.subtitleMediaIDs)
+      guard !titleQueries.isEmpty || !mediaIDs.isEmpty else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_SUBTITLE_QUERY or MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID to run read-only subtitle search compatibility checks."
+        )
+      }
 
-      do {
+      await runBackendCompatibilityStep(
+        "subtitle search",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        let directories = try await service.fetchDownloadDirectories()
+        for directory in directories {
+          if let savePath = directory.save_path {
+            XCTAssertNotNil(
+              savePath.nilIfBlank,
+              "Download directory save_path must be empty or a usable path, not blank padding."
+            )
+          }
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: titleQueries,
+          mediaIDs: mediaIDs,
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        if !built.rejectedMediaIDs.isEmpty {
+          XCTFail(
+            "Subtitle media IDs must use source:id and a movie or TV type. Rejected: \(built.rejectedMediaIDs.joined(separator: ", "))"
+          )
+        }
+        guard !built.samples.isEmpty else {
+          XCTFail("Configured subtitle queries did not produce a TV subtitle search request.")
+          return
+        }
+        for sample in built.samples {
+          try await runSubtitleSearch(service: service, sample: sample)
+        }
+        print(
+          "Subtitle search directories=\(directories.count), samples=\(built.samples.count)"
+        )
+      }
+    }
+  }
+
+  @MainActor
+  func testF209SearchAllActiveSitesContractCompatibility() async throws {
+    try await withReadOnlyBackend(requiring: ["F-209 all-active-sites search"]) { service, config in
+      guard let query = uniqueStrings(config.resourceQueries).first else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_RESOURCE_QUERY to run the F-209 all-active-sites search contract compatibility check."
+        )
+      }
+
+      await runBackendCompatibilityStep(
+        "F-209 all-active-sites search",
+        service: service,
+        config: config,
+        requirement: .permissions([.search, .manage])
+      ) {
+        let sites = try await service.fetchSites()
+        XCTAssertFalse(sites.isEmpty, "Backend should expose at least one site for the F-209 contract.")
+        for site in sites {
+          XCTAssertNotNil(
+            site.is_active,
+            "Site \(site.id) should expose is_active so TV can filter enabled search sites (F-209/F-210)."
+          )
+        }
+
+        // 真实生产入口负责加载权威站点域并生成“全部站点”参数；测试只独立计算 oracle，
+        // 不再自己生成请求参数后直接喂给 API。
+        let siteFilter = SiteFilterViewModel(apiService: service)
+        await siteFilter.loadSites()
+        XCTAssertTrue(siteFilter.hasLoadedSites)
+        XCTAssertTrue(siteFilter.loadedSitesAuthoritative)
+        siteFilter.selectedSites = []
+
+        let allSites = try await service.fetchAllSites()
+        XCTAssertFalse(allSites.isEmpty, "/site/ authoritative domain should expose at least one site.")
+        for site in allSites {
+          XCTAssertNotNil(
+            site.is_active,
+            "Authoritative-domain site \(site.id) should expose is_active."
+          )
+        }
+        XCTAssertTrue(
+          Set(sites.map(\.id)).isSubset(of: Set(allSites.map(\.id))),
+          "RSS subscription sites should be a subset of the authoritative domain, so 'all sites' misses no non-RSS search sites."
+        )
+        XCTAssertEqual(
+          Set(siteFilter.availableSites.map(\.id)),
+          Set(allSites.map(\.id)),
+          "Production SiteFilter should load the /site/ authoritative domain."
+        )
+
+        let expectedAllActiveSitesString = allSites
+          .filter { $0.is_active?.value == true }
+          .map(\.id)
+          .sorted()
+          .map(String.init)
+          .joined(separator: ",")
+        let allActiveSitesString = try XCTUnwrap(
+          siteFilter.sitesString,
+          "Production SiteFilter should encode all active site IDs for the all-sites selection."
+        )
+        XCTAssertEqual(allActiveSitesString, expectedAllActiveSitesString)
+
+        // 修复后：TV 选「全部站点」显式发送全部启用站点 ID，后端必须接受并产生搜索流。
+        let allActiveProbe = await Self.probeSearchStream(
+          service.searchTitleStream(keyword: query, sites: allActiveSitesString)
+        )
+        assertSSEProbe(
+          allActiveProbe,
+          label: "F-209 all-active-sites stream \(query)",
+          requireItems: true
+        )
+
+        // 回归：不指定站点（后端默认路径）仍被接受。
+        let defaultProbe = await Self.probeSearchStream(
+          service.searchTitleStream(keyword: query, sites: nil)
+        )
+        assertSSEProbe(
+          defaultProbe,
+          label: "F-209 default-sites stream \(query)",
+          requireItems: true
+        )
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlyMediaInfoRequestContractCompatibility() async throws {
+    try await withReadOnlyBackend(requiring: ["media info request contract"]) { service, config in
+      await runBackendCompatibilityStep(
+        "media info request contract",
+        service: service,
+        config: config,
+        requirement: .permission(.discovery)
+      ) {
+        let items = try await service.fetchRecommend(
+          path: "recommend/tmdb_tvs?with_original_language=zh|en|ja|ko",
+          page: 1
+        )
+        let media = try XCTUnwrap(
+          items.first { $0.type == "电视剧" && $0.identity != nil },
+          "TMDB TV recommendations should return a TV media item with a backend identity."
+        )
+
+        _ = try await service.checkSeasonsNotExists(mediaInfo: media)
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlyPersonSearchDecodesKnownDoubanImagePayloads() async throws {
+    try await withReadOnlyBackend(requiring: ["known Douban person search"]) { service, config in
+      await runBackendCompatibilityStep(
+        "known Douban person search",
+        service: service,
+        config: config,
+        requirement: .permission(.discovery)
+      ) {
+        let query = "易中天"
         let people = try await service.searchPerson(query: query, page: 1)
         XCTAssertTrue(
           people.contains { $0.name == query },
           "Person search should decode and include \(query), matching the MP Web person search surface."
         )
-      } catch {
-        XCTFail("Failed to decode read-only person search \(query): \(error)")
       }
     }
   }
 
   @MainActor
   func testReadOnlyTVSurfaceCompatibilityAndImageRendering() async throws {
-    try await withReadOnlyBackend { service, config in
+    try await withReadOnlyBackend(
+      requiring: [
+        "subscriptions surface",
+        "downloading surface",
+        "recommend shelf 流行趋势",
+        "explore surfaces",
+        "metadata and person search surfaces",
+      ]
+    ) { service, config in
       _ = try await service.fetchSettings()
 
       var collector = BackendCompatibilityCollector()
@@ -1425,6 +2677,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       await scanSeasonAvailabilityStatus(service: service, config: config, collector: collector)
       await scanPersonDetailSurfaces(service: service, collector: &collector)
 
+      if config.allows(.permission(.discovery)) {
+        assertPersonImagesMatchWebSelection(
+          Array(collector.peopleByID.values),
+          service: service
+        )
+      }
       await assertImagesRenderable(collector.imageCandidates, service: service)
     }
   }
@@ -1494,6 +2752,13 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let subscriptions = try await service.fetchSubscriptions()
       collector.addSubscriptions(subscriptions, surface: "subscriptions list")
 
+      if let account = config.activeAccount, account.token.super_user?.value != true {
+        XCTAssertTrue(
+          subscriptions.allSatisfy { $0.username == account.account.username },
+          "Ordinary account subscription list must be owner-scoped for \(config.activeAccountDiagnostic)."
+        )
+      }
+
       for subscription in subscriptions {
         guard let id = subscription.id else { continue }
         do {
@@ -1548,6 +2813,20 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         collector.addMedia(items, surface: "recommend shelf \(shelf.title)")
       }
     }
+
+    await runBackendCompatibilityStep(
+      "dynamic recommend shelves",
+      service: service,
+      config: config,
+      requirement: .permission(.discovery)
+    ) {
+      var seenPaths = Set(RecommendViewModel.allShelves.map(\.id))
+      for source in try await service.fetchRecommendSources()
+      where seenPaths.insert(source.api_path).inserted {
+        let items = try await service.fetchRecommend(path: source.api_path, page: 1)
+        collector.addMedia(items, surface: "dynamic recommend \(source.name)")
+      }
+    }
   }
 
   @MainActor
@@ -1557,11 +2836,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     collector: inout BackendCompatibilityCollector
   ) async {
     let mediaPaths = [
-      "discover/tmdb_movies?sort_by=popularity.desc",
-      "discover/tmdb_tvs?sort_by=popularity.desc",
+      "discover/tmdb_movies?sort_by=popularity.desc&vote_average=0&vote_count=10",
+      "discover/tmdb_tvs?sort_by=popularity.desc&vote_average=0&vote_count=10",
       "discover/douban_movies?sort=U",
       "discover/douban_tvs?sort=U",
       "discover/bangumi?type=2&sort=rank",
+      "anilist/discover?sort=POPULARITY_DESC",
       "subscribe/popular?stype=电影&sort_type=count",
       "subscribe/popular?stype=电视剧&sort_type=count",
     ]
@@ -1577,6 +2857,30 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         collector.addMedia(items, surface: "explore \(path)")
       }
 
+      let dynamicSources = ExploreViewModel.updatedExtraSourceSnapshot(
+        previous: [],
+        response: try await service.fetchDiscoverSources()
+      )
+      for source in dynamicSources {
+        for control in PluginFilterControlParser.parse(source.filter_ui) {
+          XCTAssertNotNil(
+            source.filter_params[control.field],
+            "\(source.name) filter \(control.field) must have a default value."
+          )
+        }
+        let path = ExploreViewModel.appendingQuery(
+          to: source.api_path,
+          values: source.filter_params
+        )
+        for page in 1...2 {
+          let items = try await service.fetchRecommend(path: path, page: page)
+          collector.addMedia(items, surface: "dynamic explore \(source.name) page \(page)")
+          if source.mediaid_prefix.lowercased() == "tvdb" {
+            XCTAssertTrue(items.allSatisfy { $0.identity?.source == "tvdb" })
+          }
+        }
+      }
+
       let sharePath = "subscribe/shares?stype=电视剧&sort_type=count"
       let shares = try await service.fetchSubscriptionShares(path: sharePath, page: 1)
       collector.addSubscriptionShares(shares, surface: "explore \(sharePath)")
@@ -1589,22 +2893,32 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    let queries = uniqueStrings(config.metadataQueries + collector.derivedSearchQueries(limit: 5))
-    guard !queries.isEmpty else { return }
+    let mediaQueries = uniqueStrings(config.metadataQueries + collector.derivedSearchQueries(limit: 5))
+    let personQueries = uniqueStrings(config.personQueries)
+    guard !mediaQueries.isEmpty || !personQueries.isEmpty else { return }
 
     await runBackendCompatibilityStep(
-      "metadata search surfaces",
+      "metadata and person search surfaces",
       service: service,
       config: config,
-      requirement: .permission(.search)
+      requirement: .permission(.discovery)
     ) {
-      for query in queries {
-        for page in 1...2 {
-          let items = try await service.searchMedia(query: query, page: page)
-          collector.addMedia(items, surface: "metadata search \(query) page \(page)")
+      for query in mediaQueries {
+        for source in MediaSearchSource.allowed(for: .media) {
+          for page in 1...2 {
+            let items = try await service.searchMedia(query: query, page: page, source: source)
+            collector.addMedia(
+              items,
+              surface: "\(source.title) metadata search \(query) page \(page)"
+            )
+          }
         }
 
-        let collections = try await service.searchCollection(query: query, page: 1)
+        let collections = try await service.searchCollection(
+          query: query,
+          page: 1,
+          source: .themoviedb
+        )
         collector.addMedia(collections, surface: "collection search \(query)")
         await scanCollectionDetails(
           service: service,
@@ -1612,11 +2926,15 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           collector: &collector
         )
 
-        let people = try await service.searchPerson(query: query, page: 1)
-        collector.addPeople(people, surface: "person search \(query)")
-
         let shares = try await service.searchSubscriptionShares(query: query, page: 1)
         collector.addSubscriptionShares(shares, surface: "subscription share search \(query)")
+      }
+
+      for query in personQueries {
+        for source in MediaSearchSource.allowed(for: .person) {
+          let people = try await service.searchPerson(query: query, page: 1, source: source)
+          collector.addPeople(people, surface: "\(source.title) person search \(query)")
+        }
       }
     }
   }
@@ -1631,7 +2949,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "configured collection details",
       service: service,
       config: config,
-      requirement: .permission(.search)
+      requirement: .permission(.discovery)
     ) {
       for collectionID in uniqueInts(config.collectionIDs).prefix(8) {
         let items = try await service.fetchCollection(
@@ -1685,6 +3003,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     for media in mediaForDetail {
       do {
         let detail = try await service.fetchMediaDetail(media: media)
+        assertEmbeddedDirectorProjection(detail)
         collector.addMedia(detail, surface: "media detail \(media.compatibilityTitle)")
 
         await runBackendCompatibilityStep(
@@ -1699,6 +3018,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
         do {
           let actors = try await service.fetchMediaActors(detail: detail, page: 1)
+          if let expectedSource = detail.auxiliaryContentIdentity?.source {
+            XCTAssertTrue(
+              actors.allSatisfy {
+                MediaIdentifier.normalizeSource($0.source) == expectedSource
+              },
+              "Media credits returned a mismatched person source for \(detail.compatibilityTitle)."
+            )
+          }
           collector.addPeople(actors, surface: "media actors \(detail.compatibilityTitle)")
         } catch {
           XCTFail("Failed to read actors for \(detail.compatibilityTitle): \(error)")
@@ -1731,6 +3058,27 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  private func assertEmbeddedDirectorProjection(
+    _ media: MediaInfo,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let original = media.directors ?? []
+    let resolved = media.resolvedDirectors
+    XCTAssertEqual(resolved.count, original.count, file: file, line: line)
+
+    guard let fallback = MediaIdentifier.normalizeSource(media.source),
+      ["themoviedb", "douban", "bangumi", "anilist"].contains(fallback)
+    else { return }
+
+    for (seed, projected) in zip(original, resolved)
+    where MediaIdentifier.normalizedString(seed.source) == nil {
+      XCTAssertEqual(projected.source, fallback, file: file, line: line)
+      XCTAssertEqual(projected.raw_id, seed.raw_id, file: file, line: line)
+    }
+  }
+
+  @MainActor
   private func scanSeasonSurfaces(
     service: APIService,
     media: MediaInfo,
@@ -1743,7 +3091,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       XCTFail("Failed to read seasons for \(media.compatibilityTitle): \(error)")
     }
 
-    guard let tmdbID = media.tmdb_id else { return }
+    guard media.identity?.source == "themoviedb", let tmdbID = media.tmdb_id else { return }
     do {
       let groups = try await service.fetchEpisodeGroups(tmdbId: tmdbID)
       for group in groups {
@@ -1806,14 +3154,19 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let peopleForDetail = representativePeopleForDetail(from: Array(collector.peopleByID.values))
 
     for person in peopleForDetail {
-      guard let personID = person.raw_id else { continue }
+      guard let personID = person.raw_id,
+        let source = person.source,
+        ["themoviedb", "douban", "bangumi", "anilist"].contains(source)
+      else {
+        continue
+      }
       do {
-        let detail = try await service.fetchPersonDetail(personId: personID, source: person.source)
+        let detail = try await service.fetchPersonDetail(personId: personID, source: source)
         collector.addPerson(detail, surface: "person detail \(person.compatibilityName)")
       } catch {
         let diagnostic = await readOnlyGETDiagnostic(
           service: service,
-          path: "/\(personSourcePath(person.source))/person/\(personID)"
+          path: "/\(personSourcePath(source))/person/\(personID)"
         )
         XCTFail(
           "Failed to read person detail \(person.compatibilityName): \(error). \(diagnostic)"
@@ -1823,7 +3176,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       do {
         let credits = try await service.fetchPersonCredits(
           personId: personID,
-          source: person.source,
+          source: source,
           page: 1
         )
         collector.addMedia(credits, surface: "person credits \(person.compatibilityName)")
@@ -1837,13 +3190,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private func assertResourceSearchResults(
     _ results: [Context],
     label: String,
-    requireResults: Bool,
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
-    if requireResults {
-      XCTAssertFalse(results.isEmpty, "Expected at least one result for \(label)", file: file, line: line)
-    }
+    XCTAssertFalse(results.isEmpty, "Expected at least one result for \(label)", file: file, line: line)
 
     for result in results.prefix(50) {
       XCTAssertTrue(
@@ -1874,40 +3224,32 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let mediaIDs = uniqueStrings(config.resourceMediaIDs).prefix(3)
 
     for query in titleQueries {
-      do {
-        let url = try compatibilityAPIURL(
-          service: service,
-          path: "/search/title/stream",
-          params: [
-            "keyword": query,
-            "sites": config.resourceSites,
-          ])
-        let result = await Self.probeSSEStream(url: url, token: service.token)
-        assertSSEProbe(result, label: "resource title stream \(query)")
-      } catch {
-        XCTFail("Failed to build resource title stream request \(query): \(error)")
-      }
+      let result = await Self.probeSearchStream(
+        service.searchTitleStream(keyword: query, sites: config.resourceSites)
+      )
+      assertSSEProbe(result, label: "resource title stream \(query)", requireItems: true)
     }
 
     for mediaID in mediaIDs {
-      do {
-        let url = try compatibilityAPIURL(
-          service: service,
-          path: "/search/media/\(mediaID)/stream",
-          params: [
-            "sites": config.resourceSites,
-          ])
-        let result = await Self.probeSSEStream(url: url, token: service.token)
-        assertSSEProbe(result, label: "resource media stream \(mediaID)")
-      } catch {
-        XCTFail("Failed to build resource media stream request \(mediaID): \(error)")
-      }
+      let result = await Self.probeSearchStream(
+        service.searchMediaStream(
+          keyword: mediaID,
+          type: nil,
+          area: nil,
+          title: nil,
+          year: nil,
+          season: nil,
+          sites: config.resourceSites
+        )
+      )
+      assertSSEProbe(result, label: "resource media stream \(mediaID)", requireItems: true)
     }
   }
 
   private func assertSSEProbe(
     _ result: BackendStreamProbeResult,
     label: String,
+    requireItems: Bool,
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
@@ -1915,6 +3257,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     XCTAssertNil(result.errorMessage, "\(label) returned stream error: \(result.errorMessage ?? "")", file: file, line: line)
     XCTAssertGreaterThan(result.eventCount, 0, "\(label) produced no decodable SSE events", file: file, line: line)
     XCTAssertTrue(result.sawTerminalEvent, "\(label) produced events but no terminal SSE event", file: file, line: line)
+    if requireItems {
+      XCTAssertGreaterThan(
+        result.itemCount, 0, "\(label) completed without any search results", file: file, line: line
+      )
+    }
   }
 
   @MainActor
@@ -1922,6 +3269,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     _ candidates: [BackendImageCandidate],
     service: APIService
   ) async {
+    let bangumiSettings = BackendBangumiImageProxySettings(
+      enabled: service.settings?.BANGUMI_PROXY_ENABLE?.value == true,
+      domain: service.settings?.BANGUMI_IMAGE_DOMAIN ?? ""
+    )
     var seenURLs = Set<String>()
     var uniqueCandidates: [BackendImageCandidate] = []
     var checkedImages = 0
@@ -1931,7 +3282,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let urlString = candidate.url.absoluteString
       guard seenURLs.insert(urlString).inserted else { continue }
 
-      assertProxyURLPreservesRawImage(candidate)
+      assertProxyURLPreservesRawImage(candidate, bangumiSettings: bangumiSettings)
       uniqueCandidates.append(candidate)
     }
 
@@ -1949,7 +3300,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
             let webCandidate = Self.webEquivalentImageCandidate(
               for: candidate,
               baseURL: service.baseURL,
-              useImageCache: service.useImageCache
+              useImageCache: service.useImageCache,
+              bangumiSettings: bangumiSettings
             )
           else {
             webAlignedFailures += 1
@@ -1982,6 +3334,72 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     print(
       "Backend compatibility checked \(checkedImages) tvOS-decodable images from \(uniqueCandidates.count) unique image URLs. MP Web-aligned image failures: \(webAlignedFailures)."
     )
+  }
+
+  @MainActor
+  private func assertPersonImagesMatchWebSelection(
+    _ people: [Person],
+    service: APIService,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let supportedSources = Set(["themoviedb", "douban", "bangumi", "anilist"])
+    let supportedPeople = people.filter { $0.source.map(supportedSources.contains) == true }
+    XCTAssertFalse(
+      supportedPeople.isEmpty,
+      "Person image compatibility collected no Web-supported people.",
+      file: file,
+      line: line
+    )
+
+    for person in supportedPeople {
+      let rawURL = person.compatibilityRawImageURL
+      // 数据源官方默认空白图（豆瓣 personage-default/celebrity-default、
+      // AniList anilistcdn/.../default.jpg、Bangumi no_icon_*）在 TV 端统一
+      // 拦截为占位符，不参与 Web 对齐。
+      let isFilteredPlaceholder =
+        (rawURL?.contains("doubanio.com") == true
+          && (rawURL?.contains("personage-default") == true
+            || rawURL?.contains("celebrity-default") == true))
+        || (rawURL?.contains("anilist.co") == true
+          && rawURL?.contains("anilistcdn") == true
+          && rawURL?.contains("default.jpg") == true)
+        || (rawURL.map(Self.isBangumiImageURL) == true
+          && rawURL?.contains("no_icon") == true)
+      let expectedURL =
+        isFilteredPlaceholder
+        ? nil
+        : rawURL.flatMap {
+          Self.webDisplayImageURL(
+            $0,
+            baseURL: service.baseURL,
+            useImageCache: service.useImageCache,
+            bangumiProxyEnabled: service.settings?.BANGUMI_PROXY_ENABLE?.value == true,
+            bangumiImageDomain: service.settings?.BANGUMI_IMAGE_DOMAIN
+          )
+        }
+
+      if isFilteredPlaceholder {
+        XCTAssertNil(
+          person.imageURLs.profile,
+          "Official placeholder must use the local fallback for \(person.compatibilityName) [\(person.source ?? "unknown")]",
+          file: file,
+          line: line
+        )
+        continue
+      }
+
+      // Web 有图时，TV 仍须选同一张。
+      guard let expected = expectedURL?.absoluteString else { continue }
+
+      XCTAssertEqual(
+        person.imageURLs.profile?.absoluteString,
+        expected,
+        "Person image selection differs from MP Web for \(person.compatibilityName) [\(person.source ?? "unknown")]",
+        file: file,
+        line: line
+      )
+    }
   }
 
   private static func imageFailureReason(
@@ -2021,7 +3439,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private static func webEquivalentImageCandidate(
     for candidate: BackendImageCandidate,
     baseURL: String,
-    useImageCache: Bool
+    useImageCache: Bool,
+    bangumiSettings: BackendBangumiImageProxySettings
   ) -> BackendImageCandidate? {
     guard let rawURLString = candidate.rawURLString?.nilIfBlank else {
       return nil
@@ -2030,7 +3449,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let webURL = webDisplayImageURL(
         rawURLString,
         baseURL: baseURL,
-        useImageCache: useImageCache
+        useImageCache: useImageCache,
+        bangumiProxyEnabled: bangumiSettings.enabled,
+        bangumiImageDomain: bangumiSettings.domain
       )
     else {
       return nil
@@ -2048,7 +3469,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private static func webDisplayImageURL(
     _ rawURLString: String,
     baseURL: String,
-    useImageCache: Bool
+    useImageCache: Bool,
+    bangumiProxyEnabled: Bool,
+    bangumiImageDomain: String?
   ) -> URL? {
     let value = rawURLString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return nil }
@@ -2057,8 +3480,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       return URL(string: value, relativeTo: URL(string: baseURL))?.absoluteURL
     }
 
-    if isBangumiImageURL(value) {
-      return proxiedWebImageURL(value, baseURL: baseURL, proxy: true, cache: useImageCache)
+    if isBangumiImageURL(value), bangumiProxyEnabled {
+      let target = webBangumiImageProxyURL(value, baseURL: bangumiImageDomain ?? "")
+      return proxiedWebImageURL(target, baseURL: baseURL, proxy: true, cache: useImageCache)
     }
 
     if useImageCache {
@@ -2092,10 +3516,45 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   private static func isBangumiImageURL(_ rawURLString: String) -> Bool {
-    if let host = URLComponents(string: rawURLString)?.host?.lowercased() {
-      return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+    guard let host = URLComponents(string: rawURLString)?.host?.lowercased() else {
+      return false
     }
-    return rawURLString.contains("lain.bgm.tv")
+    return ["bgm.tv", "bangumi.tv", "bangumi.lol"].contains { domain in
+      host == domain || host.hasSuffix(".\(domain)")
+    }
+  }
+
+  private static func webBangumiImageProxyURL(_ imageURL: String, baseURL: String) -> String {
+    guard isBangumiImageURL(imageURL) else { return imageURL }
+    let rawBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rawBaseURL.isEmpty else { return imageURL }
+    let candidate = rawBaseURL.contains("://") ? rawBaseURL : "https://\(rawBaseURL)"
+    guard let proxyComponents = URLComponents(string: candidate),
+      let scheme = proxyComponents.scheme?.lowercased(),
+      ["http", "https"].contains(scheme),
+      let proxyHost = proxyComponents.host,
+      proxyComponents.fragment == nil,
+      let sourceComponents = URLComponents(string: imageURL),
+      let sourceHost = sourceComponents.host
+    else {
+      return imageURL
+    }
+
+    if let query = proxyComponents.percentEncodedQuery, !query.isEmpty {
+      guard let encodedImageURL = encodeURIComponent(imageURL) else { return imageURL }
+      return candidate + encodedImageURL
+    }
+
+    var normalizedBaseURL = candidate
+    while normalizedBaseURL.hasSuffix("/") {
+      normalizedBaseURL.removeLast()
+    }
+    if rawBaseURL.hasSuffix("/") {
+      if sourceHost.caseInsensitiveCompare(proxyHost) == .orderedSame { return imageURL }
+      let query = sourceComponents.percentEncodedQuery.map { "?\($0)" } ?? ""
+      return normalizedBaseURL + sourceComponents.percentEncodedPath + query
+    }
+    return "\(normalizedBaseURL)/\(imageURL)"
   }
 
   private static func isDoubanImageURL(_ rawURLString: String) -> Bool {
@@ -2167,15 +3626,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     }
   }
 
-  fileprivate static func probeSSEStream(
-    url: URL,
-    token: String?,
+  fileprivate static func probeSearchStream(
+    _ stream: AsyncThrowingStream<SearchStreamEvent, Error>,
     timeoutSeconds: UInt64 = 45,
     maxEvents: Int? = 40
   ) async -> BackendStreamProbeResult {
     await withTaskGroup(of: BackendStreamProbeResult.self) { group in
       group.addTask {
-        await readSSEStream(url: url, token: token, maxEvents: maxEvents)
+        await readSearchStream(stream, maxEvents: maxEvents)
       }
       group.addTask {
         try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
@@ -2201,9 +3659,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     }
   }
 
-  private static func readSSEStream(
-    url: URL,
-    token: String?,
+  private static func readSearchStream(
+    _ stream: AsyncThrowingStream<SearchStreamEvent, Error>,
     maxEvents: Int?
   ) async -> BackendStreamProbeResult {
     var eventCount = 0
@@ -2212,41 +3669,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     var streamError: String?
 
     do {
-      var request = URLRequest(url: url)
-      request.timeoutInterval = 300
-      request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-      if let token {
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-      }
-
-      let (bytes, response) = try await URLSession.shared.bytes(for: request)
-      guard let httpResponse = response as? HTTPURLResponse else {
-        return BackendStreamProbeResult(
-          eventCount: eventCount,
-          itemCount: itemCount,
-          sawTerminalEvent: false,
-          errorMessage: "SSE response is not HTTP.",
-          timedOut: false
-        )
-      }
-      guard httpResponse.statusCode == 200 else {
-        return BackendStreamProbeResult(
-          eventCount: eventCount,
-          itemCount: itemCount,
-          sawTerminalEvent: false,
-          errorMessage: "HTTP \(httpResponse.statusCode), content-type: \(httpResponse.contentTypeDescription)",
-          timedOut: false
-        )
-      }
-
-      for try await line in bytes.lines {
+      for try await event in stream {
         if Task.isCancelled { break }
-        guard line.hasPrefix("data:") else { continue }
-
-        let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-        guard let data = jsonString.data(using: .utf8) else { continue }
-
-        let event = try JSONDecoder().decode(BackendSSEEventProbe.self, from: data)
         eventCount += 1
         itemCount += event.items?.count ?? 0
 
@@ -2257,7 +3681,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         }
 
         if event.type == "done" || event.enable == false {
-          if let success = event.data?.success, success == false {
+          if event.data?.success == false {
             streamError = event.data?.error ?? event.message ?? "SSE terminal event reported failure."
           }
           sawTerminalEvent = true
@@ -2268,23 +3692,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           break
         }
       }
-
-      return BackendStreamProbeResult(
-        eventCount: eventCount,
-        itemCount: itemCount,
-        sawTerminalEvent: sawTerminalEvent,
-        errorMessage: streamError,
-        timedOut: false
-      )
     } catch {
-      return BackendStreamProbeResult(
-        eventCount: eventCount,
-        itemCount: itemCount,
-        sawTerminalEvent: sawTerminalEvent,
-        errorMessage: String(describing: error),
-        timedOut: false
-      )
+      streamError = String(describing: error)
     }
+
+    return BackendStreamProbeResult(
+      eventCount: eventCount,
+      itemCount: itemCount,
+      sawTerminalEvent: sawTerminalEvent,
+      errorMessage: streamError,
+      timedOut: false
+    )
   }
 
   @MainActor
@@ -2325,14 +3743,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     media: MediaInfo,
     season: Int? = nil
   ) async throws {
-    guard let mediaId = media.apiMediaId else { return }
+    guard let identity = media.identity else { return }
 
     let url = try compatibilityAPIURL(
       service: service,
-      path: "/subscribe/media/\(mediaId)",
+      path: "/subscribe/media/\(identity.mediaId)",
       params: [
+        "media_source": identity.source,
         "season": season.map(String.init),
         "title": media.title,
+        "year": media.year,
+        "mtype": media.type,
       ])
     var request = URLRequest(url: url)
     request.timeoutInterval = 15
@@ -2481,6 +3902,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   private func assertProxyURLPreservesRawImage(
     _ candidate: BackendImageCandidate,
+    bangumiSettings: BackendBangumiImageProxySettings,
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
@@ -2505,10 +3927,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let queryItems = queryItemMap(from: components)
 
     XCTAssertNil(components.fragment, "Outer proxy URL must not have a fragment for \(candidate.label)", file: file, line: line)
+    let expectedTarget =
+      bangumiSettings.enabled && Self.isBangumiImageURL(rawURLString)
+      ? Self.webBangumiImageProxyURL(
+        rawURLString,
+        baseURL: bangumiSettings.domain
+      )
+      : rawURLString
     XCTAssertEqual(
       queryItems[proxyQueryName],
-      rawURLString,
-      "Outer proxy query must preserve the full raw image URL for \(candidate.label)",
+      expectedTarget,
+      "Outer proxy query must preserve the expected image target for \(candidate.label)",
       file: file,
       line: line
     )
@@ -2545,9 +3974,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   @MainActor
   private func withReadOnlyBackend(
+    requiring requiredSteps: [String] = [],
     _ operation: @MainActor (APIService, BackendCompatibilityConfig) async throws -> Void
   ) async throws {
-    let config = try BackendCompatibilityConfig.loadOrSkip()
+    let coverage = BackendCompatibilityCoverage()
+    let config = try BackendCompatibilityConfig.loadOrSkip().tracking(coverage)
     let service = APIService.shared
     let snapshot = BackendServiceSnapshot.capture(service: service)
 
@@ -2560,6 +3991,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       service: service,
       operation: operation
     )
+    try coverage.requireExecution(of: requiredSteps)
   }
 
   private func queryItemMap(from components: URLComponents) -> [String: String] {
@@ -2590,7 +4022,39 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 }
 
-private struct SubscriptionSideEffectTarget: Equatable {
+private enum SubscriptionStateRestoreResult: Equatable, Sendable {
+  case restored(Bool)
+  case failed(String)
+  case deadlineExceeded
+}
+
+private func restoreSubscriptionState(
+  deadlineNanoseconds: UInt64 = 15 * 1_000_000_000,
+  operation: @escaping @MainActor @Sendable () async throws -> Bool
+) async -> SubscriptionStateRestoreResult {
+  await Task.detached {
+    await withTaskGroup(of: SubscriptionStateRestoreResult.self) { group in
+      group.addTask {
+        do {
+          return .restored(try await operation())
+        } catch {
+          return .failed(String(describing: error))
+        }
+      }
+
+      group.addTask {
+        try? await Task.sleep(nanoseconds: deadlineNanoseconds)
+        return .deadlineExceeded
+      }
+
+      let result = await group.next()
+      group.cancelAll()
+      return result ?? .failed("Subscription state restore produced no result.")
+    }
+  }.value
+}
+
+private struct SubscriptionSideEffectTarget: Equatable, Sendable {
   let id: Int
   let originalState: String
 
@@ -2601,6 +4065,437 @@ private struct SubscriptionSideEffectTarget: Equatable {
   var isToggleable: Bool {
     originalState == "R" || originalState == "S"
   }
+}
+
+final class BackendCompatibilityCleanupTests: XCTestCase {
+  @MainActor
+  func testSubscriptionStateRestoreDoesNotInheritCallerCancellation() async {
+    let cleanupTask = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await restoreSubscriptionState(deadlineNanoseconds: 1_000_000_000) {
+        try Task.checkCancellation()
+        return true
+      }
+    }
+    cleanupTask.cancel()
+
+    let result = await cleanupTask.value
+    XCTAssertEqual(result, .restored(true))
+  }
+
+  @MainActor
+  func testSubscriptionStateRestoreWaitsForOperationAfterDeadlineExceeded() async {
+    let start = ContinuousClock.now
+    var didFinishRestore = false
+
+    let result = await restoreSubscriptionState(deadlineNanoseconds: 20_000_000) {
+      await withCheckedContinuation { continuation in
+        _ = Task.detached {
+          try? await Task.sleep(nanoseconds: 300_000_000)
+          continuation.resume()
+        }
+      }
+      didFinishRestore = true
+      return true
+    }
+
+    XCTAssertEqual(result, .deadlineExceeded)
+    XCTAssertTrue(didFinishRestore)
+    XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(250))
+  }
+
+  func testSlowDownloadTimeoutCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(1.5)) } catch {}
+    }
+    let started = ContinuousClock.now
+    let finished = await waitForVoidTask(download, seconds: 0.2)
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .milliseconds(900))
+  }
+
+  func testParentCancellationCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(5)) } catch {}
+    }
+    let parent = Task {
+      await waitForVoidTask(download, seconds: 30)
+    }
+    try? await Task.sleep(for: .milliseconds(30))
+    parent.cancel()
+    let started = ContinuousClock.now
+    let finished = await parent.value
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+  }
+
+  func testCancelledCallerDoesNotStartStorageRequest() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await executeStorageRequest(probe.request)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertFalse(result.success)
+    XCTAssertFalse(result.requestSent)
+    XCTAssertFalse(result.serverAnswered)
+    XCTAssertFalse(probe.didStart)
+  }
+
+  func testStorageCleanupRequestSurvivesCallerCancellation() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await performStorageRequestDespiteCancellation(probe.request, timeoutSeconds: 5)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertTrue(result.success, result.message)
+    XCTAssertTrue(probe.didStart)
+  }
+
+  @MainActor
+  func testMkdirLostResponseStillDeletesThePreparedDirectory() async throws {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "mkdir race probe must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-lost",
+      savePath: "/downloads/mp-tv-subtitle-compat-lost"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-lost", parentPath: "/downloads")
+    }
+    for _ in 0..<50 {
+      if probe.mkdirStarted { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    XCTAssertTrue(probe.mkdirStarted)
+    XCTAssertTrue(probe.directoryExists, "the server created the directory before delivering success")
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("a lost mkdir response must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(
+        description.contains(folder.savePath),
+        "lost mkdir must keep the prepared path, got: \(description)"
+      )
+      XCTAssertTrue(description.contains("uncertain"), description)
+    }
+    XCTAssertGreaterThan(probe.deleteCount, 0)
+    XCTAssertFalse(probe.directoryExists)
+  }
+
+  @MainActor
+  func testCancelBeforeMkdirDoesNotDelete() async {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "unsent mkdir must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-unsent",
+      savePath: "/downloads/mp-tv-subtitle-compat-unsent"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-unsent", parentPath: "/downloads")
+    }
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("mkdir cancelled before it is sent must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(description.hasPrefix("Storage mkdir failed"), description)
+      XCTAssertFalse(description.contains("uncertain"), description)
+      XCTAssertFalse(description.contains(folder.savePath), description)
+    }
+    XCTAssertFalse(probe.mkdirStarted)
+    XCTAssertEqual(probe.deleteCount, 0)
+  }
+
+  func testLateServerWriteDoesNotCountDeletedDirectoryAsRestored() async {
+    let server = LateSubtitleWrite()
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-late",
+      savePath: "/downloads/mp-tv-subtitle-compat-late"
+    )
+    let writer = Task {
+      await server.waitUntilDeleted()
+      server.writeFile()
+    }
+    let cleanup = await finishSubtitleIsolation(folder: folder, remoteFinished: false) {
+      server.deleteDirectory()
+    }
+    XCTAssertTrue(cleanup.deleteSucceeded)
+    XCTAssertFalse(cleanup.sceneRestored)
+    XCTAssertTrue(cleanup.logLine.contains("uncertain"))
+    XCTAssertTrue(cleanup.logLine.contains(folder.savePath))
+    await writer.value
+    XCTAssertTrue(server.directoryExists)
+    XCTAssertFalse(cleanup.sceneRestored)
+  }
+}
+
+/// 服务端在 mkdir 一开始就把目录建好，但成功响应一直不交付。取消后客户端必须按预定路径删除。
+private struct SubtitleMkdirRaceProbe {
+  var mkdirStarted: Bool { SubtitleMkdirRaceState.shared.mkdirStarted }
+  var directoryExists: Bool { SubtitleMkdirRaceState.shared.directoryExists }
+  var deleteCount: Int { SubtitleMkdirRaceState.shared.deleteCount }
+
+  static func install() -> SubtitleMkdirRaceProbe {
+    SubtitleMkdirRaceState.shared.reset()
+    URLProtocol.registerClass(SubtitleMkdirRaceURLProtocol.self)
+    return SubtitleMkdirRaceProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleMkdirRaceURLProtocol.self)
+    SubtitleMkdirRaceState.shared.reset()
+  }
+}
+
+private final class SubtitleMkdirRaceState: @unchecked Sendable {
+  static let shared = SubtitleMkdirRaceState()
+
+  private let lock = NSLock()
+  private var started = false
+  private var exists = false
+  private var deletes = 0
+
+  func reset() {
+    lock.lock()
+    started = false
+    exists = false
+    deletes = 0
+    lock.unlock()
+  }
+
+  func noteCreated() {
+    lock.lock()
+    started = true
+    exists = true
+    lock.unlock()
+  }
+
+  func noteDeleted() {
+    lock.lock()
+    exists = false
+    deletes += 1
+    lock.unlock()
+  }
+
+  var mkdirStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return started
+  }
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  var deleteCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return deletes
+  }
+}
+
+private final class SubtitleMkdirRaceURLProtocol: URLProtocol, @unchecked Sendable {
+  private let deliveryLock = NSLock()
+  private var stopped = false
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "mptv-subtitle-mkdir.test"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let path = request.url?.path ?? ""
+    if path.hasSuffix("/storage/mkdir") {
+      SubtitleMkdirRaceState.shared.noteCreated()
+      return
+    }
+    if path.hasSuffix("/storage/delete") {
+      SubtitleMkdirRaceState.shared.noteDeleted()
+      finishJSON(#"{"success":true}"#)
+      return
+    }
+    client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+  }
+
+  override func stopLoading() {
+    // 取消由 URLSession 结束 data(for:)。这里不能再回调 client，否则会和系统的取消完成重复。
+    deliveryLock.withLock { stopped = true }
+  }
+
+  private func finishJSON(_ body: String) {
+    let shouldSend = deliveryLock.withLock { () -> Bool in
+      if stopped { return false }
+      stopped = true
+      return true
+    }
+    guard shouldSend, let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else { return }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(body.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+}
+
+/// 下载任务已经结束并删除目录后，服务端工作线程仍可能把目录和字幕文件写回来。
+private final class LateSubtitleWrite: @unchecked Sendable {
+  private let lock = NSLock()
+  private var exists = false
+  private var deleted = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  func deleteDirectory() -> Bool {
+    let pending: [CheckedContinuation<Void, Never>]
+    lock.lock()
+    exists = false
+    deleted = true
+    pending = waiters
+    waiters = []
+    lock.unlock()
+    for waiter in pending {
+      waiter.resume()
+    }
+    return true
+  }
+
+  func waitUntilDeleted() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      if deleted {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
+  }
+
+  func writeFile() {
+    lock.lock()
+    exists = true
+    lock.unlock()
+  }
+}
+
+private struct SubtitleCleanupProbe {
+  var request: URLRequest {
+    var request = URLRequest(url: URL(string: "mptv-subtitle-cleanup://cleanup/delete")!)
+    request.httpMethod = "POST"
+    return request
+  }
+
+  var didStart: Bool { SubtitleCleanupURLProtocol.didStart }
+
+  static func install() -> SubtitleCleanupProbe {
+    SubtitleCleanupURLProtocol.reset()
+    URLProtocol.registerClass(SubtitleCleanupURLProtocol.self)
+    return SubtitleCleanupProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleCleanupURLProtocol.self)
+  }
+}
+
+private final class SubtitleCleanupStartCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func reset() {
+    lock.lock()
+    value = 0
+    lock.unlock()
+  }
+
+  func increment() {
+    lock.lock()
+    value += 1
+    lock.unlock()
+  }
+
+  var didStart: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return value > 0
+  }
+}
+
+private final class SubtitleCleanupURLProtocol: URLProtocol, @unchecked Sendable {
+  private static let starts = SubtitleCleanupStartCounter()
+
+  static func reset() {
+    starts.reset()
+  }
+
+  static var didStart: Bool { starts.didStart }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.scheme == "mptv-subtitle-cleanup"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    Self.starts.increment()
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(#"{"success":true}"#.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }
 
 final class BackendCompatibilitySideEffectTests: XCTestCase {
@@ -2629,6 +4524,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testSubscriptionSearchCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH",
+      requiredStep: "subscription search side-effect",
       isEnabled: { $0.testSubscriptionSearch }
     ) { service, config in
       await runBackendCompatibilityStep(
@@ -2670,6 +4566,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testSubscriptionUpdateCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE",
+      requiredStep: "subscription update side-effect",
       isEnabled: { $0.testSubscriptionUpdate }
     ) { service, config in
       await runBackendCompatibilityStep(
@@ -2687,7 +4584,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         for id in ids {
           let detail = try await service.fetchSubscription(id: id)
           XCTAssertEqual(detail.id, id, "Subscription detail ID changed before unchanged update.")
-          let success = try await service.saveSubscription(detail)
+          let success = try await service.saveSubscription(original: detail, draft: detail).success
           XCTAssertTrue(success, "Unchanged subscription update was rejected for subscription \(id).")
         }
       }
@@ -2698,6 +4595,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testSubscriptionPauseResumeCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME",
+      requiredStep: "subscription pause/resume side-effect",
       isEnabled: { $0.testSubscriptionPauseResume }
     ) { service, config in
       await runBackendCompatibilityStep(
@@ -2724,12 +4622,12 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
             target: target,
             operationDescription: "pause/resume subscription \(target.id)"
           ) {
-            let toggleSuccess = try await service.updateSubscriptionStatus(
+            let toggleResult = try await service.updateSubscriptionStatus(
               id: target.id,
               state: target.toggledState
             )
             XCTAssertTrue(
-              toggleSuccess,
+              toggleResult.success,
               "Subscription status toggle \(target.originalState) -> \(target.toggledState) was rejected for subscription \(target.id)."
             )
           }
@@ -2742,6 +4640,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testSubscriptionResetThenSearchCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH",
+      requiredStep: "subscription reset/search side-effect",
       isEnabled: { $0.testSubscriptionResetSearch }
     ) { service, config in
       await runBackendCompatibilityStep(
@@ -2768,9 +4667,9 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
             target: target,
             operationDescription: "reset and search subscription \(target.id)"
           ) {
-            let resetSuccess = try await service.resetSubscription(id: target.id)
+            let resetResult = try await service.resetSubscription(id: target.id)
             XCTAssertTrue(
-              resetSuccess,
+              resetResult.success,
               "Subscription reset request was rejected for subscription \(target.id)."
             )
 
@@ -2789,6 +4688,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testManualReorganizeCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE",
+      requiredStep: "manual reorganize side-effect",
       isEnabled: { $0.testManualReorganize }
     ) { service, config in
       await runBackendCompatibilityStep(
@@ -2808,22 +4708,18 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
 
         let concurrentCount = Swift.min(config.reorganizeConcurrentCount, histories.count)
         let targets = Array(histories.prefix(concurrentCount))
-        let requests = try targets.map { history in
-          try manualTransferRequest(service: service, history: history)
+        let tasks = targets.map { history in
+          Task { @MainActor in
+            await Self.performManualTransfer(service: service, history: history)
+          }
         }
 
-        let results = await Self.performManualTransfers(requests)
+        var results: [BackendManualTransferResult] = []
+        for task in tasks {
+          results.append(await task.value)
+        }
         for result in results {
           if result.success {
-            continue
-          }
-          if config.isExpectedPermissionDiagnostic(
-            BackendManualTransferError(result: result),
-            requirement: .superUser
-          ) {
-            print(
-              "Backend compatibility permission diagnostic for manual reorganize \(result.label): \(config.activeAccountDiagnostic); required=superuser; \(result.diagnostic)"
-            )
             continue
           }
           XCTAssertTrue(
@@ -2839,6 +4735,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   func testAIReorganizeCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE",
+      requiredStep: "AI reorganize side-effect",
       isEnabled: { $0.testAIReorganize }
     ) { service, config in
       let settings = try await service.fetchSettings()
@@ -2862,21 +4759,13 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           return
         }
 
-        guard let result = try await service.aiRedoTransferHistory(ids: ids) else {
-          XCTFail("AI reorganize did not return a progress key for history IDs \(ids).")
-          return
-        }
+        let result = try await service.aiRedoTransferHistories(ids: ids)
 
         XCTAssertFalse(result.progressKey.isEmpty, "AI reorganize returned an empty progress key.")
         XCTAssertFalse(result.acceptedIds.isEmpty, "AI reorganize accepted no history IDs.")
 
-        let progressURL = try compatibilityAPIURL(
-          service: service,
-          path: "/system/progress/\(result.progressKey)"
-        )
-        let progress = await BackendCompatibilityReadOnlyTests.probeSSEStream(
-          url: progressURL,
-          token: service.token,
+        let progress = await BackendCompatibilityReadOnlyTests.probeSearchStream(
+          service.progressStream(progressKey: result.progressKey),
           timeoutSeconds: 180,
           maxEvents: nil
         )
@@ -2899,12 +4788,100 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   }
 
   @MainActor
+  func testSubtitleDownloadCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD",
+      requiredStep: "subtitle download side-effect",
+      isEnabled: { $0.testSubtitleDownload }
+    ) { service, config in
+      await runBackendCompatibilityStep(
+        "subtitle download side-effect",
+        service: service,
+        config: config,
+        requirement: .permissions([.search, .manage])
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        guard let savePath = config.subtitleDownloadSavePath else {
+          XCTFail(
+            "Set MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH to a save_path returned by /download/paths."
+          )
+          return
+        }
+        guard let mediaID = config.subtitleMediaIDs.compactMap(\.nilIfBlank).first else {
+          XCTFail(
+            "Subtitle download needs MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID so the file is attached to one movie or TV item."
+          )
+          return
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: [],
+          mediaIDs: [mediaID],
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        guard built.rejectedMediaIDs.isEmpty, let sample = built.samples.first else {
+          XCTFail("Subtitle download media ID is not a TV subtitle search target: \(mediaID)")
+          return
+        }
+
+        let session = SubtitleSearchSession(request: sample.request, apiService: service)
+        session.start()
+        if session.state == .idle {
+          XCTFail("Subtitle download search did not start for \(sample.label).")
+          return
+        }
+        try await waitForSubtitleSearch(session)
+        assertSubtitleSearchCompleted(session, label: sample.label)
+        guard case .completed = session.state, !session.rows.isEmpty else { return }
+
+        let folder: BackendSubtitleDownloadFolder
+        do {
+          folder = try await makeSubtitleDownloadFolder(service: service, configuredSavePath: savePath)
+        } catch {
+          XCTFail(error.localizedDescription)
+          return
+        }
+        let end = await downloadFirstSubtitle(session: session, savePath: folder.savePath)
+        let cleanup = await finishSubtitleIsolation(
+          folder: folder, remoteFinished: end.remoteFinished
+        ) {
+          await removeSubtitleDownloadFolder(service: service, folder: folder)
+        }
+        print("Subtitle download media=\(mediaID), \(cleanup.logLine)")
+        switch end {
+        case .accepted:
+          XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+        case .serverRejected(let message):
+          XCTFail(message)
+          XCTAssertTrue(
+            cleanup.sceneRestored,
+            "\(cleanup.logLine) The server had already answered, so the directory should be gone."
+          )
+        case .interrupted(let message, let requestSent):
+          if requestSent {
+            XCTFail("\(message) \(cleanup.logLine)")
+          } else {
+            XCTFail(message)
+            XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+          }
+        }
+      }
+    }
+  }
+
+  @MainActor
   private func withSideEffectBackend(
     flagName: String,
+    requiredStep: String,
     isEnabled: (BackendCompatibilityConfig) -> Bool,
     _ operation: @MainActor (APIService, BackendCompatibilityConfig) async throws -> Void
   ) async throws {
-    let config = try BackendCompatibilityConfig.loadOrSkip()
+    let coverage = BackendCompatibilityCoverage()
+    let config = try BackendCompatibilityConfig.loadOrSkip().tracking(coverage)
     guard config.enableSideEffects else {
       throw XCTSkip(
         "Side-effect backend compatibility tests are disabled by MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false. Remove the false value or set it to true to run them."
@@ -2928,6 +4905,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       service: service,
       operation: operation
     )
+    try coverage.requireExecution(of: [requiredStep])
   }
 
   @MainActor
@@ -2982,18 +4960,26 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       XCTFail("Failed to \(operationDescription): \(error)")
     }
 
-    do {
-      let restored = try await service.updateSubscriptionStatus(
+    let restoreResult = await restoreSubscriptionState {
+      try await service.updateSubscriptionStatus(
         id: target.id,
         state: target.originalState
-      )
-      XCTAssertTrue(
-        restored,
+      ).success
+    }
+    switch restoreResult {
+    case .restored(true):
+      break
+    case .restored(false):
+      XCTFail(
         "Subscription \(target.id) state restore to \(target.originalState) was rejected."
       )
-    } catch {
+    case .failed(let diagnostic):
       XCTFail(
-        "Failed to restore subscription \(target.id) to original state \(target.originalState): \(error)"
+        "Failed to restore subscription \(target.id) to original state \(target.originalState): \(diagnostic)"
+      )
+    case .deadlineExceeded:
+      XCTFail(
+        "Restoring subscription \(target.id) to original state \(target.originalState) exceeded the 15-second cleanup deadline; cleanup finished before the suite continued."
       )
     }
   }
@@ -3012,125 +4998,28 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   }
 
   @MainActor
-  private func manualTransferRequest(
+  private static func performManualTransfer(
     service: APIService,
     history: TransferHistory
-  ) throws -> BackendManualTransferRequest {
-    let form = ReorganizeForm(
-      fileitem: history.src_fileitem,
-      logid: history.id,
-      target_storage: history.dest_storage?.nilIfBlank,
-      transfer_type: nil,
-      target_path: "",
-      min_filesize: 0,
-      scrape: nil,
-      from_history: false
-    )
-    let body = try JSONEncoder().encode(form)
-    let url = try compatibilityAPIURL(
-      service: service,
-      path: "/transfer/manual",
-      params: ["background": "true"]
-    )
-
-    return BackendManualTransferRequest(
-      label: "\(history.id) \(history.title ?? "")",
-      url: url,
-      token: service.token,
-      body: body
-    )
-  }
-
-  private static func performManualTransfers(
-    _ requests: [BackendManualTransferRequest]
-  ) async -> [BackendManualTransferResult] {
-    await withTaskGroup(of: BackendManualTransferResult.self) { group in
-      for request in requests {
-        group.addTask {
-          await performManualTransfer(request)
-        }
-      }
-
-      var results: [BackendManualTransferResult] = []
-      for await result in group {
-        results.append(result)
-      }
-      return results
-    }
-  }
-
-  private static func performManualTransfer(
-    _ requestInfo: BackendManualTransferRequest
   ) async -> BackendManualTransferResult {
-    do {
-      var request = URLRequest(url: requestInfo.url)
-      request.httpMethod = "POST"
-      request.timeoutInterval = 60
-      request.httpBody = requestInfo.body
-      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      if let token = requestInfo.token {
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-      }
-
-      let (data, response) = try await URLSession.shared.data(for: request)
-      guard let httpResponse = response as? HTTPURLResponse else {
-        return BackendManualTransferResult(
-          label: requestInfo.label,
-          success: false,
-          message: nil,
-          diagnostic: "Non-HTTP response."
-        )
-      }
-
-      let action = try? JSONDecoder().decode(BackendActionResponse.self, from: data)
-      let success = (200...299).contains(httpResponse.statusCode) && (action?.success ?? true)
-      return BackendManualTransferResult(
-        label: requestInfo.label,
-        success: success,
-        message: action?.message,
-        diagnostic:
-          "HTTP \(httpResponse.statusCode), content-type: \(httpResponse.contentTypeDescription), bytes: \(data.count), message: \(action?.message ?? "n/a"), body: \(Self.responseSnippet(from: data))"
-      )
-    } catch {
-      return BackendManualTransferResult(
-        label: requestInfo.label,
-        success: false,
-        message: nil,
-        diagnostic: String(describing: error)
-      )
-    }
+    let viewModel = ReorganizeViewModel(
+      logIds: [history.id],
+      fileItem: history.src_fileitem,
+      targetStorage: history.dest_storage?.nilIfBlank,
+      apiService: service
+    )
+    let success = await viewModel.submit(background: true)
+    let message = viewModel.mutationRetryMessage ?? viewModel.errorMessage
+    return BackendManualTransferResult(
+      label: "\(history.id) \(history.title ?? "")",
+      success: success,
+      diagnostic: message
+        ?? (success
+          ? "ReorganizeViewModel.submit accepted the request."
+          : "ReorganizeViewModel.submit rejected the request without a visible error.")
+    )
   }
 
-  @MainActor
-  private func compatibilityAPIURL(
-    service: APIService,
-    path: String,
-    params: [String: String?] = [:]
-  ) throws -> URL {
-    let endpoint = "\(service.baseURL)/api/v1\(path)"
-    guard var components = URLComponents(string: endpoint) else {
-      throw BackendCompatibilityProbeError.invalidURL(endpoint)
-    }
-
-    var queryItems = components.queryItems ?? []
-    for (name, value) in params.sorted(by: { $0.key < $1.key }) {
-      if let value {
-        queryItems.append(URLQueryItem(name: name, value: value))
-      }
-    }
-    components.queryItems = queryItems.isEmpty ? nil : queryItems
-
-    guard let url = components.url else {
-      throw BackendCompatibilityProbeError.invalidURL(endpoint)
-    }
-    return url
-  }
-
-  private static func responseSnippet(from data: Data, maxLength: Int = 256) -> String {
-    String(decoding: data.prefix(maxLength), as: UTF8.self)
-      .replacingOccurrences(of: "\n", with: "\\n")
-      .replacingOccurrences(of: "\r", with: "\\r")
-  }
 }
 
 private extension MediaInfo {
@@ -3148,29 +5037,22 @@ private extension Person {
 
   @MainActor
   var compatibilityRawImageURL: String? {
-    if let profilePath = profile_path, profilePath.hasPrefix("http") {
-      return profilePath
-    }
-
-    if source == "themoviedb" || (source == nil && profile_path?.hasPrefix("/") == true) {
+    if source == "themoviedb" {
       guard let profilePath = profile_path else { return nil }
       let domain = APIService.shared.settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
       return "https://\(domain)/t/p/w600_and_h900_bestv2\(profilePath)"
     }
 
     if source == "douban" {
-      switch avatar {
-      case .object(let normal):
-        return normal
-      case .url(let link):
-        return link
-      case .none:
-        return nil
-      }
+      return avatar?.urlValue
     }
 
     if source == "bangumi" {
       return images?.medium
+    }
+
+    if source == "anilist" {
+      return images?.large ?? images?.medium
     }
 
     return nil

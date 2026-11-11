@@ -1,7 +1,13 @@
 import Foundation
 
 enum AppVersionInfo {
-  nonisolated static let compatibleMoviePilotVersion = "v2.13.14"
+  nonisolated static var minimumCompatibleMoviePilotVersion: String {
+    BackendCompatibilityRegistry.current.minimumVersion.description
+  }
+
+  nonisolated static var latestCompatibleMoviePilotVersion: String {
+    BackendCompatibilityRegistry.current.latestVersion.description
+  }
 
   nonisolated static func currentAppVersion(bundle: Bundle = .main) -> String {
     let shortVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -10,23 +16,17 @@ enum AppVersionInfo {
 
   nonisolated static func displayAppVersion(shortVersion: String?) -> String {
     guard let shortVersion else { return "未知" }
-
     let trimmedVersion = shortVersion.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedVersion.isEmpty else { return "未知" }
     return trimmedVersion.hasPrefix("v") ? trimmedVersion : "v\(trimmedVersion)"
   }
 
-  nonisolated static func compareMoviePilotVersion(
-    _ lhs: String?,
-    to rhs: String
-  ) -> ComparisonResult? {
-    guard
-      let lhsComponents = moviePilotVersionComponents(lhs),
-      let rhsComponents = moviePilotVersionComponents(rhs)
-    else {
-      return nil
-    }
-
+  /// 比较 MoviePilot-TV 自身的版本号（更新说明使用）。App 版本可能只有两段，
+  /// 缺少的段按 0 处理；不能用只接受三段的 MoviePilot 后端版本解析。
+  nonisolated static func compareAppVersion(_ lhs: String?, to rhs: String) -> ComparisonResult? {
+    guard let lhsComponents = appVersionComponents(lhs),
+      let rhsComponents = appVersionComponents(rhs)
+    else { return nil }
     let length = max(lhsComponents.count, rhsComponents.count)
     for index in 0..<length {
       let lhsValue = index < lhsComponents.count ? lhsComponents[index] : 0
@@ -37,26 +37,16 @@ enum AppVersionInfo {
     return .orderedSame
   }
 
-  nonisolated static func supportsMoviePilotVersion(
-    _ backendVersion: String?,
-    minimumVersion: String = compatibleMoviePilotVersion
-  ) -> Bool? {
-    guard let result = compareMoviePilotVersion(backendVersion, to: minimumVersion) else {
-      return nil
-    }
-    return result != .orderedAscending
-  }
-
-  nonisolated private static func moviePilotVersionComponents(_ version: String?) -> [Int]? {
+  nonisolated private static func appVersionComponents(_ version: String?) -> [Int]? {
     guard let version else { return nil }
     var normalized = version.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !normalized.isEmpty, normalized != "未知" else { return nil }
-    if normalized.hasPrefix("v") {
-      normalized.removeFirst()
-    }
-    let core = normalized.split(whereSeparator: { $0 == "-" || $0 == "+" || $0 == " " }).first
-    guard let core else { return nil }
-
+    if normalized.hasPrefix("v") { normalized.removeFirst() }
+    let core = normalized.split(
+      omittingEmptySubsequences: false,
+      whereSeparator: { $0 == "-" || $0 == "+" || $0 == " " }
+    ).first
+    guard let core, core.first?.isNumber == true else { return nil }
     let components = core.split(separator: ".", omittingEmptySubsequences: false).map { part -> Int? in
       guard !part.isEmpty, part.allSatisfy(\.isNumber) else { return nil }
       return Int(part)
@@ -67,34 +57,67 @@ enum AppVersionInfo {
   }
 }
 
+/// 已登记的兼容版本不提示；其余情况提示一次，确认后同一服务器的同一后端版本不再提示。
 nonisolated struct BackendVersionWarning: Identifiable, Equatable {
   let backendVersion: String?
-  let requiredVersion: String
+  let status: BackendCompatibilityStatus
+  private let registry: BackendCompatibilityRegistry
+
+  init?(backendVersion: String?, registry: BackendCompatibilityRegistry = .current) {
+    let status = registry.status(for: backendVersion)
+    guard status != .registered else { return nil }
+    self.backendVersion = backendVersion
+    self.status = status
+    self.registry = registry
+  }
 
   private var normalizedBackendVersion: String? {
     guard let trimmed = backendVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !trimmed.isEmpty,
-      trimmed != "未知"
-    else {
-      return nil
-    }
+      !trimmed.isEmpty, trimmed != "未知"
+    else { return nil }
     return trimmed
   }
 
+  /// 只由后端版本决定：新增兼容版本或修改提示文字都不会让已确认的同一版本重新提示。
   var id: String {
-    "\(normalizedBackendVersion ?? "unknown")|\(requiredVersion)"
+    MoviePilotVersion(backendVersion)?.description ?? normalizedBackendVersion ?? "unknown"
   }
 
   var title: String {
-    if normalizedBackendVersion == nil {
-      return "无法确认 MoviePilot 后端版本"
+    switch status {
+    case .belowMinimum: return "MoviePilot 后端版本过低"
+    case .unregistered: return "兼容性尚未验证"
+    case .newerThanRegistry: return "MoviePilot 后端版本较新"
+    case .unparseable: return "无法确认 MoviePilot 后端版本"
+    case .registered: return "MoviePilot 后端版本"
     }
-    return "MoviePilot 后端版本过低"
   }
 
   var message: String {
-    let currentVersion = normalizedBackendVersion ?? "无法确认"
-    return
-      "当前后端版本：\(currentVersion)\nMoviePilot-TV 需要 \(requiredVersion) 或更高版本。低版本后端可能带来严重功能异常或数据丢失，请尽快升级后端。如仍需临时使用，仍可继续使用。"
+    var lines = ["当前后端版本：\(normalizedBackendVersion ?? "无法确认")"]
+    switch status {
+    case .belowMinimum:
+      lines.append("MoviePilot-TV 最早兼容 \(registry.minimumVersion)，低版本后端可能出现功能异常，建议升级后端。")
+    case .unregistered, .newerThanRegistry:
+      lines.append("已兼容的版本：\(compatibleVersionSummary)")
+    case .unparseable:
+      let reason = normalizedBackendVersion == nil ? "未取得后端版本号" : "无法识别该版本号"
+      lines.append("\(reason)，无法确认是否兼容。")
+      lines.append("已兼容的版本：\(compatibleVersionSummary)")
+    case .registered:
+      break
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  private var compatibleVersionSummary: String {
+    let firstVersion: MoviePilotVersion
+    if status == .unregistered, let version = MoviePilotVersion(backendVersion) {
+      firstVersion = registry.versions.first(where: { $0 > version }) ?? registry.latestVersion
+    } else {
+      firstVersion = registry.minimumVersion
+    }
+    return firstVersion == registry.latestVersion
+      ? firstVersion.description : "\(firstVersion)...\(registry.latestVersion)"
   }
 }

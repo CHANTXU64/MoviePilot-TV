@@ -1,66 +1,86 @@
+import Kingfisher
 import SwiftUI
 
 struct CollectionDetailView: View {
   let title: String
   let collectionId: Int
-  @Binding var navigationPath: NavigationPath
+  @ObservedObject var imageLifecycle: PageImageLifecycle
+  let allowsRequests: Bool
+  let previewPosterURL: URL?
+  let onInitialContentReady: () -> Void
 
   @StateObject private var viewModel: CollectionDetailViewModel
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
-  init(title: String, collectionId: Int, navigationPath: Binding<NavigationPath>) {
-    self.title = title
-    self.collectionId = collectionId
-    self._navigationPath = navigationPath
-    self._viewModel = StateObject(
-      wrappedValue: CollectionDetailViewModel(collectionId: collectionId, title: title))
-  }
-
-  #if DEBUG
   init(
-    title: String,
-    collectionId: Int,
-    navigationPath: Binding<NavigationPath>,
-    previewViewModel: CollectionDetailViewModel
+    title: String, collectionId: Int, imageLifecycle: PageImageLifecycle,
+    allowsRequests: Bool = true, previewPosterURL: URL? = nil,
+    preparedItems: [MediaInfo]? = nil,
+    onInitialContentReady: @escaping () -> Void = {}
   ) {
     self.title = title
     self.collectionId = collectionId
-    self._navigationPath = navigationPath
-    self._viewModel = StateObject(wrappedValue: previewViewModel)
+    self.imageLifecycle = imageLifecycle
+    self.allowsRequests = allowsRequests
+    self.previewPosterURL = previewPosterURL
+    self.onInitialContentReady = onInitialContentReady
+    self._viewModel = StateObject(
+      wrappedValue: CollectionDetailViewModel(
+        collectionId: collectionId, title: title, preparedItems: preparedItems
+      ))
   }
-  #endif
 
   var body: some View {
     MediaGridView(
+      imageLifecycle: imageLifecycle,
+      listIdentity: viewModel.paginator.listIdentity,
       items: viewModel.paginator.items,
       isLoading: viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,
       onLoadMore: { currentItem in
+        guard allowsRequests else { return }
         Task {
           await viewModel.paginator.loadMore(currentItem)
         }
       },
-      navigationPath: $navigationPath,
+      loadsImages: allowsRequests,
       header: {
-        Text(title)
-          .font(.largeTitle.bold())
-          .foregroundColor(.secondary)
+        HStack(spacing: 32) {
+          if let previewPosterURL {
+            PageManagedImage(
+              url: previewPosterURL,
+              processor: DownsamplingImageProcessor(size: CGSize(width: 120, height: 180)),
+              isEnabled: true,
+              participatesInPageLifecycle: true,
+              skipsMemoryCache: true,
+              loadsDiskFileSynchronously: true
+            )
+              .frame(width: 120, height: 180)
+          }
+          Text(title)
+            .font(.title2.bold())
+            .foregroundColor(.secondary)
+        }
       },
       contextMenu: { item in
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler
         )
       }
     )
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
-    .task {
-      #if DEBUG
-      if UIPreviewMode.isEnabled() { return }
-      #endif
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
+      subscriptionHandler = SubscriptionHandler()
+    }
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
+    .disabled(!allowsRequests)
+    .task(id: allowsRequests) {
+      guard allowsRequests else { return }
       await viewModel.loadInitialData()
+      guard !Task.isCancelled else { return }
+      onInitialContentReady()
     }
   }
 }

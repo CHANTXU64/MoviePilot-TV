@@ -117,7 +117,7 @@ private struct ActionRowContentButtonStyle: ButtonStyle {
 /// 1. 初始焦点落在主内容上。
 /// 2. 用户可以向右导航，将焦点逐一移动到操作按钮上。
 /// 3. 当焦点离开整行（包括内容和所有按钮）时，操作按钮会平滑地隐藏。
-struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
+struct ActionRow<Content: View, ProgressBar: View>: View {
 
   // MARK: - 焦点管理
   private enum FocusField: Hashable {
@@ -131,7 +131,6 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
   let onTap: (() -> Void)?
   let onLongPress: (() -> Void)?
   @ViewBuilder let content: (Bool) -> Content
-  @ViewBuilder let background: () -> Background
   @ViewBuilder let progressBar: () -> ProgressBar
 
   private let cornerRadius: CGFloat = 20
@@ -157,14 +156,12 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
     onTap: (() -> Void)? = nil,
     onLongPress: (() -> Void)? = nil,
     @ViewBuilder content: @escaping (Bool) -> Content,
-    @ViewBuilder background: @escaping () -> Background,
     @ViewBuilder progressBar: @escaping () -> ProgressBar
   ) {
     self.actions = actions
     self.onTap = onTap
     self.onLongPress = onLongPress
     self.content = content
-    self.background = background
     self.progressBar = progressBar
   }
 
@@ -231,14 +228,15 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
       // 这会“挤压”主内容的宽度，使其向左收缩，从而优雅地揭示出下方的操作按钮。
       .padding(.trailing, isRowActive ? measuredActionsWidth : 0)
     }
-    // 整体背景 (包含海报图和进度条)
+    // 整体背景使用固定的纯 SwiftUI 渐变，避免在可聚焦行中嵌入自定义背景视图。
     .background(
       ZStack {
-        // 背景层 (静态, 经过裁剪)
-        Color.clear
-          .overlay(background())
+        LinearGradient(
+          colors: [.black.opacity(0.3), .black.opacity(0.7)],
+          startPoint: .top,
+          endPoint: .bottom
+        )
 
-        // 进度条层 (静态)
         VStack {
           Spacer()
           progressBar()
@@ -254,8 +252,8 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
 }
 
 // MARK: - Convenience Initializers
-// 提供便捷初始化器，允许在不提供 background 或 progressBar 时省略它们
-extension ActionRow where Background == EmptyView, ProgressBar == EmptyView {
+// 提供便捷初始化器，允许在不提供 progressBar 时省略它。
+extension ActionRow where ProgressBar == EmptyView {
   init(
     actions: [ActionDescriptor],
     onTap: (() -> Void)? = nil,
@@ -267,46 +265,7 @@ extension ActionRow where Background == EmptyView, ProgressBar == EmptyView {
       onTap: onTap,
       onLongPress: onLongPress,
       content: content,
-      background: { EmptyView() },
       progressBar: { EmptyView() }
-    )
-  }
-}
-
-extension ActionRow where ProgressBar == EmptyView {
-  init(
-    actions: [ActionDescriptor],
-    onTap: (() -> Void)? = nil,
-    onLongPress: (() -> Void)? = nil,
-    @ViewBuilder content: @escaping (Bool) -> Content,
-    @ViewBuilder background: @escaping () -> Background
-  ) {
-    self.init(
-      actions: actions,
-      onTap: onTap,
-      onLongPress: onLongPress,
-      content: content,
-      background: background,
-      progressBar: { EmptyView() }
-    )
-  }
-}
-
-extension ActionRow where Background == EmptyView {
-  init(
-    actions: [ActionDescriptor],
-    onTap: (() -> Void)? = nil,
-    onLongPress: (() -> Void)? = nil,
-    @ViewBuilder content: @escaping (Bool) -> Content,
-    @ViewBuilder progressBar: @escaping () -> ProgressBar
-  ) {
-    self.init(
-      actions: actions,
-      onTap: onTap,
-      onLongPress: onLongPress,
-      content: content,
-      background: { EmptyView() },
-      progressBar: progressBar
     )
   }
 }

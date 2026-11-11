@@ -5,6 +5,7 @@ import SwiftUI
 struct MoreCard: View {
   let titleText: String
   let posterUrl: URL?
+  var loadsImage: Bool = true
   let action: () -> Void
 
   @FocusState private var isFocused: Bool
@@ -15,19 +16,22 @@ struct MoreCard: View {
     VStack(spacing: 10) {
       // 海报图片及模糊背景
       ZStack {
-        KFImage(posterUrl)
-          .requestModifier(AnyModifier.cookieModifier)
-          .placeholder {
-            Color(white: 0.12)
-          }
-          .downsampling(size: CGSize(width: width, height: height))
-          .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
-          .resizable()
-          .fade(duration: 0.25)
-          .aspectRatio(contentMode: .fill)
-          .frame(width: width, height: height)
-          .blur(radius: 20)
-          .clipped()
+        Color(white: 0.12)
+
+        PageManagedImage(
+          url: posterUrl,
+          processor: DownsamplingImageProcessor(size: CGSize(width: width, height: height))
+            |> ResizingImageProcessor(
+              referenceSize: CGSize(width: 256, height: 384),
+              mode: .aspectFill
+            ),
+          isEnabled: loadsImage,
+          participatesInPageLifecycle: true,
+          skipsMemoryCache: true
+        )
+        .frame(width: width, height: height)
+        .blur(radius: 20)
+        .clipped()
 
         // 半透明遮罩层
         Color.black.opacity(0.3)
@@ -60,15 +64,13 @@ struct MoreCard: View {
           // 对齐 title
           Text(" ")
             .font(.caption)
-            .fontWeight(.medium)
 
           // 固定占位对齐 footerLabel
           HStack(spacing: 4) {
-            Image(systemName: "plus.circle")
+            Image(systemName: AppSymbol.subscribe)
             Text(" ")
           }
           .font(.caption)
-          .fontWeight(.medium)
           .opacity(0)
         }
         .lineLimit(1)

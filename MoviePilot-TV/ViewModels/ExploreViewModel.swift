@@ -2,15 +2,504 @@ import Combine
 import Foundation
 import SwiftUI
 
-// MARK: - 数据源枚举
-enum DiscoverSource: String, CaseIterable, Identifiable {
-  case themoviedb = "TheMovieDb"
-  case douban = "豆瓣"
-  case bangumi = "Bangumi"
-  case popular = "热门订阅"
-  case subscriptionShare = "订阅分享"
+// MARK: - 插件筛选
+nonisolated struct PluginFilterOption: Hashable, Identifiable {
+  let value: JSONValue
+  let title: String
 
-  var id: String { rawValue }
+  var id: JSONValue { value }
+}
+
+nonisolated struct PluginFilterControl: Hashable, Identifiable {
+  enum Kind: Hashable {
+    case choice
+    case multiChoice
+    case text
+    case number
+    case toggle
+  }
+
+  let field: String
+  let label: String
+  let kind: Kind
+  let options: [PluginFilterOption]
+  let showExpressions: [String]
+  let rangeBounds: [JSONValue]?
+
+  var id: String { field }
+
+  func isVisible(in values: [String: JSONValue]) -> Bool {
+    showExpressions.allSatisfy {
+      PluginFilterExpression.evaluate($0, values: values) ?? true
+    }
+  }
+
+  func selectionValue(from storedValue: JSONValue) -> JSONValue {
+    guard rangeBounds != nil else { return storedValue }
+    return storedValue.arrayValue?.first ?? storedValue
+  }
+
+  func storedValue(for selection: JSONValue) -> JSONValue {
+    guard let upperBound = rangeBounds?.last else { return selection }
+    return .array([selection, upperBound])
+  }
+}
+
+nonisolated enum PluginFilterControlParser {
+  static func parse(_ nodes: [JSONValue]) -> [PluginFilterControl] {
+    var controls: [PluginFilterControl] = []
+    nodes.forEach {
+      collect($0, inheritedLabel: nil, inheritedVisibility: [], controls: &controls)
+    }
+    var seenFields = Set<String>()
+    return controls.filter {
+      seenFields.insert($0.field + "|" + $0.showExpressions.joined(separator: "|")).inserted
+    }
+  }
+
+  private static func collect(
+    _ node: JSONValue,
+    inheritedLabel: String?,
+    inheritedVisibility: [String],
+    controls: inout [PluginFilterControl]
+  ) {
+    guard let object = node.objectValue else { return }
+    let component = object["component"]?.stringValue ?? ""
+    let props = object["props"]?.objectValue ?? [:]
+    let children = object["content"]?.arrayValue ?? []
+    let prop: ([String]) -> JSONValue? = { names in
+      names.lazy.compactMap { name in
+        props.first(where: { $0.key.lowercased() == name.lowercased() })?.value
+      }.first
+    }
+    let localLabel = prop(["label"])?.stringValue ?? inheritedLabel
+    var visibility = inheritedVisibility
+    if let localVisibility = prop(["show", "v-show"])?.stringValue {
+      visibility.append(localVisibility)
+    }
+    let field =
+      prop(["model", "v-model", "modelvalue", "modelValue"])?.stringValue
+      ?? prop(["name"])?.stringValue
+      ?? object["model"]?.stringValue
+
+    if let field {
+      let lower = component.lowercased()
+      var options = collectOptions(
+        from: children + (prop(["items"])?.arrayValue ?? [])
+      )
+      let kind: PluginFilterControl.Kind
+      var rangeBounds: [JSONValue]?
+      switch lower {
+      case "vchipgroup", "vradiogroup", "vselect", "vcombobox":
+        if isMultiSelect(props) {
+          kind = .multiChoice
+        } else {
+          kind = options.isEmpty ? .text : .choice
+        }
+      case "vtextfield":
+        kind = props["type"]?.stringValue?.lowercased() == "number" ? .number : .text
+      case "vnumberinput":
+        kind = .number
+      case "vswitch":
+        kind = .toggle
+      case "vrangeslider":
+        kind = .choice
+        options = rangeOptions(from: props)
+        if let lowerBound = options.first?.value, let upperBound = options.last?.value {
+          rangeBounds = [lowerBound, upperBound]
+        }
+      default:
+        return
+      }
+      controls.append(
+        PluginFilterControl(
+          field: field,
+          label: localLabel ?? field,
+          kind: kind,
+          options: options,
+          showExpressions: visibility,
+          rangeBounds: rangeBounds
+        ))
+      return
+    }
+
+    var siblingLabel = localLabel
+    children.forEach {
+      if let label = firstLabel(in: $0) {
+        siblingLabel = label
+      }
+      collect($0, inheritedLabel: siblingLabel, inheritedVisibility: visibility, controls: &controls)
+    }
+  }
+
+  private static func isMultiSelect(_ props: [String: JSONValue]) -> Bool {
+    guard let value = props.first(where: { $0.key.lowercased() == "multiple" })?.value else {
+      return false
+    }
+    switch value {
+    case .bool(let flag):
+      return flag
+    case .string(let text):
+      return text.lowercased() == "true"
+    case .int(let number):
+      return number != 0
+    default:
+      return false
+    }
+  }
+
+  private static func rangeOptions(from props: [String: JSONValue]) -> [PluginFilterOption] {
+    func number(_ name: String) -> Double? {
+      guard let value = props.first(where: { $0.key.lowercased() == name })?.value else {
+        return nil
+      }
+      switch value {
+      case .int(let number): return Double(number)
+      case .double(let number): return number
+      case .string(let text): return Double(text)
+      default: return nil
+      }
+    }
+    guard let min = number("min"), let max = number("max"), max >= min,
+      min.isFinite, max.isFinite else { return [] }
+    let step = number("step") ?? 1
+    guard step.isFinite, step > 0 else { return [] }
+    let rawSteps = (max - min) / step
+    guard rawSteps.isFinite, rawSteps >= 0, rawSteps <= 999 else { return [] }
+    let steps = Int(rawSteps.rounded(.down)) + 1
+    var options: [PluginFilterOption] = []
+    var previous: JSONValue?
+    for index in 0..<steps {
+      let value = min + Double(index) * step
+      let isInteger = value.rounded() == value && value.magnitude < 9e15
+      let json: JSONValue = isInteger ? .int(Int(value)) : .double(value)
+      if json == previous { continue }
+      let title: String = isInteger ? String(Int(value)) : String(value)
+      options.append(PluginFilterOption(value: json, title: title))
+      previous = json
+    }
+    return options
+  }
+
+  private static func firstLabel(in node: JSONValue) -> String? {
+    guard let object = node.objectValue else { return nil }
+    if object["component"]?.stringValue?.lowercased() == "vlabel" {
+      return object["text"]?.stringValue
+    }
+    return (object["content"]?.arrayValue ?? []).lazy.compactMap { firstLabel(in: $0) }.first
+  }
+
+  /// 收集筛选项，并按 `JSONValue` first-wins 去重。
+  ///
+  /// F-135：`PluginFilterOption.id` 直接取 `value`，`ExploreView` 又用同一个 `value` 作
+  /// `Picker` 的 tag —— 一个 value 同时充当「身份」与「取值」。插件若在两个标签上声明同一个
+  /// value，就会同时产生重复 ID 和重复 tag，`ForEach` 的 diff 与焦点随之不稳定。
+  /// 这里在输入边界按「先声明者胜」消重，让 value 重新能唯一地充当身份；
+  /// 刻意**不**给 option 引入独立 ID 层 —— 那会改动 `PickerOption`/`PluginFilterOption`
+  /// 的语义面并牵动全部调用点，代价大于收益。
+  private static func collectOptions(from nodes: [JSONValue]) -> [PluginFilterOption] {
+    var seen = Set<JSONValue>()
+    return collectOptionsInDeclarationOrder(from: nodes).filter {
+      seen.insert($0.value).inserted
+    }
+  }
+
+  /// 按声明顺序展开选项，不去重 —— 去重只在 `collectOptions` 的入口做一次，
+  /// 这样层级间重复（父级与子级声明同一个 value）也能被同一遍扫描消掉。
+  private static func collectOptionsInDeclarationOrder(
+    from nodes: [JSONValue]
+  ) -> [PluginFilterOption] {
+    nodes.flatMap { node -> [PluginFilterOption] in
+      guard let object = node.objectValue else {
+        switch node {
+        case .string, .int, .double, .bool:
+          return [PluginFilterOption(value: node, title: node.queryString ?? "")]
+        case .null, .array, .object:
+          return []
+        }
+      }
+      let component = object["component"]?.stringValue?.lowercased()
+      let props = object["props"]?.objectValue ?? [:]
+      if ["vchip", "vradio"].contains(component), let value = props["value"] {
+        return [
+          PluginFilterOption(
+            value: value,
+            title: object["text"]?.queryString
+              ?? props["label"]?.queryString
+              ?? value.queryString ?? ""
+          )
+        ]
+      }
+      if let value = object["value"] ?? props["value"] {
+        let title =
+          object["title"]?.queryString
+          ?? object["text"]?.queryString
+          ?? object["label"]?.queryString
+          ?? props["title"]?.queryString
+          ?? props["label"]?.queryString
+          ?? value.queryString ?? ""
+        return [PluginFilterOption(value: value, title: title)]
+      }
+      return collectOptionsInDeclarationOrder(from: object["content"]?.arrayValue ?? [])
+    }
+  }
+}
+
+// MARK: - 动态显隐表达式
+
+nonisolated enum PluginFilterExpression {
+  static func evaluate(_ expression: String, values: [String: JSONValue]) -> Bool? {
+    var source = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+    if source.hasPrefix("{{"), source.hasSuffix("}}") {
+      source = String(source.dropFirst(2).dropLast(2))
+    }
+    guard !source.isEmpty else { return nil }
+    var lexer = Lexer(source)
+    var parser = Parser(lexer: &lexer, values: values)
+    guard let result = parser.parse() else { return nil }
+    return result.isTruthy
+  }
+
+  private struct Token: Equatable {
+    enum Kind: Equatable {
+      case identifier, string, number, boolean, null
+      case bang, andAnd, orOr, eq, neq, lparen, rparen, invalid
+    }
+
+    let kind: Kind
+    let text: String
+  }
+
+  private struct Lexer {
+    private let source: [Character]
+    private var index = 0
+
+    init(_ source: String) {
+      self.source = Array(source)
+    }
+
+    mutating func next() -> Token? {
+      while index < source.count, source[index].isWhitespace {
+        index += 1
+      }
+      guard index < source.count else { return nil }
+      let char = source[index]
+      switch char {
+      case "(":
+        index += 1
+        return Token(kind: .lparen, text: "(")
+      case ")":
+        index += 1
+        return Token(kind: .rparen, text: ")")
+      case "!":
+        if peek(offset: 1) == "=" {
+          index += 2
+          return Token(kind: .neq, text: "!=")
+        }
+        index += 1
+        return Token(kind: .bang, text: "!")
+      case "=":
+        if peek(offset: 1) == "=" {
+          index += 2
+          return Token(kind: .eq, text: "==")
+        }
+        index += 1
+        return Token(kind: .invalid, text: "=")
+      case "&":
+        guard peek(offset: 1) == "&" else {
+          index += 1
+          return Token(kind: .invalid, text: "&")
+        }
+        index += 2
+        return Token(kind: .andAnd, text: "&&")
+      case "|":
+        guard peek(offset: 1) == "|" else {
+          index += 1
+          return Token(kind: .invalid, text: "|")
+        }
+        index += 2
+        return Token(kind: .orOr, text: "||")
+      case "'", "\"":
+        return readString(quote: char)
+      default:
+        if char.isNumber || char == "-" {
+          return readNumber()
+        }
+        if char.isLetter || char == "_" {
+          return readIdentifier()
+        }
+        return Token(kind: .invalid, text: String(char))
+      }
+    }
+
+    private func peek(offset: Int) -> Character? {
+      let target = index + offset
+      guard target < source.count else { return nil }
+      return source[target]
+    }
+
+    private mutating func readString(quote: Character) -> Token? {
+      var text = ""
+      index += 1
+      while index < source.count {
+        let char = source[index]
+        if char == quote {
+          index += 1
+          return Token(kind: .string, text: text)
+        }
+        if char == "\\", index + 1 < source.count {
+          index += 1
+          text.append(source[index])
+        } else {
+          text.append(char)
+        }
+        index += 1
+      }
+      return nil
+    }
+
+    private mutating func readNumber() -> Token? {
+      let start = index
+      if source[index] == "-" {
+        index += 1
+      }
+      while index < source.count, source[index].isNumber {
+        index += 1
+      }
+      if index < source.count, source[index] == ".",
+        index + 1 < source.count, source[index + 1].isNumber {
+        index += 1
+        while index < source.count, source[index].isNumber {
+          index += 1
+        }
+      }
+      return Token(kind: .number, text: String(source[start..<index]))
+    }
+
+    private mutating func readIdentifier() -> Token? {
+      let start = index
+      while index < source.count,
+        source[index].isLetter || source[index].isNumber
+          || source[index] == "_" || source[index] == "." || source[index] == "-" {
+        index += 1
+      }
+      let text = String(source[start..<index])
+      switch text {
+      case "true", "false":
+        return Token(kind: .boolean, text: text)
+      case "null":
+        return Token(kind: .null, text: text)
+      default:
+        return Token(kind: .identifier, text: text)
+      }
+    }
+  }
+
+  private struct Parser {
+    private var lexer: Lexer
+    private let values: [String: JSONValue]
+    private var current: Token?
+
+    init(lexer: inout Lexer, values: [String: JSONValue]) {
+      self.lexer = lexer
+      self.values = values
+      advance()
+    }
+
+    mutating func parse() -> JSONValue? {
+      guard let result = parseOr() else { return nil }
+      guard current == nil else { return nil }
+      return result
+    }
+
+    private mutating func advance() {
+      current = lexer.next()
+    }
+
+    private mutating func parseOr() -> JSONValue? {
+      guard var result = parseAnd() else { return nil }
+      while current?.kind == .orOr {
+        advance()
+        guard let rhs = parseAnd() else { return nil }
+        result = .bool(result.isTruthy || rhs.isTruthy)
+      }
+      return result
+    }
+
+    private mutating func parseAnd() -> JSONValue? {
+      guard var result = parseComparison() else { return nil }
+      while current?.kind == .andAnd {
+        advance()
+        guard let rhs = parseComparison() else { return nil }
+        result = .bool(result.isTruthy && rhs.isTruthy)
+      }
+      return result
+    }
+
+    private mutating func parseComparison() -> JSONValue? {
+      guard let lhs = parseNot() else { return nil }
+      guard current?.kind == .eq || current?.kind == .neq else { return lhs }
+      let isEqualOperator = current?.kind == .eq
+      advance()
+      guard let rhs = parseNot() else { return nil }
+      return .bool(isEqualOperator ? isEqual(lhs, rhs) : !isEqual(lhs, rhs))
+    }
+
+    private mutating func parseNot() -> JSONValue? {
+      if current?.kind == .bang {
+        advance()
+        guard let operand = parseNot() else { return nil }
+        return .bool(!operand.isTruthy)
+      }
+      return parsePrimary()
+    }
+
+    private mutating func parsePrimary() -> JSONValue? {
+      guard let token = current else { return nil }
+      switch token.kind {
+      case .lparen:
+        advance()
+        guard let value = parseOr() else { return nil }
+        guard current?.kind == .rparen else { return nil }
+        advance()
+        return value
+      case .string:
+        advance()
+        return .string(token.text)
+      case .number:
+        advance()
+        if let int = Int(token.text) {
+          return .int(int)
+        }
+        if let double = Double(token.text) {
+          return .double(double)
+        }
+        return nil
+      case .boolean:
+        advance()
+        return .bool(token.text == "true")
+      case .null:
+        advance()
+        return .null
+      case .identifier:
+        advance()
+        return values[token.text] ?? .null
+      case .eq, .neq, .bang, .andAnd, .orOr, .rparen, .invalid:
+        return nil
+      }
+    }
+
+    private func isEqual(_ a: JSONValue, _ b: JSONValue) -> Bool {
+      switch (a, b) {
+      case (.int(let x), .double(let y)):
+        return Double(x) == y
+      case (.double(let x), .int(let y)):
+        return x == Double(y)
+      default:
+        return a == b
+      }
+    }
+  }
 }
 
 // MARK: - 内容包装
@@ -19,132 +508,194 @@ enum ExploreContent {
   case shares(Paginator<SubscribeShare>)
 }
 
-// MARK: - 类型枚举
-enum DiscoverMediaType: String, CaseIterable, Identifiable {
-  case movies = "电影"
-  case tvs = "剧集"
-
-  var id: String { rawValue }
-
-  var apiValue: String {
-    switch self {
-    case .movies: return "movies"
-    case .tvs: return "tvs"
-    }
-  }
-}
-
 // MARK: - ViewModel
 @MainActor
 class ExploreViewModel: ObservableObject {
-  @Published var selectedSource: DiscoverSource = .themoviedb
-  @Published var selectedType: DiscoverMediaType = .movies
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
+  @Published var configuration: ExploreConfiguration
+  private let loadsResults: Bool
+  var selectedSource: DiscoverSource {
+    get { configuration.selectedSource }
+    set { configuration.selectedSource = newValue }
+  }
+  var selectedType: DiscoverMediaType {
+    get { configuration.selectedType }
+    set { configuration.selectedType = newValue }
+  }
+  @Published private(set) var availableSources: [DiscoverSource] = []
 
   // TheMovieDb 筛选参数
-  @Published var tmdbSortBy: String = "popularity.desc"
-  @Published var tmdbGenre: String = ""
-  @Published var tmdbLanguage: String = ""
-  @Published var tmdbVoteAverage: Int = 0
+  var tmdbSortBy: String {
+    get { configuration.tmdbSortBy }
+    set { configuration.tmdbSortBy = newValue }
+  }
+  var tmdbGenre: String {
+    get { configuration.tmdbGenre }
+    set { configuration.tmdbGenre = newValue }
+  }
+  var tmdbLanguage: String {
+    get { configuration.tmdbLanguage }
+    set { configuration.tmdbLanguage = newValue }
+  }
+  var tmdbVoteAverage: Int {
+    get { configuration.tmdbVoteAverage }
+    set { configuration.tmdbVoteAverage = newValue }
+  }
+  var tmdbVoteCount: Int {
+    get { configuration.tmdbVoteCount }
+    set { configuration.tmdbVoteCount = newValue }
+  }
 
   // 豆瓣筛选参数
-  @Published var doubanSort: String = "U"
-  @Published var doubanCategory: String = ""
-  @Published var doubanZone: String = ""
-  @Published var doubanYear: String = ""
+  var doubanSort: String {
+    get { configuration.doubanSort }
+    set { configuration.doubanSort = newValue }
+  }
+  var doubanCategory: String {
+    get { configuration.doubanCategory }
+    set { configuration.doubanCategory = newValue }
+  }
+  var doubanZone: String {
+    get { configuration.doubanZone }
+    set { configuration.doubanZone = newValue }
+  }
+  var doubanYear: String {
+    get { configuration.doubanYear }
+    set { configuration.doubanYear = newValue }
+  }
 
   // Bangumi 筛选参数
-  @Published var bangumiCat: String = ""
-  @Published var bangumiSort: String = "rank"
-  @Published var bangumiYear: String = ""
+  var bangumiCat: String {
+    get { configuration.bangumiCat }
+    set { configuration.bangumiCat = newValue }
+  }
+  var bangumiSort: String {
+    get { configuration.bangumiSort }
+    set { configuration.bangumiSort = newValue }
+  }
+  var bangumiYear: String {
+    get { configuration.bangumiYear }
+    set { configuration.bangumiYear = newValue }
+  }
+
+  // AniList 筛选参数
+  var anilistSort: String {
+    get { configuration.anilistSort }
+    set { configuration.anilistSort = newValue }
+  }
+  var anilistGenre: String {
+    get { configuration.anilistGenre }
+    set { configuration.anilistGenre = newValue }
+  }
+  var anilistFormat: String {
+    get { configuration.anilistFormat }
+    set { configuration.anilistFormat = newValue }
+  }
+  var anilistSeason: String {
+    get { configuration.anilistSeason }
+    set { configuration.anilistSeason = newValue }
+  }
+  var anilistYear: Int {
+    get { configuration.anilistYear }
+    set { configuration.anilistYear = newValue }
+  }
+  var anilistStatus: String {
+    get { configuration.anilistStatus }
+    set { configuration.anilistStatus = newValue }
+  }
+  var anilistCountry: String {
+    get { configuration.anilistCountry }
+    set { configuration.anilistCountry = newValue }
+  }
+
+  // 插件筛选参数
+  var pluginFilterValues: [String: JSONValue] {
+    get { configuration.pluginFilterValues }
+    set { configuration.pluginFilterValues = newValue }
+  }
+  @Published private(set) var pluginFilterControls: [PluginFilterControl] = []
 
   // 热门订阅筛选参数
-  @Published var popularSortBy: String = "count"
-  @Published var popularGenre: String = ""
-  @Published var popularMinRating: Int = 0
+  var popularSortBy: String {
+    get { configuration.popularSortBy }
+    set { configuration.popularSortBy = newValue }
+  }
+  var popularGenre: String {
+    get { configuration.popularGenre }
+    set { configuration.popularGenre = newValue }
+  }
+  var popularMinRating: Int {
+    get { configuration.popularMinRating }
+    set { configuration.popularMinRating = newValue }
+  }
 
   // 订阅分享筛选参数
-  @Published var shareSortBy: String = "count"
-  @Published var shareGenre: String = ""
-  @Published var shareMinRating: Int = 0
+  var shareSortBy: String {
+    get { configuration.shareSortBy }
+    set { configuration.shareSortBy = newValue }
+  }
+  var shareGenre: String {
+    get { configuration.shareGenre }
+    set { configuration.shareGenre = newValue }
+  }
+  var shareMinRating: Int {
+    get { configuration.shareMinRating }
+    set { configuration.shareMinRating = newValue }
+  }
 
   // 数据状态
   @Published private(set) var paginator: Paginator<MediaInfo>?
   @Published var selectedShare: SubscribeShare?
   @Published var forkToShow: Int?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
+  private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
 
-  init() {
-    configureAutomaticLoading()
-  }
+  /// 上次触发 Paginator 重建的 "sourceID\0path" 键，用于在 sink 内代替
+  /// removeDuplicates 做去重（元组不满足 Equatable 协议，无法直接入链）。
+  private var lastPaginatorReloadKey: String?
 
-  #if DEBUG
-  init(loadsAutomatically: Bool) {
-    guard loadsAutomatically else { return }
-    configureAutomaticLoading()
-  }
-  #endif
-
-  private func configureAutomaticLoading() {
-    // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
-    let filterPublishers: [AnyPublisher<Void, Never>] = [
-      $selectedSource.map { _ in }.eraseToAnyPublisher(),
-      $selectedType.map { _ in }.eraseToAnyPublisher(),
-      $tmdbSortBy.map { _ in }.eraseToAnyPublisher(),
-      $tmdbGenre.map { _ in }.eraseToAnyPublisher(),
-      $tmdbLanguage.map { _ in }.eraseToAnyPublisher(),
-      $tmdbVoteAverage.map { _ in }.eraseToAnyPublisher(),
-      $doubanSort.map { _ in }.eraseToAnyPublisher(),
-      $doubanCategory.map { _ in }.eraseToAnyPublisher(),
-      $doubanZone.map { _ in }.eraseToAnyPublisher(),
-      $doubanYear.map { _ in }.eraseToAnyPublisher(),
-      $bangumiCat.map { _ in }.eraseToAnyPublisher(),
-      $bangumiSort.map { _ in }.eraseToAnyPublisher(),
-      $bangumiYear.map { _ in }.eraseToAnyPublisher(),
-      $popularSortBy.map { _ in }.eraseToAnyPublisher(),
-      $popularGenre.map { _ in }.eraseToAnyPublisher(),
-      $popularMinRating.map { _ in }.eraseToAnyPublisher(),
-      $shareSortBy.map { _ in }.eraseToAnyPublisher(),
-      $shareGenre.map { _ in }.eraseToAnyPublisher(),
-      $shareMinRating.map { _ in }.eraseToAnyPublisher(),
-    ]
-
-    // 合并所有筛选器 Publisher
-    Publishers.MergeMany(filterPublishers)
+  init(
+    apiService: APIService = .shared,
+    configuration: ExploreConfiguration = ExploreConfiguration(),
+    loadsResults: Bool = true
+  ) {
+    self.apiService = apiService
+    self.configuration = configuration
+    self.loadsResults = loadsResults
+    pluginFilterControls = PluginFilterControlParser.parse(configuration.selectedSource.descriptor?.filter_ui ?? [])
+    applySources()
+    guard loadsResults else { return }
+    // 独立配置草稿不订阅结果加载；普通探索继续按条件刷新分页器。
+    $configuration
       // 使用 debounce 来防止快速连续的 UI 更新导致多次加载
       // 例如，当 onSourceChanged 重置多个属性时
       .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
-      // 映射到 API 路径
-      .map { [unowned self] in self.buildApiPath() }
-      // 只有当路径变化时才继续
-      .removeDuplicates()
-      // 订阅路径变化，并创建新的 Paginator
-      .sink { [unowned self] path in
-        self.setupPaginator(for: path)
+      // 携带 source owner 一起作为去重键：仅按路径去重会吞掉
+      // "不同来源、拼出相同路径"的切换，导致旧 Paginator（捕获旧
+      // source 语义）继续服务新选中的来源。removeDuplicates 要求元素
+      // 遵循 Equatable 协议（元组不满足），故在 sink 内按上一对键手动去重。
+      .map { [unowned self] _ in (sourceID: self.selectedSource.id, path: self.buildApiPath()) }
+      .sink { [unowned self] ownerAndPath in
+        let reloadKey = "\(ownerAndPath.sourceID)\u{0}\(ownerAndPath.path)"
+        guard self.lastPaginatorReloadKey != reloadKey else { return }
+        self.lastPaginatorReloadKey = reloadKey
+        self.setupPaginator(for: ownerAndPath.path)
       }
       .store(in: &cancellables)
-  }
 
-  #if DEBUG
-  func installUIPreviewPaginator(_ previewPaginator: Paginator<MediaInfo>?) {
-    paginator?.cancel()
-    paginatorCancellable?.cancel()
-    paginator = previewPaginator
-    paginatorCancellable = previewPaginator?.objectWillChange
-      .sink { [weak self] _ in
-        self?.objectWillChange.send()
-      }
   }
-  #endif
 
   // MARK: - TheMovieDb 字典
 
   static let tmdbMovieSortDict: [(key: String, value: String)] = [
-    ("popularity.desc", "热门降序"),
-    ("popularity.asc", "热门升序"),
+    ("popularity.desc", "热度降序"),
+    ("popularity.asc", "热度升序"),
     ("release_date.desc", "上映日期降序"),
     ("release_date.asc", "上映日期升序"),
     ("vote_average.desc", "评分降序"),
@@ -152,8 +703,8 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static let tmdbTvSortDict: [(key: String, value: String)] = [
-    ("popularity.desc", "热门降序"),
-    ("popularity.asc", "热门升序"),
+    ("popularity.desc", "热度降序"),
+    ("popularity.asc", "热度升序"),
     ("first_air_date.desc", "首播日期降序"),
     ("first_air_date.asc", "首播日期升序"),
     ("vote_average.desc", "评分降序"),
@@ -220,9 +771,9 @@ class ExploreViewModel: ObservableObject {
   // MARK: - 豆瓣字典
 
   static let doubanSortDict: [(key: String, value: String)] = [
-    ("U", "综合"),
-    ("R", "上映日期"),
-    ("T", "近期热门"),
+    ("U", "综合排序"),
+    ("R", "首播时间"),
+    ("T", "近期热度"),
     ("S", "高分优先"),
   ]
 
@@ -278,7 +829,7 @@ class ExploreViewModel: ObservableObject {
 
   static var doubanYearDict: [(key: String, value: String)] {
     var years: [(key: String, value: String)] = []
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     // 近6年
     for i in 0..<6 {
       let year = String(currentYear - i)
@@ -313,12 +864,68 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static var bangumiYearDict: [(key: String, value: String)] {
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     return (0..<10).map { i in
       let year = String(currentYear - i)
       return (key: year, value: year)
     }
   }
+
+  // MARK: - AniList 字典
+
+  static let anilistSortDict: [(key: String, value: String)] = [
+    ("POPULARITY_DESC", "热门优先"),
+    ("TRENDING_DESC", "趋势优先"),
+    ("SCORE_DESC", "评分优先"),
+    ("START_DATE_DESC", "最新开播"),
+  ]
+
+  static let anilistGenreDict: [(key: String, value: String)] = [
+    ("Action", "动作"),
+    ("Adventure", "冒险"),
+    ("Comedy", "喜剧"),
+    ("Drama", "剧情"),
+    ("Fantasy", "奇幻"),
+    ("Horror", "恐怖"),
+    ("Mahou Shoujo", "魔法少女"),
+    ("Mecha", "机甲"),
+    ("Music", "音乐"),
+    ("Mystery", "悬疑"),
+    ("Psychological", "心理"),
+    ("Romance", "爱情"),
+    ("Sci-Fi", "科幻"),
+    ("Slice of Life", "日常"),
+    ("Sports", "运动"),
+    ("Supernatural", "超自然"),
+    ("Thriller", "惊悚"),
+  ]
+
+  static let anilistFormatDict: [(key: String, value: String)] = [
+    ("TV", "TV"),
+    ("TV_SHORT", "短篇 TV"),
+    ("MOVIE", "剧场版"),
+    ("OVA", "OVA"),
+    ("ONA", "ONA"),
+    ("SPECIAL", "特别篇"),
+    ("MUSIC", "音乐"),
+  ]
+
+  static let anilistSeasonDict: [(key: String, value: String)] = [
+    ("WINTER", "冬季"), ("SPRING", "春季"), ("SUMMER", "夏季"), ("FALL", "秋季"),
+  ]
+
+  static var anilistYearDict: [(key: Int, value: String)] {
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
+    return (0..<15).map { (currentYear - $0, String(currentYear - $0)) }
+  }
+
+  static let anilistStatusDict: [(key: String, value: String)] = [
+    ("RELEASING", "连载中"), ("FINISHED", "已完结"), ("NOT_YET_RELEASED", "未播出"),
+  ]
+
+  static let anilistCountryDict: [(key: String, value: String)] = [
+    ("JP", "日本"), ("CN", "中国大陆"), ("KR", "韩国"), ("TW", "中国台湾"),
+  ]
 
   // MARK: - Popular & Share 字典
   static let popularSortDict: [(key: String, value: String)] = [
@@ -335,12 +942,6 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 计算属性
 
-  var availableSources: [DiscoverSource] {
-    guard apiService.canAccess(.discovery) else { return [] }
-    if apiService.canAccess(.subscribe) { return DiscoverSource.allCases }
-    return DiscoverSource.allCases.filter { $0 != .subscriptionShare }
-  }
-
   var currentSortDict: [(key: String, value: String)] {
     switch selectedSource {
     case .themoviedb:
@@ -349,10 +950,14 @@ class ExploreViewModel: ObservableObject {
       return Self.doubanSortDict
     case .bangumi:
       return Self.bangumiSortDict
+    case .anilist:
+      return Self.anilistSortDict
     case .popular:
       return Self.popularSortDict
     case .subscriptionShare:
       return Self.shareSortDict
+    case .custom:
+      return []
     }
   }
 
@@ -361,115 +966,50 @@ class ExploreViewModel: ObservableObject {
     case .themoviedb, .popular:
       return selectedType == .movies ? Self.tmdbMovieGenreDict : Self.tmdbTvGenreDict
     case .subscriptionShare:
-      return Self.tmdbTvGenreDict
+      var seen = Set<String>()
+      return (Self.tmdbMovieGenreDict + Self.tmdbTvGenreDict).filter {
+        seen.insert($0.key).inserted
+      }
     case .douban:
       return Self.doubanCategoryDict
     case .bangumi:
       return Self.bangumiCatDict
+    case .anilist:
+      return Self.anilistGenreDict
+    case .custom:
+      return []
     }
   }
 
   // MARK: - API 路径构建
 
-  private func buildApiPath() -> String {
-    switch selectedSource {
-    case .themoviedb:
-      var path = "discover/tmdb_\(selectedType.apiValue)"
-      var params: [String] = []
+  func buildApiPath() -> String { configuration.apiPath }
 
-      if !tmdbSortBy.isEmpty {
-        params.append("sort_by=\(tmdbSortBy)")
-      }
-      if !tmdbGenre.isEmpty {
-        params.append("with_genres=\(tmdbGenre)")
-      }
-      if !tmdbLanguage.isEmpty {
-        params.append("with_original_language=\(tmdbLanguage)")
-      }
-      if tmdbVoteAverage > 0 {
-        params.append("vote_average=\(tmdbVoteAverage)")
-        params.append("vote_count=10")
-      }
+  nonisolated static func appendingQuery(to path: String, values: [String: JSONValue]) -> String {
+    ExploreConfiguration.appendingQuery(to: path, values: values)
+  }
 
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
+  nonisolated static func popularSubscriptionKey(_ item: MediaInfo) -> String {
+    let structuredPrefix =
+      item.mediaid_prefix.flatMap { $0.isEmpty ? nil : $0 }
+      ?? item.source.flatMap { $0.isEmpty ? nil : $0 }
 
-    case .douban:
-      var path = "discover/douban_\(selectedType.apiValue)"
-      var params: [String] = []
-
-      if !doubanSort.isEmpty {
-        params.append("sort=\(doubanSort)")
-      }
-      // 拼接 tags: 风格,地区,年代
-      let tags = [doubanCategory, doubanZone, doubanYear].filter { !$0.isEmpty }.joined(
-        separator: ",")
-      if !tags.isEmpty {
-        if let encoded = tags.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-          params.append("tags=\(encoded)")
-        }
-      }
-
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-
-    case .bangumi:
-      var path = "discover/bangumi"
-      var params: [String] = ["type=2"]  // 固定 type=2 表示动画
-
-      if !bangumiCat.isEmpty {
-        params.append("cat=\(bangumiCat)")
-      }
-      if !bangumiSort.isEmpty {
-        params.append("sort=\(bangumiSort)")
-      }
-      if !bangumiYear.isEmpty {
-        params.append("year=\(bangumiYear)")
-      }
-
-      path += "?" + params.joined(separator: "&")
-      return path
-
-    case .popular:
-      var path = "subscribe/popular"
-      var params: [String] = []
-      params.append("stype=\(selectedType == .movies ? "电影" : "电视剧")")
-      if !popularSortBy.isEmpty {
-        params.append("sort_type=\(popularSortBy)")
-      }
-      if !popularGenre.isEmpty {
-        params.append("genre_id=\(popularGenre)")
-      }
-      if popularMinRating > 0 {
-        params.append("min_rating=\(popularMinRating)")
-      }
-
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-    case .subscriptionShare:
-      var path = "subscribe/shares"
-      var params: [String] = []
-      params.append("stype=电视剧")
-      if !shareSortBy.isEmpty {
-        params.append("sort_type=\(shareSortBy)")
-      }
-      if !shareGenre.isEmpty {
-        params.append("genre_id=\(shareGenre)")
-      }
-      if shareMinRating > 0 {
-        params.append("min_rating=\(shareMinRating)")
-      }
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
+    let mediaID: String
+    if let id = item.media_id, !id.isEmpty, let prefix = structuredPrefix {
+      mediaID = "\(prefix == "themoviedb" ? "tmdb" : prefix):\(id)"
+    } else if let id = item.tmdb_id, id != 0 {
+      mediaID = "tmdb:\(id)"
+    } else if let id = item.douban_id, !id.isEmpty {
+      mediaID = "douban:\(id)"
+    } else if let id = item.bangumi_id, id != 0 {
+      mediaID = "bangumi:\(id)"
+    } else if let id = item.anilist_id, id != 0 {
+      mediaID = "anilist:\(id)"
+    } else {
+      mediaID = "\(item.mediaid_prefix ?? "media"):\(item.title ?? "")"
     }
+
+    return "\(item.source ?? "unknown"):\(mediaID):season:\(item.season.map(String.init) ?? "all")"
   }
 
   // MARK: - 数据加载
@@ -496,22 +1036,32 @@ class ExploreViewModel: ObservableObject {
         case .subscriptionShare:
           let shares = try await apiService.fetchSubscriptionShares(path: path, page: page)
           return shares.map { $0.toMediaInfo() }
-        default:
+        case .themoviedb, .douban, .bangumi, .anilist, .popular, .custom:
           return try await apiService.fetchRecommend(path: path, page: page)
         }
       },
       processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems =
-          source == .subscriptionShare
-          ? MediaInfo.deduplicateSubscriptionShareMedia(newItems, existingKeys: &seenKeys)
-          : MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        let uniqueNewItems: [MediaInfo]
+        if source == .popular {
+          uniqueNewItems = newItems.filter {
+            seenKeys.insert(Self.popularSubscriptionKey($0)).inserted
+          }
+        } else if source == .subscriptionShare {
+          uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+            newItems,
+            existingKeys: &seenKeys
+          )
+        } else {
+          uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        }
         if uniqueNewItems.isEmpty {
           return false
         }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in
@@ -532,32 +1082,147 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 重置筛选器
 
-  func onSourceChanged() {
-    // 重置所有筛选参数
-    selectedType = .movies
-    tmdbSortBy = "popularity.desc"
-    tmdbGenre = ""
-    tmdbLanguage = ""
-    tmdbVoteAverage = 0
-    doubanSort = "U"
-    doubanCategory = ""
-    doubanZone = ""
-    doubanYear = ""
-    bangumiCat = ""
-    bangumiSort = "rank"
-    bangumiYear = ""
-    popularSortBy = "count"
-    popularGenre = ""
-    popularMinRating = 0
-    shareSortBy = "count"
-    shareGenre = ""
-    shareMinRating = 0
+  func onSourceChanged(from previousSource: DiscoverSource? = nil) {
+    let preservesPluginValues =
+      previousSource?.id == selectedSource.id
+      && previousSource?.descriptor?.filter_params == selectedSource.descriptor?.filter_params
+
+    let previousPluginValues = pluginFilterValues
+    configuration = ExploreConfiguration(source: selectedSource)
+    if preservesPluginValues { pluginFilterValues = previousPluginValues }
+    if let descriptor = selectedSource.descriptor {
+      if !preservesPluginValues {
+        pluginFilterValues = descriptor.filter_params
+      }
+      pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+    } else {
+      pluginFilterValues = [:]
+      pluginFilterControls = []
+    }
   }
 
   func onTypeChanged() {
-    // 类型变化时重置风格（因为电影和剧集的风格不同）
-    tmdbGenre = ""
-    doubanCategory = ""
-    popularGenre = ""
+    // 与 Web 端 TheMovieDbView/DoubanView 对齐：切换后只做成员归一化，
+    // 保留新类型字典仍接受的共有值，只清掉/回落新类型不接受的独占值。
+    switch selectedSource {
+    case .themoviedb:
+      if !currentSortDict.contains(where: { $0.key == tmdbSortBy }) {
+        tmdbSortBy = "popularity.desc"
+      }
+      if !currentGenreDict.contains(where: { $0.key == tmdbGenre }) {
+        tmdbGenre = ""
+      }
+    case .popular:
+      if !currentGenreDict.contains(where: { $0.key == popularGenre }) {
+        popularGenre = ""
+      }
+    default:
+      // Douban category/Bangumi cat/AniList genre 等字典不随类型变化，无需清理
+      break
+    }
+  }
+
+  func restoreConfiguration(_ saved: ExploreConfiguration) {
+    configuration = saved
+    pluginFilterControls = PluginFilterControlParser.parse(saved.selectedSource.descriptor?.filter_ui ?? [])
+    applySources()
+  }
+
+  func setPluginFilter(_ field: String, value: JSONValue) {
+    guard let source = selectedSource.descriptor else { return }
+    pluginFilterValues = Self.applyingPluginFilter(
+      field: field,
+      value: value,
+      to: pluginFilterValues,
+      defaults: source.filter_params,
+      depends: source.depends
+    )
+  }
+
+  nonisolated static func applyingPluginFilter(
+    field: String,
+    value: JSONValue,
+    to values: [String: JSONValue],
+    defaults: [String: JSONValue] = [:],
+    depends: [String: [String]]?
+  ) -> [String: JSONValue] {
+    var result = values
+    let oldValue = result[field]
+    let defaultValue = defaults[field]
+    let normalizedValue =
+      !value.isTruthy && defaultValue?.isTruthy == true
+      ? defaultValue ?? value
+      : value
+    result[field] = normalizedValue
+    guard oldValue != normalizedValue, let depends else { return result }
+    for (dependentField, prerequisites) in depends
+    where dependentField != field && prerequisites.contains(field) {
+      result[dependentField] = .null
+    }
+    return result
+  }
+
+  func refreshSources() async {
+    guard apiService.canAccess(.discovery) else {
+      applySources()
+      return
+    }
+    do {
+      let sources = try await apiService.fetchDiscoverSources()
+      extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
+        previous: extraSourceSnapshot,
+        response: sources
+      )
+    } catch {
+      Logger.error("动态发现来源加载失败: \(error)")
+      extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
+        previous: extraSourceSnapshot,
+        response: nil
+      )
+    }
+    applySources()
+  }
+
+  nonisolated static func updatedExtraSourceSnapshot(
+    previous: [DiscoverSourceDescriptor],
+    response sources: [DiscoverSourceDescriptor]?
+  ) -> [DiscoverSourceDescriptor] {
+    guard let sources else { return previous }
+    var prefixes = Set(["themoviedb", "douban", "bangumi", "anilist"])
+    return sources.filter {
+      !$0.mediaid_prefix.isEmpty && prefixes.insert($0.mediaid_prefix).inserted
+    }
+  }
+
+  private func applySources() {
+    guard apiService.canAccess(.discovery) else {
+      availableSources = []
+      return
+    }
+    var sources = DiscoverSource.allCases.filter {
+      $0 != .subscriptionShare || apiService.canAccess(.subscribe)
+    }
+    sources.append(contentsOf: extraSourceSnapshot.map(DiscoverSource.custom))
+    if !loadsResults {
+      if let latest = sources.first(where: { $0.id == selectedSource.id }) {
+        selectedSource = latest
+        if let descriptor = latest.descriptor {
+          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+        }
+      } else {
+        sources.insert(selectedSource, at: 0)
+      }
+      availableSources = sources
+      return
+    }
+    availableSources = sources
+    let previousSource = selectedSource
+    if let source = sources.first(where: { $0.id == previousSource.id }) ?? sources.first,
+      source != previousSource
+    {
+      selectedSource = source
+      onSourceChanged(from: previousSource)
+    }
   }
 }

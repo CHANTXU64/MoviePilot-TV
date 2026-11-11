@@ -1,6 +1,36 @@
+import UIKit
 import XCTest
 
+@testable import MoviePilot_TV
+
 final class SystemViewDefaultStyleTests: XCTestCase {
+  func testTopShelfSelectionHasIndependentRootSectionInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let start = try XCTUnwrap(source.range(of: "private var recommendationPage:"))
+    let end = try XCTUnwrap(source.range(of: "private var topShelfSelectionOptions:"))
+    let recommendationPage = source[start.lowerBound..<end.lowerBound]
+    XCTAssertFalse(recommendationPage.contains("topShelfManager"))
+    XCTAssertFalse(recommendationPage.contains("Picker("))
+    XCTAssertTrue(source.contains("section(\"Apple TV 主屏\")"))
+    XCTAssertTrue(source.contains("\"主屏显示内容\""))
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    XCTAssertTrue(source[rootStart.lowerBound..<rootEnd.lowerBound].contains("topShelfSettings"))
+  }
+
+  func testTopShelfSettingsLeadsRootSettingsSectionsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    let rootPage = source[rootStart.lowerBound..<rootEnd.lowerBound]
+    let topShelf = try XCTUnwrap(rootPage.range(of: "topShelfSettings"))
+    let subscriptions = try XCTUnwrap(rootPage.range(of: "if canConfigureSubscriptions"))
+    let recommendation = try XCTUnwrap(rootPage.range(of: "section(\"推荐页\")"))
+
+    XCTAssertLessThan(topShelf.lowerBound, subscriptions.lowerBound)
+    XCTAssertLessThan(topShelf.lowerBound, recommendation.lowerBound)
+  }
+
   func testSystemViewDoesNotUsePrivateSettingsImplementation() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
@@ -11,52 +41,182 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("_TSK"))
   }
 
-  func testContentViewLabelsSystemTabAsSettings() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
-
-    XCTAssertTrue(
-      source.contains(
-        "SystemView(isSelected: selectedTab == .system)"
+  func testBackendVersionObserverDefersInitialSessionReplayUntilStartup() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
+    let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
+    let store = try XCTUnwrap(
+      source.range(
+        of: ".store(in: &cancellables)",
+        range: sessionPublisher.upperBound..<source.endIndex
       )
     )
-    XCTAssertTrue(source.contains("Label(\"设置\", systemImage: \"gear\")"))
-    XCTAssertFalse(source.contains("Label(\"系统\", systemImage: \"gear\")"))
+    let subscription = source[sessionPublisher.lowerBound..<store.upperBound]
+
+    XCTAssertTrue(
+      subscription.contains(
+        "session.token != nil, self.didPrepareStartup, !self.isRefreshingStartupSession"
+      )
+    )
   }
 
-  func testSystemViewKeepsConnectionAndAppInfoEntryPoints() throws {
+  func testStatusTabSelectionDrivesAuthoritativeTransferHistoryRefresh() throws {
+    let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+    let statusSource = try Self.source(at: "MoviePilot-TV/Views/Pages/StatusView.swift")
+    let historySource = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"
+    )
+
+    XCTAssertTrue(contentSource.contains("StatusView(isSelected: selectedTab == .status)"))
+    XCTAssertTrue(statusSource.contains("TransferHistoryView("))
+    XCTAssertTrue(statusSource.contains("viewModel: transferHistoryViewModel"))
+    XCTAssertTrue(statusSource.contains("keepsRowsMounted: TransferHistoryView.shouldMountRows("))
+    XCTAssertTrue(historySource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
+  }
+
+  func testRecommendTabSelectionDrivesSuccessEmptyReactivation() throws {
+    let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+    let recommendSource = try Self.source(at: "MoviePilot-TV/Views/Pages/RecommendView.swift")
+
+    XCTAssertNotNil(contentSource.range(
+      of: #"RecommendView\(\s*isSelected: selectedTab == \.recommend[,)]"#,
+      options: .regularExpression
+    ))
+    XCTAssertTrue(recommendSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(recommendSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(recommendSource.contains("await viewModel.refreshSources()"))
+  }
+
+  func testTransferHistoryMutationIntentsCarryTheirSourceSession() throws {
+    let source = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"
+    )
+
+    XCTAssertTrue(source.contains("let sourceSession = viewModel.captureMutationSession()"))
+    XCTAssertTrue(source.contains("TransferHistoryItemMutationIntent("))
+    XCTAssertTrue(source.contains("TransferHistoryBatchMutationIntent("))
+    XCTAssertTrue(source.contains("sourceSession: intent.sourceSession"))
+    XCTAssertTrue(source.contains("sourceSession: sourceSession"))
+  }
+
+  func testSystemViewKeepsConnectionAppInfoAndChangelogEntryPoints() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
     XCTAssertTrue(source.contains("\"连接与APP信息\""))
     XCTAssertTrue(source.contains("\"连接\""))
     XCTAssertTrue(source.contains("\"APP 信息\""))
+    XCTAssertTrue(source.contains("\"版本更新历史\""))
+    XCTAssertTrue(source.contains("row(\"版本更新历史\", showsDisclosure: true)"))
+    XCTAssertTrue(source.contains("push(.changelog)"))
     XCTAssertTrue(source.contains("\"MoviePilot TV APP\""))
+    XCTAssertTrue(source.contains("密码安全提示：请勿将 MoviePilot 密码与其他服务共用"))
+    XCTAssertTrue(source.contains("Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码"))
+    XCTAssertTrue(viewModelSource.contains("已登录（Apple 钥匙串安全存储）"))
+    XCTAssertTrue(viewModelSource.contains("已登录（密码明文非安全存储）"))
     XCTAssertFalse(source.contains("\"连接与版本\""))
+  }
+
+  func testUpdateNoticeOnlyChecksWhenSettingsTabIsSelectedInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains(".onChange(of: isSelected)"))
+    XCTAssertTrue(source.contains("guard isSelected, updateNotice == nil else { return }"))
+    XCTAssertTrue(source.contains("AppChangelog.markPresented(entry)"))
+    XCTAssertTrue(source.contains("presenting: updateNotice"))
+  }
+
+  func testChangelogSheetUsesSharedReadingSheetInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains("ReadingSheet(title: entry.version, blocks: Self.changelogBlocks(entry))"))
+    XCTAssertTrue(source.contains("value: \"\\(entry.releaseDate) · MoviePilot \\(entry.compatibleMoviePilotVersion)\""))
+  }
+
+  /// 更新历史详情：发布日期在最前，空小节不出现，条目带「•」前缀。
+  func testChangelogBlocksListDateThenNonEmptySections() {
+    let entry = AppChangelogEntry(
+      version: "v9.9.9",
+      releaseDate: "2026-11-03",
+      compatibleMoviePilotVersion: "v3.2.3",
+      highlights: ["亮点"],
+      updates: [],
+      fixes: ["修复一", "修复二"],
+      optimizations: []
+    )
+    let blocks = SystemView.changelogBlocks(entry)
+    XCTAssertEqual(blocks.map { String($0.text.characters) }, ["2026-11-03", "更新内容", "• 亮点", "修复", "• 修复一", "• 修复二"])
+    XCTAssertEqual(blocks.map(\.style), [.secondary, .heading, .secondary, .heading, .secondary, .secondary])
+  }
+
+  func testReleaseWorkflowUsesMainChangelogAsReleaseNotesSource() throws {
+    let source = try Self.source(at: ".agents/prompts/release.md")
+
+    XCTAssertTrue(source.contains("## 更新内容"))
+    XCTAssertTrue(source.contains("### 新增功能"))
+    XCTAssertFalse(source.contains("## 主要更新"))
+    XCTAssertTrue(
+      source.contains(
+        "兼容摘要按下一节「兼容范围」写。最高版本相对上一发布版没有变化时，省略兼容摘要。"
+      )
+    )
+    XCTAssertTrue(source.contains("写成：`兼容 MoviePilot 后端 v最低 至 v最高。`"))
+    XCTAssertTrue(
+      source.contains("`compatibleMoviePilotVersion` 仍然只保存最高版本这一个版本号。")
+    )
+    XCTAssertTrue(source.contains("`highlights` → `更新内容` 标题下最前面的摘要条目"))
+    XCTAssertTrue(source.contains("新版本信息未提交并推送到 `main` 前，不得创建 GitHub Release"))
+    XCTAssertTrue(source.contains("保持文字和顺序一致"))
+  }
+
+  func testSearchSettingsAndHeaderKeepPermissionAndLayoutContract() throws {
+    let systemSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
+
+    XCTAssertTrue(
+      containsTokensInOrder(
+        systemSource,
+        ["case .mediaSourceSelection:", "if canConfigureRecommendations {"]
+      )
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        systemSource,
+        ["case .siteSelection:", "if canConfigureSearch {"]
+      )
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        systemSource,
+        ["if canConfigureRecommendations {", "section(\"聚合搜索\")"]
+      )
+    )
+    XCTAssertTrue(searchSource.contains("ZStack(alignment: .trailing)"))
+    XCTAssertTrue(searchSource.contains("ZStack(alignment: .leading)"))
+    XCTAssertTrue(searchSource.contains(".frame(width: 300, alignment: .trailing)"))
+    XCTAssertTrue(searchSource.contains(".frame(width: 300, alignment: .leading)"))
+    XCTAssertTrue(searchSource.contains("private var visibleFilterSearchType: SearchType"))
+    XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .resource"))
+    XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .unified"))
+    XCTAssertTrue(
+      searchSource.contains("Text(\"搜索来源：\\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? \"默认\")\")")
+    )
   }
 
   func testSubscriptionCompatibilityChecklistTracksPermissionContractRisk() throws {
     let source = try Self.source(at: "docs/subscription-compatibility-checklist.md")
 
-    XCTAssertTrue(source.contains("用户权限契约风险"))
-    XCTAssertTrue(source.contains("权限契约仍不稳定"))
-    XCTAssertTrue(source.contains("Token.super_user"))
+    XCTAssertTrue(source.contains("## 订阅权限与快照"))
     XCTAssertTrue(source.contains("permissions.subscribe"))
-    XCTAssertTrue(source.contains("/mediaserver/notexists"))
-    XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
-    XCTAssertTrue(source.contains("/dashboard/*"))
-    XCTAssertTrue(source.contains("ViewModel 入口跳过"))
-    XCTAssertTrue(source.contains("下载与整理等 manage 功能请求继续交给后端鉴权"))
-    XCTAssertTrue(source.contains("CustomFilterRules"))
-    XCTAssertTrue(source.contains("UserFilterRuleGroups"))
-    XCTAssertTrue(source.contains("/system/setting/public/{key}"))
-    XCTAssertTrue(source.contains("canAccess(.subscribe)"))
-    XCTAssertTrue(source.contains("不显示入库状态徽章"))
+    XCTAssertTrue(source.contains("GET /subscribe/"))
+    XCTAssertTrue(source.contains("普通用户与超级用户"))
+    XCTAssertTrue(source.contains("不要把“过滤异常记录”当成长期契约"))
     XCTAssertTrue(source.contains("best_version"))
-    XCTAssertTrue(source.contains("不要只按 HTTP 状态码"))
-    XCTAssertTrue(source.contains("app/core/security.py"))
-    XCTAssertTrue(source.contains("app/db/user_oper.py"))
-    XCTAssertTrue(source.contains("app/api/endpoints/login.py"))
-    XCTAssertTrue(source.contains("token校验不通过"))
-    XCTAssertTrue(source.contains("400 用户权限不足"))
+    XCTAssertTrue(source.contains("完整 PUT"))
+    XCTAssertTrue(source.contains("订阅写入、状态修改、搜索、重置、删除和 Fork"))
+    XCTAssertTrue(source.contains("MoviePilot v2.15.3 起"))
+    XCTAssertTrue(source.contains("同一媒体同一季可以存在不同剧集组的订阅"))
+    XCTAssertTrue(source.contains("这与后端已按剧集组区分查重/存在性的行为并不对称"))
   }
 
   func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
@@ -66,15 +226,118 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("bottomLeftText: bottomLeft"))
   }
 
-  func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {
+  func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActiveInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
     XCTAssertTrue(
-      source.contains("SystemSettingsRootBackObserver(isEnabled: isSelected && isActive && page == .root)")
+      source.contains("isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root")
     )
     XCTAssertTrue(
-      source.contains(".systemSettingsExitCommand(isEnabled: isSelected && isActive && page != .root")
+      source.contains(
+        "&& !showAppInfo && updateNotice == nil && selectedDetail == nil"
+      )
     )
+    XCTAssertTrue(source.contains("&& !showLogoutConfirmation"))
+    XCTAssertTrue(source.contains("guard windowHasNoPresentedContent() else { return }"))
+    XCTAssertTrue(source.contains(".systemSettingsExitCommand("))
+    XCTAssertTrue(source.contains("page != .root"))
+  }
+
+  func testLogViewerPageFiltersLevelAndTimeThenShowsLogCardsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/LogViewerView.swift")
+
+    XCTAssertTrue(source.contains("Toggle(\"记录日志\", isOn: $viewModel.isRecordingEnabled)"))
+    XCTAssertTrue(source.contains("Picker(\"级别\", selection: $viewModel.levelFilter)"))
+    XCTAssertTrue(source.contains("Picker(\"时间\", selection: $viewModel.timeFilter)"))
+    XCTAssertTrue(source.contains(".pickerStyle(.menu)"))
+    XCTAssertTrue(source.contains("HStack(spacing: 24)"))
+    XCTAssertTrue(source.contains(".focusSection()"))
+    XCTAssertNotNil(source.range(of: "equals: .logDownRedirector"))
+    XCTAssertNotNil(
+      source.range(
+        of: "focusedItem.wrappedValue == .logRecording\n                || focusedItem.wrappedValue == .logDownRedirector"
+      )
+    )
+    XCTAssertNotNil(source.range(of: ".focusEffectDisabled()"))
+    XCTAssertNotNil(source.range(of: "focusedItem.wrappedValue = .logLevelFilter"))
+    XCTAssertNil(source.range(of: "UIFocusGuide"))
+    XCTAssertNil(source.range(of: "onMoveCommand"))
+    XCTAssertNil(source.range(of: "prefersDefaultFocus"))
+    XCTAssertNil(source.range(of: "@Namespace"))
+    let levelPicker = try XCTUnwrap(source.range(of: "Picker(\"级别\", selection: $viewModel.levelFilter)"))
+    let timePicker = try XCTUnwrap(source.range(of: "Picker(\"时间\", selection: $viewModel.timeFilter)"))
+    XCTAssertLessThan(levelPicker.lowerBound, timePicker.lowerBound)
+    XCTAssertTrue(source.contains("ScrollView(.vertical)"))
+    XCTAssertTrue(source.contains("LazyVStack(alignment: .leading, spacing: 28)"))
+    XCTAssertTrue(source.contains("var body: some View {\n    ScrollView(.vertical)"))
+    XCTAssertTrue(source.contains(".lineLimit(6)"))
+    XCTAssertTrue(source.contains("@ObservedObject var viewModel: LogViewerViewModel"))
+    XCTAssertTrue(source.contains("struct LogRecordDetailSheet: View"))
+    XCTAssertTrue(source.contains("ReadingSheet("))
+    XCTAssertFalse(source.contains("@StateObject"))
+    XCTAssertFalse(source.contains(".sheet("))
+    XCTAssertTrue(source.contains("Text(record.message)"))
+    XCTAssertTrue(source.contains(".font(.caption.bold())"))
+    XCTAssertFalse(source.contains("record.fileName"))
+    XCTAssertFalse(source.contains("record.function"))
+    XCTAssertFalse(source.contains("record.line"))
+    XCTAssertFalse(source.contains("全部"))
+
+    let emptyStateMatches = source.components(separatedBy: "没有符合条件的日志")
+    XCTAssertEqual(emptyStateMatches.count - 1, 1)
+  }
+
+  func testSystemViewExposesLogViewerAtBottomOfRootPageInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    let rootPage = source[rootStart.lowerBound..<rootEnd.lowerBound]
+
+    XCTAssertFalse(rootPage.contains("section(\"诊断\")"))
+    XCTAssertTrue(rootPage.contains("section(\"连接与APP信息\")"))
+    XCTAssertTrue(rootPage.contains("\"查看日志\""))
+    XCTAssertTrue(rootPage.contains("push(.logs)"))
+    XCTAssertTrue(source.contains("if page == .logs"))
+    XCTAssertNotNil(source.range(of: "LogViewerView("))
+    XCTAssertTrue(source.contains("viewModel: logViewerViewModel"))
+    XCTAssertNotNil(source.range(of: "focusedItem: $focusedItem"))
+    XCTAssertTrue(source.contains("selectedRecord: selectedLogRecordBinding"))
+    XCTAssertTrue(source.contains("@StateObject private var logViewerViewModel"))
+    XCTAssertNotNil(source.range(of: ".sheet(item: $selectedDetail)"))
+    XCTAssertNotNil(source.range(of: "selectedDetail = .changelog(entry)"))
+    XCTAssertNotNil(source.range(of: "case .log(let record):"))
+    XCTAssertNotNil(source.range(of: "LogRecordDetailSheet(record: record)"))
+    XCTAssertNil(source.range(of: ".sheet(item: $selectedLogRecord)"))
+    XCTAssertNil(source.range(of: ".sheet(item: $selectedChangelogEntry)"))
+    XCTAssertFalse(source.contains("isPresentingLogDetail"))
+    XCTAssertFalse(source.contains("case logEntry"))
+    XCTAssertNil(source.range(of: "equals: .logEntry"))
+    XCTAssertNotNil(source.range(of: "target = .logRecording"))
+    XCTAssertTrue(source.contains("case logRecording"))
+
+    let section = try XCTUnwrap(rootPage.range(of: "section(\"连接与APP信息\")"))
+    let changelog = try XCTUnwrap(rootPage.range(of: "push(.changelog)"))
+    let logs = try XCTUnwrap(rootPage.range(of: "push(.logs)"))
+    XCTAssertLessThan(section.lowerBound, changelog.lowerBound)
+    XCTAssertLessThan(changelog.lowerBound, logs.lowerBound)
+  }
+
+  func testAppBootstrapsPersistentLoggingOutsideTestsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/App/MoviePilot-TVApp.swift")
+
+    XCTAssertTrue(source.contains("Self.bootstrapLogging()"))
+    XCTAssertTrue(source.contains("NSClassFromString(\"XCTestCase\") == nil"))
+    XCTAssertTrue(source.contains("PersistentLogHandler(store: .shared)"))
+    XCTAssertTrue(source.contains("MultiplexLogHandler"))
+    XCTAssertTrue(source.contains("PersistentLogStore.shared.pruneExpired()"))
+  }
+
+  func testSystemViewRefreshButtonStaysFocusableWhileRefreshing() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertFalse(source.contains(".disabled(viewModel.isRefreshing)"))
+    XCTAssertTrue(viewModelSource.contains("guard !isRefreshing else { return }"))
   }
 
   func testMissingPersistedFilterRuleDoesNotDisplayAsNoFilter() throws {
@@ -114,42 +377,52 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("private static let columnSpacing: CGFloat = 270"))
   }
 
-  func testSessionLogoutPreloaderCleanupUsesMainActorBridge() throws {
+  /// 会话切换时的清理已由 `SessionScope` 生命周期保证，行为回归见
+  /// `SessionResourceIsolationTests.testMediaPreloaderPreservesSameAccountRefreshAndClearsAccountSwitchSynchronously`；
+  /// 这里只保留“预载缓存不得自建并行淘汰机制”的接线守卫。
+  func testMediaPreloaderKeepsNoParallelCacheEvictionInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/MediaPreloader.swift")
 
-    XCTAssertTrue(source.contains("Task { @MainActor [weak self] in"))
-    XCTAssertTrue(source.contains("self?.clearAll()"))
+    XCTAssertFalse(source.contains("maxCacheSize"))
+    XCTAssertFalse(source.contains("accessOrder"))
+    XCTAssertFalse(source.contains("evictIfNeeded"))
   }
 
-  func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
-
-    XCTAssertTrue(source.contains(".onAppear {"))
-    XCTAssertTrue(
-      source.contains(
-        "selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)"
-      )
-    )
-  }
-
-  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {
+  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActionsInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let containerSource = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+    )
 
     XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
-    XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertFalse(source.contains("isFocusEnabled"))
+    XCTAssertFalse(source.contains("requestPreferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
     XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
-    XCTAssertTrue(source.contains("case subscribe, search, sites, otherInfo"))
+    XCTAssertTrue(source.contains("case play, subscribe, search, subtitleSearch, sites, otherInfo"))
+    // 播放按钮只在可应用内播放时出现，焦点目标随之存在。
+    XCTAssertTrue(source.contains("if let playbackTarget = viewModel.inAppPlaybackTarget"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
+    XCTAssertTrue(containerSource.contains(".allowsHitTesting(!isReady)"))
+    XCTAssertFalse(containerSource.contains(".allowsHitTesting(isReady)"))
+    XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
+    XCTAssertFalse(containerSource.contains(".focusable(!isReady)"))
+    XCTAssertFalse(containerSource.contains(".disabled(!isReady)"))
   }
 
   func testMediaDetailSeasonInformationButtonStaysEnabled() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(
+      source.contains(
+        "guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }"
+      )
+    )
+    XCTAssertFalse(
       source.contains(".disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)")
     )
     XCTAssertTrue(
@@ -168,6 +441,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
     XCTAssertTrue(source.contains("ProgressView()"))
     XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
+    XCTAssertTrue(source.contains("guard !viewModel.isLoading else { return }"))
+    XCTAssertFalse(
+      source.contains(
+        ".disabled(viewModel.isLoading || viewModel.serverURL.isEmpty"
+      )
+    )
     XCTAssertTrue(source.contains("notificationManager.show(message: message, type: .error)"))
     XCTAssertFalse(source.contains("Image(systemName: \"film.stack.fill\")"))
     XCTAssertFalse(source.contains("Text(errorMessage)"))
@@ -181,35 +460,121 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let mediaSection = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
-    XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        mediaSection,
+        [".padding(.horizontal, 8)", ".focusSection()"]
+      )
+    )
+  }
+
+  @MainActor
+  func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
+    let homeSource = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let failureMessage = SubscriptionCancelConfirmation.failureMessage
+
+    XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
+    XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
+    XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+    XCTAssertTrue(detailSource.contains("guard await viewModel.cancelSubscription() else"))
+    XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+  }
+
+  /// 除了 AppSymbol.swift，源码里不直接写 SF Symbols 图标名。只检查源码写法，不代表图标的实际显示。
+  /// 两种写法都查：传给 `systemName:` / `systemImage:` / `icon:` 的字面量（含单个单词的图标名），
+  /// 以及任何位置出现、在当前系统确实是图标的带点名字（如三元表达式里的 `"plus.circle"`）。
+  func testAllSymbolsComeFromAppSymbolInSource() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let appRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("MoviePilot-TV")
+    let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
+    var checked = 0
+    for case let url as URL in enumerator where url.pathExtension == "swift" {
+      guard url.lastPathComponent != "AppSymbol.swift" else { continue }
+      let source = try String(contentsOf: url, encoding: .utf8)
+      let message = "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。"
+      XCTAssertFalse(source.contains(#/(systemName|systemImage|icon)\s*:\s*"[a-z0-9]/#), message)
+      let bareSymbols = source.matches(of: #/"([a-z0-9]+(?:\.[a-z0-9]+)+)"/#)
+        .map { String($0.1) }
+        .filter { UIImage(systemName: $0) != nil }
+      XCTAssertEqual(bareSymbols, [], message)
+      checked += 1
+    }
+    XCTAssertGreaterThan(checked, 50)
+  }
+
+  /// AppSymbol 里每个图标名只出现一次，并且在当前系统能取到图标。
+  /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
+  func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
+    let names = source.matches(of: #/static let (\w+) = "([^"]+)"/#)
+      .map { (constant: String($0.1), symbol: String($0.2)) }
+    XCTAssertGreaterThan(names.count, 50)
+
+    let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
+      .mapValues { $0.map(\.constant) }
+    XCTAssertEqual(duplicates, [:], "同一个图标名写了多次，同义请写成别名，不同意思请换图标。")
+
+    for name in names {
+      XCTAssertNotNil(UIImage(systemName: name.symbol), "AppSymbol.\(name.constant)（\(name.symbol)）取不到图标。")
+    }
   }
 
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
     let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
+    let subscribePanelSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribePanel.swift")
+    let subscribeViewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SubscribeSheetViewModel.swift")
     let reorganizeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
+    let reorganizeViewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/ReorganizeViewModel.swift")
     let addDownloadSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/AddDownloadSheet.swift")
     let addDownloadViewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/AddDownloadViewModel.swift")
     let transferSource = try Self.source(at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
     let subscriptionModifierSource = try Self.source(at: "MoviePilot-TV/Views/Components/SubscriptionModifier.swift")
     let forkSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift")
 
-    XCTAssertTrue(sheetStyleSource.contains("struct SheetFeedbackView: View"))
+    XCTAssertFalse(sheetStyleSource.contains("struct SheetFeedbackView: View"))
     XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
-    XCTAssertTrue(subscribeSheetSource.contains("SheetActionButton("))
+    XCTAssertTrue(sheetStyleSource.contains("guard !isLoading else { return }"))
+    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled && !closesSheet)"))
+    XCTAssertFalse(sheetStyleSource.contains(".disabled(isLoading || isDisabled)"))
+    XCTAssertTrue(subscribePanelSource.contains("SheetActionButton("))
     XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(addDownloadSheetSource.contains("SheetActionButton("))
-    XCTAssertTrue(addDownloadSheetSource.contains("SheetFeedbackView(message: message, actionTitle: \"重新加载\")"))
+    // 出错提示统一用同一个组件，放在主按钮上方。
+    let subtitleSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubtitleDownloadSheet.swift")
+    for source in [
+      addDownloadSheetSource, reorganizeSheetSource, subscribePanelSource, forkSource, subtitleSheetSource,
+    ] {
+      XCTAssertTrue(source.contains("SheetRetryingMessage("))
+      XCTAssertFalse(source.contains("feedbackMessage:"))
+    }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
-    XCTAssertTrue(subscribeSheetSource.contains("title: viewModel.isNewSubscription ? \"确定\" : \"保存\""))
+    XCTAssertTrue(forkSource.contains("SheetCompactPanel {"))
+    XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))
+    XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
+    XCTAssertTrue(subscribeSheetSource.contains("isSaving: isSaveAttemptInFlight"))
+    XCTAssertTrue(subscribeSheetSource.contains("guard !isSaveAttemptInFlight else { return }"))
+    // 出错时按钮不换不藏：保存后失败不再把主按钮换成「关闭」。
+    XCTAssertFalse(subscribePanelSource.contains("title: \"关闭\""))
     XCTAssertTrue(reorganizeSheetSource.contains("title: \"开始整理\""))
-    XCTAssertTrue(addDownloadSheetSource.contains("title: \"确定\""))
+    XCTAssertTrue(addDownloadSheetSource.contains("title: \"下载\""))
     XCTAssertTrue(forkSource.contains("title: \"复用订阅\""))
-    XCTAssertFalse([subscribeSheetSource, reorganizeSheetSource, addDownloadSheetSource, forkSource].contains { $0.contains("失败，重试") })
+    XCTAssertFalse([subscribeSheetSource, subscribePanelSource, reorganizeSheetSource, addDownloadSheetSource, forkSource].contains { $0.contains("失败，重试") })
     XCTAssertFalse(subscribeSheetSource.contains("NotificationManager"))
+    XCTAssertFalse(subscribePanelSource.contains("NotificationManager"))
     XCTAssertFalse(reorganizeSheetSource.contains("NotificationManager"))
     XCTAssertFalse(addDownloadSheetSource.contains("NotificationManager"))
     XCTAssertFalse(addDownloadSheetSource.contains(".onChange(of: viewModel.errorMessage"))
+    XCTAssertTrue(subscribeViewModelSource.contains("guard !isSaving else { return false }"))
+    XCTAssertTrue(reorganizeViewModelSource.contains("guard !isSubmitting else { return false }"))
+    XCTAssertTrue(
+      reorganizeViewModelSource.contains("guard !isPreviewing, !isSubmitting else { return .notGenerated }")
+    )
+    XCTAssertTrue(reorganizeSheetSource.contains("(await viewModel.preview()).shouldPresent"))
+    XCTAssertTrue(addDownloadViewModelSource.contains("guard !isSubmitting else { return }"))
+    XCTAssertTrue(forkSource.contains("guard !isForking else { return }"))
     XCTAssertTrue(addDownloadViewModelSource.contains("下载设置没有加载完成，请重试。"))
     XCTAssertTrue(addDownloadViewModelSource.contains("暂时无法添加下载，请稍后重试。"))
     XCTAssertFalse(addDownloadViewModelSource.contains("error.localizedDescription"))
@@ -217,6 +582,199 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(subscriptionModifierSource.contains("notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)"))
     XCTAssertFalse(subscriptionModifierSource.contains(".alert(alertTitle, isPresented: $showAlert)"))
     XCTAssertTrue(forkSource.contains("subscriptionHandler.forkErrorMessage"))
+  }
+
+  func testReorganizeSheetUsesSheetRowSourceButtonPreviewSheetAndBackgroundSubmit() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
+
+    XCTAssertTrue(
+      containsTokensInOrder(source, ["case .mediaSource:", "SheetPicker(", "case .mediaId:"])
+    )
+    XCTAssertTrue(source.contains("sources.options(including: viewModel.mediaSource).map"))
+    XCTAssertTrue(
+      source.contains(
+        "viewModel.isEpisodeGroupsLoading ? \"正在加载…\" : nil"
+      )
+    )
+    XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
+    XCTAssertFalse(source.contains("private var sourceButtons: some View"))
+    XCTAssertFalse(source.contains(".disabled((viewModel.form.type_name ?? \"\").isEmpty)"))
+    let idFieldSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
+    XCTAssertTrue(source.contains("ManualMediaIdField("))
+    XCTAssertTrue(idFieldSource.contains("var placeholder = \"自动判断\""))
+    XCTAssertFalse(idFieldSource.contains("留空自动识别"))
+    XCTAssertTrue(idFieldSource.contains("Image(systemName: AppSymbol.search)"))
+    XCTAssertTrue(idFieldSource.contains(".accessibilityLabel(\"搜索媒体\")"))
+    XCTAssertFalse(idFieldSource.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
+    XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        ["viewModel.mutationRetryMessage = nil", "dismiss()"]
+      )
+    )
+    XCTAssertTrue(source.contains("private struct ReorganizePreviewSheet: View"))
+    XCTAssertFalse(source.contains("@FocusState private var focusedPreviewIndex: Int?"))
+    XCTAssertFalse(source.contains(".focusable()"))
+    XCTAssertFalse(source.contains(".focused($focusedPreviewIndex, equals: index)"))
+    XCTAssertTrue(source.contains("Button(action: {})"))
+    XCTAssertTrue(source.contains(".buttonStyle(TextCardButtonStyle())"))
+    XCTAssertFalse(source.contains(".scaleEffect(isFocused"))
+    XCTAssertTrue(source.contains("color: item.success == false ? .red : .primary"))
+    XCTAssertFalse(source.contains("color: item.success == false ? .red : .green"))
+    XCTAssertTrue(
+      source.contains(".contentMargins(.horizontal, Self.horizontalPadding, for: .scrollContent)"))
+    XCTAssertFalse(source.contains(".scrollClipDisabled()"))
+    XCTAssertFalse(source.contains(".padding(20)"))
+    XCTAssertTrue(source.contains("Text(\"整理预览\")"))
+    XCTAssertFalse(source.contains("Label(\"整理预览\""))
+    XCTAssertFalse(source.contains("Button(\"关闭\")"))
+    XCTAssertFalse(source.contains("确认整理前后的文件路径"))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Text(value.formatted())", ".font("])
+    )
+    XCTAssertFalse(containsTrimmedLineSequence(source, ["Text(name)", ".font("]))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Image(systemName: icon)", ".font("])
+    )
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["Image(systemName: AppSymbol.arrowRight)", ".font("]
+      )
+    )
+    XCTAssertTrue(containsTrimmedLineSequence(source, ["Text(\"整理预览\")", ".font(.title3.bold())"]))
+    XCTAssertTrue(source.contains("HStack(spacing: 16)"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(source, [".padding(14)", ".padding(.leading, 10)"])
+    )
+    XCTAssertTrue(source.contains(".padding(.top, ReadingSheetLayout.verticalPadding)"))
+    XCTAssertTrue(source.contains("width: ReadingSheetLayout.sheetWidth"))
+    XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
+    XCTAssertTrue(source.contains("title: \"开始整理\""))
+    XCTAssertTrue(source.contains("loadingTitle: viewModel.isLoading ? \"加载中\" : \"整理中\""))
+    XCTAssertFalse(source.contains("title: \"加入整理队列\""))
+    XCTAssertFalse(source.contains("loadingTitle: \"加入中\""))
+    XCTAssertFalse(source.contains("title: \"立即整理\""))
+    XCTAssertTrue(source.contains("submit(background: true)"))
+    XCTAssertFalse(source.contains("submit(background: false)"))
+    XCTAssertTrue(idFieldSource.contains("showMediaSearch = false"))
+  }
+
+  func testManualMediaSearchSheetKeepsSearchExplicitAndFocusable() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
+
+    XCTAssertTrue(source.contains("NavigationStack {"))
+    // 不放大标题，顶部是整行的「片名」输入框和「搜索」。
+    XCTAssertFalse(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
+    XCTAssertTrue(source.contains("SheetInlineTextField(title: \"片名\", text: $viewModel.keyword)"))
+    XCTAssertFalse(source.contains("Text(\"搜索 \\(viewModel.source.title) 媒体\")"))
+    XCTAssertFalse(source.contains("placeholder: \"输入标题后搜索\""))
+    XCTAssertTrue(source.contains(".focusSection()"))
+    XCTAssertFalse(source.contains("Button(\"关闭\")"))
+    XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        [
+          "private func startSearch() {",
+          "guard !viewModel.isLoading else { return }",
+          "searchTask?.cancel()",
+          "searchTask = Task { await viewModel.search() }",
+        ]
+      )
+    )
+    XCTAssertFalse(source.contains(".disabled(viewModel.isLoading)"))
+    XCTAssertTrue(source.contains("private var searchRevision = 0"))
+    XCTAssertTrue(source.contains("searchRevision &+= 1"))
+    XCTAssertTrue(source.contains("items = []"))
+    XCTAssertTrue(source.contains("guard !title.isEmpty else {"))
+    XCTAssertTrue(source.contains("guard searchRevision == revision else { return }"))
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        ["if searchRevision == revision {", "isLoading = false"]
+      )
+    )
+    XCTAssertFalse(
+      source.contains(
+        "keyword.trimmingCharacters(in: .whitespacesAndNewlines) == title"
+      )
+    )
+    XCTAssertFalse(
+      source.contains(
+        "viewModel.keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"
+      )
+    )
+    XCTAssertFalse(source.contains(".onSubmit"))
+    XCTAssertTrue(source.contains("source: viewModel.source"))
+    XCTAssertTrue(source.contains("GridItem(.fixed(500), spacing: 36)"))
+    XCTAssertFalse(source.contains(".padding(36)"))
+    XCTAssertTrue(source.contains(".contentMargins(.vertical, 28, for: .scrollContent)"))
+    XCTAssertFalse(source.contains(".scrollClipDisabled()"))
+    XCTAssertEqual(
+      source.components(separatedBy: ".padding(.horizontal, 56)").count - 1,
+      2
+    )
+    XCTAssertFalse(source.contains(".padding(.horizontal, 40)"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        [".padding(.top, 52)", "}", ".frame(width: 1148, height: 820)"]
+      )
+    )
+    XCTAssertFalse(source.contains(".frame(width: 1120, height: 780)"))
+    XCTAssertFalse(source.contains(".frame(width: 1140, height: 820)"))
+    XCTAssertFalse(source.contains(".frame(width: 1200, height: 820)"))
+    XCTAssertFalse(source.contains(".frame(width: 1400, height: 820)"))
+    XCTAssertTrue(source.contains(".onDisappear {"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidDisappear()"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidAppear()"))
+  }
+
+  @MainActor
+  func testManualMediaSearchClearsExistingResultsForEmptySubmission() async {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.keyword = "  "
+
+    await viewModel.search()
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchDismissalKeepsResultsUntilTransitionCompletes() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
+    XCTAssertTrue(viewModel.isLoading)
+
+    await waitUntil("manual media search dismissal cleanup") {
+      viewModel.items.isEmpty && !viewModel.isLoading
+    }
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchRapidReappearanceCancelsPendingCleanup() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+    viewModel.presentationDidAppear()
+    await settleAsyncWindow()
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
+    XCTAssertFalse(viewModel.isLoading)
   }
 
   func testHorizontalLoadMoreIndicatorsAlignToPosterArea() throws {
@@ -245,15 +803,86 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(source.contains(".frame(height: UIScreen.main.bounds.height * 0.94)"))
-    XCTAssertTrue(source.contains("Color.clear\n              .frame(height: UIScreen.main.bounds.height)"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        ["Color.clear", ".frame(height: UIScreen.main.bounds.height)"]
+      )
+    )
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
+  }
+
+  func testMediaDetailNavigationUsesUnifiedImageLifecycleInSource() throws {
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let menuSource = try Self.source(at: "MoviePilot-TV/Views/Components/MediaContextMenu.swift")
+
+    XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
+    XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
+    XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
+    XCTAssertFalse(detailSource.contains("navigationPath.count"))
+    XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseAfterNavigationStarts"))
+    XCTAssertFalse(menuSource.contains("onDidNavigate"))
+  }
+
+  func testMediaDetailRestoredContentFocusDoesNotScrollToTopAgain() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("guard focused, !showContentPage else { return }"))
+  }
+
+  func testMediaGridPinsTopRowsWithoutContainerFocusReset() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/MediaGridView.swift")
+    let windowSource = try Self.source(at: "MoviePilot-TV/Services/ImageLoadWindow.swift")
+
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        ["onFocus: { isFocused in", "handleFocus("]
+      )
+    )
+    XCTAssertFalse(source.contains("@FocusState private var focusedGridItemID"))
+    XCTAssertFalse(source.contains("scheduleImageAnchorReset"))
+    XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
+  }
+
+  func testMediaDetailLoadingPosterReleasesAfterFadeCompletes() throws {
+    let source = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+    )
+
+    XCTAssertTrue(
+      source.contains(
+        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+      )
+    )
+    XCTAssertTrue(
+      source.contains(
+        "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
+      )
+    )
+    XCTAssertTrue(
+      source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
+    )
+    XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
+    XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
+    XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
+    XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["if isReady {", "keepsLoadingPosterImage = false"]
+      )
+    )
+    XCTAssertFalse(
+      source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
+    )
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
-    XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
-    XCTAssertTrue(source.contains("guard APIService.shared.canRequestSuperUserEndpoints else {"))
+    XCTAssertTrue(source.contains("let rules = try await apiService.fetchCustomFilterRules()"))
+    XCTAssertTrue(source.contains("guard apiService.canRequestSuperUserEndpoints else {"))
     XCTAssertTrue(source.contains("customFilterRules = rules"))
   }
 
@@ -261,7 +890,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let viewSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
     let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
-    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService: APIService"))
+    XCTAssertTrue(viewSource.contains("apiService: APIService = .shared"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureCustomFilters: Bool"))
@@ -271,7 +901,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(viewSource.contains("if canConfigureCustomFilters {"))
     XCTAssertFalse(viewSource.contains("guard canConfigureSearch else { return }"))
     XCTAssertTrue(viewSource.contains("guard canConfigureCustomFilters else { return }"))
-    XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
+    XCTAssertTrue(viewModelSource.contains("guard apiService.canAccess(.search) else {"))
   }
 
   func testRecommendBackendCompatibilityScansShelvesIndependently() throws {
@@ -284,12 +914,36 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   func testFilterRuleGroupsCompatibilityProbeUsesSuperUserRequirement() throws {
     let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
-    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\""))
+    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\"", options: .backwards))
     let end = try XCTUnwrap(source.range(of: "\"custom filter rules\"", range: start.upperBound..<source.endIndex))
     let probe = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(probe.contains("requirement: .superUser"))
     XCTAssertFalse(probe.contains("requirement: .permission(.subscribe)"))
+  }
+
+  @MainActor
+  private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    condition: @MainActor () -> Bool
+  ) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+      if clock.now >= deadline {
+        XCTFail("Timed out waiting for \(description)", file: file, line: line)
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+  }
+
+  @MainActor
+  private func settleAsyncWindow() async {
+    try? await Task.sleep(for: .milliseconds(75))
   }
 
   private static func source(at path: String) throws -> String {

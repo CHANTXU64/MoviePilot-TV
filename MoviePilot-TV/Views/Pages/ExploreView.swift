@@ -2,46 +2,67 @@ import Combine
 import SwiftUI
 
 struct ExploreView: View {
-  @StateObject private var viewModel: ExploreViewModel
-  @State private var path = NavigationPath()
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
-  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
-  #if DEBUG
-  private let uiPreviewForkShare: SubscribeShare?
-  #endif
-
-  init() {
-    _viewModel = StateObject(wrappedValue: ExploreViewModel())
-    #if DEBUG
-    uiPreviewForkShare = nil
-    #endif
-  }
-
-  #if DEBUG
-  init(viewModel: ExploreViewModel, uiPreviewForkShare: SubscribeShare? = nil) {
-    _viewModel = StateObject(wrappedValue: viewModel)
-    self.uiPreviewForkShare = uiPreviewForkShare
-  }
-  #endif
+  let isSelected: Bool
+  @ObservedObject var navigationCoordinator: ImageNavigationCoordinator
+  var allowsRequests = true
+  var onReturnToRoot: (UUID) -> Void = { _ in }
+  @Environment(\.scenePhase) private var scenePhase
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
+      Group {
+        if allowsRequests {
+          ExploreRootContent(isSelected: isSelected)
+        } else {
+          Color(white: 0.1).ignoresSafeArea()
+        }
+      }
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry, allowsRequests: allowsRequests)
+      }
+    }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .onAppear { updateStackForeground() }
+    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
+    .onChange(of: navigationCoordinator.topEntryID) { previous, current in
+      if current == nil, let previous { onReturnToRoot(previous) }
+    }
+    .task(id: allowsRequests) {
+      guard allowsRequests else { return }
+      navigationCoordinator.startDeferredMediaLoads()
+    }
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
+  }
+}
+
+private struct ExploreRootContent: View {
+  let isSelected: Bool
+  @StateObject private var viewModel = ExploreViewModel()
+  @State private var subscriptionHandler = SubscriptionHandler()
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+
+  var body: some View {
       Group {
         if let paginator = viewModel.paginator {
           // 主内容区：媒体网格
           MediaGridView(
+            imageLifecycle: navigationCoordinator.rootLifecycle,
+            listIdentity: paginator.listIdentity,
             items: paginator.items,
             isLoading: paginator.isFirstLoading,
             isLoadingMore: paginator.isLoadingMore,
             onLoadMore: { itemId in
               Task { await paginator.loadMore(itemId) }
             },
-            navigationPath: $path,
             header: { headerView },
             contextMenu: { item in
               MediaContextMenuItems(
                 item: item,
-                navigationPath: $path,
                 subscriptionHandler: subscriptionHandler
               )
             },
@@ -56,40 +77,15 @@ struct ExploreView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
-      .navigationDestination(for: MediaInfo.self) { media in
-        MediaDetailContainerView(media: media, navigationPath: $path)
-      }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(person: person, navigationPath: $path)
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
-      }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
+      subscriptionHandler = SubscriptionHandler()
     }
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
-    .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
-      ForkSubscribeSheet(
-        share: share,
-        onFork: { newSubId in
-          Task {
-            await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
-          }
-        },
-        subscriptionHandler: subscriptionHandler
-      )
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
+    .task(id: isSelected) {
+      guard isSelected else { return }
+      await viewModel.refreshSources()
     }
-    #if DEBUG
-    .onAppear {
-      guard let uiPreviewForkShare else { return }
-      Task { @MainActor in
-        await Task.yield()
-        subscriptionHandler.forkSheetRequest = uiPreviewForkShare
-      }
-    }
-    #endif
   }
 
   private var headerView: some View {
@@ -99,9 +95,9 @@ struct ExploreView: View {
         selectedSource: $viewModel.selectedSource,
         sources: viewModel.availableSources
       )
-        .onChange(of: viewModel.selectedSource) { _, _ in
-          viewModel.onSourceChanged()
-        }
+      .onChange(of: viewModel.selectedSource) { previousSource, _ in
+        viewModel.onSourceChanged(from: previousSource)
+      }
 
       // 第二行：筛选器（根据数据源动态显示）
       FilterPickersView(viewModel: viewModel)
@@ -109,7 +105,10 @@ struct ExploreView: View {
           viewModel.onTypeChanged()
         }
     }
+    // 筛选行光晕会进入下方海报，页头画在网格上面。
+    .zIndex(1)
   }
+
 }
 
 // MARK: - 数据源选择器
@@ -120,7 +119,7 @@ struct SourcePickerView: View {
   var body: some View {
     Picker("数据源", selection: $selectedSource) {
       ForEach(sources) { source in
-        Text(source.rawValue).tag(source)
+        Text(source.title).tag(source)
       }
     }
     .pickerStyle(.segmented)
@@ -135,6 +134,7 @@ struct FilterPickersView: View {
   @State private var tmdbFocusedIndex: Int = 0
   @State private var doubanFocusedIndex: Int = 0
   @State private var bangumiFocusedIndex: Int = 0
+  @State private var anilistFocusedIndex: Int = 0
   @State private var popularFocusedIndex: Int = 0
   @State private var shareFocusedIndex: Int = 0
 
@@ -143,13 +143,22 @@ struct FilterPickersView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
+  private var hasFocusableFilters: Bool {
+    if case .custom = viewModel.selectedSource {
+      return !viewModel.pluginFilterControls.isEmpty
+    }
+    return true
+  }
+
   private var currentFocusIndex: Int {
     switch viewModel.selectedSource {
     case .themoviedb: tmdbFocusedIndex
     case .douban: doubanFocusedIndex
     case .bangumi: bangumiFocusedIndex
+    case .anilist: anilistFocusedIndex
     case .popular: popularFocusedIndex
     case .subscriptionShare: shareFocusedIndex
+    case .custom: 0
     }
   }
 
@@ -158,8 +167,10 @@ struct FilterPickersView: View {
     case .themoviedb: tmdbFocusedIndex = index
     case .douban: doubanFocusedIndex = index
     case .bangumi: bangumiFocusedIndex = index
+    case .anilist: anilistFocusedIndex = index
     case .popular: popularFocusedIndex = index
     case .subscriptionShare: shareFocusedIndex = index
+    case .custom: break
     }
   }
 
@@ -168,7 +179,7 @@ struct FilterPickersView: View {
       // 顶部焦点重定向器 - 捕获来自上方数据源选择器的焦点
       Color.clear
         .frame(height: 1)
-        .focusable(focusedPickerIndex == nil)
+        .focusable(hasFocusableFilters && focusedPickerIndex == nil)
         .focused($isTopRedirectorFocused)
         .onChange(of: isTopRedirectorFocused) { _, isFocused in
           if isFocused {
@@ -177,30 +188,40 @@ struct FilterPickersView: View {
           }
         }
 
-      HStack(spacing: 20) {
-        switch viewModel.selectedSource {
-        case .themoviedb:
-          tmdbFilters
-            .foregroundColor(.primary)
-        case .douban:
-          doubanFilters
-            .foregroundColor(.primary)
-        case .bangumi:
-          bangumiFilters
-            .foregroundColor(.primary)
-        case .popular:
-          popularFilters
-            .foregroundColor(.primary)
-        case .subscriptionShare:
-          shareFilters
-            .foregroundColor(.primary)
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 20) {
+          switch viewModel.selectedSource {
+          case .themoviedb:
+            tmdbFilters
+              .foregroundColor(.primary)
+          case .douban:
+            doubanFilters
+              .foregroundColor(.primary)
+          case .bangumi:
+            bangumiFilters
+              .foregroundColor(.primary)
+          case .anilist:
+            anilistFilters
+              .foregroundColor(.primary)
+          case .popular:
+            popularFilters
+              .foregroundColor(.primary)
+          case .subscriptionShare:
+            shareFilters
+              .foregroundColor(.primary)
+          case .custom:
+            pluginFilters
+              .foregroundColor(.primary)
+          }
         }
+        .lineLimit(1)
       }
+      .scrollClipDisabled()
 
       // 底部焦点重定向器 - 捕获来自下方媒体网格的焦点
       Color.clear
         .frame(height: 1)
-        .focusable(focusedPickerIndex == nil)
+        .focusable(hasFocusableFilters && focusedPickerIndex == nil)
         .focused($isBottomRedirectorFocused)
         .onChange(of: isBottomRedirectorFocused) { _, isFocused in
           if isFocused {
@@ -214,6 +235,8 @@ struct FilterPickersView: View {
         setCurrentFocusIndex(newIndex)
       }
     }
+    // 焦点光晕超出按钮，盖住上方数据源选择器。层级只抬这一行，不改按钮和焦点条的位置。
+    .zIndex(1)
   }
 
   // MARK: - TheMovieDb 筛选器
@@ -261,12 +284,20 @@ struct FilterPickersView: View {
     // 评分
     Picker("评分", selection: $viewModel.tmdbVoteAverage) {
       Text("评分：不限").tag(0)
-      ForEach([5, 6, 7, 8, 9], id: \.self) { rating in
+      ForEach(5...10, id: \.self) { rating in
         Text("评分：\(rating)分以上").tag(rating)
       }
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 4)
+
+    Picker("评分人数", selection: $viewModel.tmdbVoteCount) {
+      ForEach([10, 100, 500, 1_000, 5_000, 10_000], id: \.self) { count in
+        Text("评分人数：\(count)人以上").tag(count)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 5)
   }
 
   // MARK: - 豆瓣筛选器
@@ -324,11 +355,11 @@ struct FilterPickersView: View {
   // MARK: - Bangumi 筛选器
   @ViewBuilder
   private var bangumiFilters: some View {
-    // 分类
-    Picker("分类", selection: $viewModel.bangumiCat) {
-      Text("分类：全部").tag("")
+    // 类别
+    Picker("类别", selection: $viewModel.bangumiCat) {
+      Text("类别：全部").tag("")
       ForEach(ExploreViewModel.bangumiCatDict, id: \.key) { item in
-        Text("分类：" + item.value).tag(item.key)
+        Text("类别：" + item.value).tag(item.key)
       }
     }
     .pickerStyle(.menu)
@@ -352,6 +383,189 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
+  }
+
+  // MARK: - AniList 筛选器
+  @ViewBuilder
+  private var anilistFilters: some View {
+    Picker("排序", selection: $viewModel.anilistSort) {
+      ForEach(ExploreViewModel.anilistSortDict, id: \.key) {
+        Text("排序：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 0)
+
+    Picker("形式", selection: $viewModel.anilistFormat) {
+      Text("形式：全部").tag("")
+      ForEach(ExploreViewModel.anilistFormatDict, id: \.key) {
+        Text("形式：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 1)
+
+    Picker("风格", selection: $viewModel.anilistGenre) {
+      Text("风格：全部").tag("")
+      ForEach(ExploreViewModel.anilistGenreDict, id: \.key) {
+        Text("风格：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 2)
+
+    Picker("季度", selection: $viewModel.anilistSeason) {
+      Text("季度：全部").tag("")
+      ForEach(ExploreViewModel.anilistSeasonDict, id: \.key) {
+        Text("季度：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 3)
+
+    Picker("年份", selection: $viewModel.anilistYear) {
+      Text("年份：全部").tag(0)
+      ForEach(ExploreViewModel.anilistYearDict, id: \.key) {
+        Text("年份：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 4)
+
+    Picker("状态", selection: $viewModel.anilistStatus) {
+      Text("状态：全部").tag("")
+      ForEach(ExploreViewModel.anilistStatusDict, id: \.key) {
+        Text("状态：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 5)
+
+    Picker("地区", selection: $viewModel.anilistCountry) {
+      Text("地区：全部").tag("")
+      ForEach(ExploreViewModel.anilistCountryDict, id: \.key) {
+        Text("地区：" + $0.value).tag($0.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 6)
+  }
+
+  // MARK: - 插件筛选器
+  @ViewBuilder
+  private var pluginFilters: some View {
+    ForEach(Array(viewModel.pluginFilterControls.enumerated()), id: \.element.id) {
+      index, control in
+      if control.isVisible(in: viewModel.pluginFilterValues) {
+        switch control.kind {
+        case .choice:
+          Picker(
+            control.label,
+            selection: pluginBinding(for: control)
+          ) {
+            let selection = control.selectionValue(from: pluginBindingValue(control.field))
+            if !control.options.contains(where: { $0.value == selection }) {
+              Text("\(control.label)：默认").tag(selection)
+            }
+            ForEach(control.options) { option in
+              Text("\(control.label)：\(option.title)").tag(option.value)
+            }
+          }
+          .pickerStyle(.menu)
+          .focused($focusedPickerIndex, equals: index)
+        case .multiChoice:
+          multiSelectButton(for: control, index: index)
+        case .text:
+          TextField(control.label, text: pluginTextBinding(for: control.field))
+            .frame(width: 260)
+            .focused($focusedPickerIndex, equals: index)
+        case .number:
+          TextField(control.label, text: pluginNumberBinding(for: control.field))
+            .frame(width: 180)
+            .focused($focusedPickerIndex, equals: index)
+        case .toggle:
+          Toggle(control.label, isOn: pluginToggleBinding(for: control.field))
+            .fixedSize()
+            .focused($focusedPickerIndex, equals: index)
+        }
+      }
+    }
+  }
+
+  /// 插件多选筛选：系统菜单，菜单关闭时才提交一次，避免每勾一项都重新请求。
+  @ViewBuilder
+  private func multiSelectButton(for control: PluginFilterControl, index: Int) -> some View {
+    DeferredMultiSelectionMenu(
+      options: control.options,
+      id: \.value,
+      selected: Set(pluginBindingValue(control.field).arrayValue ?? []),
+      label: { $0.title },
+      emptySelectionTitle: "全部",
+      onCommit: { selection in
+        // 按选项顺序写回；不在选项里的旧值一并去掉。
+        let selected = control.options
+          .filter { selection.contains($0.value) }
+          .map(\.value)
+        viewModel.setPluginFilter(control.field, value: .array(selected))
+      }
+    ) {
+      Text(multiSelectSummary(for: control))
+    }
+    .focused($focusedPickerIndex, equals: index)
+  }
+
+  private func multiSelectSummary(for control: PluginFilterControl) -> String {
+    let selected = pluginBindingValue(control.field).arrayValue ?? []
+    guard !selected.isEmpty else { return "\(control.label)：全部" }
+    let titles = control.options
+      .filter { selected.contains($0.value) }
+      .map(\.title)
+    if !titles.isEmpty {
+      return "\(control.label)：" + titles.joined(separator: "/")
+    }
+    return "\(control.label)：已选 \(selected.count) 项"
+  }
+
+  private func pluginToggleBinding(for field: String) -> Binding<Bool> {
+    Binding(
+      get: {
+        if case .bool(let value) = pluginBindingValue(field) {
+          return value
+        }
+        return false
+      },
+      set: { viewModel.setPluginFilter(field, value: .bool($0)) }
+    )
+  }
+
+  private func pluginBindingValue(_ field: String) -> JSONValue {
+    viewModel.pluginFilterValues[field] ?? .null
+  }
+
+  private func pluginBinding(for control: PluginFilterControl) -> Binding<JSONValue> {
+    Binding(
+      get: { control.selectionValue(from: pluginBindingValue(control.field)) },
+      set: { viewModel.setPluginFilter(control.field, value: control.storedValue(for: $0)) }
+    )
+  }
+
+  private func pluginTextBinding(for field: String) -> Binding<String> {
+    Binding(
+      get: { pluginBindingValue(field).queryString ?? "" },
+      set: { viewModel.setPluginFilter(field, value: $0.isEmpty ? .null : .string($0)) }
+    )
+  }
+
+  private func pluginNumberBinding(for field: String) -> Binding<String> {
+    Binding(
+      get: { pluginBindingValue(field).queryString ?? "" },
+      set: {
+        viewModel.setPluginFilter(
+          field,
+          value: $0.isEmpty ? .null : Int($0).map(JSONValue.int) ?? .string($0)
+        )
+      }
+    )
   }
 
   // MARK: - Popular 筛选器
@@ -388,7 +602,7 @@ struct FilterPickersView: View {
     // 评分
     Picker("评分", selection: $viewModel.popularMinRating) {
       Text("评分：不限").tag(0)
-      ForEach([5, 6, 7, 8, 9], id: \.self) { rating in
+      ForEach(5...10, id: \.self) { rating in
         Text("评分：\(rating)分以上").tag(rating)
       }
     }
@@ -421,7 +635,7 @@ struct FilterPickersView: View {
     // 评分
     Picker("评分", selection: $viewModel.shareMinRating) {
       Text("评分：不限").tag(0)
-      ForEach([5, 6, 7, 8, 9], id: \.self) { rating in
+      ForEach(5...10, id: \.self) { rating in
         Text("评分：\(rating)分以上").tag(rating)
       }
     }

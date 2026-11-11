@@ -13,21 +13,38 @@ struct GroupedStaff: Identifiable {
 /// 订阅状态、TMDB 识别、分季信息全部由 MediaPreloadTask 提供。
 @MainActor
 class MediaDetailViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var detail: MediaInfo
 
   // 界面背景稳定性控制
   @Published var backgroundUrl: URL?
+  @Published var backgroundFallbackUrl: URL?
   @Published var isUsingPosterAsBackdrop = false
 
   // 分页加载器
   let recommendPaginator: Paginator<MediaInfo>
   let similarPaginator: Paginator<MediaInfo>
   let actorsPaginator: Paginator<Person>
+  /// 豆瓣短评（进入详情页即拉第一页，条件见 `DoubanDiscussionAvailability`）
+  let doubanCommentsPaginator: Paginator<DoubanDiscussionEntry>
+  /// 豆瓣影评（与 Web 一样按需加载：切到「影评」或短评为空时才请求）
+  let doubanReviewsPaginator: Paginator<DoubanDiscussionEntry>
+  /// 「短评 / 影评」区块当前展示的分类。
+  @Published private(set) var doubanDiscussionKind: DoubanDiscussionEntry.Kind = .comment
 
   // 演职人员信息
   @Published var heroTopActors: [Person] = []
   @Published var heroTopStaff: [GroupedStaff] = []
   @Published var uniqueDirectors: [Person] = []
+
+  @Published private(set) var isInLibrary = false
+  /// 管理员且条目在（或无法确认不在）可在应用内播放的服务器上时，应用内播放的目标。
+  @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
+  /// MoviePilot 入库查询给的条目（含所属服务器），有播放入口时才有。电视剧按集播放用它在服务器上找这部剧，
+  /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。界面不直接显示它，和 `inAppPlaybackTarget` 一起更新，不单独触发重绘。
+  private(set) var mediaServerItemRef: MediaServerItemRef?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -35,23 +52,44 @@ class MediaDetailViewModel: ObservableObject {
   @Published var isFirstRowReady = false
 
   // 视图模型与服务
-  @Published var siteFilter = SiteFilterViewModel()
-  private let apiService = APIService.shared
+  @Published var siteFilter: SiteFilterViewModel
+  private let apiService: APIService
 
   /// 可变引用盒子：让 Paginator 闭包始终读取最新的 detail 值。
   /// init 时可能传入 partial data，applyFullDetail 会更新 box 内的值，
   /// 闭包通过 capture 这个 box（引用类型）自动读到 applyFullDetail 后的 detail。
   private final class DetailBox {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     var value: MediaInfo
     init(_ v: MediaInfo) { value = v }
   }
   private let detailBox: DetailBox
   private var cancellables = Set<AnyCancellable>()
+  /// 跟随应用内播放开关和后端版本的变化，出栈时停止。
+  private var playbackAvailabilityObservation: AnyCancellable?
+  private var mediaServerExistsTask: Task<Void, Never>?
+  private var relatedContentTask: Task<Void, Never>?
+  private var relatedContentChildTasks: [Task<Void, Never>] = []
+  /// 已发起过首屏请求的分类；离页前不会自动重发，失败只能由用户在状态卡上重试。
+  private var requestedDoubanKinds: Set<DoubanDiscussionEntry.Kind> = []
+  /// 用户亲手切换过分类后，不再因为短评为空自动改看影评。
+  private var hasUserChosenDoubanKind = false
 
-  init(detail: MediaInfo) {
+  init(detail: MediaInfo, apiService: APIService = .shared) {
     self.detail = detail
+    self.apiService = apiService
+    self.siteFilter = SiteFilterViewModel(apiService: apiService)
     let box = DetailBox(detail)
     self.detailBox = box
+
+    // 预加载命中时容器首帧即揭示内容，这里同步安装背景避免首帧灰底；
+    // 网络加载路径随后由 applyFullDetail 以动画升级为完整详情背景。
+    let initialBackground = detail.imageURLs.backgroundTarget
+    self.backgroundUrl = initialBackground.url
+    self.backgroundFallbackUrl = initialBackground.fallbackURL
+    self.isUsingPosterAsBackdrop = initialBackground.isPoster
 
     // --- Paginator for Recommend ---
     // ⚠️ 闭包 capture box（引用类型），而非 capture init 时的 detail 值。
@@ -70,7 +108,8 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in
@@ -93,7 +132,8 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in
@@ -112,10 +152,16 @@ class MediaDetailViewModel: ObservableObject {
         items = StaffManager.mergeActors(existing: items, newBatch: newItems)
         return items.count > initialCount
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       }
     )
+
+    self.doubanCommentsPaginator = Self.makeDoubanDiscussionPaginator(
+      kind: .comment, detailBox: box, apiService: apiService)
+    self.doubanReviewsPaginator = Self.makeDoubanDiscussionPaginator(
+      kind: .review, detailBox: box, apiService: apiService)
 
     // --- Forward Paginator Updates ---
     self.recommendPaginator.objectWillChange
@@ -129,29 +175,227 @@ class MediaDetailViewModel: ObservableObject {
     self.actorsPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+
+    self.doubanCommentsPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    self.doubanReviewsPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    // 详情页可能留在另一个标签页的导航栈里，也可能在读到后端设置之前就打开了（比如从 Top Shelf 冷启动直接进来），
+    // 设置里的开关或后端版本变了都要重新判断播放入口。
+    playbackAvailabilityObservation = Publishers.Merge(
+      NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification).map { _ in () },
+      apiService.$settings.map { $0?.BACKEND_VERSION }.removeDuplicates().dropFirst().map { _ in () }
+    )
+    .receive(on: DispatchQueue.main)
+    .sink { [weak self] in self?.inAppPlaybackAvailabilityDidChange() }
   }
 
-  #if DEBUG
-  func installUIPreviewRows(
-    actors: [Person],
-    recommendations: [MediaInfo],
-    similar: [MediaInfo],
-    isLoadingMore: Bool = false
-  ) {
-    actorsPaginator.installUIPreviewItems(actors, isLoadingMore: isLoadingMore)
-    recommendPaginator.installUIPreviewItems(recommendations, isLoadingMore: isLoadingMore)
-    similarPaginator.installUIPreviewItems(similar, isLoadingMore: isLoadingMore)
-
-    if heroTopActors.isEmpty {
-      heroTopActors = Array(actors.prefix(4))
+  /// 应用内播放开关或后端版本变了：不再提供时立即收起播放入口；再重新查一次入库状态和播放目标，
+  /// 可以提供时补回入口。正在进行的上一次查询被取代。
+  private func inAppPlaybackAvailabilityDidChange() {
+    let isEnabled = InAppPlaybackAvailability.isEnabled(
+      backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: PlaybackPreferences.isInAppPlaybackEnabled)
+    if !isEnabled {
+      mediaServerItemRef = nil
+      inAppPlaybackTarget = nil
     }
-    if !actors.isEmpty || !uniqueDirectors.isEmpty || !recommendations.isEmpty || !similar.isEmpty {
-      isFirstRowReady = true
+    guard hasAppliedFullDetail else { return }
+    startMediaServerExistsCheck()
+  }
+
+  private func startMediaServerExistsCheck() {
+    mediaServerExistsTask?.cancel()
+    mediaServerExistsTask = Task { [weak self] in
+      await self?.loadMediaServerExists()
+      // 被取代的查询已取消，不能清掉新查询的句柄。
+      guard !Task.isCancelled else { return }
+      self?.mediaServerExistsTask = nil
     }
   }
-  #endif
+
+  // MARK: - 豆瓣短评 / 影评
+
+  /// 短评与影评共用的分页器：后端是偏移分页，`start` 取此前各批实际返回的条数（去重前）。
+  ///
+  /// 与 Web 的 `start = 已加载条数` 一致。不按「页码 × 每页条数」推算：豆瓣某批返回不足
+  /// 每页条数时会跳过条目或提前判到底。也不按去重后的条数推算：去重丢掉的条目仍占用服务端
+  /// 的位置，按去重后条数推算会让下一批与上一批重叠。入口条件在请求前重新求值，详情或设置
+  /// 变化后不会用失效的条件发请求。
+  private static func makeDoubanDiscussionPaginator(
+    kind: DoubanDiscussionEntry.Kind,
+    detailBox box: DetailBox,
+    apiService: APIService
+  ) -> Paginator<DoubanDiscussionEntry> {
+    var seenKeys = Set<String>()
+    return Paginator<DoubanDiscussionEntry>(
+      threshold: DoubanDiscussionAvailability.loadMoreThreshold,
+      // 豆瓣返回 total：分页器据此判到底，不再多发一次空请求；胶囊数量也读它。
+      cursorFetcher: { @MainActor [apiService, box] cursor in
+        let detail = box.value
+        guard
+          DoubanDiscussionAvailability.isEligible(
+            detail: detail,
+            backendVersion: apiService.settings?.BACKEND_VERSION
+          ),
+          let doubanId = DoubanDiscussionAvailability.normalizedDoubanID(detail.douban_id),
+          let typeName = DoubanDiscussionAvailability.normalizedMediaType(detail.type)
+        // 入口条件中途失效时按「取消」处理：不能返回空数组，否则会被当成确认为空的终页。
+        else { throw CancellationError() }
+        let pageSize = DoubanDiscussionAvailability.pageSize
+        let start = cursor.offset
+        switch kind {
+        case .comment:
+          let page = try await apiService.fetchDoubanComments(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize)
+          return PaginatedBatch(
+            items: page.resolvedItems.map(DoubanDiscussionEntry.init(comment:)), total: page.total)
+        case .review:
+          let page = try await apiService.fetchDoubanReviews(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize)
+          return PaginatedBatch(
+            items: page.resolvedItems.map(DoubanDiscussionEntry.init(review:)), total: page.total)
+        }
+      },
+      processor: { @MainActor items, newItems in
+        let unique = newItems.filter { seenKeys.insert($0.id).inserted }
+        guard !unique.isEmpty else { return false }
+        items.append(contentsOf: unique)
+        return true
+      },
+      onReset: { @MainActor in
+        seenKeys.removeAll()
+      }
+    )
+  }
+
+  /// 胶囊文字，例如「短评 128」；规则见 `DoubanDiscussionAvailability.chipTitle`。
+  func doubanChipTitle(for kind: DoubanDiscussionEntry.Kind) -> String {
+    DoubanDiscussionAvailability.chipTitle(
+      for: kind,
+      total: doubanPaginator(for: kind).total,
+      loadedCount: doubanPaginator(for: kind).items.count
+    )
+  }
+
+  func doubanPaginator(for kind: DoubanDiscussionEntry.Kind) -> Paginator<DoubanDiscussionEntry> {
+    switch kind {
+    case .comment: return doubanCommentsPaginator
+    case .review: return doubanReviewsPaginator
+    }
+  }
+
+  func doubanRowState(for kind: DoubanDiscussionEntry.Kind) -> DoubanDiscussionRowState {
+    let paginator = doubanPaginator(for: kind)
+    return DoubanDiscussionAvailability.rowState(
+      hasRequested: requestedDoubanKinds.contains(kind),
+      itemCount: paginator.items.count,
+      isLoadingFirstPage: paginator.isFirstLoading,
+      hasError: paginator.hasError,
+      hasMore: paginator.hasMore
+    )
+  }
+
+  /// 区块是否可见（不含入口条件；入口条件由视图结合当前设置判断）。
+  var isDoubanDiscussionSectionVisible: Bool {
+    DoubanDiscussionAvailability.isSectionVisible(
+      comments: doubanRowState(for: .comment),
+      reviews: doubanRowState(for: .review)
+    )
+  }
+
+  /// 进入详情页即拉取短评第一页；影评等用户切过去再拉（与 Web 一致，避免同时请求两个豆瓣接口）。
+  ///
+  /// - 不参与首屏预载、不阻塞 `isFirstRowReady`，区块异步渐进显示。
+  /// - 完整详情应用之前不发请求：入口卡片带来的部分详情里的豆瓣 ID / 类型可能与完整详情不同。
+  /// - 版本 / 豆瓣 ID / 媒体类型任一不满足时**不发请求**。
+  /// - 条件在调用时重新求值，「设置晚到」时后续调用仍能补发；发起后不再重发。
+  /// - 调用方负责 `allowsRequests` 门禁：启动会话准备期间不得调用。
+  func loadDoubanDiscussionIfNeeded() {
+    startDoubanDiscussionIfNeeded(.comment)
+  }
+
+  /// 用户点了分类胶囊。点当前已选中的分类不算改选，短评为空时仍会自动改看影评。
+  func selectDoubanDiscussion(_ kind: DoubanDiscussionEntry.Kind) {
+    guard kind != doubanDiscussionKind else { return }
+    hasUserChosenDoubanKind = true
+    doubanDiscussionKind = kind
+    startDoubanDiscussionIfNeeded(kind)
+  }
+
+  /// 状态卡后面的「重试」按钮：只重试当前分类。
+  func retryDoubanDiscussion() {
+    let kind = doubanDiscussionKind
+    guard isDoubanDiscussionEligible else { return }
+    requestedDoubanKinds.insert(kind)
+    runDoubanDiscussionFirstPage(kind)
+  }
+
+  /// 已有内容、加载更多失败时行尾的「重试」按钮：只重试当前分类的下一批。
+  func retryDoubanDiscussionNextPage() {
+    guard isDoubanDiscussionEligible else { return }
+    let paginator = doubanPaginator(for: doubanDiscussionKind)
+    Task { await paginator.retryAfterError() }
+  }
+
+  private var isDoubanDiscussionEligible: Bool {
+    hasAppliedFullDetail
+      && DoubanDiscussionAvailability.isEligible(
+        detail: detail,
+        backendVersion: apiService.settings?.BACKEND_VERSION
+      )
+  }
+
+  private func startDoubanDiscussionIfNeeded(_ kind: DoubanDiscussionEntry.Kind) {
+    guard !requestedDoubanKinds.contains(kind), isDoubanDiscussionEligible else { return }
+    requestedDoubanKinds.insert(kind)
+    runDoubanDiscussionFirstPage(kind)
+  }
+
+  /// 重新拉取某一类的第一页。分页器同步进入首屏加载中，状态卡不会在任务启动前闪成失败；
+  /// 再次重试或离页取消会让上一轮加载提前结束，结束时的状态不是「空」，不会误切分类。
+  private func runDoubanDiscussionFirstPage(_ kind: DoubanDiscussionEntry.Kind) {
+    let load = doubanPaginator(for: kind).startRefresh()
+    guard kind == .comment else { return }
+    Task { @MainActor [weak self] in
+      await load.value
+      guard let self else { return }
+      // 短评确认为空时自动改看影评，否则整个区块没有可看的内容；
+      // 用户已经亲手选过分类就尊重用户的选择。
+      if !hasUserChosenDoubanKind, doubanRowState(for: .comment) == .empty {
+        doubanDiscussionKind = .review
+        startDoubanDiscussionIfNeeded(.review)
+      }
+    }
+  }
 
   private var hasAppliedFullDetail = false
+
+  /// 页面重新激活时，对处于“成功空终态”的推荐/相似/演员分页各重试一次。
+  func refreshSuccessEmptySections() async {
+    if recommendPaginator.items.isEmpty, !recommendPaginator.isLoading, !recommendPaginator.hasError,
+      !recommendPaginator.hasMore
+    {
+      await recommendPaginator.refresh()
+    }
+    if similarPaginator.items.isEmpty, !similarPaginator.isLoading, !similarPaginator.hasError,
+      !similarPaginator.hasMore
+    {
+      await similarPaginator.refresh()
+    }
+    if actorsPaginator.items.isEmpty, !actorsPaginator.isLoading, !actorsPaginator.hasError,
+      !actorsPaginator.hasMore
+    {
+      await actorsPaginator.refresh()
+    }
+  }
 
   /// 应用完整的媒体详情数据并加载辅助内容。
   /// 在 fullDetail 加载完成后调用，负责：
@@ -167,10 +411,46 @@ class MediaDetailViewModel: ObservableObject {
     hasAppliedFullDetail = true
 
     // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
-    uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])
-    heroTopStaff = StaffManager.getTopGroupedStaff(from: fullDetail.directors ?? [], count: 1)
-    heroTopActors = StaffManager.processActors(
-      persons: Array((fullDetail.actors ?? []).prefix(4)))
+    let directors = fullDetail.resolvedDirectors
+    uniqueDirectors = StaffManager.processCrew(persons: directors)
+    heroTopStaff = StaffManager.getTopGroupedStaff(from: directors, count: 1)
+    // F-050：**先去重、再取前四**，不要反过来。
+    //
+    // 后端 `actors` 取自 TMDB `credits.cast`（`app/core/context.py:481-486`），只过滤
+    // `known_for_department == "Acting"` 而**不去重**，而 TMDB 的 cast 允许同一个人以不同
+    // `character` 出现多条。原实现先 `prefix(4)` 再交给 `processActors` 按 id 合并，于是这 4 条
+    // 里的多角色重复被折叠成一个、Hero 只剩 2~3 人，而本方法尾部「Hero 完全为空才用分页
+    // 数据补」的分支只在**彻底为空**时才兜底，半空状态永远补不上。
+    //
+    // 顺序颠倒后与分页那一路同构（`actorsPaginator` 的 processor 本就是 `mergeActors`），
+    // 所以该兜底分支里的 `prefix(4)` 是对的、无需改动。`mergeActors` 保持服务端顺序且合并
+    // `character`（多角色显示成「角色A/角色B」），故就顺序这一项而言，改的只是「取哪四个人」，
+    // 被合并者的角色信息不丢；下面 F-056 的过滤是另一件事，它确实会丢弃无名者 —— 那些人
+    // 在 Hero 行里本就渲染不出任何内容。
+    //
+    // F-056（G07 第三裁并入本项）：**空名一并剔掉**，无名氏不能白占名额。
+    // 视图侧 `MediaDetailView.swift:1037` 是 `compactMap { $0.name }.joined(...)`，
+    // name 为 nil 或去空白后为空的人渲染出来只是一个空档，却照样消耗四个名额之一，
+    // 后面明明还有别的演员可以顶上 —— 与上面重复项挤人同属「取样顺序」这一个根因，
+    // 故两条一起在这里收口，顺序是 G07 第三裁给的 `processActors` → 过滤 → `prefix(4)`。
+    //
+    // 过滤只放在 Hero 取样这一层，**不下沉到 `mergeActors`**：演员货架要不要收无名者
+    // 是另一条口径，verify_s006 已明确货架不受本项影响，不在这里顺带改。
+    //
+    // 尾部的「完全为空才补」也**不需要放宽**：分页第一页取的就是同一份 `credits.cast`
+    // 的前 24 条，故 `fullDetail.actors` 非空时分页不会有新面孔可补；本处修好后
+    // 「去重后自然不足四人」只剩「这份 cast 去重后本就不足四人」一种解释，无处可补。
+    // 该分支保持原样：它只在 `heroTopActors` 彻底为空时兜底，此时过滤与否都不改变
+    // 「这份数据本就没有可显示的主演」这一结论，为它加过滤只会扩大本次改动面。
+    heroTopActors = Array(
+      StaffManager.processActors(persons: fullDetail.actors ?? [])
+        .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .prefix(4))
+
+    startMediaServerExistsCheck()
+
+    // 进入详情页就拉豆瓣短评/影评第一页：独立任务、不参与首屏就绪判断、不做任何预载。
+    loadDoubanDiscussionIfNeeded()
 
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
@@ -185,24 +465,32 @@ class MediaDetailViewModel: ObservableObject {
       // 否则：View 层通过 onChange(of: preloadTask.isSeasonDataLoaded) 设置
     }
 
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      if !isSeasonFirst {
-        isFirstRowReady = true
-      }
-      return
-    }
-    #endif
-
     // 异步加载网络数据（不阻塞调用方返回，数据到达后渐进显示）
-    Task {
-      // 1. 并发启动演职员、推荐和相似内容加载
-      let actorsTask = Task { @MainActor in await actorsPaginator.refresh() }
-      let recommendTask = Task { @MainActor in await recommendPaginator.refresh() }
-      let similarTask = Task { @MainActor in await similarPaginator.refresh() }
+    relatedContentTask = Task { [weak self] in
+      guard let self else { return }
+      defer {
+        relatedContentChildTasks.removeAll()
+        relatedContentTask = nil
+      }
+
+      // 1. 并发启动演职员、推荐和相似内容加载，并保存句柄供 Pop 取消。
+      let actorsTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await actorsPaginator.refresh()
+      }
+      let recommendTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await recommendPaginator.refresh()
+      }
+      let similarTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await similarPaginator.refresh()
+      }
+      relatedContentChildTasks = [actorsTask, recommendTask, similarTask]
 
       // 2. 优先等待演员信息加载完成，用于快速更新 Hero 区域和判断首行就绪
       await actorsTask.value
+      guard !Task.isCancelled else { return }
 
       if heroTopActors.isEmpty {
         heroTopActors = Array(actorsPaginator.items.prefix(4))
@@ -220,6 +508,7 @@ class MediaDetailViewModel: ObservableObject {
 
       // 3. 继续等待推荐和相似内容的并行任务完成
       _ = await (recommendTask.value, similarTask.value)
+      guard !Task.isCancelled else { return }
 
       // ── 所有数据加载完毕，兜底设置 ──
       // 仅对非电视剧（首行不是 season）生效：此时 actors/directors/recommend/similar 都已确定。
@@ -231,38 +520,103 @@ class MediaDetailViewModel: ObservableObject {
     }
   }
 
+  /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
+  func cancelForPop() {
+    playbackAvailabilityObservation = nil
+    mediaServerExistsTask?.cancel()
+    mediaServerExistsTask = nil
+    relatedContentTask?.cancel()
+    relatedContentTask = nil
+    relatedContentChildTasks.forEach { $0.cancel() }
+    relatedContentChildTasks.removeAll()
+    actorsPaginator.cancel()
+    recommendPaginator.cancel()
+    similarPaginator.cancel()
+    doubanCommentsPaginator.cancel()
+    doubanReviewsPaginator.cancel()
+    preloadTask = nil
+  }
+
+  /// 详情页集列表按集播放用的上下文：电视剧有播放入口时才有。`episodeGroup` 是详情页当前选的剧集组（nil 为默认顺序），
+  /// `seasons` 是详情页的季顺序（剧集组下是组内季号）。每集能不能播见 `PlaybackCoordinator.episodeAvailability`。
+  func episodePlaybackContext(episodeGroup: String?, seasons: [Int]) -> EpisodePlaybackContext? {
+    guard inAppPlaybackTarget != nil else { return nil }
+    return EpisodePlaybackContext(
+      media: detail, episodeGroup: episodeGroup, seasons: seasons, libraryItem: mediaServerItemRef)
+  }
+
+  private func loadMediaServerExists() async {
+    guard detail.identity != nil else { return }
+    let isMovie = detail.type == "电影"
+    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放。
+    let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
+    let offersPlayback = InAppPlaybackAvailability.offers(
+      mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+    guard showsLibraryState || offersPlayback else { return }
+    let snapshot = apiService.sessionSnapshot()
+    let coordinator = apiService.sessionScope.playbackCoordinator
+    let itemRef: MediaServerItemRef?
+    do {
+      itemRef = try await apiService.fetchMediaServerItemRef(media: detail)
+    } catch is CancellationError {
+      return
+    } catch {
+      Logger.error("检查媒体入库状态失败: \(error)")
+      return
+    }
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+    if showsLibraryState { isInLibrary = itemRef != nil }
+    guard let itemRef, offersPlayback else { return }
+    do {
+      // 入库条目可能属于不能在应用内播放的服务器，ID 也可能和别的服务器撞号：需要时在可播放的服务器上按外部编号找到它。
+      let servers = try await apiService.fetchCachedMediaServers()
+      guard servers.contains(where: \.supportsInAppPlayback) else { return }
+      let expected = LibraryItemExpectation(media: detail)
+      let target = await coordinator.locateLibraryItem(
+        itemRef.itemID, expected: expected, in: servers, preferredServer: itemRef.server)
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+      mediaServerItemRef = target == nil ? nil : itemRef
+      inAppPlaybackTarget = target
+    } catch is CancellationError {
+    } catch {
+      Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")
+    }
+  }
+
   /// 根据媒体的海报或背景图更新详情页背景
   private func setBackground() {
-    let backdrop = detail.imageURLs.backdrop
-    let poster = detail.imageURLs.poster
-
-    let targetUrl: URL?
-    let targetIsPoster: Bool
-
-    // 优先级：背景大图 > 海报图
-    if let backdrop = backdrop {
-      targetUrl = backdrop
-      targetIsPoster = false
-    } else if let poster = poster {
-      targetUrl = poster
-      targetIsPoster = true
-    } else {
-      targetUrl = nil
-      targetIsPoster = false
-    }
+    let target = detail.imageURLs.backgroundTarget
 
     // 核心保护逻辑：只有当背景 URL 真正改变时才触发 @Published 更新。
     // 这能有效防止因为值相同但对象不同导致的 UI 重新闪烁刷新。
-    if self.backgroundUrl != targetUrl || self.isUsingPosterAsBackdrop != targetIsPoster {
+    if self.backgroundUrl != target.url || self.backgroundFallbackUrl != target.fallbackURL
+      || self.isUsingPosterAsBackdrop != target.isPoster
+    {
       withAnimation(.easeInOut(duration: 0.8)) {
-        if self.backgroundUrl != targetUrl {
-          self.backgroundUrl = targetUrl
+        if self.backgroundUrl != target.url {
+          self.backgroundUrl = target.url
         }
-        if self.isUsingPosterAsBackdrop != targetIsPoster {
-          self.isUsingPosterAsBackdrop = targetIsPoster
+        if self.backgroundFallbackUrl != target.fallbackURL {
+          self.backgroundFallbackUrl = target.fallbackURL
+        }
+        if self.isUsingPosterAsBackdrop != target.isPoster {
+          self.isUsingPosterAsBackdrop = target.isPoster
         }
       }
     }
+  }
+
+  func refreshBackgroundForImageConfiguration() {
+    setBackground()
+  }
+
+  func useBackgroundFallback(afterFailing failedURL: URL) {
+    guard backgroundUrl == failedURL, let fallbackURL = backgroundFallbackUrl,
+      fallbackURL != failedURL
+    else { return }
+    backgroundFallbackUrl = nil
+    backgroundUrl = fallbackURL
   }
 
   // MARK: - 订阅操作（业务逻辑，由 View 层调用）
@@ -280,7 +634,8 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 构建订阅请求对象（用于弹出 SubscribeSheet）
   func buildSubscribeRequest(season: Int? = nil) -> Subscribe {
-    Subscribe(
+    let identity = detail.identity
+    return Subscribe(
       id: nil,
       name: detail.title ?? "",
       year: detail.year,
@@ -289,41 +644,37 @@ class MediaDetailViewModel: ObservableObject {
       poster: detail.poster_path,
       state: "N",
       last_update: nil,
-      // 优先使用预加载识别到的 TMDB ID（豆瓣/Bangumi 来源可能在预加载阶段才拿到）
-      tmdbid: preloadTask?.tmdbId ?? detail.tmdb_id,
+      // 完整详情是当前页面的权威身份；预识别 TMDB 仅在详情未提供时兜底。
+      tmdbid: detail.tmdb_id ?? preloadTask?.tmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
-      mediaid: MediaIdentifier.apiMediaId(
-        tmdbId: nil,
-        doubanId: nil,
-        bangumiId: nil,
-        mediaIdPrefix: detail.mediaid_prefix,
-        mediaId: detail.media_id
-      )
+      anilistid: detail.anilist_id,
+      media_source: identity?.source,
+      media_id: identity?.mediaId,
+      mediaid: detail.apiMediaId
     )
   }
 
   /// 取消当前媒体的订阅
-  func cancelSubscription() async {
+  @discardableResult
+  func cancelSubscription() async -> Bool {
+    let snapshot = apiService.sessionSnapshot()
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      preloadTask?.isSubscribed = false
-      return
-    }
-    #endif
-
-    let didCancel = await deleteResolvedSubscription()
+    let didCancel = await deleteResolvedSubscription(snapshot: snapshot)
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     // 刷新所有订阅状态（包括全局和分季）
     await refreshSubscriptionStatus(forceRefresh: true)
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     if didCancel {
       // 通知首页刷新订阅列表
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    // 远端已被其他入口删除时，刷新后的未订阅状态也视为收敛成功。
+    return didCancel || preloadTask?.isSubscribed == false
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
@@ -333,12 +684,6 @@ class MediaDetailViewModel: ObservableObject {
       preloadTask?.isSubscribed = false
       return true
     }
-
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      return true
-    }
-    #endif
 
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
     var resultCount = 0
@@ -370,7 +715,7 @@ class MediaDetailViewModel: ObservableObject {
             }
             return true
           } catch {
-            print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+            Logger.error("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
             return false
           }
         }
@@ -388,35 +733,47 @@ class MediaDetailViewModel: ObservableObject {
         didRefreshAll = didRefreshAll && didRefresh
       }
     }
-    return resultCount == 0 || didRefreshAll
+    return resultCount > 0 && didRefreshAll
   }
 
-  private func deleteResolvedSubscription() async -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return true }
-    #endif
-
+  private func deleteResolvedSubscription(snapshot: APIServiceSessionSnapshot) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     var fallbackSubscriptionId: Int?
     for media in subscriptionLookupCandidates() {
       do {
-        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+        guard
+          let subscription = try await apiService.fetchSubscriptionLookup(
+            media: media,
+            includeVideoMetadataFallback: false
+          )
+        else {
           continue
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         if canDeleteByMediaId(subscription.mediaId),
           subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
         {
-          return try await apiService.deleteSubscription(mediaId: subscription.mediaId, season: nil)
+          return try await apiService.deleteSubscriptionResult(
+            mediaId: subscription.mediaId,
+            season: nil
+          ).success
         }
         fallbackSubscriptionId = subscription.id
+      } catch is CancellationError {
+        return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     if let fallbackSubscriptionId {
       do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         return try await apiService.deleteSubscription(id: fallbackSubscriptionId)
+      } catch is CancellationError {
+        return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     return false
@@ -424,20 +781,23 @@ class MediaDetailViewModel: ObservableObject {
 
   func headerUnsubscribeConfirmationMessage() async -> String {
     let baseMessage = SubscriptionCancelConfirmation.headerMessage(for: detail)
-    #if DEBUG
-    if UIPreviewMode.isEnabled() { return baseMessage }
-    #endif
-    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning() else {
+    let snapshot = apiService.sessionSnapshot()
+    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning(snapshot: snapshot),
+      apiService.isSessionUnchanged(from: snapshot)
+    else {
       return baseMessage
     }
     return "\(baseMessage)\n\n\(warning)"
   }
 
-  private func resolvedTMDBMultiSeasonCancellationWarning() async -> String? {
+  private func resolvedTMDBMultiSeasonCancellationWarning(
+    snapshot: APIServiceSessionSnapshot
+  ) async -> String? {
     guard detail.tmdb_id == nil, detail.douban_id != nil || detail.bangumi_id != nil else {
       return nil
     }
-    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(),
+    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(snapshot: snapshot),
+      apiService.isSessionUnchanged(from: snapshot),
       mediaId.hasPrefix("tmdb:"),
       let tmdbId = Int(mediaId.dropFirst("tmdb:".count))
     else {
@@ -446,6 +806,7 @@ class MediaDetailViewModel: ObservableObject {
 
     do {
       let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: true)
+      guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
       let targetMediaId = "tmdb:\(tmdbId)"
       let matchingSubscriptions = subscriptions.filter {
         $0.type == "电视剧"
@@ -457,25 +818,36 @@ class MediaDetailViewModel: ObservableObject {
         return "当前内容匹配到 TMDB 下 \(matchingSubscriptions.count) 条订阅，确认后会一并取消。"
       }
       return "当前内容匹配到 TMDB 下多个分季订阅：\(seasonListText(seasons))。确认后会一并取消。"
+    } catch is CancellationError {
+      return nil
     } catch {
-      print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
+      Logger.error("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
       return nil
     }
   }
 
-  private func resolvedMediaDeleteTargetForHeaderUnsubscribe() async -> String? {
+  private func resolvedMediaDeleteTargetForHeaderUnsubscribe(
+    snapshot: APIServiceSessionSnapshot
+  ) async -> String? {
     for media in subscriptionLookupCandidates() {
       do {
-        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
+        guard let subscription = try await apiService.fetchSubscriptionLookup(
+          media: media,
+          includeVideoMetadataFallback: false
+        ) else {
           continue
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
         if canDeleteByMediaId(subscription.mediaId),
           subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
         {
           return subscription.mediaId
         }
+      } catch is CancellationError {
+        return nil
       } catch {
-        print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
       }
     }
     return nil

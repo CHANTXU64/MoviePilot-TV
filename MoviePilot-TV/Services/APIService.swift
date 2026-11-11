@@ -1,12 +1,17 @@
 import Combine
-import CryptoKit
 import Foundation
+import Kingfisher
 
 enum APIError: Error {
   case invalidURL
   case networkError(Error)
   case decodingError(Error)
   case serverMessage(String)
+  /// 502/503/504 可由反向代理在源站仍继续处理时返回，不是业务终态。
+  case gatewayStatus(Int, String)
+  case authenticationChallenge(statusCode: Int, message: String?)
+  case credentialsRejected
+  case mfaUnsupported
   case unauthorized
   case unknown
 }
@@ -20,8 +25,14 @@ extension APIError: LocalizedError {
       return error.localizedDescription
     case .decodingError:
       return "响应解析失败"
-    case .serverMessage(let message):
+    case .serverMessage(let message), .gatewayStatus(_, let message):
       return message
+    case .authenticationChallenge(let statusCode, let message):
+      return trimmedNonEmpty([message]) ?? "HTTP \(statusCode)"
+    case .credentialsRejected:
+      return "用户名或密码错误"
+    case .mfaUnsupported:
+      return "当前账号已开启 MFA，TV 端暂不支持"
     case .unauthorized:
       return "登录已失效"
     case .unknown:
@@ -38,10 +49,41 @@ enum SessionRefreshResult: Equatable {
   case refreshFailed
 }
 
+enum LoginDraftReason: String, Codable, Equatable {
+  case credentialsRejected
+  case mfaUnsupported
+  case missingCredentials
+  case missingServerURL
+}
+
+struct LoginDraft: Codable, Equatable {
+  let serverURL: String
+  let username: String
+  let password: String?
+  let reason: LoginDraftReason
+}
+
+/// 统一错误文本选择器：逐项 trim 后按顺序取首个非空文本；全部无效返回 nil。
+nonisolated func trimmedNonEmpty(_ candidates: [String?]) -> String? {
+  for candidate in candidates {
+    if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    {
+      return trimmed
+    }
+  }
+  return nil
+}
+
 nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
   let message: String?
+  let message_i18n: String?
+
+  var localizedMessage: String? {
+    trimmedNonEmpty([message_i18n, message])
+  }
 }
 
 nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
@@ -51,18 +93,117 @@ nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
 }
 
 struct APIServiceSessionSnapshot: Equatable {
+  let epoch: UInt64
+}
+
+struct APIServiceSessionState: Equatable {
   let baseURL: String
   let token: String?
-  let userName: String?
-  let superUser: Bool?
-  let permissions: [String: Bool]?
+  let currentUser: Token?
+  let epoch: UInt64
+  let imageNamespace: String
+
+  var profileKey: String? {
+    guard let userId = currentUser?.user_id else { return nil }
+    return "\(baseURL)|user:\(userId)"
+  }
+
+  var uiIdentity: String {
+    guard token != nil else { return "logged-out" }
+    guard let profileKey else { return "pending:\(baseURL)" }
+    return "\(profileKey)|\(permissionFingerprint)"
+  }
+
+  private var permissionFingerprint: String {
+    if currentUser?.super_user?.value == true { return "superuser" }
+    return (currentUser?.permissions ?? [:])
+      .sorted { $0.key < $1.key }
+      .map { "\($0.key)=\($0.value ? 1 : 0)" }
+      .joined(separator: ",")
+  }
+}
+
+private struct APIServiceSessionLease {
+  let epoch: UInt64
+  let baseURL: String
+  let token: String?
+  let runtime: APIServiceSessionRuntime
+}
+
+private final class APIServiceSessionRuntime: @unchecked Sendable {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
+  let transport: URLSession
+  let cookieVault = ResourceCookieVault()
+  let imageDownloader: ImageDownloader
+
+  init(
+    identifier: String = UUID().uuidString,
+    configuration baseConfiguration: URLSessionConfiguration
+  ) {
+    let configuration = baseConfiguration.copy() as! URLSessionConfiguration
+    configuration.httpShouldSetCookies = false
+    configuration.httpCookieStorage = nil
+    transport = URLSession(configuration: configuration)
+
+    imageDownloader = ImageDownloader(name: "moviepilot-session-\(identifier)")
+    let imageConfiguration = baseConfiguration.copy() as! URLSessionConfiguration
+    imageConfiguration.httpShouldSetCookies = false
+    imageConfiguration.httpCookieStorage = nil
+    imageDownloader.sessionConfiguration = imageConfiguration
+  }
+
+  func cancel() {
+    transport.invalidateAndCancel()
+    imageDownloader.cancelAll()
+  }
+}
+
+private struct StoredSessionRecord: Codable {
+  let revision: UInt64
+  let baseURL: String
+  let token: String
+  let currentUser: Token?
+  let username: String?
+  let password: String?
+  let imageNamespace: String
+}
+
+private struct StoredSessionMarker: Codable {
+  enum Storage: String, Codable {
+    case keychain
+    case userDefaults
+    case tombstone
+  }
+
+  let revision: UInt64
+  let storage: Storage
 }
 
 private struct CurrentUserResponse: Decodable {
+  let id: Int
   let name: String
   let is_superuser: FlexibleBool?
   let avatar: String?
   let permissions: [String: Bool]?
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case is_superuser
+    case avatar
+    case permissions
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(Int.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    is_superuser = try container.decodeIfPresent(FlexibleBool.self, forKey: .is_superuser)
+    avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    permissions = try decodeUserPermissions(from: container, forKey: .permissions)
+  }
 
   func token(accessToken: String) -> Token {
     Token(
@@ -70,26 +211,12 @@ private struct CurrentUserResponse: Decodable {
       token_type: "bearer",
       super_user: is_superuser,
       permissions: permissions ?? [:],
+      user_id: id,
       user_name: name,
       avatar: avatar
     )
   }
 }
-
-nonisolated struct MediaImageURLConfig: Sendable {
-  let baseURL: String
-  let useImageCache: Bool
-}
-
-#if DEBUG
-struct SubscriptionCacheTestHooks {
-  var afterSubscriptionSnapshotCacheHit: (() async -> Void)?
-  var afterSubscriptionSnapshotFetchValue: (() async -> Void)?
-  var afterSubscriptionSnapshotCacheStore: (() async -> Void)?
-  var afterSubscriptionStatusCacheHit: (() async -> Void)?
-  var afterSubscriptionStatusCacheStore: (() async -> Void)?
-}
-#endif
 
 nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
   switch error {
@@ -107,60 +234,39 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
-nonisolated private func encodeURIComponent(_ value: String) -> String? {
-  let allowed = CharacterSet(
-    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
-  return value.addingPercentEncoding(withAllowedCharacters: allowed)
-}
-
-nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
+/// 不透明 ID 按单个路径段编码一次（MoviePilot 媒体 ID、Emby 条目 ID 共用）。
+nonisolated func encodeMediaIDPathSegment(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:")
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
 }
 
-nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
-  if let host = URLComponents(string: value)?.host?.lowercased() {
-    return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
-  }
-  return value.contains("lain.bgm.tv")
+nonisolated func redactedEndpointForLogging(_ endpoint: String) -> String {
+  String(endpoint.split(separator: "?", maxSplits: 1).first ?? "")
+    .split(separator: "#", maxSplits: 1)
+    .first
+    .map(String.init) ?? ""
 }
 
-nonisolated private func displayImageURL(
-  _ value: String?,
-  baseURL: String,
-  useImageCache: Bool
-) -> URL? {
-  guard let value, !value.isEmpty else {
-    return nil
+nonisolated func relativeBackendEndpoint(
+  path: String,
+  params: [String: String?] = [:]
+) throws -> String {
+  guard var components = URLComponents(string: path),
+    components.scheme == nil,
+    components.host == nil,
+    !path.hasPrefix("//"),
+    !components.path.split(separator: "/").contains("..")
+  else {
+    throw APIError.invalidURL
   }
-
-  let lowercasedValue = value.lowercased()
-  guard lowercasedValue.hasPrefix("http://") || lowercasedValue.hasPrefix("https://") else {
-    return URL(string: value)
+  components.path = "/" + components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  guard !components.path.isEmpty, components.path != "/" else {
+    throw APIError.invalidURL
   }
-
-  guard let encodedUrl = encodeURIComponent(value) else {
-    return nil
-  }
-
-  if isBangumiImageURL(value) {
-    var urlString = "\(baseURL)/api/v1/system/img/1?imgurl=\(encodedUrl)"
-    if useImageCache {
-      urlString += "&cache=true"
-    }
-    return URL(string: urlString)
-  }
-
-  if useImageCache {
-    return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-  }
-
-  if value.contains("doubanio.com") {
-    return URL(string: "\(baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
-  }
-
-  return URL(string: value)
+  appendPercentEncodedQueryParams(to: &components, params: params)
+  guard let endpoint = components.string else { throw APIError.invalidURL }
+  return endpoint
 }
 
 nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throws -> T {
@@ -174,23 +280,28 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
   if firstByte == UInt8(ascii: "{") {
     do {
       let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
+      if response.success == false {
+        throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+      }
       if let wrappedData = response.data {
         return wrappedData
       }
-      if response.success == false {
-        throw APIError.serverMessage(response.message ?? "Request failed")
-      }
-      if let message = response.message, !message.isEmpty {
+      if let message = response.localizedMessage, !message.isEmpty {
         throw APIError.serverMessage(message)
       }
     } catch let error as APIError {
       throw error
     } catch let error as DecodingError {
+      if let response = try? JSONDecoder().decode(ApiResponse<JSONValue>.self, from: data),
+        response.success == false
+      {
+        throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+      }
       if let context = decodingContext(from: error), !context.codingPath.isEmpty {
         throw APIError.decodingError(error)
       }
     } catch {
-      print("DEBUG: [decodeOrUnwrap] unknown error: \(error)")
+      Logger.debug("[decodeOrUnwrap] unknown error: \(error)")
     }
   }
 
@@ -200,159 +311,90 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
 nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
   success: Bool, message: String?
 ) {
-  struct ActionResponse: Decodable { let success: Bool?, message: String? }
-  if let resp = try? JSONDecoder().decode(ActionResponse.self, from: data) {
-    return (resp.success ?? false, resp.message)
+  // 仅零字节空 body 按旧契约兼容为成功；非空响应一律按严格 envelope 解码，畸形/错类型失败关闭。
+  if data.isEmpty {
+    return (true, nil)
   }
-  if let apiResp = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-    return (apiResp.success ?? false, apiResp.message)
-  }
-  // 默认返回成功，因为某些API成功时可能不返回body
-  return (true, nil)
+  return try decodeStrictActionResponseSync(from: data)
 }
 
-nonisolated private func posterImageURL(posterPath: String?, config: MediaImageURLConfig) -> URL? {
-  let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
-
-  if let currentUrl = url, currentUrl.contains("doubanio.com") {
-    if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
-      return nil
-    }
+nonisolated private func decodeStrictActionResponseSync(from data: Data) throws -> (
+  success: Bool, message: String?
+) {
+  struct ActionResponse: Decodable {
+    let success: Bool?
+    let message: String?
+    let message_i18n: String?
   }
-
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
-}
-
-nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig)
-  -> URL?
-{
-  guard let url = backdropPath, !url.isEmpty else { return nil }
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
-}
-
-/// 泛型轻量级接口缓存，带过期及淘汰策略
-actor APICache<Key: Hashable, Value> {
-  private struct CacheEntry {
-    let value: Value
-    var expiresAt: Date
-  }
-
-  private var cache: [Key: CacheEntry] = [:]
-  private let defaultTTL: TimeInterval
-  private let size: Int
-  private let renewsTTLOnAccess: Bool
-  private let now: @Sendable () -> Date
-
-  init(
-    defaultTTL: TimeInterval = 60,
-    size: Int = 50,
-    renewsTTLOnAccess: Bool = true,
-    now: @escaping @Sendable () -> Date = Date.init
-  ) {
-    self.defaultTTL = defaultTTL
-    self.size = size
-    self.renewsTTLOnAccess = renewsTTLOnAccess
-    self.now = now
-  }
-
-  func get(_ key: Key) -> Value? {
-    guard var entry = cache[key] else { return nil }
-
-    let currentDate = now()
-    if currentDate > entry.expiresAt {
-      cache.removeValue(forKey: key)
-      return nil
-    }
-
-    if renewsTTLOnAccess {
-      // 访问时“续期”，变相实现了 LRU
-      entry.expiresAt = currentDate.addingTimeInterval(defaultTTL)
-      cache[key] = entry
-    }
-
-    return entry.value
-  }
-
-  func set(_ key: Key, value: Value, ttl: TimeInterval? = nil) {
-    // 如果缓存已满且要添加的是新 Key，则执行淘汰策略
-    if cache.count >= size, cache[key] == nil {
-      // 淘汰掉最接近过期的项
-      if let keyToEvict = cache.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key {
-        cache.removeValue(forKey: keyToEvict)
-      }
-    }
-
-    let expiresAt = now().addingTimeInterval(ttl ?? defaultTTL)
-    let newEntry = CacheEntry(value: value, expiresAt: expiresAt)
-    cache[key] = newEntry
-  }
-
-  func remove(_ key: Key) {
-    cache.removeValue(forKey: key)
-  }
-
-  func clear() {
-    cache.removeAll()
-  }
+  let response = try JSONDecoder().decode(ActionResponse.self, from: data)
+  return (
+    response.success ?? false,
+    trimmedNonEmpty([response.message_i18n, response.message])
+  )
 }
 
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
   static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
-  private static let noAccessibleFeatureMessage = "当前用户没有可访问的功能权限"
   private static let keychainService = "MoviePilot-TV"
   private static let accessTokenAccount = "accessToken"
   private static let currentUserAccount = "currentUser"
+  private static let sessionRecordAccount = "sessionRecord.v2"
+  private static let sessionMarkerKey = "sessionMarker.v2"
+  private static let loginDraftAccount = "loginDraft.v1"
+  private static let loginDraftMarkerKey = "loginDraftMarker.v1"
+  private static let defaultBaseURL = "http://192.168.1.1:3000"
+  private static let ambiguousAuthenticationChallengeLimit = 3
 
-  private var loginTask: Task<Void, Error>?
-  @Published var currentUser: Token? = APIService.loadStoredCurrentUserIfTokenExists() {
-    didSet {
-      if oldValue?.user_name != currentUser?.user_name
-        || oldValue?.super_user?.value != currentUser?.super_user?.value
-        || oldValue?.permissions != currentUser?.permissions
-      {
-        invalidateSubscriptionCachesAfterSessionChange()
-      }
-      persistCurrentUser()
+  @Published private(set) var session: APIServiceSessionState
+  private let sessionConfiguration: URLSessionConfiguration
+  private var runtime: APIServiceSessionRuntime
+  private var activeSessionScope: SessionScope?
+  private var storedUsername: String?
+  private var storedPassword: String?
+  private var storageLocation: StoredSessionMarker.Storage = .tombstone
+  private var activeCandidateLoginCounts: [UInt64: Int] = [:]
+  var loginDraft: LoginDraft?
+  private var authenticationRetryTask: Task<Void, Never>?
+  private var authenticationRetryEpoch: UInt64?
+  private var ambiguousAuthenticationChallengeCount = 0
+  private var didNotifyAmbiguousAuthenticationChallenge = false
+
+  #if TESTING
+    var storedCredentialsForTesting: (username: String?, password: String?) {
+      (storedUsername, storedPassword)
     }
+  #endif
+
+  var baseURL: String { session.baseURL }
+  var token: String? { session.token }
+  var currentUser: Token? { session.currentUser }
+
+  var profileKey: String? {
+    if let key = session.profileKey {
+      return key
+    }
+    return Self.persistedProfileKey(baseURL: session.baseURL, token: session.token)
+  }
+  var uiIdentity: String { session.uiIdentity }
+
+  /// 会话身份尚未恢复（token-only 会话在 /user/current 恢复完成前或恢复失败）时，
+  /// 回退到持久化且与当前 token 匹配的已验证快照，避免四类 profile 偏好读写静默失效。
+  private static func persistedProfileKey(baseURL: String, token: String?) -> String? {
+    guard let token, !token.isEmpty,
+      let storedUser = loadStoredCurrentUser(),
+      let restoredUser = storedUser.withRestoredAccessToken(token),
+      let userId = restoredUser.user_id
+    else {
+      return nil
+    }
+    return "\(baseURL)|user:\(userId)"
   }
 
-  @Published var baseURL: String =
-    UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
-  {
-    didSet {
-      UserDefaults.standard.set(baseURL, forKey: "serverURL")
-      currentUser = nil
-      invalidateSubscriptionCachesAfterSessionChange()
-    }
-  }
-
-  @Published var token: String? =
-    KeychainHelper.shared.read(service: keychainService, account: accessTokenAccount)
-    ?? UserDefaults.standard.string(forKey: accessTokenAccount)
-  {
-    didSet {
-      invalidateSubscriptionCachesAfterSessionChange()
-      if let token = token {
-        if !KeychainHelper.shared.save(
-          token,
-          service: Self.keychainService,
-          account: Self.accessTokenAccount
-        ) {
-          UserDefaults.standard.set(token, forKey: Self.accessTokenAccount)
-        }
-      } else {
-        currentUser = nil
-        if !KeychainHelper.shared.delete(
-          service: Self.keychainService,
-          account: Self.accessTokenAccount
-        ) {
-          print("Failed to delete keychain item for account: accessToken")
-        }
-        UserDefaults.standard.removeObject(forKey: Self.accessTokenAccount)
-      }
-    }
+  var isSessionStoredInKeychain: Bool? {
+    guard session.token != nil else { return nil }
+    return storageLocation == .keychain
   }
 
   @Published var settings: GlobalSettings? {
@@ -363,8 +405,8 @@ class APIService: ObservableObject {
       } else {
         // 对于 tvOS 17.x 及更早版本，禁用图像缓存以避免 WEBP 解码问题。
         if useCacheSetting {
-          print(
-            "ℹ️ Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
+          Logger.info(
+            "Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
           )
         }
         self.useImageCache = false
@@ -373,111 +415,46 @@ class APIService: ObservableObject {
   }
   @Published var useImageCache: Bool = false
 
-  // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
-  private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
-  private let mediaSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
-  private let groupSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
-  private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
-    defaultTTL: 120, size: 20)
-  private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
-  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(
-    defaultTTL: 30,
-    size: 1,
-    renewsTTLOnAccess: false
-  )
-  private var subscriptionCacheGeneration = 0
-  private var subscriptionSnapshotFetchGeneration: Int?
-  private var subscriptionSnapshotFetchRevision = 0
-  private var subscriptionSnapshotFetchTaskRevision: Int?
-  private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
-  #if DEBUG
-  var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
-  private var subscriptionDebugRequestCount = 0
-  var uiPreviewPermissions: Set<UserPermissionKey>?
-  var uiPreviewCanRequestSuperUserEndpoints: Bool?
-  #endif
-
-  private func invalidateSubscriptionCaches() async {
-    subscriptionCacheGeneration &+= 1
-    subscriptionSnapshotFetchTask?.cancel()
-    subscriptionSnapshotFetchGeneration = nil
-    subscriptionSnapshotFetchTaskRevision = nil
-    subscriptionSnapshotFetchTask = nil
-    await subscriptionStatusCache.clear()
-    await subscriptionSnapshotCache.clear()
+  var imageConfigurationIdentity: String {
+    let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
+    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
   }
 
-  private func invalidateSubscriptionCachesAfterSessionChange() {
-    subscriptionCacheGeneration &+= 1
-    subscriptionSnapshotFetchTask?.cancel()
-    subscriptionSnapshotFetchGeneration = nil
-    subscriptionSnapshotFetchTaskRevision = nil
-    subscriptionSnapshotFetchTask = nil
-    let statusCache = subscriptionStatusCache
-    let snapshotCache = subscriptionSnapshotCache
-    Task {
-      await statusCache.clear()
-      await snapshotCache.clear()
+  /// 接口缓存随会话作用域存活；尚未创建作用域时没有缓存可失效。
+  private func invalidateSubscriptionCaches() {
+    activeSessionScope?.invalidateSubscriptionCaches()
+  }
+
+  /// 会话快照内读取共享缓存：调用方每次挂起前后都校验任务取消与会话，旧会话的结果不会返回给调用者；
+  /// 共享加载在真正发请求前也校验发起时的会话，排队期间切换账号时不会借用新会话的凭据执行。
+  private func sessionCachedValue<Value: Sendable>(
+    _ cache: CoalescingCache<String, Value>,
+    key: String,
+    forceRefresh: Bool = false,
+    acceptsCachedValue: (Value) -> Bool = { _ in true },
+    load: @escaping @MainActor () async throws -> Value
+  ) async throws -> Value {
+    let snapshot = sessionSnapshot()
+    return try await cache.value(
+      for: key,
+      forceRefresh: forceRefresh,
+      acceptsCachedValue: acceptsCachedValue,
+      validate: { try validateSessionSnapshot(snapshot) }
+    ) { [weak self] in
+      guard let self, self.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+      return try await load()
     }
   }
 
-  // MARK: - 用于自动登录的凭据
-  private var storedUsername: String? {
-    get {
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-        ?? UserDefaults.standard.string(forKey: "username")
-    }
-    set {
-      if let value = newValue {
-        if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: "username") {
-          UserDefaults.standard.set(value, forKey: "username")
-        }
-      } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "username") {
-          print("Failed to delete keychain item for account: username")
-        }
-        UserDefaults.standard.removeObject(forKey: "username")
-      }
-    }
-  }
-
-  private var storedPassword: String? {
-    get {
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password")
-        ?? UserDefaults.standard.string(forKey: "password")
-    }
-    set {
-      if let value = newValue {
-        if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: "password") {
-          UserDefaults.standard.set(value, forKey: "password")
-        }
-      } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "password") {
-          print("Failed to delete keychain item for account: password")
-        }
-        UserDefaults.standard.removeObject(forKey: "password")
-      }
-    }
+  private func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
+    try Task.checkCancellation()
+    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
   }
 
   private enum StoredCurrentUserState {
     case missing
-    case noAccessibleFeature
     case invalidToken
     case restored(Token)
-  }
-
-  private static func loadStoredCurrentUserIfTokenExists() -> Token? {
-    guard let storedToken = storedAccessToken else { return nil }
-    switch storedCurrentUserState(storedToken: storedToken) {
-    case .restored(let currentUser):
-      return currentUser
-    case .noAccessibleFeature:
-      clearStoredSessionCredentials()
-      return nil
-    case .missing, .invalidToken:
-      return nil
-    }
   }
 
   private static var storedAccessToken: String? {
@@ -496,6 +473,81 @@ class APIService: ObservableObject {
     return try? JSONDecoder().decode(Token.self, from: data)
   }
 
+  private static func loadStoredLoginDraft() -> LoginDraft? {
+    let defaults = UserDefaults.standard
+    if let marker = loadLoginDraftMarker() {
+      let json: String?
+      switch marker.storage {
+      case .keychain:
+        json = KeychainHelper.shared.read(service: keychainService, account: loginDraftAccount)
+      case .userDefaults:
+        json = defaults.string(forKey: loginDraftAccount)
+      case .tombstone:
+        json = nil
+      }
+      return decodeLoginDraft(json)
+    }
+
+    // Marker 存在但损坏时失败关闭，避免重新加载已失去权威性的旧密码副本。
+    guard defaults.object(forKey: loginDraftMarkerKey) == nil else { return nil }
+
+    // 兼容本次 marker 引入前的草稿；旧实现中 UserDefaults 是 Keychain 失败后的新副本。
+    guard let legacyDraft = decodeLoginDraft(
+      defaults.string(forKey: loginDraftAccount)
+        ?? KeychainHelper.shared.read(service: keychainService, account: loginDraftAccount)
+    ) else {
+      return nil
+    }
+    _ = persistLoginDraft(legacyDraft)
+    return legacyDraft
+  }
+
+  @discardableResult
+  private static func persistLoginDraft(_ draft: LoginDraft) -> Bool {
+    guard
+      let data = try? JSONEncoder().encode(draft),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return false
+    }
+    let revision = nextLoginDraftRevision()
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    if KeychainHelper.shared.save(json, service: keychainService, account: loginDraftAccount) {
+      UserDefaults.standard.removeObject(forKey: loginDraftAccount)
+      persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .keychain))
+      return true
+    }
+    UserDefaults.standard.set(json, forKey: loginDraftAccount)
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .userDefaults))
+    return true
+  }
+
+  private static func clearStoredLoginDraft() {
+    let revision = nextLoginDraftRevision()
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    _ = KeychainHelper.shared.delete(service: keychainService, account: loginDraftAccount)
+    UserDefaults.standard.removeObject(forKey: loginDraftAccount)
+  }
+
+  private static func decodeLoginDraft(_ json: String?) -> LoginDraft? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(LoginDraft.self, from: data)
+  }
+
+  private static func loadLoginDraftMarker() -> StoredSessionMarker? {
+    guard let data = UserDefaults.standard.data(forKey: loginDraftMarkerKey) else { return nil }
+    return try? JSONDecoder().decode(StoredSessionMarker.self, from: data)
+  }
+
+  private static func nextLoginDraftRevision() -> UInt64 {
+    (loadLoginDraftMarker()?.revision ?? 0) &+ 1
+  }
+
+  private static func persistLoginDraftMarker(_ marker: StoredSessionMarker) {
+    guard let data = try? JSONEncoder().encode(marker) else { return }
+    UserDefaults.standard.set(data, forKey: loginDraftMarkerKey)
+  }
+
   private static func clearStoredSessionCredentials() {
     [
       accessTokenAccount,
@@ -504,7 +556,7 @@ class APIService: ObservableObject {
       "password",
     ].forEach { account in
       if !KeychainHelper.shared.delete(service: keychainService, account: account) {
-        print("Failed to delete keychain item for account: \(account)")
+        Logger.warning("Failed to delete keychain item for account: \(account)")
       }
       UserDefaults.standard.removeObject(forKey: account)
     }
@@ -513,7 +565,6 @@ class APIService: ObservableObject {
   private static func storedCurrentUserState(storedToken: String) -> StoredCurrentUserState {
     guard let storedUser = loadStoredCurrentUser() else { return .missing }
     guard storedUser.hasKnownFeaturePermissions else { return .missing }
-    guard storedUser.hasLoginAccessibleFeature else { return .noAccessibleFeature }
     guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
       return .invalidToken
     }
@@ -522,66 +573,129 @@ class APIService: ObservableObject {
 
   private func restoreCurrentUserFromStorage() -> Bool {
     guard let storedToken = token else { return false }
-    switch Self.storedCurrentUserState(storedToken: storedToken) {
+    switch Self.persistedCurrentUserState(storedToken: storedToken) {
     case .restored(let restoredUser):
-      currentUser = restoredUser
+      let cookies = runtime.cookieVault.snapshot()
+      replaceSession(
+        baseURL: baseURL,
+        token: storedToken,
+        currentUser: restoredUser,
+        username: storedUsername,
+        password: storedPassword,
+        persist: true,
+        cookies: cookies
+      )
       return true
-    case .noAccessibleFeature:
-      logout()
-      return false
     case .missing, .invalidToken:
       return false
     }
   }
 
-  private func persistCurrentUser() {
-    guard let currentUser else {
-      if !KeychainHelper.shared.delete(service: Self.keychainService, account: Self.currentUserAccount)
-      {
-        print("Failed to delete keychain item for account: currentUser")
+  init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
+    let initial = Self.loadInitialSession()
+    self.sessionConfiguration = sessionConfiguration.copy() as! URLSessionConfiguration
+    session = initial.state
+    loginDraft = initial.loginDraft
+    runtime = APIServiceSessionRuntime(
+      identifier: initial.state.imageNamespace,
+      configuration: self.sessionConfiguration
+    )
+    storedUsername = initial.username
+    storedPassword = initial.password
+    storageLocation = initial.storage
+    if UserDefaults.standard.object(forKey: Self.sessionMarkerKey) == nil {
+      if let token = initial.state.token, !token.isEmpty {
+        storageLocation = persistRecord(
+          StoredSessionRecord(
+            revision: 1,
+            baseURL: initial.state.baseURL,
+            token: token,
+            currentUser: initial.state.currentUser?.withoutPersistedAccessToken(),
+            username: initial.username,
+            password: initial.password,
+            imageNamespace: initial.state.imageNamespace
+          )
+        )
+      } else {
+        persistMarker(StoredSessionMarker(revision: 1, storage: .tombstone))
+        storageLocation = .tombstone
       }
-      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
-      return
     }
-
-    guard
-      let data = try? JSONEncoder().encode(currentUser),
-      let json = String(data: data, encoding: .utf8)
-    else {
-      return
-    }
-
-    if KeychainHelper.shared.save(json, service: Self.keychainService, account: Self.currentUserAccount) {
-      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
-    } else {
-      print("Failed to save keychain item for account: currentUser")
-      persistCurrentUserDefaultsFallback(currentUser)
+    if initial.state.token != nil {
+      loginDraft = nil
+      Self.clearStoredLoginDraft()
     }
   }
 
-  private func persistCurrentUserDefaultsFallback(_ currentUser: Token) {
-    let fallbackUser = currentUser.withoutPersistedAccessToken()
-    guard
-      let data = try? JSONEncoder().encode(fallbackUser),
-      let json = String(data: data, encoding: .utf8)
-    else {
-      return
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      activeSessionScope?.tearDown()
+      runtime.cancel()
     }
-    UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
   }
-
-  private init() {}
 
   var isLoggedIn: Bool {
     return token != nil
   }
 
   func logout() {
-    token = nil
-    currentUser = nil
-    storedUsername = nil
-    storedPassword = nil
+    let revision = nextStoredRevision()
+    persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    storageLocation = .tombstone
+    loginDraft = nil
+    Self.clearStoredLoginDraft()
+    clearStoredRecordAndLegacyCredentials()
+    replaceSession(
+      baseURL: baseURL,
+      token: nil,
+      currentUser: nil,
+      username: nil,
+      password: nil,
+      persist: false
+    )
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
+  }
+
+  private func requireReauthentication(reason: LoginDraftReason) {
+    let draft = LoginDraft(
+      serverURL: baseURL,
+      username: storedUsername ?? currentUser?.user_name ?? "",
+      password: storedPassword,
+      reason: reason
+    )
+    loginDraft = draft
+    _ = Self.persistLoginDraft(draft)
+
+    let revision = nextStoredRevision()
+    persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    storageLocation = .tombstone
+    clearStoredRecordAndLegacyCredentials()
+    replaceSession(
+      baseURL: draft.serverURL,
+      token: nil,
+      currentUser: nil,
+      username: draft.username,
+      password: draft.password,
+      persist: false
+    )
+  }
+
+  func updateLoginDraft(
+    serverURL: String,
+    username: String,
+    password: String,
+    reason: LoginDraftReason? = nil
+  ) {
+    guard let resolvedReason = reason ?? loginDraft?.reason else { return }
+    let draft = LoginDraft(
+      serverURL: serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
+      username: username,
+      password: password,
+      reason: resolvedReason
+    )
+    loginDraft = draft
+    _ = Self.persistLoginDraft(draft)
   }
 
   private var currentOrStoredUser: Token? {
@@ -589,44 +703,391 @@ class APIService: ObservableObject {
       return currentUser
     }
     guard let token, !token.isEmpty else { return nil }
-    switch Self.storedCurrentUserState(storedToken: token) {
+    switch Self.persistedCurrentUserState(storedToken: token) {
     case .restored(let storedUser):
       return storedUser
-    case .noAccessibleFeature, .invalidToken, .missing:
+    case .invalidToken, .missing:
       return nil
     }
   }
 
   var canRequestSuperUserEndpoints: Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      return uiPreviewCanRequestSuperUserEndpoints ?? false
-    }
-    #endif
-    return currentOrStoredUser?.canRequestSuperUserEndpoints == true
+    currentOrStoredUser?.canRequestSuperUserEndpoints == true
+  }
+
+  /// 与权限判断同源的用户名：冷启动时 `/user/current` 尚未返回也能读到已保存的账号。
+  var currentOrStoredUserName: String? {
+    currentOrStoredUser?.user_name
   }
 
   func canAccess(_ permission: UserPermissionKey) -> Bool {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      return uiPreviewPermissions?.contains(permission) ?? false
-    }
-    #endif
-    return currentOrStoredUser?.canAccess(permission) == true
+    currentOrStoredUser?.canAccess(permission) == true
   }
 
   func sessionSnapshot() -> APIServiceSessionSnapshot {
-    APIServiceSessionSnapshot(
-      baseURL: baseURL,
-      token: token,
-      userName: currentUser?.user_name,
-      superUser: currentUser?.super_user?.value,
-      permissions: currentUser?.permissions
-    )
+    APIServiceSessionSnapshot(epoch: session.epoch)
   }
 
   func isSessionUnchanged(from snapshot: APIServiceSessionSnapshot) -> Bool {
-    sessionSnapshot() == snapshot
+    session.epoch == snapshot.epoch
+  }
+
+  /// 冻结会话的操作只消费一次失效通知；已过期的快照在订阅时立即失效。
+  func sessionInvalidationPublisher(for snapshot: APIServiceSessionSnapshot) -> AnyPublisher<Void, Never> {
+    $session
+      .first { $0.epoch != snapshot.epoch }
+      .map { _ in () }
+      .eraseToAnyPublisher()
+  }
+
+  private struct InitialSession {
+    let state: APIServiceSessionState
+    let username: String?
+    let password: String?
+    let storage: StoredSessionMarker.Storage
+    let loginDraft: LoginDraft?
+  }
+
+  private static func loadInitialSession() -> InitialSession {
+    let defaults = UserDefaults.standard
+    let storedBaseURL = normalizedBaseURL(defaults.string(forKey: "serverURL"))
+    let fallbackBaseURL = storedBaseURL ?? defaultBaseURL
+    let persistedLoginDraft = loadStoredLoginDraft()
+    if let marker = loadMarker() {
+      return restoreInitialSession(
+        from: marker,
+        fallbackBaseURL: fallbackBaseURL,
+        loginDraft: persistedLoginDraft
+      )
+    }
+
+    // 新格式标记存在但无法解码时必须失败关闭，不能退回旧字段复活已退出的账号。
+    if defaults.object(forKey: sessionMarkerKey) != nil {
+      return loggedOutInitialSession(baseURL: fallbackBaseURL, loginDraft: persistedLoginDraft)
+    }
+
+    return migrateLegacyInitialSession(
+      baseURL: storedBaseURL,
+      fallbackBaseURL: fallbackBaseURL,
+      persistedLoginDraft: persistedLoginDraft,
+      defaults: defaults
+    )
+  }
+
+  private static func restoreInitialSession(
+    from marker: StoredSessionMarker,
+    fallbackBaseURL: String,
+    loginDraft: LoginDraft?
+  ) -> InitialSession {
+    guard marker.storage != .tombstone,
+      let record = loadRecord(from: marker.storage),
+      record.revision == marker.revision,
+      let normalizedURL = normalizedBaseURL(record.baseURL),
+      !record.token.isEmpty
+    else {
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        epoch: marker.revision,
+        loginDraft: loginDraft
+      )
+    }
+
+    let restoredUser = record.currentUser?.withRestoredAccessToken(record.token)
+    guard record.currentUser == nil || restoredUser != nil else {
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        epoch: marker.revision,
+        loginDraft: loginDraft
+      )
+    }
+    return InitialSession(
+      state: APIServiceSessionState(
+        baseURL: normalizedURL,
+        token: record.token,
+        currentUser: restoredUser,
+        epoch: marker.revision,
+        imageNamespace: record.imageNamespace
+      ),
+      username: record.username,
+      password: record.password,
+      storage: marker.storage,
+      loginDraft: nil
+    )
+  }
+
+  private static func migrateLegacyInitialSession(
+    baseURL: String?,
+    fallbackBaseURL: String,
+    persistedLoginDraft: LoginDraft?,
+    defaults: UserDefaults
+  ) -> InitialSession {
+    let legacyUsername = KeychainHelper.shared.read(service: keychainService, account: "username")
+      ?? defaults.string(forKey: "username")
+    let legacyPassword = KeychainHelper.shared.read(service: keychainService, account: "password")
+      ?? defaults.string(forKey: "password")
+    guard let legacyToken = storedAccessToken, !legacyToken.isEmpty else {
+      clearStoredSessionCredentials()
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        loginDraft: persistedLoginDraft
+      )
+    }
+    guard let baseURL else {
+      let draft = LoginDraft(
+        serverURL: "",
+        username: legacyUsername ?? "",
+        password: legacyPassword,
+        reason: .missingServerURL
+      )
+      _ = persistLoginDraft(draft)
+      clearStoredSessionCredentials()
+      return loggedOutInitialSession(baseURL: fallbackBaseURL, loginDraft: draft)
+    }
+
+    let legacyUserState = storedCurrentUserState(storedToken: legacyToken)
+    let legacyUser: Token?
+    if case .restored(let user) = legacyUserState {
+      legacyUser = user
+    } else {
+      legacyUser = nil
+    }
+    return InitialSession(
+      state: APIServiceSessionState(
+        baseURL: baseURL,
+        token: legacyToken,
+        currentUser: legacyUser,
+        epoch: 0,
+        imageNamespace: UUID().uuidString
+      ),
+      username: legacyUsername,
+      password: legacyPassword,
+      storage: .userDefaults,
+      loginDraft: nil
+    )
+  }
+
+  private static func loggedOutInitialSession(
+    baseURL: String,
+    epoch: UInt64 = 0,
+    loginDraft: LoginDraft? = nil
+  ) -> InitialSession {
+    InitialSession(
+      state: loggedOutState(baseURL: baseURL, epoch: epoch),
+      username: nil,
+      password: nil,
+      storage: .tombstone,
+      loginDraft: loginDraft
+    )
+  }
+
+  private static func loggedOutState(baseURL: String, epoch: UInt64) -> APIServiceSessionState {
+    APIServiceSessionState(
+      baseURL: baseURL,
+      token: nil,
+      currentUser: nil,
+      epoch: epoch,
+      imageNamespace: UUID().uuidString
+    )
+  }
+
+  private static func normalizedBaseURL(_ rawValue: String?) -> String? {
+    guard let rawValue else { return nil }
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard let components = URLComponents(string: trimmed),
+      ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+      components.host != nil
+    else {
+      return nil
+    }
+    return trimmed
+  }
+
+  private static func loadMarker() -> StoredSessionMarker? {
+    guard let data = UserDefaults.standard.data(forKey: sessionMarkerKey) else { return nil }
+    return try? JSONDecoder().decode(StoredSessionMarker.self, from: data)
+  }
+
+  private static func loadRecord(from storage: StoredSessionMarker.Storage) -> StoredSessionRecord? {
+    let json: String?
+    switch storage {
+    case .keychain:
+      json = KeychainHelper.shared.read(service: keychainService, account: sessionRecordAccount)
+    case .userDefaults:
+      json = UserDefaults.standard.string(forKey: sessionRecordAccount)
+    case .tombstone:
+      json = nil
+    }
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(StoredSessionRecord.self, from: data)
+  }
+
+  private static func persistedCurrentUserState(storedToken: String) -> StoredCurrentUserState {
+    if let marker = loadMarker(), marker.storage != .tombstone,
+      let record = loadRecord(from: marker.storage),
+      record.revision == marker.revision,
+      record.token == storedToken,
+      let storedUser = record.currentUser
+    {
+      guard storedUser.hasKnownFeaturePermissions else { return .missing }
+      guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
+        return .invalidToken
+      }
+      return .restored(restoredUser)
+    }
+    return .missing
+  }
+
+  private func nextStoredRevision() -> UInt64 {
+    max(Self.loadMarker()?.revision ?? 0, session.epoch) &+ 1
+  }
+
+  private func persistMarker(_ marker: StoredSessionMarker) {
+    guard let data = try? JSONEncoder().encode(marker) else { return }
+    UserDefaults.standard.set(data, forKey: Self.sessionMarkerKey)
+  }
+
+  @discardableResult
+  private func persistRecord(_ record: StoredSessionRecord) -> StoredSessionMarker.Storage {
+    guard let data = try? JSONEncoder().encode(record),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return .tombstone
+    }
+
+    let storage: StoredSessionMarker.Storage
+    if KeychainHelper.shared.save(
+      json,
+      service: Self.keychainService,
+      account: Self.sessionRecordAccount
+    ) {
+      storage = .keychain
+      UserDefaults.standard.removeObject(forKey: Self.sessionRecordAccount)
+    } else {
+      storage = .userDefaults
+      UserDefaults.standard.set(json, forKey: Self.sessionRecordAccount)
+    }
+    persistMarker(StoredSessionMarker(revision: record.revision, storage: storage))
+    Self.clearStoredSessionCredentials()
+    return storage
+  }
+
+  private func clearStoredRecordAndLegacyCredentials() {
+    if !KeychainHelper.shared.delete(
+      service: Self.keychainService,
+      account: Self.sessionRecordAccount
+    ) {
+      Logger.warning("Failed to delete keychain item for account: \(Self.sessionRecordAccount)")
+    }
+    UserDefaults.standard.removeObject(forKey: Self.sessionRecordAccount)
+    Self.clearStoredSessionCredentials()
+  }
+
+  func replaceSession(
+    baseURL rawBaseURL: String,
+    token: String?,
+    currentUser: Token?,
+    username: String?,
+    password: String?,
+    persist: Bool,
+    cookies: [HTTPCookie] = []
+  ) {
+    cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
+    let normalizedURL = Self.normalizedBaseURL(rawBaseURL) ?? session.baseURL
+    let nextEpoch = session.epoch &+ 1
+    let provisional = APIServiceSessionState(
+      baseURL: normalizedURL,
+      token: token,
+      currentUser: currentUser,
+      epoch: nextEpoch,
+      imageNamespace: session.imageNamespace
+    )
+    let preserveImageNamespace = provisional.profileKey != nil
+      && provisional.uiIdentity == session.uiIdentity
+    let nextState = APIServiceSessionState(
+      baseURL: normalizedURL,
+      token: token,
+      currentUser: currentUser,
+      epoch: nextEpoch,
+      imageNamespace: preserveImageNamespace ? session.imageNamespace : UUID().uuidString
+    )
+
+    if persist, let token, !token.isEmpty {
+      let revision = nextStoredRevision()
+      // 先让旧记录失效；若随后写入或进程中断，重启时宁可退出，也不能复活旧账号。
+      persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+      storageLocation = .tombstone
+      let record = StoredSessionRecord(
+        revision: revision,
+        baseURL: normalizedURL,
+        token: token,
+        currentUser: currentUser?.withoutPersistedAccessToken(),
+        username: username,
+        password: password,
+        imageNamespace: nextState.imageNamespace
+      )
+      storageLocation = persistRecord(record)
+      loginDraft = nil
+      Self.clearStoredLoginDraft()
+    }
+
+    let oldUIIdentity = session.uiIdentity
+    let oldBaseURL = session.baseURL
+    let oldRuntime = runtime
+    let newRuntime = APIServiceSessionRuntime(
+      identifier: nextState.imageNamespace,
+      configuration: sessionConfiguration
+    )
+    newRuntime.cookieVault.replace(with: cookies)
+    runtime = newRuntime
+    session = nextState
+    storedUsername = username
+    storedPassword = password
+    UserDefaults.standard.set(normalizedURL, forKey: "serverURL")
+    oldRuntime.cancel()
+    releaseSessionScopeIfNeeded(for: nextState)
+    invalidateAllSessionCaches()
+    if oldUIIdentity != nextState.uiIdentity || oldBaseURL != nextState.baseURL {
+      settings = nil
+    }
+  }
+
+  /// 当前会话的共享协作对象。首次使用时创建；拆除只发生在 `replaceSession`。
+  var sessionScope: SessionScope {
+    if let activeSessionScope { return activeSessionScope }
+    let scope = SessionScope(apiService: self, uiIdentity: session.uiIdentity)
+    activeSessionScope = scope
+    return scope
+  }
+
+  var mediaPreloader: MediaPreloader { sessionScope.mediaPreloader }
+
+  var imageWarmer: MPImageWarmer { sessionScope.imageWarmer }
+
+  /// 会话身份变化或登出时同步拆除旧作用域，不依赖对象释放时机。
+  private func releaseSessionScopeIfNeeded(for state: APIServiceSessionState) {
+    guard let scope = activeSessionScope else { return }
+    guard scope.uiIdentity != state.uiIdentity || state.token == nil else { return }
+    activeSessionScope = nil
+    scope.tearDown()
+  }
+
+  private func invalidateAllSessionCaches() {
+    activeSessionScope?.invalidateAllCaches()
+  }
+
+  private func currentLease() -> APIServiceSessionLease {
+    APIServiceSessionLease(
+      epoch: session.epoch,
+      baseURL: session.baseURL,
+      token: session.token,
+      runtime: runtime
+    )
+  }
+
+  private func validate(_ lease: APIServiceSessionLease) throws {
+    guard session.epoch == lease.epoch else { throw CancellationError() }
   }
 
   func refreshStoredSessionAfterAppUpdateIfNeeded(
@@ -638,14 +1099,6 @@ class APIService: ObservableObject {
     }
 
     let defaults = UserDefaults.standard
-    if let currentUser, currentUser.hasKnownFeaturePermissions,
-      !currentUser.hasLoginAccessibleFeature
-    {
-      logout()
-      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
-      return .noStoredSession
-    }
-
     if defaults.string(forKey: Self.sessionRefreshAppVersionKey) == normalizedAppVersion {
       if token != nil, currentUser == nil {
         _ = restoreCurrentUserFromStorage()
@@ -695,146 +1148,480 @@ class APIService: ObservableObject {
       return .skippedWithoutCredentials
     }
 
-    let previousToken = token
-    let previousCurrentUser = currentUser
     do {
-      _ = try await login(
-        username: username,
-        password: password,
-        preserveExistingSessionOnFailure: true
-      )
+      _ = try await reloginStoredSession()
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .refreshed
     } catch {
-      if Self.isNoAccessibleFeatureError(error) {
-        logout()
-        defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
-        return .noStoredSession
-      }
-      token = previousToken
-      currentUser = previousCurrentUser
-      storedUsername = username
-      storedPassword = password
       return .refreshFailed
     }
   }
 
+  func refreshCurrentUserForStartup() async {
+    _ = await recoverCurrentUserFromCurrentUserEndpoint()
+  }
+
   private func recoverCurrentUserFromCurrentUserEndpoint() async -> Bool {
-    guard let accessToken = token, !accessToken.isEmpty else { return false }
+    guard token?.isEmpty == false else { return false }
+    let startingEpoch = session.epoch
     do {
-      let data = try await makeRequest(
-        endpoint: "/user/current",
-        retryOn401: false,
-        logoutOnUnauthorized: false
-      )
-      let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      let data = try await makeRequest(endpoint: "/user/current")
+      let user = try await decodeOrUnwrap(CurrentUserResponse.self, from: data)
+      guard let accessToken = token, !accessToken.isEmpty else { return false }
       let recoveredUser = user.token(accessToken: accessToken)
-      guard recoveredUser.hasLoginAccessibleFeature else {
-        logout()
-        return false
-      }
-      currentUser = recoveredUser
+      applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
       return true
+    } catch is CancellationError {
+      return session.epoch != startingEpoch && token != nil && currentUser != nil
     } catch {
+      scheduleAuthenticationRetry(forEpoch: startingEpoch)
       return false
     }
   }
 
   private func makeRequest(
-    endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false,
-    retryOn401: Bool = true,
-    logoutOnUnauthorized: Bool = true
+    endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false
   ) async throws -> Data {
-    guard let url = URL(string: "\(baseURL)/api/v1\(endpoint)") else {
+    let lease = currentLease()
+    do {
+      return try await performRequest(
+        endpoint: endpoint,
+        method: method,
+        body: body,
+        isForm: isForm,
+        lease: lease,
+        requireCurrentLease: true
+      )
+    } catch APIError.authenticationChallenge(let statusCode, let message) {
+      try await recoverSessionAfterAuthenticationChallenge(
+        lease,
+        endpoint: endpoint,
+        statusCode: statusCode,
+        message: message
+      )
+      throw CancellationError()
+    }
+  }
+
+  private enum CurrentUserProbeResult {
+    case valid(Token)
+    case rejected
+    case unavailable(Error)
+  }
+
+  private func recoverSessionAfterAuthenticationChallenge(
+    _ lease: APIServiceSessionLease,
+    endpoint: String,
+    statusCode: Int,
+    message: String?
+  ) async throws {
+    try validate(lease)
+
+    if endpoint == "/user/current" {
+      guard Self.isDefinitiveCurrentUserRejection(statusCode: statusCode, message: message) else {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+        throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      }
+    } else {
+      switch await probeCurrentUser(using: lease) {
+      case .valid(let recoveredUser):
+        cancelAuthenticationRetry()
+        resetAmbiguousAuthenticationChallenges()
+        guard let accessToken = lease.token, !accessToken.isEmpty else {
+          throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+        }
+        if recoveredUser != currentUser {
+          applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
+        }
+        // `/user/current` 成功证明 token 仍有效，原响应只能按业务权限错误处理。
+        throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      case .rejected:
+        break
+      case .unavailable(let error):
+        // 无法完成权威校验时保持原会话，等待网络或服务恢复后重试。
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+        scheduleAuthenticationRetry(forEpoch: lease.epoch)
+        throw error
+      }
+    }
+
+    guard let username = storedUsername, let password = storedPassword,
+      !username.isEmpty, !password.isEmpty
+    else {
+      requireReauthentication(reason: .missingCredentials)
+      return
+    }
+
+    do {
+      _ = try await login(username: username, password: password, serverURL: lease.baseURL)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch APIError.credentialsRejected {
+      guard session.epoch == lease.epoch else { throw CancellationError() }
+      requireReauthentication(reason: .credentialsRejected)
+    } catch APIError.mfaUnsupported {
+      guard session.epoch == lease.epoch else { throw CancellationError() }
+      requireReauthentication(reason: .mfaUnsupported)
+    } catch {
+      // 断网、超时、服务端错误和未知响应都不是密码认证结论。
+      scheduleAuthenticationRetry(forEpoch: lease.epoch)
+      throw error
+    }
+  }
+
+  private func probeCurrentUser(using lease: APIServiceSessionLease) async -> CurrentUserProbeResult {
+    do {
+      let data = try await performRequest(
+        endpoint: "/user/current",
+        method: "GET",
+        body: nil,
+        isForm: false,
+        lease: lease,
+        requireCurrentLease: true
+      )
+      let response = try await decodeOrUnwrap(CurrentUserResponse.self, from: data)
+      guard let accessToken = lease.token, !accessToken.isEmpty else {
+        return .rejected
+      }
+      return .valid(response.token(accessToken: accessToken))
+    } catch APIError.authenticationChallenge(let statusCode, let message) {
+      if Self.isDefinitiveCurrentUserRejection(statusCode: statusCode, message: message) {
+        return .rejected
+      }
+      return .unavailable(
+        APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      )
+    } catch {
+      return .unavailable(error)
+    }
+  }
+
+  private func applyRecoveredCurrentUser(_ recoveredUser: Token, accessToken: String) {
+    cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
+    guard currentUser != recoveredUser else { return }
+    let cookies = runtime.cookieVault.snapshot()
+    replaceSession(
+      baseURL: baseURL,
+      token: accessToken,
+      currentUser: recoveredUser,
+      username: storedUsername,
+      password: storedPassword,
+      persist: true,
+      cookies: cookies
+    )
+  }
+
+  private static func isDefinitiveCurrentUserRejection(
+    statusCode: Int,
+    message: String?
+  ) -> Bool {
+    guard statusCode == 401 || statusCode == 403,
+      let message = trimmedNonEmpty([message])?.lowercased()
+    else {
+      return false
+    }
+    return [
+      "not authenticated",
+      "token校验不通过",
+      "authentication token not found",
+      "用户不存在",
+      "user does not exist",
+      "使用者不存在",
+      "用户未激活",
+    ].contains { message.contains($0) }
+  }
+
+  private func recordAmbiguousAuthenticationChallenge(forEpoch epoch: UInt64) {
+    guard session.epoch == epoch, token != nil else { return }
+    ambiguousAuthenticationChallengeCount += 1
+    guard ambiguousAuthenticationChallengeCount >= Self.ambiguousAuthenticationChallengeLimit,
+      !didNotifyAmbiguousAuthenticationChallenge
+    else {
+      return
+    }
+    didNotifyAmbiguousAuthenticationChallenge = true
+    NotificationCenter.default.post(name: .authenticationNeedsAttention, object: nil)
+  }
+
+  private func resetAmbiguousAuthenticationChallenges() {
+    ambiguousAuthenticationChallengeCount = 0
+    didNotifyAmbiguousAuthenticationChallenge = false
+  }
+
+  private func scheduleAuthenticationRetry(forEpoch epoch: UInt64) {
+    guard session.epoch == epoch, token != nil else { return }
+    guard authenticationRetryEpoch != epoch || authenticationRetryTask == nil else { return }
+
+    authenticationRetryTask?.cancel()
+    authenticationRetryEpoch = epoch
+    authenticationRetryTask = Task { [weak self] in
+      let delays: [UInt64] = [2, 5, 15, 30, 60]
+      var attempt = 0
+      while !Task.isCancelled {
+        let seconds = delays[min(attempt, delays.count - 1)]
+        do {
+          try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+        } catch {
+          break
+        }
+        guard let self else { break }
+        guard !Task.isCancelled, self.session.epoch == epoch, self.token != nil else { break }
+        if await self.recoverCurrentUserFromCurrentUserEndpoint() { break }
+        attempt += 1
+      }
+      if let self, self.authenticationRetryEpoch == epoch {
+        self.authenticationRetryTask = nil
+        self.authenticationRetryEpoch = nil
+      }
+    }
+  }
+
+  private func cancelAuthenticationRetry() {
+    authenticationRetryTask?.cancel()
+    authenticationRetryTask = nil
+    authenticationRetryEpoch = nil
+  }
+
+  private func performRequest(
+    endpoint: String,
+    method: String,
+    body: Data?,
+    isForm: Bool,
+    lease: APIServiceSessionLease,
+    requireCurrentLease: Bool
+  ) async throws -> Data {
+    if requireCurrentLease { try validate(lease) }
+    let request = try buildRequest(
+      endpoint: endpoint,
+      method: method,
+      body: body,
+      isForm: isForm,
+      lease: lease
+    )
+    let (data, response) = try await send(
+      request,
+      lease: lease,
+      requireCurrentLease: requireCurrentLease
+    )
+    if requireCurrentLease { try validate(lease) }
+    if let httpResponse = response as? HTTPURLResponse {
+      try handleHTTPResponse(
+        httpResponse,
+        data: data,
+        endpoint: endpoint,
+        lease: lease,
+        requireCurrentLease: requireCurrentLease
+      )
+    }
+    if requireCurrentLease { try validate(lease) }
+    return data
+  }
+
+  private func buildRequest(
+    endpoint: String,
+    method: String,
+    body: Data?,
+    isForm: Bool,
+    lease: APIServiceSessionLease
+  ) throws -> URLRequest {
+    guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
       throw APIError.invalidURL
     }
+    var request = Self.configuredRequest(
+      url: url,
+      method: method,
+      body: body,
+      isForm: isForm,
+      token: lease.token,
+      cookieHeader: lease.runtime.cookieVault.cookieHeader(for: url)
+    )
+    if endpoint == "/user/current" || endpoint == "/login/access-token" {
+      request.timeoutInterval = 10
+    }
+    return request
+  }
+
+  static func configuredRequest(
+    url: URL,
+    method: String,
+    body: Data?,
+    isForm: Bool,
+    token: String?,
+    cookieHeader: String?
+  ) -> URLRequest {
     var request = URLRequest(url: url)
     request.httpMethod = method
-    if let token = token {
+    if let token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
+    if let cookieHeader {
+      request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+    }
+    request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
     if isForm {
       request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
     } else {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
     request.httpBody = body
-    logSubscriptionRequestIfNeeded(endpoint: endpoint, method: method)
-    let (data, response) = try await URLSession.shared.data(for: request)
-    if let httpResponse = response as? HTTPURLResponse {
-      func serverMessageError() -> APIError {
-        struct ErrorPayload: Decodable {
-          let message: String?
-          let detail: String?
-        }
-        let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-        let message = payload?.message ?? payload?.detail
-        return APIError.serverMessage(
-          [String(httpResponse.statusCode), message]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: ": ")
-        )
-      }
-
-      if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-        // 如果允许重试，则尝试自动登录
-        if retryOn401, let u = storedUsername, let p = storedPassword, !u.isEmpty, !p.isEmpty {
-          print("Token expired. Attempting auto-login for user: \(u)")
-          let task: Task<Void, Error>
-          if let existingTask = loginTask {
-            task = existingTask
-          } else {
-            task = Task { [weak self] in
-              guard let self = self else { return }
-              defer { self.loginTask = nil }
-              _ = try await self.login(
-                username: u,
-                password: p,
-                preserveExistingSessionOnFailure: true
-              )
-            }
-            self.loginTask = task
-          }
-          do {
-            try await task.value
-            // 使用新令牌递归调用
-            return try await makeRequest(
-              endpoint: endpoint,
-              method: method,
-              body: body,
-              isForm: isForm,
-              retryOn401: false,
-              logoutOnUnauthorized: logoutOnUnauthorized
-            )
-          } catch {
-            print("Auto-login failed: \(error)")
-            if logoutOnUnauthorized {
-              self.logout()
-            }
-            throw APIError.unauthorized
-          }
-        }
-        if logoutOnUnauthorized {
-          self.logout()
-          throw APIError.unauthorized
-        }
-        throw serverMessageError()
-      }
-      guard (200...299).contains(httpResponse.statusCode) else {
-        print("DEBUG: [makeRequest] HTTP Error: \(httpResponse.statusCode) for \(endpoint)")
-        throw serverMessageError()
-      }
-    }
-    return data
+    return request
   }
 
-  private func logSubscriptionRequestIfNeeded(endpoint: String, method: String) {
-    #if DEBUG
-      guard endpoint.hasPrefix("/subscribe") else { return }
-      subscriptionDebugRequestCount += 1
-      Logger.debug("[SubscriptionRequest] #\(subscriptionDebugRequestCount) \(method) \(endpoint)")
-    #endif
+  private func send(
+    _ request: URLRequest,
+    lease: APIServiceSessionLease,
+    requireCurrentLease: Bool
+  ) async throws -> (Data, URLResponse) {
+    do {
+      return try await lease.runtime.transport.data(for: request)
+    } catch {
+      if requireCurrentLease, session.epoch != lease.epoch {
+        throw CancellationError()
+      }
+      if error is CancellationError || (error as? URLError)?.code == .cancelled {
+        throw CancellationError()
+      }
+      throw APIError.networkError(error)
+    }
+  }
+
+  private func handleHTTPResponse(
+    _ response: HTTPURLResponse,
+    data: Data,
+    endpoint: String,
+    lease: APIServiceSessionLease,
+    requireCurrentLease: Bool
+  ) throws {
+    if let responseURL = response.url {
+      lease.runtime.cookieVault.update(from: response, for: responseURL)
+    }
+    let errorPayload = Self.decodeErrorPayload(from: data)
+    let message = if endpoint == "/user/current" {
+      Self.definitiveCurrentUserRejectionMessage(errorPayload) ?? errorPayload?.localizedMessage
+    } else {
+      errorPayload?.localizedMessage
+    }
+    if response.statusCode == 401 || response.statusCode == 403 {
+      if endpoint == "/login/access-token", response.statusCode == 401 {
+        if response.value(forHTTPHeaderField: "X-MFA-Required")?.lowercased() == "true"
+          || Self.containsAuthenticationMessage(
+            errorPayload,
+            candidates: ["需要二次验证", "two-step verification is required", "需要二次驗證"]
+          )
+        {
+          throw APIError.mfaUnsupported
+        }
+        if Self.isDefinitiveCredentialRejection(errorPayload) {
+          throw APIError.credentialsRejected
+        }
+      }
+      if endpoint == "/login/access-token" {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+      }
+      if requireCurrentLease, session.epoch == lease.epoch {
+        if isCandidateLoginActive(for: lease.epoch) {
+          throw CancellationError()
+        }
+        throw APIError.authenticationChallenge(
+          statusCode: response.statusCode,
+          message: message
+        )
+      }
+      throw Self.serverMessageError(statusCode: response.statusCode, data: data)
+    }
+    guard (200...299).contains(response.statusCode) else {
+      Logger.error("HTTP \(response.statusCode): \(redactedEndpointForLogging(endpoint))")
+      throw Self.serverMessageError(statusCode: response.statusCode, data: data)
+    }
+  }
+
+  static func serverMessageError(statusCode: Int, data: Data) -> APIError {
+    let message = decodeErrorPayload(from: data)?.localizedMessage
+    let description = [String(statusCode), message]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: ": ")
+    if statusCode == 502 || statusCode == 503 || statusCode == 504 {
+      return .gatewayStatus(statusCode, description)
+    }
+    return APIError.serverMessage(description)
+  }
+
+  /// 读回 `serverMessageError` 写入的 HTTP 状态码；业务失败等其他来源的消息返回 nil。
+  nonisolated static func httpStatusCode(fromServerMessage message: String) -> Int? {
+    let prefix = message.prefix { $0 != ":" }
+    guard prefix.count == 3, let status = Int(prefix), (100...599).contains(status) else { return nil }
+    return status
+  }
+
+  private struct ErrorPayload: Decodable {
+    let message: String?
+    let message_i18n: String?
+    let detail: String?
+    let detail_i18n: String?
+
+    var localizedMessage: String? {
+      trimmedNonEmpty([message_i18n, detail_i18n, message, detail])
+    }
+
+    var allMessages: [String] {
+      [message_i18n, detail_i18n, message, detail].compactMap {
+        trimmedNonEmpty([$0])
+      }
+    }
+  }
+
+  private static func decodeErrorPayload(from data: Data) -> ErrorPayload? {
+    try? JSONDecoder().decode(ErrorPayload.self, from: data)
+  }
+
+  private static func isDefinitiveCredentialRejection(_ payload: ErrorPayload?) -> Bool {
+    containsAuthenticationMessage(
+      payload,
+      candidates: [
+        "用户名或密码错误",
+        "incorrect username or password",
+        "使用者名稱或密碼錯誤",
+      ]
+    )
+  }
+
+  private static func definitiveCurrentUserRejectionMessage(
+    _ payload: ErrorPayload?
+  ) -> String? {
+    matchingAuthenticationMessage(
+      payload,
+      candidates: [
+        "not authenticated",
+        "token校验不通过",
+        "authentication token not found",
+        "用户不存在",
+        "user does not exist",
+        "使用者不存在",
+        "用户未激活",
+      ]
+    )
+  }
+
+  private static func containsAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> Bool {
+    matchingAuthenticationMessage(payload, candidates: candidates) != nil
+  }
+
+  private static func matchingAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> String? {
+    guard let payload else { return nil }
+    let normalizedCandidates = candidates.map { $0.lowercased() }
+    return payload.allMessages.first { message in
+      let normalizedMessage = message.lowercased()
+      return normalizedCandidates.contains { normalizedMessage.contains($0) }
+    }
   }
 
   private func buildEndpoint(path: String, params: [String: String?] = [:]) throws -> String {
@@ -842,20 +1629,42 @@ class APIService: ObservableObject {
       throw APIError.invalidURL
     }
     // 保留 path 中可能已存在的查询参数
-    var queryItems = components.queryItems ?? []
-    // 添加新的参数
-    for (name, value) in params {
-      if let value = value {
-        queryItems.append(URLQueryItem(name: name, value: value))
-      }
-    }
-    if !queryItems.isEmpty {
-      components.queryItems = queryItems
-    }
+    appendPercentEncodedQueryParams(to: &components, params: params)
     guard let endpoint = components.string else {
       throw APIError.invalidURL
     }
     return endpoint
+  }
+
+  /// V3 媒体身份路径：`/{prefix}/{media_id}?media_source=`，不再把 `tmdb:123` 整段放进 path。
+  private func endpointForMediaIdentity(
+    pathPrefix: String,
+    identity: MediaIdentity,
+    extraParams: [String: String?] = [:],
+    suffix: String = ""
+  ) throws -> String {
+    guard let encodedMediaId = encodeMediaIDPathSegment(identity.mediaId), !encodedMediaId.isEmpty
+    else {
+      throw APIError.invalidURL
+    }
+    var params = extraParams
+    params["media_source"] = identity.source
+    return try buildEndpoint(path: "\(pathPrefix)/\(encodedMediaId)\(suffix)", params: params)
+  }
+
+  private func endpointForMediaIdentity(
+    pathPrefix: String,
+    media: MediaInfo,
+    extraParams: [String: String?] = [:],
+    suffix: String = ""
+  ) throws -> String {
+    guard let identity = media.identity else { throw APIError.invalidURL }
+    return try endpointForMediaIdentity(
+      pathPrefix: pathPrefix,
+      identity: identity,
+      extraParams: extraParams,
+      suffix: suffix
+    )
   }
 
   // MARK: - Helpers
@@ -864,9 +1673,10 @@ class APIService: ObservableObject {
     _ type: T.Type,
     from data: Data
   ) async throws -> T {
+    let decodeEpoch = session.epoch
+    let decoded: T
     if type == MediaInfo.self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoInBackground(from: data, config: config)
+      let mappedMedia = try await decodeMediaInfoInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -875,11 +1685,9 @@ class APIService: ObservableObject {
               codingPath: [], debugDescription: "Failed to map MediaInfoJSON to \(T.self)")
           ))
       }
-      return mapped
-    }
-    if type == [MediaInfo].self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data, config: config)
+      decoded = mapped
+    } else if type == [MediaInfo].self {
+      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -888,29 +1696,23 @@ class APIService: ObservableObject {
               codingPath: [], debugDescription: "Failed to map [MediaInfoJSON] to \(T.self)")
           ))
       }
-      return mapped
+      decoded = mapped
+    } else {
+      decoded = try decodeOrUnwrapSync(from: data)
     }
-    return try decodeOrUnwrapSync(from: data)
-  }
-
-  private func currentMediaImageURLConfig() -> MediaImageURLConfig {
-    MediaImageURLConfig(baseURL: baseURL, useImageCache: useImageCache)
+    guard session.epoch == decodeEpoch else { throw CancellationError() }
+    return decoded
   }
 
   /// 仅对 MediaInfo 热路径做后台解码，避免主线程解析大 JSON。
-  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig)
-    async throws -> MediaInfo
+  private func decodeMediaInfoInBackground(from data: Data) async throws -> MediaInfo
   {
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<MediaInfo, Error>) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
-          let imageURLs = MediaInfo.ImageURLs(
-            poster: posterImageURL(posterPath: raw.poster_path, config: config),
-            backdrop: backdropImageURL(backdropPath: raw.backdrop_path, config: config)
-          )
-          continuation.resume(returning: MediaInfo(json: raw, precomputedImageURLs: imageURLs))
+          continuation.resume(returning: MediaInfo(json: raw))
         } catch {
           continuation.resume(throwing: error)
         }
@@ -919,7 +1721,7 @@ class APIService: ObservableObject {
   }
 
   /// 仅对 MediaInfo 列表热路径做后台解码，缓解分页加载时的主线程压力。
-  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig)
+  private func decodeMediaInfoArrayInBackground(from data: Data)
     async throws -> [MediaInfo]
   {
     try await withCheckedThrowingContinuation {
@@ -927,13 +1729,7 @@ class APIService: ObservableObject {
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: [MediaInfoJSON] = try decodeOrUnwrapSync(from: data)
-          let mapped = raw.map { item -> MediaInfo in
-            let imageURLs = MediaInfo.ImageURLs(
-              poster: posterImageURL(posterPath: item.poster_path, config: config),
-              backdrop: backdropImageURL(backdropPath: item.backdrop_path, config: config)
-            )
-            return MediaInfo(json: item, precomputedImageURLs: imageURLs)
-          }
+          let mapped = raw.map { MediaInfo(json: $0) }
           continuation.resume(returning: mapped)
         } catch {
           continuation.resume(throwing: error)
@@ -944,16 +1740,16 @@ class APIService: ObservableObject {
 
   /// 静默验证 Token 有效性。
   /// 仅在 App 启动、切回前台或 Tab 切换时调用，频率极低且不阻塞 UI。
-  /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
+  /// Token 失效时优先用保存的凭据自动登录，当前验证随会话切换结束。
   func validateTokenSilently() {
-    guard isLoggedIn else { return }
+    guard isLoggedIn, !isCandidateLoginActive(for: session.epoch) else { return }
 
     Task {
       do {
-        _ = try await makeRequest(endpoint: "/user/current", retryOn401: true)
-        print("Token/Session validation successful.")
+        _ = try await makeRequest(endpoint: "/user/current")
+        Logger.debug("Token/Session validation successful.")
       } catch {
-        print("Silent token validation background process handled: \(error)")
+        Logger.debug("Silent token validation background process handled: \(error)")
       }
     }
   }
@@ -964,40 +1760,95 @@ class APIService: ObservableObject {
   func login(
     username: String,
     password: String,
-    preserveExistingSessionOnFailure: Bool = false
+    serverURL: String? = nil
   ) async throws -> Token {
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "username", value: username),
-      URLQueryItem(name: "password", value: password),
-    ]
-    guard let bodyData = components.query?.data(using: .utf8) else {
+    guard let targetBaseURL = Self.normalizedBaseURL(serverURL ?? baseURL) else {
+      throw APIError.invalidURL
+    }
+    let startingEpoch = session.epoch
+    beginCandidateLogin(for: startingEpoch)
+    defer { endCandidateLogin(for: startingEpoch) }
+    let candidateRuntime = APIServiceSessionRuntime(configuration: sessionConfiguration)
+    defer { candidateRuntime.cancel() }
+    guard let encodedUsername = encodeURIComponent(username),
+      let encodedPassword = encodeURIComponent(password)
+    else {
+      throw APIError.unknown
+    }
+    let formBody = "username=\(encodedUsername)&password=\(encodedPassword)"
+    guard let bodyData = formBody.data(using: .utf8) else {
       throw APIError.unknown
     }
 
-    // 传递 retryOn401: false 以防止凭据错误时出现无限循环
-    let data = try await makeRequest(
-      endpoint: "/login/access-token", method: "POST", body: bodyData, isForm: true,
-      retryOn401: false,
-      logoutOnUnauthorized: !preserveExistingSessionOnFailure
+    let candidateLease = APIServiceSessionLease(
+      epoch: startingEpoch,
+      baseURL: targetBaseURL,
+      token: nil,
+      runtime: candidateRuntime
+    )
+    let data = try await performRequest(
+      endpoint: "/login/access-token",
+      method: "POST",
+      body: bodyData,
+      isForm: true,
+      lease: candidateLease,
+      requireCurrentLease: false
     )
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
-    guard tokenResponse.hasLoginAccessibleFeature else {
-      throw APIError.serverMessage(Self.noAccessibleFeatureMessage)
-    }
+    guard session.epoch == startingEpoch else { throw CancellationError() }
 
-    self.token = tokenResponse.access_token
-    self.currentUser = tokenResponse
-    // 成功时保存凭据
-    self.storedUsername = username
-    self.storedPassword = password
+    replaceSession(
+      baseURL: targetBaseURL,
+      token: tokenResponse.access_token,
+      currentUser: tokenResponse,
+      username: username,
+      password: password,
+      persist: true,
+      cookies: candidateRuntime.cookieVault.snapshot()
+    )
 
     return tokenResponse
   }
 
-  private static func isNoAccessibleFeatureError(_ error: Error) -> Bool {
-    guard case APIError.serverMessage(let message) = error else { return false }
-    return message.contains(noAccessibleFeatureMessage)
+  func reloginStoredSession() async throws -> Token {
+    guard let storedUsername, let storedPassword,
+      !storedUsername.isEmpty, !storedPassword.isEmpty
+    else {
+      throw APIError.serverMessage("未找到保存的凭据")
+    }
+    let startingEpoch = session.epoch
+    do {
+      return try await login(
+        username: storedUsername,
+        password: storedPassword,
+        serverURL: baseURL
+      )
+    } catch APIError.credentialsRejected {
+      guard session.epoch == startingEpoch else { throw CancellationError() }
+      requireReauthentication(reason: .credentialsRejected)
+      throw APIError.credentialsRejected
+    } catch APIError.mfaUnsupported {
+      guard session.epoch == startingEpoch else { throw CancellationError() }
+      requireReauthentication(reason: .mfaUnsupported)
+      throw APIError.mfaUnsupported
+    }
+  }
+
+  private func beginCandidateLogin(for epoch: UInt64) {
+    activeCandidateLoginCounts[epoch, default: 0] += 1
+  }
+
+  private func endCandidateLogin(for epoch: UInt64) {
+    guard let count = activeCandidateLoginCounts[epoch] else { return }
+    if count > 1 {
+      activeCandidateLoginCounts[epoch] = count - 1
+    } else {
+      activeCandidateLoginCounts.removeValue(forKey: epoch)
+    }
+  }
+
+  private func isCandidateLoginActive(for epoch: UInt64) -> Bool {
+    activeCandidateLoginCounts[epoch, default: 0] > 0
   }
 
   /// 获取媒体统计数据
@@ -1028,26 +1879,27 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/utils/globalSetting.ts (fetchGlobalSettings)
   /// - 应用场景: 初始化系统基础配置（如 TMDB 图片域名、是否启用图片缓存等）。
   func fetchSettings() async throws -> GlobalSettings {
+    let snapshot = sessionSnapshot()
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
       var response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
       if token != nil {
         do {
-          let userData = try await makeRequest(
-            endpoint: "/system/global/user",
-            retryOn401: false,
-            logoutOnUnauthorized: false
-          )
+          guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+          let userData = try await makeRequest(endpoint: "/system/global/user")
           let userSettings = try await decodeOrUnwrap(GlobalSettings.self, from: userData)
           response.mergeUserSettings(userSettings)
+        } catch is CancellationError {
+          throw CancellationError()
         } catch {
-          print("DEBUG: [fetchSettings] Failed to fetch user settings: \(error)")
+          Logger.error("[fetchSettings] Failed to fetch user settings: \(error)")
         }
       }
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       self.settings = response
       return response
     } catch {
-      print("DEBUG: [fetchSettings] Failed to fetch settings: \(error)")
+      Logger.error("[fetchSettings] Failed to fetch settings: \(error)")
       throw error
     }
   }
@@ -1061,13 +1913,21 @@ class APIService: ObservableObject {
   /// 搜索通用媒体信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (path: '/browse/media/search')
   /// - 应用场景: 聚合搜索页面的“电影”和“电视剧”分类结果展示。前端路由 /browse/ 后接的部分即为 API 路径。
-  func searchMedia(query: String, page: Int = 1) async throws -> [MediaInfo] {
+  func searchMedia(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [MediaInfo] {
+    var params = [
+      "type": "media",
+      "title": query,
+      "page": String(page),
+    ]
+    params["media_source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
-      params: [
-        "title": query,
-        "page": String(page),
-      ])
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
@@ -1083,7 +1943,12 @@ class APIService: ObservableObject {
   /// 优化后的 TMDB ID 识别逻辑 (移植并增强自 MediaIdSelector.vue)
   /// 结合了 searchMedia (基于影视数据库的精确搜索) 和 recognizeMedia (基于名称规则的模糊猜测)
   /// 旨在提升 Douban、Bangumi、媒体库项目的识别准确率。
-  func recognizeTmdbId(title: String, year: String? = nil, type: String? = nil) async -> Int? {
+  func recognizeTmdbId(
+    title: String,
+    year: String? = nil,
+    type: String? = nil
+  ) async throws -> Int? {
+    let snapshot = sessionSnapshot()
     var queryTitle = title.trimmingCharacters(in: .whitespaces)
     let searchYear = year?.trimmingCharacters(in: .whitespaces)
 
@@ -1114,11 +1979,14 @@ class APIService: ObservableObject {
     guard !queryTitle.isEmpty else { return nil }
 
     // 2. 尝试使用 searchMedia 进行精确搜索
+    // 首段失败不直接返回：暂存错误并继续 fallback，fallback 也无结果时抛出，避免伪装 no-match。
+    var firstStageError: Error?
     do {
       Logger.debug("[APIService] 开始 TMDB 搜索识别: '\(title)' -> 清洗后: '\(queryTitle)'", metadata: ["year": searchYear ?? "n/a", "type": type ?? "n/a"])
       
-      // 恢复原始调用：API 不带 type 参数，保持与 SearchBarDialog.vue 一致
-      let results = try await searchMedia(query: queryTitle)
+      // 不传 type，保持与 Web 搜索接口一致；显式锁定 TMDB，避免受后端默认识别源影响。
+      let results = try await searchMedia(query: queryTitle, source: .themoviedb)
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       let targetTitle = queryTitle.lowercased().trimmingCharacters(in: .whitespaces)
 
       let normalizedTargetType = type.map { normalizeMediaType($0) }
@@ -1143,7 +2011,7 @@ class APIService: ObservableObject {
         let yearMatch = (searchYear == nil || result.year == nil || searchYear == result.year)
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (严格匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
@@ -1177,61 +2045,118 @@ class APIService: ObservableObject {
         }()
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (年份误差匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
         }
       }
+    } catch is CancellationError {
+      throw CancellationError()
     } catch {
+      firstStageError = error
       Logger.error("[APIService] searchMedia during recognition failed: \(error)")
     }
 
     // 3. Fallback 到 recognizeMedia
     // 适用于包含季、集、制作组信息的原始文件名字符串
+    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
     do {
       Logger.debug("[APIService] Search 未命中，尝试 Fallback 到后端 Recognize 接口: \(title)")
       let recognizeQuery =
         (searchYear != nil && !title.contains(searchYear!)) ? "\(title) \(searchYear!)" : title
-      let result = try await recognizeMedia(title: recognizeQuery)
+      let result = try await recognizeMedia(title: recognizeQuery, source: .themoviedb)
 
       // 检查识别出的类型是否匹配（如果已知 type）
       if let targetType = type, let recognizedType = result.media_info?.type {
         if normalizeMediaType(targetType) == normalizeMediaType(recognizedType) {
-          if let tmdbId = result.media_info?.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
              Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
              return tmdbId
           }
         } else {
-          // 识别出的类型不符，属于误报，拒绝该结果
+          // 识别出的类型不符，属于误报，拒绝该结果。
+          //
+          // F-122：但「拒绝这个结果」不等于「媒体不存在」—— 只有首段**查完过**才谈得上
+          // 无匹配。首段失败（超时/500）时这里的 nil 会被 `getTMDBJumpTarget` 当成
+          // 「媒体不存在」，弹出误导性的「未识别到此媒体的TMDB信息」，而首段其实从没
+          // 得出过结论。故沿用本方法尾部的同一口径：首段失败过就抛出它的原始错误。
           Logger.warning("[APIService] recognizeMedia 类型不匹配: 期望 \(targetType), 实际 \(recognizedType)")
+          if let firstStageError {
+            throw firstStageError
+          }
           return nil
         }
       }
 
-      if let tmdbId = result.media_info?.tmdb_id {
+      if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
         Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
         return tmdbId
       }
+    } catch is CancellationError {
+      throw CancellationError()
     } catch {
       Logger.error("[APIService] recognizeMedia fallback failed: \(error)")
+      // 两段都失败时抛出首段原始错误（若首段未失败则抛尾段错误），
+      // 让调用方区分"识别失败"与"真正无匹配"。
+      throw firstStageError ?? error
+    }
+
+    // F-122：兜底请求本身成功、却没给出可用 ID。若首段曾失败，此刻手上只有「一次不完整的
+    // 查询」，不能据此断言「媒体不存在」—— 抛出首段原始错误，让调用方按识别失败处理，
+    // 而不是弹误导性的「媒体不存在」。
+    if let firstStageError {
+      throw firstStageError
     }
 
     Logger.info("[APIService] 识别失败: \(title)")
     return nil
   }
 
-  /// 搜索合集
-  /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('collection'))
-  /// - 应用场景: 聚合搜索页面的“合集”分类。用户在搜索框输入关键词并选择“合集”时调用，用于搜索 TMDB 系列电影。
-  func searchCollection(query: String, page: Int = 1) async throws -> [MediaInfo] {
+  /// 宿主内置与启用插件注册的媒体来源目录，与 Web `useMediaSources` 同源。
+  func fetchMediaSources() async throws -> [MediaSourceInfo] {
+    try await sessionCachedValue(sessionScope.mediaSourceCatalogCache, key: "sources") { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: "/media/source")
+      return try await self.decodeOrUnwrap([MediaSourceInfo].self, from: data)
+    }
+  }
+
+  /// 手动写入表单的媒体 ID 选择器，与 Web MediaIdSelector 请求保持一致。
+  func searchManualMedia(
+    title: String,
+    source: MediaSearchSource
+  ) async throws -> [MediaInfo] {
     let endpoint = try buildEndpoint(
       path: "/media/search",
       params: [
-        "type": "collection",
-        "title": query,
-        "page": String(page),
+        "title": title,
+        "page": "1",
+        "count": "20",
+        "media_source": source.rawValue,
       ])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
+  }
+
+  /// 搜索合集
+  /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('collection'))
+  /// - 应用场景: 聚合搜索页面的“合集”分类。用户在搜索框输入关键词并选择“合集”时调用，用于搜索 TMDB 系列电影。
+  func searchCollection(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [MediaInfo] {
+    var params = [
+      "type": "collection",
+      "title": query,
+      "page": String(page),
+    ]
+    params["media_source"] = source?.rawValue
+    let endpoint = try buildEndpoint(
+      path: "/media/search",
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
@@ -1239,14 +2164,21 @@ class APIService: ObservableObject {
   /// 搜索人物
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('person'))
   /// - 应用场景: 聚合搜索页面的“演职员”分类。用户在搜索框输入关键词并选择“人物”时调用，用于搜索导演、演员等资料。
-  func searchPerson(query: String, page: Int = 1) async throws -> [Person] {
+  func searchPerson(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [Person] {
+    var params = [
+      "type": "person",
+      "title": query,
+      "page": String(page),
+    ]
+    params["media_source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
-      params: [
-        "type": "person",
-        "title": query,
-        "page": String(page),
-      ])
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([Person].self, from: data)
   }
@@ -1263,10 +2195,19 @@ class APIService: ObservableObject {
   ///   2. 发现页面 (ExploreViewModel)：按数据源分类加载列表。
   ///   3. 详情页面逻辑支撑：作为 fetchMediaRecommendations 和 fetchMediaSimilar 的底层实现，详情页不能直接调用。
   func fetchRecommend(path: String, page: Int = 1) async throws -> [MediaInfo] {
-    let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
-    let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
+    let endpoint = try relativeBackendEndpoint(path: path, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
+  }
+
+  func fetchDiscoverSources() async throws -> [DiscoverSourceDescriptor] {
+    let data = try await makeRequest(endpoint: "/discover/source")
+    return try await decodeOrUnwrap([DiscoverSourceDescriptor].self, from: data)
+  }
+
+  func fetchRecommendSources() async throws -> [RecommendSourceDescriptor] {
+    let data = try await makeRequest(endpoint: "/recommend/source")
+    return try await decodeOrUnwrap([RecommendSourceDescriptor].self, from: data)
   }
 
   /// 获取订阅分享列表
@@ -1274,7 +2215,13 @@ class APIService: ObservableObject {
   /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
   func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
-    let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
+    let endpoint = try buildEndpoint(
+      path: absolutePath,
+      params: [
+        "page": String(page),
+        "count": "30",
+      ]
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([SubscribeShare].self, from: data)
   }
@@ -1295,22 +2242,24 @@ class APIService: ObservableObject {
   }
 
   /// 获取推荐媒体
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (构造 tmdb|douban|bangumi/recommend/* 系列路径)
-  /// - 应用场景: 在媒体详情页底部，根据当前的 tmdb/douban/bangumi ID 获取“推荐”列表。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi、AniList 字段顺序构造 recommend 路径)
+  /// - 应用场景: 在媒体详情页底部，根据 Web 支持的辅助内容来源获取“推荐”列表。
   /// - ⚠️ 注意: Bangumi 的推荐接口不需要传 type。
   func fetchMediaRecommendations(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
+    guard let identity = detail.auxiliaryContentIdentity else { return [] }
     var path: String?
-
-    if let tmdbId = detail.tmdb_id {
+    if identity.source == "themoviedb" {
       guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
       else { return [] }
-      path = "tmdb/recommend/\(tmdbId)/\(type)"
-    } else if let doubanId = detail.douban_id {
+      path = "tmdb/recommend/\(identity.mediaId)/\(type)"
+    } else if identity.source == "douban" {
       guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
       else { return [] }
-      path = "douban/recommend/\(doubanId)/\(type)"
-    } else if let bangumiId = detail.bangumi_id {
-      path = "bangumi/recommend/\(bangumiId)"
+      path = "douban/recommend/\(identity.mediaId)/\(type)"
+    } else if identity.source == "bangumi" {
+      path = "bangumi/recommend/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/recommend/\(identity.mediaId)"
     }
 
     guard let finalPath = path else { return [] }
@@ -1320,12 +2269,14 @@ class APIService: ObservableObject {
   /// 获取类似媒体
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (构造 tmdb/similar/* 系列路径)
   /// - 应用场景: 媒体详情页获取相似推荐内容。
-  /// - ⚠️ 注意: 仅有 TMDB_ID 的才支持获取相似媒体。
+  /// - ⚠️ 注意: Web 只要详情包含有效 TMDB ID 就显示相似内容，不要求主身份为 TMDB。
   func fetchMediaSimilar(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
-    guard let tmdbId = detail.tmdb_id else { return [] }
+    guard let identity = detail.auxiliaryContentIdentity, identity.source == "themoviedb" else {
+      return []
+    }
     guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
     else { return [] }
-    let path = "tmdb/similar/\(tmdbId)/\(type)"
+    let path = "tmdb/similar/\(identity.mediaId)/\(type)"
     return try await fetchRecommend(path: path, page: page)
   }
 
@@ -1368,7 +2319,7 @@ class APIService: ObservableObject {
   ) {
     let endpoint = try buildEndpoint(path: "/download/stop/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
-    return try await decodeActionResponse(from: data)
+    return try decodeActionResponseSync(from: data)
   }
 
   /// 继续下载任务
@@ -1379,7 +2330,7 @@ class APIService: ObservableObject {
   ) {
     let endpoint = try buildEndpoint(path: "/download/start/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
-    return try await decodeActionResponse(from: data)
+    return try decodeActionResponseSync(from: data)
   }
 
   /// 删除下载任务
@@ -1393,15 +2344,7 @@ class APIService: ObservableObject {
       params: ["name": clientName]
     )
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    return try await decodeActionResponse(from: data)
-  }
-
-  /// 辅助方法：解码通用操作响应
-  private func decodeActionResponse(from data: Data) async throws -> (
-    success: Bool,
-    message: String?
-  ) {
-    try decodeActionResponseSync(from: data)
+    return try decodeActionResponseSync(from: data)
   }
 
   // MARK: - Transfer History
@@ -1434,9 +2377,13 @@ class APIService: ObservableObject {
   ///   - item: 要删除的历史记录项。
   ///   - deleteSource: 是否同时删除源文件。
   ///   - deleteDest: 是否同时删除目标文件。
-  func deleteTransferHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool)
+  func deleteTransferHistory(
+    item: TransferHistory,
+    deleteSource: Bool,
+    deleteDest: Bool
+  )
     async throws
-    -> Bool
+    -> (success: Bool, message: String?)
   {
     let body = try JSONEncoder().encode(item)
     let endpoint = try buildEndpoint(
@@ -1445,19 +2392,44 @@ class APIService: ObservableObject {
         "deletesrc": String(deleteSource),
         "deletedest": String(deleteDest),
       ])
-    let data = try await makeRequest(endpoint: endpoint, method: "DELETE", body: body)
-    return try await decodeActionResponse(from: data).success
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "DELETE",
+      body: body
+    )
+    return try decodeStrictActionResponseSync(from: data)
   }
 
-  /// AI重新整理历史记录
+  /// 单条 AI 重新整理历史记录
   /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
-  func aiRedoTransferHistory(ids: [Int]) async throws -> (progressKey: String, acceptedIds: [Int])? {
+  func aiRedoTransferHistory(id: Int) async throws -> (progressKey: String, acceptedIds: [Int]) {
+    let endpoint = try buildEndpoint(path: "/history/transfer/\(id)/ai-redo")
+    let data = try await makeRequest(endpoint: endpoint, method: "POST")
+    return try decodeAiRedoResponse(data, fallbackIds: [id])
+  }
+
+  /// 批量 AI 重新整理历史记录
+  /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
+  func aiRedoTransferHistories(ids: [Int]) async throws -> (
+    progressKey: String, acceptedIds: [Int]
+  ) {
     let endpoint = try buildEndpoint(path: "/history/transfer/ai-redo")
     let body = try JSONEncoder().encode(["history_ids": ids])
-    let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "POST",
+      body: body
+    )
+    return try decodeAiRedoResponse(data, fallbackIds: ids)
+  }
+
+  private func decodeAiRedoResponse(_ data: Data, fallbackIds: [Int]) throws -> (
+    progressKey: String, acceptedIds: [Int]
+  ) {
     struct AiRedoResponse: Codable {
       let success: Bool?
       let message: String?
+      let message_i18n: String?
       let data: AiRedoResponseData?
     }
     struct AiRedoResponseData: Codable {
@@ -1465,13 +2437,14 @@ class APIService: ObservableObject {
       let history_ids: [Int]?
     }
     let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
+    let message = trimmedNonEmpty([res.message_i18n, res.message])
     guard res.success == true else {
-      throw APIError.serverMessage(res.message ?? "未知错误")
+      throw APIError.serverMessage(message ?? "未知错误")
     }
-    if let key = res.data?.progress_key {
-      return (progressKey: key, acceptedIds: res.data?.history_ids ?? ids)
+    guard let key = res.data?.progress_key, !key.isEmpty else {
+      throw APIError.serverMessage(message ?? "AI 整理失败")
     }
-    return nil
+    return (progressKey: key, acceptedIds: res.data?.history_ids ?? fallbackIds)
   }
 
   /// 手动整理
@@ -1480,12 +2453,48 @@ class APIService: ObservableObject {
   /// - Parameters:
   ///   - form: 包含整理所需全部信息的表单。
   ///   - background: 是否在后台执行整理任务。`true`为后台执行，会立即返回；`false`为前台执行，会等待任务完成。
-  func manualTransfer(form: ReorganizeForm, background: Bool) async throws -> Bool {
+  func manualTransfer(
+    form: ReorganizeForm,
+    background: Bool
+  ) async throws -> (
+    success: Bool, message: String?
+  ) {
     let body = try JSONEncoder().encode(form)
     let endpoint = try buildEndpoint(
       path: "/transfer/manual", params: ["background": String(background)])
-    let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
-    return try await decodeActionResponse(from: data).success
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "POST",
+      body: body
+    )
+    return try decodeStrictActionResponseSync(from: data)
+  }
+
+  func previewManualTransfer(form: ReorganizeForm) async throws -> ManualTransferPreviewData {
+    var previewForm = form
+    previewForm.preview = true
+    let body = try JSONEncoder().encode(previewForm)
+    let endpoint = try buildEndpoint(
+      path: "/transfer/manual",
+      params: ["background": "false"]
+    )
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "POST",
+      body: body
+    )
+    let response = try JSONDecoder().decode(
+      ApiResponse<ManualTransferPreviewData>.self,
+      from: data
+    )
+    guard response.success == true else {
+      throw APIError.serverMessage(response.localizedMessage ?? "整理预览失败")
+    }
+    guard var preview = response.data else {
+      throw APIError.serverMessage("整理预览响应缺少数据")
+    }
+    preview.message = response.localizedMessage ?? preview.message
+    return preview
   }
 
   /// 获取存储配置
@@ -1515,6 +2524,17 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 会话内缓存的媒体服务器配置，供首页、详情页判断能否应用内播放，以及播放时连接 Emby。
+  /// 配置里有密钥，只保存在内存。`forceRefresh` 重新读取并写回缓存（首页加载、播放失败后核对配置）。
+  func fetchCachedMediaServers(forceRefresh: Bool = false) async throws -> [MediaServerConf] {
+    try await sessionCachedValue(
+      sessionScope.mediaServerConfigCache, key: "MediaServers", forceRefresh: forceRefresh
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.fetchMediaServers()
+    }
+  }
+
   /// 获取媒体服务器最新入库
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerLatest.vue
   /// - 应用场景: 首页仪表盘展示最近添加的影片
@@ -1524,61 +2544,148 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
+  /// 查询媒体是否已入库，返回媒体服务器中的条目（MoviePilot 媒体库同步表），未入库为 nil。
+  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)、
+  ///   MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
+  /// - 应用场景: 电影详情页订阅按钮展示入库状态；管理员的应用内播放入口
+  /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
+  ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
+  ///   v3.2.6 起 `data.item.server` 是条目所属服务器的配置名称，与 ID 取自同一条记录；更早的版本或旧缓存没有这个键，
+  ///   这时配置多台服务器需要调用方逐台确认归属。服务器名称只是候选，不代替逐台查找。
+  func fetchMediaServerItemRef(media: MediaInfo) async throws -> MediaServerItemRef? {
+    struct MediaServerExistsData: Decodable {
+      let item: [String: String]?
+    }
+    let identity = media.identity
+    let endpoint = try buildEndpoint(
+      path: "/mediaserver/exists",
+      params: [
+        "media_source": identity?.source,
+        "media_id": identity?.mediaId,
+        "title": media.title,
+        "year": media.year,
+        "season": media.season.map(String.init),
+        "mtype": media.type,
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
+    guard let itemID = trimmedNonEmpty([result.item?["id"]]) else { return nil }
+    return MediaServerItemRef(itemID: itemID, server: trimmedNonEmpty([result.item?["server"]]))
+  }
+
   // MARK: - 资源搜索
 
   // MARK: - Server-Sent Events (SSE) Streaming
 
+  private struct SSEReconnectPolicy: Sendable {
+    let delay: Duration
+    let maxRetries: Int
+  }
+
+  private struct SSETerminalEvent: Error {}
+
+  /// 连接统一使用调用开始时的会话租约；消费方式和重连策略由各端点决定。
+  private func openSSE(endpoint: String, lease: APIServiceSessionLease) async throws -> URLSession.AsyncBytes {
+    try Task.checkCancellation()
+    try validate(lease)
+    guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else { throw APIError.invalidURL }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 300
+    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    if let token = lease.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
+      request.setValue(cookie, forHTTPHeaderField: "Cookie")
+    }
+    request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+    let (bytes, response) = try await lease.runtime.transport.bytes(for: request)
+    do {
+      try Task.checkCancellation()
+      try validate(lease)
+      guard let response = response as? HTTPURLResponse else { throw APIError.serverMessage("无效响应") }
+      lease.runtime.cookieVault.update(from: response, for: url)
+      guard response.statusCode == 200 else {
+        if response.statusCode == 401 || response.statusCode == 403 { throw APIError.unauthorized }
+        throw APIError.serverMessage("HTTP Error \(response.statusCode)")
+      }
+      return bytes
+    } catch {
+      bytes.task.cancel()
+      throw error
+    }
+  }
+
   /// 通用 SSE 流式请求
-  private func streamSSE(endpoint: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    let serviceBaseURL = baseURL
-    let authToken = token
+  private func streamSSE<Event: Decodable & Sendable>(
+    endpoint: String,
+    as _: Event.Type,
+    reconnectPolicy: SSEReconnectPolicy? = nil,
+    isTerminal: (@Sendable (Event) -> Bool)? = nil
+  ) -> AsyncThrowingStream<Event, Error> {
+    let lease = currentLease()
 
     return AsyncThrowingStream { continuation in
       let task = Task {
-        do {
-          guard let url = URL(string: "\(serviceBaseURL)/api/v1\(endpoint)") else {
-            throw APIError.invalidURL
-          }
-          var request = URLRequest(url: url)
-          request.timeoutInterval = 300 // 长连接
-          request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        var retryCount = 0
 
-          if let authToken {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-          }
+        while true {
+          var shouldReconnect = false
 
-          let (result, response) = try await URLSession.shared.bytes(for: request)
+          do {
+            let result = try await self.openSSE(endpoint: endpoint, lease: lease)
+            defer { result.task.cancel() }
 
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw APIError.serverMessage("无效响应")
-          }
-
-          if httpResponse.statusCode != 200 {
-            if httpResponse.statusCode == 401 {
-              throw APIError.unauthorized
-            }
-            throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
-          }
-
-          for try await line in result.lines {
-            if line.hasPrefix("data:") {
-              let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-              if let data = jsonString.data(using: .utf8) {
-                do {
-                  let event = try JSONDecoder().decode(SearchStreamEvent.self, from: data)
-                  continuation.yield(event)
-                } catch {
-                  print("SSE Decoding Error: \(error), raw string: \(jsonString)")
-                }
+            // 字节读取/组帧/解码在后台完成，避免每个字节都往返 MainActor。
+            // 交付回调在 MainActor 上原子地校验会话并发布，保留切服及取消边界。
+            try await SSEEventReader.read(from: result, as: Event.self) { event in
+              try Task.checkCancellation()
+              try self.validate(lease)
+              continuation.yield(event)
+              if isTerminal?(event) == true {
+                throw SSETerminalEvent()
               }
             }
-          }
-          continuation.finish()
-        } catch {
-          if Task.isCancelled {
+
+            guard reconnectPolicy != nil else {
+              continuation.finish()
+              return
+            }
+            shouldReconnect = true
+          } catch is SSETerminalEvent {
             continuation.finish()
-          } else {
-            continuation.finish(throwing: error)
+            return
+          } catch {
+            if Task.isCancelled {
+              continuation.finish()
+              return
+            }
+            if self.session.epoch != lease.epoch || (error as? URLError)?.code == .cancelled {
+              continuation.finish(throwing: CancellationError())
+              return
+            }
+
+            guard reconnectPolicy != nil, Self.isTransientSSEError(error) else {
+              continuation.finish(throwing: error)
+              return
+            }
+            shouldReconnect = true
+          }
+
+          guard shouldReconnect, let policy = reconnectPolicy else {
+            continuation.finish()
+            return
+          }
+          guard retryCount < policy.maxRetries else {
+            continuation.finish()
+            return
+          }
+          retryCount += 1
+
+          do {
+            try await Task.sleep(for: policy.delay)
+          } catch {
+            continuation.finish()
+            return
           }
         }
       }
@@ -1586,6 +2693,11 @@ class APIService: ObservableObject {
         task.cancel()
       }
     }
+  }
+
+  private nonisolated static func isTransientSSEError(_ error: Error) -> Bool {
+    guard let urlError = error as? URLError else { return false }
+    return urlError.code != .cancelled
   }
 
   /// 流式标题搜索 (SSE)
@@ -1598,7 +2710,7 @@ class APIService: ObservableObject {
           "sites": sites,
         ]
       )
-      return streamSSE(endpoint: endpoint)
+      return streamSSE(endpoint: endpoint, as: SearchStreamEvent.self)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
     }
@@ -1609,9 +2721,17 @@ class APIService: ObservableObject {
     keyword: String, type: String?, area: String?, title: String?, year: String?, season: Int?, sites: String?
   ) -> AsyncThrowingStream<SearchStreamEvent, Error> {
     do {
+      guard let identity = MediaIdentifier.identity(from: keyword) else {
+        throw APIError.invalidURL
+      }
+      guard let encodedMediaId = encodeMediaIDPathSegment(identity.mediaId), !encodedMediaId.isEmpty
+      else {
+        throw APIError.invalidURL
+      }
       let endpoint = try buildEndpoint(
-        path: "/search/media/\(keyword)/stream",
+        path: "/search/media/\(encodedMediaId)/stream",
         params: [
+          "media_source": identity.source,
           "mtype": type,
           "area": area,
           "title": title,
@@ -1619,15 +2739,66 @@ class APIService: ObservableObject {
           "season": season.map(String.init),
           "sites": sites,
         ])
-      return streamSSE(endpoint: endpoint)
+      return streamSSE(endpoint: endpoint, as: SearchStreamEvent.self)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
     }
   }
 
+  /// 显式单页资源搜索：逐事件等待消费者完成，既不缓存事件队列，也不重连或 HTTP 重搜。
+  func readResourceSearchPage(
+    query: ResourceSearchQuery, source: String?, page: Int,
+    maximumEventBytes: @escaping @MainActor @Sendable () throws -> Int,
+    receive: @escaping @MainActor @Sendable (SearchStreamEvent, Int) async throws -> Void
+  ) async throws {
+    let lease = currentLease()
+    var params: [String: String?] = [
+      "sites": query.sites, "manual_paging": "true", "page": String(page), "source": source,
+    ]
+    let path: String
+    if query.isMediaSearch {
+      guard let identity = MediaIdentifier.identity(from: query.keyword),
+        let mediaID = encodeMediaIDPathSegment(identity.mediaId), !mediaID.isEmpty
+      else { throw APIError.invalidURL }
+      path = "/search/media/\(mediaID)/stream"
+      params.merge([
+        "media_source": identity.source, "mtype": query.type, "area": query.area,
+        "title": query.title, "year": query.year, "season": query.season.map(String.init),
+      ]) { _, value in value }
+    } else {
+      path = "/search/title/stream"
+      params["keyword"] = query.keyword
+    }
+    let endpoint = try buildEndpoint(path: path, params: params)
+    let bytes = try await openSSE(endpoint: endpoint, lease: lease)
+    defer { bytes.task.cancel() }
+    try await SSEEventReader.consume(
+      from: bytes, as: BoundedResourceSearchEvent.self, maximumEventBytes: maximumEventBytes,
+      configureDecoder: { decoder, frameLimit, frameBytes in
+        if let frameLimit {
+          // 帧上限按剩余预算 / 16 推导；扣除本帧实际临时占用后再限制对象数。
+          decoder.userInfo[BoundedResourceSearchEvent.itemLimitKey] = max(0, frameLimit * 16 - frameBytes * 8) / 4096
+        }
+      }
+    ) { bounded, byteCount in
+      try Task.checkCancellation()
+      try self.validate(lease)
+      try await receive(bounded.event, byteCount)
+    }
+  }
+
   /// 进度监听 (SSE)
   func progressStream(progressKey: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    return streamSSE(endpoint: "/system/progress/\(progressKey)")
+    return streamSSE(
+      endpoint: "/system/progress/\(progressKey)",
+      as: SearchStreamEvent.self,
+      reconnectPolicy: SSEReconnectPolicy(delay: .seconds(1), maxRetries: 5),
+      isTerminal: Self.isTerminalProgressEvent
+    )
+  }
+
+  private nonisolated static func isTerminalProgressEvent(_ event: SearchStreamEvent) -> Bool {
+    event.enable == false || event.type == "done" || event.type == "error"
   }
 
   /// 搜索资源
@@ -1641,14 +2812,17 @@ class APIService: ObservableObject {
     year: String? = nil, season: Int? = nil, sites: String? = nil
   ) async throws -> [Context] {
     // 匹配 Vue 端逻辑：如果 keyword 的格式是 xxxx:xxxxx 且 : 前面的 xxxx 为字符，则按照媒体 ID 格式搜索
-    let isIdSearch = keyword.range(of: "^[a-zA-Z]+:", options: .regularExpression) != nil
+    let isIdSearch = isResourceMediaSearchKeyword(keyword)
 
     let endpoint: String
     if isIdSearch {
-      // ID 搜索时，ID 作为路径的一部分，不需要对包含 “:” 的 mediaId 进行编码
-      endpoint = try buildEndpoint(
-        path: "/search/media/\(keyword)",
-        params: [
+      guard let identity = MediaIdentifier.identity(from: keyword) else {
+        throw APIError.invalidURL
+      }
+      endpoint = try endpointForMediaIdentity(
+        pathPrefix: "/search/media",
+        identity: identity,
+        extraParams: [
           "mtype": type,
           "area": area,
           "title": title,
@@ -1668,6 +2842,81 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([Context].self, from: data)
   }
 
+  /// 季号或集号只有明确给出且非负时才进入查询。0 是有效季，必须编码成 "0"；缺失则省略。
+  static func subtitleSeasonEpisodeQuery(_ value: Int?) -> String? {
+    guard let value, value >= 0 else { return nil }
+    return String(value)
+  }
+
+  func subtitleSearchEndpoint(for request: SubtitleSearchRequest, streaming: Bool) throws -> String {
+    switch request.kind {
+    case .title(let keyword):
+      return try buildEndpoint(
+        path: streaming ? "/search/subtitle/title/stream" : "/search/subtitle/title",
+        params: [
+          "keyword": keyword,
+          "sites": request.sites,
+        ])
+    case .media(let source, let mediaId, let type, let season, let episode):
+      return try endpointForMediaIdentity(
+        pathPrefix: "/search/subtitle/media",
+        identity: MediaIdentity(source: source, mediaId: mediaId),
+        extraParams: [
+          "mtype": type,
+          "season": Self.subtitleSeasonEpisodeQuery(season),
+          "episode": Self.subtitleSeasonEpisodeQuery(episode),
+          "sites": request.sites,
+        ],
+        suffix: streaming ? "/stream" : ""
+      )
+    }
+  }
+
+  /// 字幕 SSE 不重连。心跳由收集器忽略；断流回退由会话决定，不在传输层重搜。
+  func openSubtitleSearchStream(
+    _ request: SubtitleSearchRequest
+  ) -> AsyncThrowingStream<SubtitleSearchEvent, Error> {
+    do {
+      let endpoint = try subtitleSearchEndpoint(for: request, streaming: true)
+      return streamSSE(endpoint: endpoint, as: SubtitleSearchEvent.self)
+    } catch {
+      return AsyncThrowingStream { $0.finish(throwing: error) }
+    }
+  }
+
+  func searchSubtitles(_ request: SubtitleSearchRequest) async throws -> [SubtitleInfo] {
+    let endpoint = try subtitleSearchEndpoint(for: request, streaming: false)
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([SubtitleInfo].self, from: data)
+  }
+
+  func fetchDownloadDirectories() async throws -> [DownloadDirectory] {
+    let data = try await makeRequest(endpoint: "/download/paths")
+    return try await decodeOrUnwrap([DownloadDirectory].self, from: data)
+  }
+
+  /// 服务端按签名链接自行下载字幕到媒体下载目录，不创建下载器任务。
+  /// 自动目录传 JSON null；空 body 或 success 不为 true 都不是成功。
+  func downloadSubtitle(
+    subtitle: SubtitleInfo,
+    mediaSource: String,
+    mediaId: String,
+    savePath: String?
+  ) async throws {
+    let body = try JSONEncoder().encode(SubtitleDownloadRequest(
+      subtitle: subtitle,
+      mediaSource: mediaSource,
+      mediaId: mediaId,
+      savePath: savePath
+    ))
+    let data = try await makeRequest(endpoint: "/download/subtitle", method: "POST", body: body)
+    guard !data.isEmpty else { throw APIError.serverMessage("字幕下载失败") }
+    let response = try decodeStrictActionResponseSync(from: data)
+    guard response.success else {
+      throw APIError.serverMessage(response.message ?? "字幕下载失败")
+    }
+  }
+
   // MARK: - 详情与订阅
 
   /// 识别媒体标题（自动识别/猜测）
@@ -1676,8 +2925,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 名称识别测试页面，用于测试后端的标题识别规则。
   /// - 对比组件: 前端的手动搜索功能由 `MediaIdSelector.vue` UI组件实现，该组件调用 `/media/search` API 来让用户**手动搜索并确认**影视信息。
   /// - tvOS现状: 当前 tvOS 端仅使用了此“自动识别”逻辑，后续审查时需关注其识别准确率是否满足业务场景。
-  func recognizeMedia(title: String) async throws -> RecognizeResponse {
-    let endpoint = try buildEndpoint(path: "/media/recognize", params: ["title": title])
+  func recognizeMedia(
+    title: String,
+    source: MediaSearchSource? = nil
+  ) async throws -> RecognizeResponse {
+    let endpoint = try buildEndpoint(
+      path: "/media/recognize",
+      params: [
+        "title": title,
+        "media_source": source?.rawValue,
+      ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(RecognizeResponse.self, from: data)
   }
@@ -1686,17 +2943,17 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue
   /// - 应用场景: 影视剧详情页的主接口，获取最全的媒体信息。
   func fetchMediaDetail(media: MediaInfo) async throws -> MediaInfo {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，并可能导致上层视图显示“无数据”。
-      // 这里直接抛出错误以便上层捕获并处理UI状态。
+    guard media.identity != nil else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，并可能导致上层视图显示“无数据”。
       throw APIError.invalidURL
     }
-    let params: [String: String?] = [
-      "type_name": media.type,
-      "title": media.title,
-      "year": media.year,
-    ]
-    let endpoint = try buildEndpoint(path: "/media/\(mediaId)", params: params)
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/media",
+      media: media,
+      extraParams: [
+        "type_name": media.type
+      ]
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(MediaInfo.self, from: data)
   }
@@ -1707,8 +2964,7 @@ class APIService: ObservableObject {
   /// - ⚠️ 参数说明:
   ///   - `source`: **数据源，决定API的路由**。前端直接将其作为路径的一部分。
   func fetchPersonDetail(personId: String, source: String?) async throws -> Person {
-    var sourcePath = source ?? "tmdb"
-    if sourcePath == "themoviedb" { sourcePath = "tmdb" }
+    let sourcePath = try personSourcePath(source)
     let endpoint = "/\(sourcePath)/person/\(personId)"
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(Person.self, from: data)
@@ -1722,8 +2978,7 @@ class APIService: ObservableObject {
   func fetchPersonCredits(personId: String, source: String?, page: Int = 1) async throws
     -> [MediaInfo]
   {
-    var sourcePath = source ?? "tmdb"
-    if sourcePath == "themoviedb" { sourcePath = "tmdb" }
+    let sourcePath = try personSourcePath(source)
     let endpoint = try buildEndpoint(
       path: "/\(sourcePath)/person/credits/\(personId)",
       params: ["page": String(page)])
@@ -1731,19 +2986,34 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
+  private func personSourcePath(_ source: String?) throws -> String {
+    guard let source else { throw APIError.invalidURL }
+    switch source {
+    case "themoviedb":
+      return "tmdb"
+    case "douban", "bangumi", "anilist":
+      return source
+    default:
+      throw APIError.invalidURL
+    }
+  }
+
   /// 获取媒体演员
   /// - 对应前端: `MoviePilot-Frontend/src/pages/credits.vue` (调用 `PersonCardListView.vue` 进行分页加载)
-  /// - 应用场景: 影视详情页展示的演员横向列表，支持 TMDB/豆瓣/Bangumi 来源。支持分页加载。
+  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi、AniList 字段顺序展示演员，支持分页加载。
   func fetchMediaActors(detail: MediaInfo, page: Int) async throws -> [Person] {
-    var path = ""
-    if let tmdbId = detail.tmdb_id {
+    guard let identity = detail.auxiliaryContentIdentity else { return [] }
+    let path: String
+    if identity.source == "themoviedb" {
       let type = detail.type ?? ""
-      path = "tmdb/credits/\(tmdbId)/\(type)"
-    } else if let doubanId = detail.douban_id {
+      path = "tmdb/credits/\(identity.mediaId)/\(type)"
+    } else if identity.source == "douban" {
       let type = detail.type ?? ""
-      path = "douban/credits/\(doubanId)/\(type)"
-    } else if let bangumiId = detail.bangumi_id {
-      path = "bangumi/credits/\(bangumiId)"
+      path = "douban/credits/\(identity.mediaId)/\(type)"
+    } else if identity.source == "bangumi" {
+      path = "bangumi/credits/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/credits/\(identity.mediaId)"
     } else {
       return []
     }
@@ -1753,12 +3023,101 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([Person].self, from: data)
   }
 
+  /// 获取豆瓣短评
+  /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaCommentView.vue`
+  ///   （`start` 是条目偏移量，不是页码；`count` 固定 10）。
+  /// - 对应后端: `app/api/endpoints/douban.py` 的 `douban_interests`，只要求登录态。
+  /// - 应用场景: 媒体详情页「短评 / 影评」区块默认的短评分类，进入详情页即拉第一页。
+  func fetchDoubanComments(
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int = DoubanDiscussionAvailability.pageSize
+  ) async throws -> DoubanCommentPage {
+    let endpoint = try doubanDiscussionEndpoint(
+      kind: "interests",
+      doubanId: doubanId,
+      typeName: typeName,
+      start: start,
+      count: count
+    )
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap(DoubanCommentPage.self, from: data)
+  }
+
+  /// 获取豆瓣影评
+  /// - 对应后端: `app/api/endpoints/douban.py` 的 `douban_reviews`。
+  /// - 应用场景: 与 Web 一样按需加载，用户切到「影评」胶囊（或短评为空自动切换）时才请求。
+  /// - 注意: `abstract` 只是豆瓣返回的摘要，不是影评全文。
+  func fetchDoubanReviews(
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int = DoubanDiscussionAvailability.pageSize
+  ) async throws -> DoubanReviewPage {
+    let endpoint = try doubanDiscussionEndpoint(
+      kind: "reviews",
+      doubanId: doubanId,
+      typeName: typeName,
+      start: start,
+      count: count
+    )
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap(DoubanReviewPage.self, from: data)
+  }
+
+  /// 短评/影评共用的分页端点：`/douban/{kind}/{doubanid}/{type_name}?start=&count=`。
+  /// 豆瓣 ID 与中文类型各自按单个路径段编码一次（`/` 等分隔符也会被转义）。
+  private func doubanDiscussionEndpoint(
+    kind: String,
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int
+  ) throws -> String {
+    guard
+      let encodedId = encodeMediaIDPathSegment(doubanId),
+      !encodedId.isEmpty,
+      let encodedType = encodeMediaIDPathSegment(typeName),
+      !encodedType.isEmpty
+    else {
+      throw APIError.invalidURL
+    }
+    return try buildEndpoint(
+      path: "/douban/\(kind)/\(encodedId)/\(encodedType)",
+      params: ["start": String(max(0, start)), "count": String(max(1, count))]
+    )
+  }
+
   /// 获取 RSS 站点列表
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在 **订阅编辑对话框** 中，作为“订阅站点”下拉菜单的数据源。
   func fetchSites() async throws -> [Site] {
     let data = try await makeRequest(endpoint: "/site/rss")
     return try await decodeOrUnwrap([Site].self, from: data)
+  }
+
+  /// 获取全部站点（含未启用），权威域。
+  /// - 对应后端: `/site/`（site.py:39-47），需要 **manage** 权限，返回全部站点。
+  /// - 应用场景: 作为资源搜索的权威站点列表（F-209/F-210），调用方按 `is_active` 过滤。
+  func fetchAllSites() async throws -> [Site] {
+    let data = try await makeRequest(endpoint: "/site/")
+    return try await decodeOrUnwrap([Site].self, from: data)
+  }
+
+  /// 获取资源搜索可用的站点列表：优先权威域 `/site/`（全部站点，需 manage 权限），
+  /// 权限不足或接口失败时降级为订阅域 `/site/rss`。
+  /// - Returns: 站点列表 + 是否拿到权威域。仅 authoritative 时按 availableSites 做归一化才有意义，
+  ///   降级域（订阅子集）不能用来裁剪已保存的合法站点选择（F-210 破坏性副作用）。
+  func fetchSearchableSites() async throws -> (sites: [Site], authoritative: Bool) {
+    if canAccess(.manage) {
+      do {
+        return (try await fetchAllSites(), authoritative: true)
+      } catch {
+        Logger.warning("[APIService] 加载权威站点 /site/ 失败，降级订阅域 /site/rss: \(error)")
+      }
+    }
+    return (try await fetchSites(), authoritative: false)
   }
 
   /// 获取目录配置
@@ -1809,45 +3168,75 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
   func fetchEpisodeGroups(tmdbId: Int) async throws -> [EpisodeGroup] {
     let endpoint = "/media/groups/\(tmdbId)"
-    if let cached = await episodeGroupsCache.get(endpoint) { return cached }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([EpisodeGroup].self, from: data)
-    await episodeGroupsCache.set(endpoint, value: result)
-    return result
+    return try await sessionCachedValue(sessionScope.episodeGroupsCache, key: endpoint) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([EpisodeGroup].self, from: data)
+    }
   }
 
   /// 获取标准电视剧的各季基础信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getMediaSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户**未**选择任何特殊的“剧集组”时，调用此 API 获取并展示该剧集在 TMDB 上定义的标准分季信息（S01, S02 等）。
-  func getMediaSeasons(media: MediaInfo) async throws -> [TmdbSeason] {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回空数组
+  func getMediaSeasons(
+    media: MediaInfo, allSeasons: Bool = false, forceRefresh: Bool = false
+  ) async throws -> [TmdbSeason] {
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
       return []
     }
     let params: [String: String?] = [
-      "mediaid": mediaId,
+      "media_source": identity.source,
+      "media_id": identity.mediaId,
       "title": media.title,
       "year": media.year,
-      "season": media.season.map(String.init),
+      "season": allSeasons ? nil : media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
-    if let cached = await mediaSeasonsCache.get(endpoint) { return cached }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
-    await mediaSeasonsCache.set(endpoint, value: result)
-    return result
+    // 后端查询失败时也会回空列表。空结果不跨页面复用，下次进入按 Web 一样重新读取。
+    return try await sessionCachedValue(
+      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
+      acceptsCachedValue: { !$0.isEmpty }
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
+    }
   }
 
   /// 获取特定剧集组（如长篇连载划分的部/篇）下的季信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getGroupSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
-  func getGroupSeasons(groupId: String) async throws -> [TmdbSeason] {
+  func getGroupSeasons(groupId: String, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
-    if let cached = await groupSeasonsCache.get(endpoint) { return cached }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
-    await groupSeasonsCache.set(endpoint, value: result)
-    return result
+    // 与标准季表相同：空结果可能是后端查询失败，不跨页面复用。
+    return try await sessionCachedValue(
+      sessionScope.groupSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
+      acceptsCachedValue: { !$0.isEmpty }
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
+    }
+  }
+
+  /// 获取某一季的全部集（TMDB），选了剧集组时按剧集组的季。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (loadSeasonEpisodes)
+  /// - 应用场景: 详情页集列表；按集播放的上一集、下一集
+  /// - 备注: 选了剧集组时 `season` 是组内季号，返回的 `episode_number` 是组内序号，`season_number` 仍是 TMDB 原季号；
+  ///   v3.2.6 起每集带 TMDB 单集 ID（`id`），不随剧集组变化。
+  func fetchTmdbEpisodes(
+    tmdbID: Int, season: Int, episodeGroup: String?, forceRefresh: Bool = false
+  ) async throws -> [TmdbEpisode] {
+    let endpoint = try buildEndpoint(
+      path: "/tmdb/\(tmdbID)/\(season)", params: ["episode_group": trimmedNonEmpty([episodeGroup])])
+    return try await sessionCachedValue(
+      sessionScope.tmdbEpisodesCache, key: endpoint, forceRefresh: forceRefresh
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbEpisode].self, from: data)
+    }
   }
 
   /// 批量检查媒体服务器中已入库的季、集状态
@@ -1855,52 +3244,31 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
     let body = try JSONEncoder().encode(mediaInfo)
-    let hash = SHA256.hash(data: body)
-    let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
-    if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
     let data = try await makeRequest(
       endpoint: "/mediaserver/notexists",
       method: "POST",
-      body: body,
-      retryOn401: false,
-      logoutOnUnauthorized: false
+      body: body
     )
-    let result = try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
-    await seasonsNotExistsCache.set(cacheKey, value: result)
-    return result
+    return try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
   }
 
-  /// 保存（更新）订阅配置
-  /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
-  /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
-  func saveSubscription(_ subscribe: Subscribe) async throws -> Bool {
-    let body = try JSONEncoder().encode(subscribe)
+  /// 更新订阅编辑草稿（PUT /subscribe/）；新增订阅使用 addSubscription。
+  func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    let body = try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))
     let endpoint = "/subscribe/"
-    // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
-    // 基于 Vue：更新是 PUT /subscribe/，创建是 POST /subscribe/ (或默认配置)
-    // 由于 Subscribe 结构体有 ID，如果它 > 0 或不为 nil，则使用 PUT。
-    let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "PUT",
+      body: body
+    )
+    let result = try decodeStrictActionResponseSync(from: data)
 
-    let data = try await makeRequest(endpoint: endpoint, method: method, body: body)
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      struct SimpleResp: Decodable {
-        let success: Bool?
-        let message: String?
-      }
-      if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
-        success = resp.success ?? true
-      } else {
-        success = true
-      }
+    if result.success {
+      invalidateSubscriptionCaches()
     }
-
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return result
   }
 
   /// 新增订阅（简单模式）
@@ -1909,18 +3277,27 @@ class APIService: ObservableObject {
   ///   - **订阅电影时**: 直接调用此 API，请求中的 `season` 参数为 null。
   ///   - **订阅电视剧分季时**: 会先弹出 `SubscribeSeasonDialog.vue` 分季选择框。用户确认后，前端遍历所选的每一季，并为每一季都单独调用一次此 API，每次传入对应的 `season` 编号。
   /// - 备注：Subscribe 参数用于更新订阅状态缓存
-  func addSubscription(request: SubscribeRequest, subscribe: Subscribe) async throws -> Int? {
+  func addSubscription(
+    request: SubscribeRequest,
+    subscribe: Subscribe
+  ) async throws -> Int? {
     let body = try JSONEncoder().encode(request)
-    let data = try await makeRequest(endpoint: "/subscribe/", method: "POST", body: body)
+    let data = try await makeRequest(
+      endpoint: "/subscribe/",
+      method: "POST",
+      body: body
+    )
 
     struct SubscribeAddResp: Decodable {
       let id: Int?
     }
 
-    if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data),
-      let id = response.data?.id
-    {
-      await invalidateSubscriptionCaches()
+    let response = try JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data)
+    guard response.success == true else {
+      throw APIError.serverMessage(response.localizedMessage ?? "新增订阅失败")
+    }
+    if let id = response.data?.id {
+      invalidateSubscriptionCaches()
       return id
     }
     return nil
@@ -1930,51 +3307,73 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
-    let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
+    let data = try await makeRequest(
+      endpoint: "/subscribe/\(id)",
+      method: "DELETE"
+    )
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
+      invalidateSubscriptionCaches()
     }
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return result.success
   }
 
   /// 通过媒体 ID 和季数删除订阅
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (主要实现), `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 在详情页或媒体卡片上，取消对该媒体的订阅（点击已激活的心形图标）。
   func deleteSubscription(media: MediaInfo, season: Int?) async throws -> Bool {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
-      return false
-    }
-    return try await deleteSubscription(mediaId: mediaId, season: season)
+    try await deleteSubscriptionResult(media: media, season: season).success
   }
 
-  /// 通过已解析的媒体 ID 和季数删除订阅
+  func deleteSubscriptionResult(media: MediaInfo, season: Int?) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回失败
+      return (false, "媒体身份不完整")
+    }
+    return try await deleteSubscriptionResult(identity: identity, season: season)
+  }
+
+  /// 通过已归一化的主媒体 ID 和季数删除订阅
   /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `removeSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅时，先解析真实订阅归属的 `mediaId`，再保持 Web 的媒体级删除语义。
+  /// - 应用场景: 保持 Web 的媒体级删除语义，使用共享身份解析结果。
   func deleteSubscription(mediaId: String, season: Int?) async throws -> Bool {
-    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
-      throw APIError.invalidURL
+    try await deleteSubscriptionResult(mediaId: mediaId, season: season).success
+  }
+
+  func deleteSubscriptionResult(
+    mediaId: String,
+    season: Int?
+  ) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard let identity = MediaIdentifier.identity(from: mediaId) else {
+      return (false, "媒体身份不完整")
     }
-    let endpoint = try buildEndpoint(
-      path: "/subscribe/media/\(encodedMediaId)",
-      params: ["season": season.map(String.init)])
-    let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
+    return try await deleteSubscriptionResult(identity: identity, season: season)
+  }
+
+  private func deleteSubscriptionResult(
+    identity: MediaIdentity,
+    season: Int?
+  ) async throws -> (
+    success: Bool, message: String?
+  ) {
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/subscribe/media",
+      identity: identity,
+      extraParams: ["season": season.map(String.init)]
+    )
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      method: "DELETE"
+    )
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
+      invalidateSubscriptionCaches()
     }
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return result
   }
 
   /// 复用（Fork）一个订阅分享
@@ -1982,7 +3381,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int {
     let body = try JSONEncoder().encode(share)
-    let data = try await makeRequest(endpoint: "/subscribe/fork", method: "POST", body: body)
+    let data = try await makeRequest(
+      endpoint: "/subscribe/fork",
+      method: "POST",
+      body: body
+    )
     struct ForkResponse: Decodable {
       let id: Int?
     }
@@ -1992,47 +3395,46 @@ class APIService: ObservableObject {
     } catch {
       throw APIError.decodingError(error)
     }
-    guard response.success != false else {
-      throw APIError.serverMessage(response.message ?? "复用订阅失败")
+    // 与仓内其它 mutation 解码（decodeStrictActionResponseSync 的 `success ?? false`）
+    // 及 Web 端 ForkSubscribeDialog（`if (result.success)`）保持一致：成功必须是显式
+    // `success == true` 且携带正 ID。缺/空 success 一律失败关闭，避免把含糊的 2xx
+    // 当成已创建的订阅继续走 GET→编辑器链。
+    guard response.success == true else {
+      throw APIError.serverMessage(response.localizedMessage ?? "复用订阅失败")
     }
-    guard let id = response.data?.id else {
+    guard let id = response.data?.id, id > 0 else {
       throw APIError.serverMessage("复用订阅响应缺少 ID")
     }
-    await invalidateSubscriptionCaches()
+    invalidateSubscriptionCaches()
     return id
   }
 
   /// 暂停或恢复订阅状态
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/cards/SubscribeCard.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅列表页对单个卡片进行“暂停/恢复”切换。 2. 在订阅列表页进行批量暂停/恢复操作时并发调用。
-  func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
+  func updateSubscriptionStatus(
+    id: Int,
+    state: String
+  ) async throws -> (
+    success: Bool, message: String?
+  ) {
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
+      invalidateSubscriptionCaches()
     }
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return result
   }
 
   /// 立即触发订阅搜索
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (searchSubscribe)
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
-    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
+    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)", method: "POST")
+    let success = try decodeStrictActionResponseSync(from: data).success
     if success {
-      await invalidateSubscriptionCaches()
+      invalidateSubscriptionCaches()
     }
     return success
   }
@@ -2040,18 +3442,15 @@ class APIService: ObservableObject {
   /// 重置订阅状态（重新开始）
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (resetSubscribe)
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
-  func resetSubscription(id: Int) async throws -> Bool {
-    let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
+  func resetSubscription(id: Int) async throws -> (
+    success: Bool, message: String?
+  ) {
+    let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)", method: "POST")
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
+      invalidateSubscriptionCaches()
     }
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return result
   }
 
   /// 获取单条订阅详情
@@ -2059,65 +3458,79 @@ class APIService: ObservableObject {
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
-    return try await decodeOrUnwrap(Subscribe.self, from: data)
+    let subscription = try await decodeOrUnwrap(Subscribe.self, from: data)
+    guard id > 0, subscription.id == id else {
+      throw APIError.serverMessage("订阅详情缺少匹配的有效 ID，请刷新后重试")
+    }
+    return subscription
   }
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅前，先复用查询结果解析出真实订阅归属的媒体 ID。
-  /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
+  /// - 应用场景: 状态检查、编辑定位，以及详情页 Header 取消订阅前的严格身份确认。
+  /// - 备注: 状态查询附带标题、年份和类型。v3.0.10-1 起，电影和电视剧（含 TMDB）
+  ///   在精确身份未命中时都会回退：有年份时优先精确年份，其次匹配年份为空的订阅；
+  ///   没有年份时只匹配年份为空的订阅。解析媒体级删除目标时必须关闭该回退，
+  ///   因为 DELETE 仍只接受精确来源身份。`mediaId` 恒为本次查询使用的媒体身份，
+  ///   响应回显的身份只用来判断“归属是否已被确认”（`isResolvedMediaId`），不再充当删除目标。
+  ///   原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
     season: Int? = nil,
-    allowSessionRefreshOnUnauthorized: Bool = true
+    includeVideoMetadataFallback: Bool = true
   ) async throws -> SubscriptionLookupResult? {
     struct SubscribeLookupResp: Codable {
       let id: Int?
       let tmdbid: Int?
       let doubanid: String?
       let bangumiid: Int?
+      let anilistid: Int?
+      let media_source: String?
+      let media_id: String?
       let mediaid: String?
 
-      var apiMediaId: String? {
-        MediaIdentifier.apiMediaId(
-          tmdbId: tmdbid,
+      /// 响应是否给出了可确认的订阅归属：canonical 成对身份，或任一可用的专用 ID。
+      /// 只回答“有没有”，不再把响应身份当作删除目标。
+      var hasResolvedIdentity: Bool {
+        if let source = media_source, !source.isEmpty,
+          let id = media_id, !id.isEmpty
+        {
+          return true
+        }
+        return MediaIdentifier.apiMediaId(
+          tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
           doubanId: doubanid,
-          bangumiId: bangumiid,
+          bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
+          anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
           fallbackMediaId: mediaid
-        )
+        ) != nil
       }
     }
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
-    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
-      throw APIError.invalidURL
-    }
-    let endpoint = try buildEndpoint(
-      path: "/subscribe/media/\(encodedMediaId)",
-      params: [
+    // 各版本 Web 都附带 title/year/mtype；v3.0.10-1 前的后端只在自身条件满足时使用回退参数，
+    // 多发的参数会被忽略，所以这里不按后端版本区分。
+    let usesVideoMetadataFallback = includeVideoMetadataFallback
+      && (media.type == "电影" || media.type == "电视剧")
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/subscribe/media",
+      identity: identity,
+      extraParams: [
         "season": season.map(String.init),
         "title": media.title,
-      ])
-    let data = try await makeRequest(
-      endpoint: endpoint,
-      retryOn401: allowSessionRefreshOnUnauthorized,
-      logoutOnUnauthorized: allowSessionRefreshOnUnauthorized
+        "year": usesVideoMetadataFallback ? media.year : nil,
+        "mtype": usesVideoMetadataFallback ? media.type : nil,
+      ]
     )
+    let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
-    if let resolvedMediaId = resp.apiMediaId {
-      return SubscriptionLookupResult(
-        id: id,
-        mediaId: resolvedMediaId,
-        isResolvedMediaId: true
-      )
-    }
     return SubscriptionLookupResult(
       id: id,
-      mediaId: mediaId,
-      isResolvedMediaId: false
+      mediaId: identity.mediaKey,
+      isResolvedMediaId: resp.hasResolvedIdentity
     )
   }
 
@@ -2128,8 +3541,7 @@ class APIService: ObservableObject {
   func fetchSubscriptionID(media: MediaInfo, season: Int? = nil) async throws -> Int? {
     try await fetchSubscriptionLookup(
       media: media,
-      season: season,
-      allowSessionRefreshOnUnauthorized: true
+      season: season
     )?.id
   }
 
@@ -2146,43 +3558,14 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    while true {
-      try Task.checkCancellation()
-      let generation = subscriptionCacheGeneration
-      let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
-      if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
-        #if DEBUG
-        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheHit?()
-        #endif
-        try Task.checkCancellation()
-        if generation == subscriptionCacheGeneration {
-          return cached
-        }
-        continue
-      }
-
-      do {
-        let isSubscribed =
-          try await fetchSubscriptionLookup(
-            media: media,
-            season: season,
-            allowSessionRefreshOnUnauthorized: false
-          ) != nil
-        guard generation == subscriptionCacheGeneration else {
-          continue
-        }
-        await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
-        #if DEBUG
-        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore?()
-        #endif
-        try Task.checkCancellation()
-        guard generation == subscriptionCacheGeneration else {
-          continue
-        }
-        return isSubscribed
-      } catch is CancellationError {
-        throw CancellationError()
-      }
+    let key = "\(mediaId):\(season.map(String.init) ?? "")"
+    return try await sessionCachedValue(
+      sessionScope.subscriptionStatusCache,
+      key: key,
+      forceRefresh: forceRefresh
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.fetchSubscriptionLookup(media: media, season: season) != nil
     }
   }
 
@@ -2190,172 +3573,59 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
-    var canReadCache = !forceRefresh
-    while true {
-      try Task.checkCancellation()
-      let generation = subscriptionCacheGeneration
-      let cacheKey = "subscriptions:\(generation)"
-      if canReadCache, let cached = await subscriptionSnapshotCache.get(cacheKey) {
-        #if DEBUG
-        await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit?()
-        #endif
-        try Task.checkCancellation()
-        guard generation == subscriptionCacheGeneration else {
-          canReadCache = true
-          continue
-        }
-        return cached
-      }
-
-      let fetch = subscriptionSnapshotFetchTask(
-        for: generation,
-        reuseInFlight: canReadCache
-      )
-      let subscriptions: [Subscribe]
-      do {
-        subscriptions = try await fetch.task.value
-      } catch is CancellationError {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(
-          generation: generation,
-          revision: fetch.revision
-        )
-        try Task.checkCancellation()
-        guard generation == subscriptionCacheGeneration else {
-          canReadCache = true
-          continue
-        }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
-          canReadCache = true
-          continue
-        }
-        throw CancellationError()
-      } catch {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(
-          generation: generation,
-          revision: fetch.revision
-        )
-        guard generation == subscriptionCacheGeneration else {
-          canReadCache = true
-          continue
-        }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
-          canReadCache = true
-          continue
-        }
-        throw error
-      }
-
-      #if DEBUG
-      await subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue?()
-      #endif
-      try Task.checkCancellation()
-      guard generation == subscriptionCacheGeneration else {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(
-          generation: generation,
-          revision: fetch.revision
-        )
-        canReadCache = true
-        continue
-      }
-      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
-        canReadCache = true
-        continue
-      }
-      await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
-      #if DEBUG
-      await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore?()
-      #endif
-      try Task.checkCancellation()
-      guard generation == subscriptionCacheGeneration else {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(
-          generation: generation,
-          revision: fetch.revision
-        )
-        canReadCache = true
-        continue
-      }
-      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
-        canReadCache = true
-        continue
-      }
-      clearSubscriptionSnapshotFetchTaskIfCurrent(
-        generation: generation,
-        revision: fetch.revision
-      )
-      return subscriptions
-    }
-  }
-
-  private func subscriptionSnapshotFetchTask(
-    for generation: Int,
-    reuseInFlight: Bool
-  ) -> (revision: Int, task: Task<[Subscribe], Error>) {
-    if reuseInFlight,
-      let task = subscriptionSnapshotFetchTask,
-      let revision = subscriptionSnapshotFetchTaskRevision,
-      subscriptionSnapshotFetchGeneration == generation
-    {
-      return (revision, task)
-    }
-
-    subscriptionSnapshotFetchRevision &+= 1
-    let revision = subscriptionSnapshotFetchRevision
-    let task = Task { [weak self] in
+    try await sessionCachedValue(
+      sessionScope.subscriptionSnapshotCache,
+      key: "subscriptions",
+      forceRefresh: forceRefresh
+    ) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: "/subscribe/")
       return try await self.decodeOrUnwrap([Subscribe].self, from: data)
     }
-    subscriptionSnapshotFetchGeneration = generation
-    subscriptionSnapshotFetchTaskRevision = revision
-    subscriptionSnapshotFetchTask = task
-    return (revision, task)
-  }
-
-  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int, revision: Int) {
-    guard subscriptionSnapshotFetchGeneration == generation else { return }
-    guard subscriptionSnapshotFetchTaskRevision == revision else { return }
-    subscriptionSnapshotFetchGeneration = nil
-    subscriptionSnapshotFetchTaskRevision = nil
-    subscriptionSnapshotFetchTask = nil
   }
 
   /// 添加下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/AddDownloadDialog.vue
   /// - 应用场景: 在资源搜索结果中选择特定条目后，将其推送到后端下载器执行下载。
-  func addDownload(payload: AddDownloadRequest, endpoint: String) async throws -> (
+  func addDownload(payload: AddDownloadRequest) async throws -> (
     success: Bool, message: String?
   ) {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .prettyPrinted
     let body = try encoder.encode(payload)
 
+    let endpoint = payload.media_in == nil ? "/download/add" : "/download/"
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
 
-    struct DownloadResp: Decodable {
-      let success: Bool?
-      let message: String?
-    }
-
-    // 尝试解码简单的成功/消息响应
-    if let resp = try? JSONDecoder().decode(DownloadResp.self, from: data) {
-      return (resp.success ?? false, resp.message)
-    }
-
-    // 尝试解码标准的 ApiResponse 包装器
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return (response.success ?? false, response.message)
-    }
-
-    return (true, nil)
+    return try decodeStrictActionResponseSync(from: data)
   }
 
   /// 获取订阅的海报图片 URL
+  private func configuredDisplayImageURL(_ value: String?) -> URL? {
+    displayImageURL(
+      value,
+      baseURL: baseURL,
+      useImageCache: useImageCache,
+      bangumiProxyEnabled: settings?.BANGUMI_PROXY_ENABLE?.value == true,
+      bangumiImageDomain: settings?.BANGUMI_IMAGE_DOMAIN
+    )
+  }
+
   func getSubscribePosterImageUrl(_ subscribe: Subscribe) -> URL? {
     return getSubscribePosterImageUrl(poster: subscribe.poster)
   }
 
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
-    return displayImageURL(poster, baseURL: baseURL, useImageCache: useImageCache)
+    guard let poster, !isDefaultPlaceholderImageURL(poster) else { return nil }
+    return configuredDisplayImageURL(poster)
+  }
+
+  /// 豆瓣评论作者头像的可显示地址。
+  /// - 豆瓣头像域名对非同源 Referer 返回 418，必须统一走后端图片代理（与 Web 的
+  ///   `getDisplayImageUrl` 一致），绝不能把原始地址直接交给图片组件。
+  func getDoubanCommentAvatarImageUrl(_ avatar: String?) -> URL? {
+    guard let avatar = DoubanDiscussionIdentity.normalized(avatar) else { return nil }
+    return configuredDisplayImageURL(avatar)
   }
 
   /// 获取订阅分享的海报图片 URL
@@ -2369,16 +3639,17 @@ class APIService: ObservableObject {
   }
 
   func getPosterImageUrl(posterPath: String?) -> URL? {
-    let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
+    let url = posterPath.replacingOccurrences(of: "original", with: "w500")
 
-    // 1. 匹配豆瓣默认海报并拦截
-    if let currentUrl = url, currentUrl.contains("doubanio.com") {
-      if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
-        return nil
-      }
-    }
+    return configuredDisplayImageURL(url)
+  }
 
-    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
+  /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
+  /// 与降尺寸版本共用数据源默认空白海报拦截规则。
+  func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
+    return configuredDisplayImageURL(posterPath)
   }
 
   /// 获取媒体背景图片 URL
@@ -2387,7 +3658,7 @@ class APIService: ObservableObject {
   }
 
   func getBackdropImageUrl(backdropPath: String?) -> URL? {
-    return displayImageURL(backdropPath, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(backdropPath)
   }
 
   /// 获取下载 Card 中的背景图片
@@ -2418,15 +3689,18 @@ class APIService: ObservableObject {
 
   /// 获取季海报 URL，严格参照 Vue 逻辑
   func getSeasonPosterURL(posterPath: String?, mediaPosterPath: String?) -> URL? {
-    // Vue: if (!posterPath) return props.media?.poster_path
-    guard let posterPath = posterPath, !posterPath.isEmpty else {
-      guard let mediaPosterPath = mediaPosterPath, !mediaPosterPath.isEmpty else { return nil }
-      return URL(string: mediaPosterPath)
-    }
+    let resolvedPath = posterPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallbackPath = mediaPosterPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let path = [resolvedPath, fallbackPath].compactMap({ $0 }).first(where: { !$0.isEmpty })
+    else { return nil }
 
-    // Vue: return `https://${globalSettings.TMDB_IMAGE_DOMAIN}/t/p/w500${posterPath}`
-    let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-    return URL(string: "https://\(domain)/t/p/w500\(posterPath)")
+    if path.hasPrefix("/") {
+      let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
+      return configuredDisplayImageURL("https://\(domain)/t/p/w500\(path)")
+    }
+    return configuredDisplayImageURL(
+      path.replacingOccurrences(of: "/t/p/original/", with: "/t/p/w500/")
+    )
   }
 
   /// 获取人物图片 URL
@@ -2447,59 +3721,139 @@ class APIService: ObservableObject {
   func getPersonImageURL(
     source: String?, profilePath: String?, avatar: PersonAvatar?, images: BangumiImages?
   ) -> URL? {
-    var url = ""
-    var effectiveSource = source
-
-    // 自动推断来源
-    if effectiveSource == nil || (effectiveSource?.isEmpty ?? true) {
-      if let path = profilePath, path.hasPrefix("/") {
-        effectiveSource = "themoviedb"
-      } else if avatar != nil {
-        effectiveSource = "douban"
-      } else if images != nil {
-        effectiveSource = "bangumi"
-      } else if let path = profilePath, path.hasPrefix("http") {
-        url = path
-      }
-    }
-
-    if effectiveSource == "themoviedb" {
-      if profilePath == nil && url.isEmpty {
-        return nil
-      }
+    let url: String
+    switch source {
+    case "themoviedb":
+      guard let profilePath else { return nil }
       let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-      let path = profilePath ?? ""
-      if url.isEmpty {
-        url = "https://\(domain)/t/p/w600_and_h900_bestv2\(path)"
-      }
-    } else if effectiveSource == "douban" {
-      guard let avatar = avatar else {
-        return nil
-      }
-      switch avatar {
-      case .object(let normal):
-        url = normal
-      case .url(let link):
-        url = link
-      }
-    } else if effectiveSource == "bangumi" {
-      guard let medium = images?.medium else {
-        return nil
-      }
-      url = medium
-    }
-
-    if url.isEmpty {
+      url = "https://\(domain)/t/p/w600_and_h900_bestv2\(profilePath)"
+    case "douban":
+      guard let avatarURL = avatar?.urlValue else { return nil }
+      url = avatarURL
+    case "bangumi":
+      guard let image = images?.medium else { return nil }
+      url = image
+    case "anilist":
+      // AniList 媒体详情的内嵌 directors/actors 使用 avatar.large，
+      // 而独立 credits/person 端点使用 images.large；两种结构都要兼容。
+      guard let image = images?.large ?? images?.medium ?? avatar?.urlValue else { return nil }
+      url = image
+    default:
       return nil
     }
 
-    // 匹配豆瓣默认人员图标并拦截 (针对 Apple TV 的特殊优化)
-    if url.contains("doubanio.com")
-      && (url.contains("personage-default") || (url.contains("celebrity-default")))
-    {
-      return nil
+    guard !isDefaultPlaceholderImageURL(url) else { return nil }
+
+    return configuredDisplayImageURL(url)
+  }
+
+  func isProtectedImageURL(_ url: URL) -> Bool {
+    isProtectedMoviePilotImageURL(url, baseURL: baseURL)
+  }
+
+  /// 为 Top Shelf 下载可直接保存到共享缓存的原图。
+  /// 认证只允许停留在发起时冻结的 MoviePilot 保护图片边界；跨边界重定向永久剥离凭据。
+  func fetchTopShelfImageResource(
+    at url: URL,
+    maximumBytes: Int = 8_000_000,
+    maximumPixels: Int = 40_000_000
+  ) async throws -> TopShelfImageResource {
+    let lease = currentLease()
+    try validate(lease)
+    let startedProtected = isProtectedMoviePilotImageURL(url, baseURL: lease.baseURL)
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.timeoutInterval = 10
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+    if startedProtected {
+      if let token = lease.token {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      }
+      if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+      }
     }
 
-    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
+    let redirectDelegate = TopShelfImageRedirectDelegate(
+      startedProtected: startedProtected,
+      baseURL: lease.baseURL,
+      token: lease.token,
+      cookieHeader: { [vault = lease.runtime.cookieVault] target in
+        vault.cookieHeader(for: target)
+      }
+    )
+
+    do {
+      let resource = try await TopShelfImageLoader.downloadTopShelfImage(
+        request: request,
+        transport: lease.runtime.transport,
+        redirectDelegate: redirectDelegate,
+        maximumBytes: maximumBytes,
+        maximumPixels: maximumPixels
+      )
+      try Task.checkCancellation()
+      try validate(lease)
+      return resource
+    } catch {
+      if session.epoch != lease.epoch || error is CancellationError
+        || (error as? URLError)?.code == .cancelled
+      {
+        throw CancellationError()
+      }
+      if redirectDelegate.didBlockInsecureRedirect {
+        throw TopShelfImageError.insecureRedirect
+      }
+      if let imageError = error as? TopShelfImageError { throw imageError }
+      throw APIError.networkError(error)
+    }
+  }
+
+  func imageSource(for url: URL) -> Source {
+    if url.isFileURL {
+      return .provider(LocalFileImageDataProvider(fileURL: url))
+    }
+    let resource: KF.ImageResource
+    if isProtectedImageURL(url) {
+      resource = KF.ImageResource(
+        downloadURL: url,
+        cacheKey: "moviepilot-protected:\(session.imageNamespace):\(url.absoluteString)"
+      )
+    } else {
+      resource = KF.ImageResource(downloadURL: url)
+    }
+    return .network(resource)
+  }
+
+  func imageOptions(for url: URL) -> KingfisherOptionsInfo {
+    guard let downloader = imageDownloader(for: url),
+      let modifier = imageRequestModifier(for: url)
+    else {
+      return []
+    }
+    return [
+      .downloader(downloader),
+      .requestModifier(modifier),
+    ]
+  }
+
+  func imageDownloader(for url: URL) -> ImageDownloader? {
+    isProtectedImageURL(url) ? runtime.imageDownloader : nil
+  }
+
+  func imageRequestModifier(for url: URL) -> AnyModifier? {
+    guard isProtectedImageURL(url) else { return nil }
+    let vault = runtime.cookieVault
+    return AnyModifier { request in
+      var request = request
+      if let url = request.url, let cookie = vault.cookieHeader(for: url) {
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+      }
+      return request
+    }
+  }
+
+  private func effectivePort(_ components: URLComponents) -> Int? {
+    if let port = components.port { return port }
+    return components.scheme?.lowercased() == "https" ? 443 : 80
   }
 }

@@ -2,9 +2,9 @@ import SwiftUI
 
 struct MediaContextMenuItems: View {
   let item: MediaInfo
-  @Binding var navigationPath: NavigationPath
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @EnvironmentObject var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
@@ -18,73 +18,99 @@ struct MediaContextMenuItems: View {
   }
 
   var body: some View {
-    if canSubscribeMedia, let share = item.subscribeShare {
+    if canSubscribeMedia, !item.isCollection, item.type != "音乐", let share = item.subscribeShare {
       // 订阅分享的专属菜单
       Button {
         subscriptionHandler.forkSheetRequest = share
       } label: {
-        Label("复用订阅", systemImage: "document.on.document")
+        Label(
+          subscriptionHandler.forkCapability.unavailableHint ?? "复用订阅",
+          systemImage: AppSymbol.forkSubscription)
       }
+      .disabled(!subscriptionHandler.forkCapability.isAvailable)
     }
 
     Button {
       // 点击"详情"时立即触发预加载
-      MediaPreloader.shared.preload(for: item)
-      navigationPath.append(item)
+      navigationCoordinator.push(item)
     } label: {
-      Label("详情", systemImage: "info.circle")
+      Label("详情", systemImage: AppSymbol.details)
     }
 
-    if item.collection_id == nil {
+    if !item.isCollection {
       // TMDB 详情页：复用 MediaActionHandler 逻辑，点击时实时获取/识别 TMDB ID
       // 不依赖预加载状态，按钮永远可点，避免菜单状态不刷新的问题
-      if item.douban_id != nil || item.bangumi_id != nil {
+      if item.canJumpToTMDB {
         Button {
+          let navigationSource = navigationCoordinator.sourceToken()
           Task {
             // 优先传入预加载的 tmdbId，避免重复网络请求
             // ⚠️ 此处在 Button 操作中（非 body 渲染），可安全使用 getTask
-            let preloadedTmdbId = MediaPreloader.shared.getTask(for: item)?.tmdbId
+            let preloadedTmdbId = APIService.shared.mediaPreloader.getTask(for: item)?.tmdbId
             if let target = await mediaActionHandler.getTMDBJumpTarget(
               for: item, targetTmdbId: preloadedTmdbId)
             {
-              navigationPath.append(target)
+              navigationCoordinator.push(
+                target,
+                loadingPosterURL: item.imageURLs.poster,
+                ifCurrent: navigationSource
+              )
             }
           }
         } label: {
-          Label("TMDB详情页", systemImage: "link")
+          Label("TMDB详情页", systemImage: AppSymbol.link)
         }
       }
 
-      // 订阅按钮：读取预加载的订阅状态来决定显示文本
-      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改最近使用 (LRU) 状态
-      let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
+      // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
+      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态
+      let preloadedSubscribed = APIService.shared.mediaPreloader.peekTask(for: item)?.isSubscribed
 
-      if canSubscribeMedia {
+      if canSubscribeMedia, item.type != "音乐" {
         Button {
           if let onSubscribe = onSubscribe {
             onSubscribe(item)
           } else {
-            subscriptionHandler.handleSubscribe(item)
+            subscriptionHandler.handleSubscribe(
+              item,
+              expectedSubscribed: preloadedSubscribed == true
+            )
           }
         } label: {
           if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
-            Label("已订阅", systemImage: "checkmark.circle.fill")
+            Label("已订阅", systemImage: AppSymbol.subscribed)
           } else {
             Label(
               item.canDirectlySubscribe ? "订阅" : "分季订阅",
-              systemImage: item.canDirectlySubscribe ? "plus.circle" : "list.bullet.circle")
+              systemImage: item.canDirectlySubscribe ? AppSymbol.subscribe : AppSymbol.chooseSeasons)
           }
         }
       }
 
       if canSearchResources {
         Button {
+          let navigationSource = navigationCoordinator.sourceToken()
           Task { @MainActor in
-            let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(for: item)
-            navigationPath.append(request)
+            if let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
+              for: item
+            ) {
+              navigationCoordinator.push(request, ifCurrent: navigationSource)
+            }
           }
         } label: {
-          Label("搜索资源", systemImage: "magnifyingglass")
+          Label("搜索资源", systemImage: AppSymbol.search)
+        }
+        if SubtitleSearchRequest.supportsSubtitleSearch(item) {
+          Button {
+            let navigationSource = navigationCoordinator.sourceToken()
+            Task { @MainActor in
+              if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(for: item) {
+                navigationCoordinator.push(request, ifCurrent: navigationSource)
+              }
+            }
+          } label: {
+            Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
+          }
         }
       }
     }
@@ -93,7 +119,6 @@ struct MediaContextMenuItems: View {
 
 struct MediaContextMenu: ViewModifier {
   let item: MediaInfo
-  @Binding var navigationPath: NavigationPath
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
 
   // 可选的自定义订阅操作
@@ -105,7 +130,6 @@ struct MediaContextMenu: ViewModifier {
       .contextMenu {
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler,
           onSubscribe: onSubscribe
         )
@@ -116,13 +140,11 @@ struct MediaContextMenu: ViewModifier {
 extension View {
   func mediaContextMenu(
     item: MediaInfo,
-    navigationPath: Binding<NavigationPath>,
     onSubscribe: ((MediaInfo) -> Void)? = nil
   ) -> some View {
     self.modifier(
       MediaContextMenu(
         item: item,
-        navigationPath: navigationPath,
         onSubscribe: onSubscribe
       )
     )

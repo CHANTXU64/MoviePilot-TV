@@ -3,17 +3,25 @@ import Foundation
 
 @MainActor
 class CollectionDetailViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let paginator: Paginator<MediaInfo>
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
 
-  init(collectionId: Int, title: String) {
+  init(
+    collectionId: Int, title: String, apiService: APIService = .shared,
+    preparedItems: [MediaInfo]? = nil
+  ) {
+    self.apiService = apiService
     var seenKeys = Set<String>()
 
     self.paginator = Paginator<MediaInfo>(
       threshold: 12,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.fetchCollection(collectionId: collectionId, page: page, title: title)
+        return try await apiService.fetchCollection(
+          collectionId: collectionId, page: page, title: title)
       },
       processor: { @MainActor items, newItems in
         // 使用现有的去重逻辑
@@ -24,13 +32,16 @@ class CollectionDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { item in
+      imageWarmer: apiService.imageWarmer,
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
+      preparedFirstPage: preparedItems,
       onReset: { @MainActor in
         seenKeys.removeAll()  // 重置时清空 seenKeys
       }
     )
+    hasLoaded = preparedItems != nil
 
     self.paginator.objectWillChange
       .sink { [weak self] _ in
@@ -53,7 +64,13 @@ class CollectionDetailViewModel: ObservableObject {
   private var hasLoaded = false
 
   func loadInitialData() async {
-    guard !hasLoaded else { return }
+    guard !hasLoaded else {
+      // 重新进入页面时，若首次成功返回空，则自动重试一次。
+      if paginator.items.isEmpty, !paginator.isLoading, !paginator.hasError, !paginator.hasMore {
+        await paginator.refresh()
+      }
+      return
+    }
     hasLoaded = true
     await paginator.refresh()
   }

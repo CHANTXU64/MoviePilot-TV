@@ -5,12 +5,61 @@ import XCTest
 
 @MainActor
 final class ImageProxyEncodingTests: XCTestCase {
+  func testImageConfigurationIdentityTracksURLInputs() throws {
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://images-a.local"
+    service.useImageCache = false
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"images-a.example"}"#.utf8)
+    )
+    let initial = service.imageConfigurationIdentity
+
+    service.useImageCache = true
+    let cacheEnabled = service.imageConfigurationIdentity
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"images-b.example","GLOBAL_IMAGE_CACHE":true}"#.utf8)
+    )
+    let domainChanged = service.imageConfigurationIdentity
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(
+        #"{"TMDB_IMAGE_DOMAIN":"images-b.example","GLOBAL_IMAGE_CACHE":true,"BANGUMI_PROXY_ENABLE":true,"BANGUMI_IMAGE_DOMAIN":"https://bangumi-proxy.example/?url="}"#.utf8
+      )
+    )
+    let bangumiProxyChanged = service.imageConfigurationIdentity
+
+    XCTAssertNotEqual(initial, cacheEnabled)
+    XCTAssertNotEqual(cacheEnabled, domainChanged)
+    XCTAssertNotEqual(domainChanged, bangumiProxyChanged)
+  }
+
+  func testExistingMediaRecomputesPosterAfterImageConfigurationChanges() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    let media = MediaInfo(
+      title: "Dynamic Image",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg"
+    )
+
+    let uncached = try XCTUnwrap(media.imageURLs.poster)
+    service.useImageCache = true
+    let cached = try XCTUnwrap(media.imageURLs.poster)
+
+    XCTAssertNotEqual(uncached, cached)
+    XCTAssertEqual(cached.path, "/api/v1/system/cache/image")
+  }
+
   func testMediaServerPosterProxyPreservesNestedQueryAndFragment() throws {
     let service = APIService.shared
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
 
     let rawImage =
       "http://emby.local/Items/abc/Images/Primary?tag=main&quality=90#poster"
@@ -34,7 +83,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let rawImage =
@@ -56,7 +105,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -78,7 +127,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -100,7 +149,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -122,17 +171,23 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
       "https://people.local/avatar.jpg?size=large&token=person#headshot"
     let url = try XCTUnwrap(
       service.getPersonImageURL(
-        source: nil,
-        profilePath: rawImage,
+        source: "anilist",
+        profilePath: nil,
         avatar: nil,
-        images: nil
+        images: BangumiImages(
+          large: rawImage,
+          common: nil,
+          medium: nil,
+          small: nil,
+          grid: nil
+        )
       )
     )
 
@@ -146,12 +201,135 @@ final class ImageProxyEncodingTests: XCTestCase {
     )
   }
 
+  func testBangumiPersonImageUsesBangumiProxyBeforeGlobalCache() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"BANGUMI_PROXY_ENABLE":true,"BANGUMI_IMAGE_DOMAIN":""}"#.utf8)
+    )
+    service.useImageCache = true
+
+    let rawImage =
+      "https://lain.bgm.tv/pic/crt/m/person.jpg?size=medium&token=person#headshot"
+    let url = try XCTUnwrap(
+      service.getPersonImageURL(
+        source: "bangumi",
+        profilePath: nil,
+        avatar: nil,
+        images: BangumiImages(
+          large: nil,
+          common: nil,
+          medium: rawImage,
+          small: nil,
+          grid: nil
+        )
+      )
+    )
+
+    let queryItems = try assertProxyURL(
+      url,
+      path: "/api/v1/system/img/1",
+      queryName: "imgurl",
+      rawImage: rawImage,
+      leakedKeys: ["token"],
+      encodedTail: "%26token%3Dperson%23headshot"
+    )
+    XCTAssertEqual(queryItems["cache"], "true")
+  }
+
+  func testBangumiQueryProxyMatchesWebContract() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(
+        #"{"BANGUMI_PROXY_ENABLE":true,"BANGUMI_IMAGE_DOMAIN":"https://image-proxy.example/?url="}"#.utf8
+      )
+    )
+
+    let rawImage = "https://img.bangumi.tv/pic/cover.jpg?size=large"
+    let encodedSource = try XCTUnwrap(encodeURIComponent(rawImage))
+    let rewrittenImage = "https://image-proxy.example/?url=\(encodedSource)"
+    let url = try XCTUnwrap(service.getPosterImageUrl(posterPath: rawImage))
+    let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+    XCTAssertEqual(components.path, "/api/v1/system/img/1")
+    XCTAssertEqual(queryItemMap(from: components)["imgurl"], rewrittenImage)
+  }
+
+  func testBangumiHostAndPathProxyModesMatchWebContract() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    let rawImage = "https://img.bangumi.tv/pic/cover.jpg?size=large"
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(
+        #"{"BANGUMI_PROXY_ENABLE":true,"BANGUMI_IMAGE_DOMAIN":"https://image-proxy.example/"}"#.utf8
+      )
+    )
+    var url = try XCTUnwrap(service.getPosterImageUrl(posterPath: rawImage))
+    var components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    XCTAssertEqual(
+      queryItemMap(from: components)["imgurl"],
+      "https://image-proxy.example/pic/cover.jpg?size=large"
+    )
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(
+        #"{"BANGUMI_PROXY_ENABLE":true,"BANGUMI_IMAGE_DOMAIN":"https://image-proxy.example/passthrough"}"#.utf8
+      )
+    )
+    url = try XCTUnwrap(service.getPosterImageUrl(posterPath: rawImage))
+    components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    XCTAssertEqual(
+      queryItemMap(from: components)["imgurl"],
+      "https://image-proxy.example/passthrough/\(rawImage)"
+    )
+  }
+
+  func testDisabledBangumiProxyKeepsExpandedOfficialHostDirect() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(
+        #"{"BANGUMI_PROXY_ENABLE":false,"BANGUMI_IMAGE_DOMAIN":"https://image-proxy.example/"}"#.utf8
+      )
+    )
+
+    let rawImage = "https://img.bangumi.tv/pic/cover.jpg"
+    XCTAssertEqual(service.getPosterImageUrl(posterPath: rawImage)?.absoluteString, rawImage)
+    XCTAssertNil(
+      service.getPosterImageUrl(
+        posterPath: "https://img.bangumi.tv/img/no_icon_subject.png"
+      )
+    )
+  }
+
   func testModelComputedImageURLsPreserveNestedQueryAndFragment() throws {
     let service = APIService.shared
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawPoster = "https://poster.local/movie.jpg?lang=zh&token=poster#cover"
@@ -174,6 +352,92 @@ final class ImageProxyEncodingTests: XCTestCase {
       rawImage: rawBackdrop,
       leakedKeys: ["token"],
       encodedTail: "%26token%3Dbackdrop%23still"
+    )
+  }
+
+  func testPosterFallbackKeepsOriginalURLWhenDownsizedVersionIsRewritten() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = true
+
+    // TMDB 标准路径：降尺寸为 w500，fallback 保留 original 原始图。
+    let tmdbMedia = MediaInfo(
+      title: "TMDB",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg",
+      backdrop_path: nil
+    )
+    let tmdbPoster = try XCTUnwrap(tmdbMedia.imageURLs.poster)
+    let tmdbFallback = try XCTUnwrap(tmdbMedia.imageURLs.posterFallback)
+    XCTAssertEqual(
+      try queryItemMap(
+        from: try XCTUnwrap(
+          URLComponents(url: tmdbPoster, resolvingAgainstBaseURL: false)))["url"],
+      "https://image.tmdb.org/t/p/w500/poster.jpg"
+    )
+    XCTAssertEqual(
+      try queryItemMap(
+        from: try XCTUnwrap(
+          URLComponents(url: tmdbFallback, resolvingAgainstBaseURL: false)))["url"],
+      "https://image.tmdb.org/t/p/original/poster.jpg"
+    )
+
+    // 第三方 URL 的 host 含 original：降尺寸会被误改写，fallback 必须保留原始 URL。
+    let thirdPartyMedia = MediaInfo(
+      title: "Third",
+      poster_path: "https://original-media.cdn.com/poster.jpg",
+      backdrop_path: nil
+    )
+    let thirdPoster = try XCTUnwrap(thirdPartyMedia.imageURLs.poster)
+    let thirdFallback = try XCTUnwrap(thirdPartyMedia.imageURLs.posterFallback)
+    XCTAssertTrue(thirdPoster.absoluteString.contains("w500-media.cdn.com"))
+    XCTAssertEqual(
+      try queryItemMap(
+        from: try XCTUnwrap(
+          URLComponents(url: thirdFallback, resolvingAgainstBaseURL: false)))["url"],
+      "https://original-media.cdn.com/poster.jpg"
+    )
+
+    // 豆瓣默认图：降尺寸与 fallback 都按同一规则拦截。
+    let doubanMedia = MediaInfo(
+      title: "Douban",
+      poster_path: "https://img9.doubanio.com/view/photo/m/public/movie_default.jpg",
+      backdrop_path: nil
+    )
+    XCTAssertNil(doubanMedia.imageURLs.poster)
+    XCTAssertNil(doubanMedia.imageURLs.posterFallback)
+
+    // Bangumi 官方无封面占位图：降尺寸与 fallback 都按同一规则拦截。
+    let bangumiMedia = MediaInfo(
+      title: "Bangumi",
+      poster_path: "https://lain.bgm.tv/img/no_icon_subject.png",
+      backdrop_path: nil
+    )
+    XCTAssertNil(bangumiMedia.imageURLs.poster)
+    XCTAssertNil(bangumiMedia.imageURLs.posterFallback)
+
+    // 订阅和订阅分享复用同一入口，不能让原始占位图重新出现在首页或加载遮罩。
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://lain.bgm.tv/img/no_icon_subject.png"
+      )
+    )
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://s4.anilist.co/file/anilistcdn/staff/large/default.jpg"
+      )
+    )
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://img9.doubanio.com/view/photo/s_ratio_poster/public/movie_default_large.png"
+      )
+    )
+    XCTAssertNotNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://lain.bgm.tv/pic/cover/l/valid.jpg"
+      )
     )
   }
 
@@ -210,13 +474,19 @@ final class ImageProxyEncodingTests: XCTestCase {
 private struct ImageProxyServiceSnapshot {
   let baseURL: String
   let useImageCache: Bool
+  let settings: GlobalSettings?
 
   static func capture(service: APIService) -> ImageProxyServiceSnapshot {
-    ImageProxyServiceSnapshot(baseURL: service.baseURL, useImageCache: service.useImageCache)
+    ImageProxyServiceSnapshot(
+      baseURL: service.baseURL,
+      useImageCache: service.useImageCache,
+      settings: service.settings
+    )
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
+    service.baseURLForTesting = baseURL
+    service.settings = settings
     service.useImageCache = useImageCache
   }
 }

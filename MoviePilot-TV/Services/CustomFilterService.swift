@@ -1,18 +1,37 @@
 import Foundation
-import SwiftDate
 
 /// 自定义过滤服务
 /// 移植自后端 filter.py 的核心筛选逻辑，在前端对搜索资源结果进行过滤。
+/// 语义与后端 `app/modules/filter/__init__.py` 的 `__match_rule` 对齐：
+/// - include/exclude 支持单个字符串或列表，任一正则匹配；
+/// - seeders/publish_time 解析前忽略首尾空白（对齐 Python int()/float()）；
+/// - pubdate 缺失或不可解析按 0 分钟处理（对齐后端 pub_minutes()）；
+/// - 非法正则或数值显式失败，不静默放行（对齐后端抛异常）；
+/// - 所选规则 ID 不存在时全部排除（对齐后端 rule_set.get 为空返回 False）。
 enum CustomFilterService {
+
+  /// 规则解析失败时抛出的错误；与后端非法规则抛异常的行为对齐。
+  nonisolated enum FilterError: Error, LocalizedError, Sendable {
+    case invalidRule(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .invalidRule(let detail):
+        return "自定义过滤规则无效：\(detail)"
+      }
+    }
+  }
 
   /// 根据自定义规则过滤搜索结果
   /// - Parameters:
   ///   - contexts: 原始搜索结果
   ///   - rule: 用户选择的自定义过滤规则
   /// - Returns: 过滤后的搜索结果
-  static func filter(contexts: [Context], with rule: CustomRule) -> [Context] {
-    return contexts.filter { context in
-      matchRule(context: context, rule: rule)
+  static func filter(contexts: [Context], with rule: CustomRule) throws -> [Context] {
+    let prepared = PreparedResourceRule(ResourceRule(rule))
+    let formatter = ResourceResultSemantics.dateFormatter()
+    return try contexts.filter { context in
+      try prepared.matches(ResourceFilterInput(context: context), formatter: formatter)
     }
   }
 
@@ -27,8 +46,8 @@ enum CustomFilterService {
     using apiService: APIService,
     caller: String = ""
   ) async throws -> [Context] {
-    let hardRuleId = SystemViewModel.currentSelectedHardFilterRuleId()
-    let softRuleId = SystemViewModel.currentSelectedSoftFilterRuleId()
+    let hardRuleId = SystemViewModel.currentSelectedHardFilterRuleId(apiService: apiService)
+    let softRuleId = SystemViewModel.currentSelectedSoftFilterRuleId(apiService: apiService)
 
     guard hardRuleId != nil || softRuleId != nil else {
       return contexts
@@ -42,193 +61,155 @@ enum CustomFilterService {
     var finalContexts = contexts
 
     // 1. 应用硬过滤 (完全排除)
-    if let hardId = hardRuleId, let hardRule = rules.first(where: { $0.id == hardId }) {
+    if let hardId = hardRuleId {
+      guard let hardRule = rules.first(where: { $0.id == hardId }) else {
+        // 与后端 __match_rule 一致：规则不存在时所有资源都不匹配。
+        return []
+      }
       let originalCount = finalContexts.count
-      finalContexts = filter(contexts: finalContexts, with: hardRule)
-      print("🔍 [\(caller)] 应用硬过滤规则「\(hardRule.name)」: \(originalCount) → \(finalContexts.count) 个资源")
+      finalContexts = try filter(contexts: finalContexts, with: hardRule)
+      Logger.debug("[\(caller)] 应用硬过滤规则「\(hardRule.name)」: \(originalCount) → \(finalContexts.count) 个资源")
     }
 
     // 2. 应用软过滤 (置尾变灰)
-    if let softId = softRuleId, let softRule = rules.first(where: { $0.id == softId }) {
+    if let softId = softRuleId {
+      guard let softRule = rules.first(where: { $0.id == softId }) else {
+        // 与后端 __match_rule 一致：规则不存在时所有资源都不匹配，全部置灰。
+        return finalContexts.map { context in
+          var context = context
+          context.isFilteredOut = true
+          return context
+        }
+      }
+      let prepared = PreparedResourceRule(ResourceRule(softRule))
+      let formatter = ResourceResultSemantics.dateFormatter()
       var matched: [Context] = []
       var unmatched: [Context] = []
       for var ctx in finalContexts {
-        if matchRule(context: ctx, rule: softRule) {
+        if try prepared.matches(ResourceFilterInput(context: ctx), formatter: formatter) {
           matched.append(ctx)
         } else {
           ctx.isFilteredOut = true
           unmatched.append(ctx)
         }
       }
-      print("🔍 [\(caller)] 应用软过滤规则「\(softRule.name)」: 命中 \(matched.count) 个资源，排除 \(unmatched.count) 个资源（置尾）")
+      Logger.debug("[\(caller)] 应用软过滤规则「\(softRule.name)」: 命中 \(matched.count) 个资源，排除 \(unmatched.count) 个资源（置尾）")
       finalContexts = matched + unmatched
     }
 
     return finalContexts
   }
 
-  /// 判断单个搜索结果是否匹配规则
-  /// - 对应后端: filter.py __match_rule 方法
-  static func matchRule(context: Context, rule: CustomRule) -> Bool {
-    let torrent = context.torrent_info
+  static func matchRule(context: Context, rule: CustomRule) throws -> Bool {
+    try PreparedResourceRule(ResourceRule(rule)).matches(
+      ResourceFilterInput(context: context), formatter: ResourceResultSemantics.dateFormatter())
+  }
+}
 
-    // 匹配项：标题 + 副标题 + 标签（与后端 content 逻辑一致）
-    let title = torrent?.title ?? ""
-    let desc = torrent?.description ?? ""
-    let labels = (torrent?.labels ?? []).joined(separator: " ")
-    let content = "\(title) \(desc) \(labels)"
+nonisolated struct ResourceRule: Equatable, Sendable {
+  let missing: Bool
+  let include: [String]
+  let exclude: [String]
+  let size: String?
+  let seeders: String?
+  let time: String?
 
-    // 1. 包含规则：整个 include 字符串作为一个正则表达式匹配
-    //    与后端一致: re.search(include, content, re.IGNORECASE)
-    if let include = rule.include, !include.isEmpty {
-      if let regex = try? NSRegularExpression(pattern: include, options: .caseInsensitive) {
-        if regex.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) == nil {
-          print("🔍 [CustomFilter] 排除: \(title) — 不匹配包含规则 [\(include)]")
-          return false
-        }
-      }
+  @MainActor init(_ rule: CustomRule?) {
+    missing = rule == nil
+    include = rule?.include ?? []
+    exclude = rule?.exclude ?? []
+    size = rule?.size_range
+    seeders = rule?.seeders
+    time = rule?.publish_time
+  }
+}
+
+/// 新旧搜索共用的预编译规则；静态条件与相对时间拆开，供分页缓存分别失效。
+nonisolated struct PreparedResourceRule: Sendable {
+  let rule: ResourceRule
+  let includes: [Result<NSRegularExpression?, CustomFilterService.FilterError>]
+  let excludes: [Result<NSRegularExpression?, CustomFilterService.FilterError>]
+  let size: Result<(Double, Double), CustomFilterService.FilterError>?
+  let seeders: Result<Int, CustomFilterService.FilterError>?
+  let time: Result<[Double], CustomFilterService.FilterError>?
+
+  init(_ rule: ResourceRule) {
+    self.rule = rule
+    func regex(_ pattern: String) -> Result<NSRegularExpression?, CustomFilterService.FilterError> {
+      if pattern.isEmpty { return .success(nil) }
+      do { return .success(try NSRegularExpression(pattern: pattern, options: .caseInsensitive)) }
+      catch { return .failure(.invalidRule("正则表达式「\(pattern)」无法编译")) }
     }
-
-    // 2. 排除规则：整个 exclude 字符串作为一个正则表达式匹配
-    //    与后端一致: re.search(exclude, content, re.IGNORECASE)
-    if let exclude = rule.exclude, !exclude.isEmpty {
-      if let regex = try? NSRegularExpression(pattern: exclude, options: .caseInsensitive),
-        regex.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)) != nil
-      {
-        print("🔍 [CustomFilter] 排除: \(title) — 匹配排除规则 [\(exclude)]")
-        return false
+    includes = rule.include.map(regex)
+    excludes = rule.exclude.map(regex)
+    if let value = rule.size, !value.isEmpty {
+      let trimmed = value.trimmingCharacters(in: .whitespaces)
+      var range: (Double, Double)?
+      if trimmed.contains("-") {
+        let parts = trimmed.split(separator: "-", omittingEmptySubsequences: false)
+        if parts.count == 2,
+          let low = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+          let high = Double(parts[1].trimmingCharacters(in: .whitespaces)) { range = (low, high) }
+      } else if trimmed.hasPrefix(">"), let low = Double(trimmed.dropFirst().trimmingCharacters(in: .whitespaces)) {
+        range = (low, .infinity)
+      } else if trimmed.hasPrefix("<"), let high = Double(trimmed.dropFirst().trimmingCharacters(in: .whitespaces)) {
+        range = (-.infinity, high)
+      } else if !trimmed.hasPrefix(">"), !trimmed.hasPrefix("<") {
+        // 现有合同中的单值大小没有匹配分支，返回不匹配而非错误。
+        range = (.infinity, -.infinity)
       }
-    }
+      size = range.map { .success($0) } ?? .failure(.invalidRule("大小范围「\(value)」无法解析"))
+    } else { size = nil }
+    if let value = rule.seeders, !value.isEmpty {
+      seeders = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)).map { .success($0) }
+        ?? .failure(.invalidRule("做种人数「\(value)」无法解析"))
+    } else { seeders = nil }
+    if let value = rule.time, !value.isEmpty {
+      let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+      let values = parts.compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+      time = values.count == parts.count && !values.isEmpty ? .success(values)
+        : .failure(.invalidRule("发布时间「\(value)」无法解析"))
+    } else { time = nil }
+  }
 
-    // 3. 大小范围规则 (单位: MB，按每集大小匹配)
-    if let sizeRange = rule.size_range, !sizeRange.isEmpty {
-      if !matchSize(context: context, sizeRange: sizeRange) {
-        return false
+  /// 单批调用与增量缓存共用判断；只有实际执行到该条件时才抛解析错误。
+  func matches(_ input: ResourceFilterInput, formatter: DateFormatter) throws -> Bool {
+    guard try matchesStatic(input) else { return false }
+    let date = time == nil || input.pubdate.isEmpty ? nil : formatter.date(from: input.pubdate)
+    return try matchesTime(date, hasTorrent: input.hasTorrent, now: Date())
+  }
+
+  func matchesStatic(_ input: ResourceFilterInput) throws -> Bool {
+    if rule.missing { return false }
+    let range = NSRange(input.content.startIndex..., in: input.content)
+    func matches(_ regex: Result<NSRegularExpression?, CustomFilterService.FilterError>) throws -> Bool {
+      guard let expression = try regex.get() else { return true }
+      return expression.firstMatch(in: input.content, range: range) != nil
+    }
+    if !includes.isEmpty {
+      var found = false
+      for regex in includes {
+        if try matches(regex) { found = true; break }
       }
+      if !found { return false }
     }
-
-    // 4. 做种人数规则
-    if let seedersStr = rule.seeders, !seedersStr.isEmpty, let minSeeders = Int(seedersStr) {
-      let currentSeeders = torrent?.seeders ?? 0
-      if currentSeeders < minSeeders {
-        print("🔍 [CustomFilter] 排除: \(title) — 做种人数 \(currentSeeders) < \(minSeeders)")
-        return false
-      }
+    for regex in excludes {
+      if try matches(regex) { return false }
     }
-
-    // 5. 发布时间规则 (单位: 分钟)
-    if let publishTime = rule.publish_time, !publishTime.isEmpty {
-      if !matchPublishTime(torrent: torrent, publishTime: publishTime) {
-        return false
-      }
+    if input.hasTorrent, let size {
+      let (low, high) = try size.get()
+      let value = Double(input.size) / Double(input.episodes)
+      if !(low * 1024 * 1024 <= value && value <= high * 1024 * 1024) { return false }
     }
-
+    if let seeders, input.seeders < (try seeders.get()) { return false }
     return true
   }
 
-  // MARK: - 大小匹配
-
-  /// 判断种子每集大小是否在指定范围内
-  /// - 对应后端: filter.py __match_size（剧集拆分为每集大小）
-  /// - size_range 单位: MB，torrent.size 单位: 字节
-  /// - 与后端一致: 匹配成功返回 true，所有格式都不匹配则返回 false
-  private static func matchSize(context: Context, sizeRange: String) -> Bool {
-    guard let torrent = context.torrent_info else { return true }
-    let title = torrent.title ?? ""
-    let trimmed = sizeRange.trimmingCharacters(in: .whitespaces)
-    guard !trimmed.isEmpty else { return true }
-
-    // 集数：与后端一致，用 meta_info.total_episode，默认 1
-    let episodeCount = max(context.meta_info?.total_episode ?? 1, 1)
-    // 每集大小（字节）
-    let perEpisodeSize = Double(torrent.size) / Double(episodeCount)
-
-    if trimmed.contains("-") {
-      // 区间格式: "min-max" (MB)
-      let parts = trimmed.split(separator: "-")
-        .map { String($0).trimmingCharacters(in: .whitespaces) }
-      guard parts.count == 2,
-        let minMB = Double(parts[0]),
-        let maxMB = Double(parts[1])
-      else { return false }
-      let minBytes = minMB * 1024 * 1024
-      let maxBytes = maxMB * 1024 * 1024
-      if minBytes <= perEpisodeSize && perEpisodeSize <= maxBytes {
-        return true
-      }
-    } else if trimmed.hasPrefix(">") {
-      let valueStr = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
-      guard let minMB = Double(valueStr) else { return false }
-      if perEpisodeSize >= minMB * 1024 * 1024 {
-        return true
-      }
-    } else if trimmed.hasPrefix("<") {
-      let valueStr = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
-      guard let maxMB = Double(valueStr) else { return false }
-      if perEpisodeSize <= maxMB * 1024 * 1024 {
-        return true
-      }
-    }
-
-    print(
-      "🔍 [CustomFilter] 排除: \(title) — 每集大小 \(Int64(perEpisodeSize).formattedBytes()) (\(episodeCount)集) 不匹配 \(sizeRange) MB"
-    )
-    return false
-  }
-
-  // MARK: - 发布时间匹配
-
-  /// 判断种子发布时间是否在指定范围内
-  /// - 对应后端: filter.py __match_rule 中 pubdate 逻辑
-  /// - publish_time 单位: 分钟，torrent.pubdate 是日期字符串
-  private static func matchPublishTime(torrent: TorrentInfo?, publishTime: String) -> Bool {
-    guard let torrent = torrent else { return true }
-    let title = torrent.title ?? ""
-
-    // 解析 pubdate 字符串为 Date
-    guard let pubdate = torrent.pubdate, !pubdate.isEmpty else {
-      return true
-    }
-
-    // 尝试多种日期格式解析
-    guard let pubMinutes = parsePubdateToMinutes(pubdate) else {
-      print("🔍 [CustomFilter] 警告: 无法解析 pubdate: \(pubdate)")
-      return true
-    }
-
-    // publish_time 单位是"分钟"，直接比较
-    let parts = publishTime.split(separator: "-")
-      .map { String($0).trimmingCharacters(in: .whitespaces) }
-    if parts.count == 1 {
-      // 单值: 发布时间必须 >= 该分钟数
-      guard let minMinutes = Double(parts[0]) else { return true }
-      if pubMinutes < minMinutes {
-        print(
-          "🔍 [CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟 < \(minMinutes) 分钟"
-        )
-        return false
-      }
-    } else if parts.count == 2 {
-      // 区间: 发布时间必须在 [min, max] 分钟范围内
-      guard let minMinutes = Double(parts[0]), let maxMinutes = Double(parts[1]) else {
-        return true
-      }
-      if pubMinutes < minMinutes || pubMinutes > maxMinutes {
-        print(
-          "🔍 [CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟不在 \(minMinutes)-\(maxMinutes) 分钟范围"
-        )
-        return false
-      }
-    }
-
-    return true
-  }
-
-  /// 将 pubdate 字符串解析为距今的分钟数
-  /// 使用 SwiftDate 解析，与 Formatters.swift 中 toRelativeDateString() 保持一致
-  private static func parsePubdateToMinutes(_ pubdate: String) -> Double? {
-    let region = Region(zone: Zones.asiaShanghai)
-    guard let date = Date(pubdate, region: region) else { return nil }
-    return Date().timeIntervalSince(date) / 60.0
+  func matchesTime(_ date: Date?, hasTorrent: Bool, now: Date) throws -> Bool {
+    guard hasTorrent, let time else { return true }
+    let limits = try time.get()
+    let minutes = date.map { (now.timeIntervalSince($0) / 60).rounded(.down) } ?? 0
+    if minutes < limits[0] { return false }
+    return limits.count == 1 || !(minutes > limits[1])
   }
 }

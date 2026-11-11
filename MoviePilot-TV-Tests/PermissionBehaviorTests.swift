@@ -7,7 +7,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
   func testVisibleTabsExposeEntryForEachGrantedPermission() {
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.discovery])),
-      [.home, .recommend, .explore, .system]
+      [.home, .recommend, .explore, .search, .system]
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.search])),
@@ -27,11 +27,14 @@ final class PermissionVisibleEntryTests: XCTestCase {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Components/MediaContextMenu.swift")
 
     XCTAssertTrue(
-      source.contains("if canSubscribeMedia, let share = item.subscribeShare"),
-      "长按菜单“复用订阅”必须在 subscribe 权限门之后。"
+      source.contains(
+        "if canSubscribeMedia, !item.isCollection, item.type != \"音乐\", let share = item.subscribeShare"
+      ),
+      "长按菜单“复用订阅”必须同时在 subscribe 权限、合集门和音乐门之后。"
     )
+    XCTAssertTrue(source.contains("if !item.isCollection {"), "合集不应显示订阅或搜索入口。")
     XCTAssertTrue(
-      source.contains("if canSubscribeMedia {\n        Button"),
+      source.contains("if canSubscribeMedia, item.type != \"音乐\" {\n        Button"),
       "长按菜单“订阅/分季订阅”必须在 subscribe 权限门之后。"
     )
     XCTAssertTrue(
@@ -58,6 +61,10 @@ final class PermissionVisibleEntryTests: XCTestCase {
     XCTAssertTrue(
       source.contains("if canSubscribeMedia {"),
       "详情页 Header 的订阅/分季订阅按钮必须在 subscribe 权限门之后。"
+    )
+    XCTAssertTrue(
+      source.contains("apiService.canAccess(.subscribe) && !viewModel.detail.isCollection"),
+      "合集详情不应显示订阅入口。"
     )
     XCTAssertTrue(
       source.contains("if canSearchResources {"),
@@ -118,9 +125,12 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"),
+        expectedSubscribed: false
+      )
       try await permissionBehaviorWaitUntil("movie subscribe sheet opens") {
         handler.sheetSubscribe != nil
       }
@@ -129,13 +139,59 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       XCTAssertEqual(handler.sheetSubscribe?.type, "电影")
       let subscriptionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
         method: "GET",
-        path: "/api/v1/subscribe/media/tmdb:901"
+        path: "/api/v1/subscribe/media/901"
       )
       XCTAssertEqual(subscriptionLookupCount, 1)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"),
+        expectedSubscribed: false
+      )
 
       XCTAssertEqual(handler.tvSubscribeRequest?.mediaInfo.title, "可分季订阅剧集")
+    }
+  }
+
+  func testSubscriptionHandlerDirectlySubscribesUnknownAndRejectsCollection() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+
+      let unknownHandler = SubscriptionHandler(apiService: service)
+      unknownHandler.handleSubscribe(
+        MediaInfo(tmdb_id: 903, title: "可直接订阅的未知类型", type: "未知"),
+        expectedSubscribed: false
+      )
+      try await permissionBehaviorWaitUntil("unknown subscribe sheet opens") {
+        unknownHandler.sheetSubscribe != nil
+      }
+
+      XCTAssertEqual(unknownHandler.sheetSubscribe?.type, "未知")
+      XCTAssertNil(unknownHandler.tvSubscribeRequest)
+      let unknownLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/media/903"
+      )
+      XCTAssertEqual(unknownLookupCount, 1)
+
+      let collectionHandler = SubscriptionHandler(apiService: service)
+      collectionHandler.handleSubscribe(
+        MediaInfo(
+          tmdb_id: 904,
+          title: "不可订阅的合集",
+          type: "系列",
+          collection_id: 90
+        ),
+        expectedSubscribed: false
+      )
+      try await Task.sleep(nanoseconds: 100_000_000)
+
+      XCTAssertNil(collectionHandler.sheetSubscribe)
+      XCTAssertNil(collectionHandler.tvSubscribeRequest)
+      let collectionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/media/904"
+      )
+      XCTAssertEqual(collectionLookupCount, 0)
     }
   }
 
@@ -145,8 +201,20 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
+      let notifications = PermissionNotificationCounter()
+      let observer = NotificationCenter.default.addObserver(
+        forName: .subscriptionDidUpdate,
+        object: nil,
+        queue: nil
+      ) { _ in
+        notifications.increment()
+      }
+      defer { NotificationCenter.default.removeObserver(observer) }
+
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+      XCTAssertEqual(notifications.count(), 1)
+
       await handler.fetchSubscriptionAndShowEditor(subId: 7001)
 
       XCTAssertEqual(forkedId, 7001)
@@ -164,6 +232,96 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
       XCTAssertEqual(forkRequestCount, 1)
       XCTAssertEqual(fetchRequestCount, 1)
+      XCTAssertEqual(notifications.count(), 1)
+    }
+  }
+
+  func testForkedEditorDoesNotContinueUnderAnotherAccount() async throws {
+    try await withPermissionBehaviorBackend { service in
+      let accountA = Token(
+        access_token: "account-a-token",
+        token_type: "bearer",
+        super_user: FlexibleBool(false),
+        permissions: permissionBehaviorPermissions([.subscribe]),
+        user_id: 1,
+        user_name: "account-a",
+        avatar: nil
+      )
+      service.replaceSessionForTesting(
+        baseURL: "http://permission-behavior-tests.local",
+        token: accountA.access_token,
+        currentUser: accountA
+      )
+      service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
+      let handler = SubscriptionHandler(apiService: service)
+      let forkResult = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+      let forkedId = try XCTUnwrap(forkResult)
+
+      let accountB = Token(
+        access_token: "account-b-token",
+        token_type: "bearer",
+        super_user: FlexibleBool(false),
+        permissions: permissionBehaviorPermissions([.subscribe]),
+        user_id: 2,
+        user_name: "account-b",
+        avatar: nil
+      )
+      service.replaceSessionForTesting(
+        baseURL: "http://permission-behavior-tests.local",
+        token: accountB.access_token,
+        currentUser: accountB
+      )
+      await handler.fetchSubscriptionAndShowEditor(subId: forkedId)
+
+      XCTAssertNil(handler.sheetSubscribe)
+      let fetchRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/7001"
+      )
+      XCTAssertEqual(fetchRequestCount, 0)
+    }
+  }
+
+  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkBusinessFails() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+      await PermissionBehaviorURLProtocol.stub.setForkResponse(
+        #"{"success":false,"message":"数据库约束失败"}"#
+      )
+
+      let handler = SubscriptionHandler(apiService: service)
+      let notifications = PermissionNotificationCounter()
+      let observer = NotificationCenter.default.addObserver(
+        forName: .subscriptionDidUpdate,
+        object: nil,
+        queue: nil
+      ) { _ in
+        notifications.increment()
+      }
+      defer { NotificationCenter.default.removeObserver(observer) }
+
+      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+
+      XCTAssertNil(forkedId)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《复用分享》，请稍后重试。")
+      XCTAssertEqual(handler.notificationSerial, 0)
+      XCTAssertEqual(notifications.count(), 0)
+    }
+  }
+
+  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkResponseHasNoId() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+      await PermissionBehaviorURLProtocol.stub.setForkResponse(
+        #"{"success":true,"data":{}}"#
+      )
+
+      let handler = SubscriptionHandler(apiService: service)
+      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+
+      XCTAssertNil(forkedId)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《复用分享》，请稍后重试。")
+      XCTAssertEqual(handler.notificationSerial, 0)
     }
   }
 
@@ -227,8 +385,8 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let recommend = RecommendViewModel()
-      let explore = ExploreViewModel()
+      let recommend = RecommendViewModel(apiService: service)
+      let explore = ExploreViewModel(apiService: service)
 
       try await permissionBehaviorWaitUntil("recommend request starts") {
         await PermissionBehaviorURLProtocol.stub.requestCount(
@@ -258,7 +416,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery, .subscribe])
 
-      let explore = ExploreViewModel()
+      let explore = ExploreViewModel(apiService: service)
       XCTAssertTrue(explore.availableSources.contains(.subscriptionShare))
 
       explore.selectedSource = .subscriptionShare
@@ -278,7 +436,11 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let resourceViewModel = ResourceResultViewModel(keyword: "有搜索权限", sites: "1")
+      let resourceViewModel = ResourceResultViewModel(
+        keyword: "有搜索权限",
+        sites: "1",
+        apiService: service
+      )
       await resourceViewModel.search()
 
       try await permissionBehaviorWaitUntil("resource search result publishes") {
@@ -290,7 +452,12 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
         method: "GET",
         path: "/api/v1/search/title/stream"
       )
+      let fallbackRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/search/title"
+      )
       XCTAssertEqual(streamRequestCount, 1)
+      XCTAssertEqual(fallbackRequestCount, 1)
     }
   }
 }
@@ -303,10 +470,16 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "电影", type: "电影"))
-      handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "剧集", type: "电视剧"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 901, title: "电影", type: "电影"),
+        expectedSubscribed: false
+      )
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 902, title: "剧集", type: "电视剧"),
+        expectedSubscribed: false
+      )
       try await Task.sleep(nanoseconds: 100_000_000)
 
       XCTAssertNil(handler.sheetSubscribe)
@@ -323,7 +496,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
       await handler.fetchSubscriptionAndShowEditor(subId: 7001)
 
@@ -349,7 +522,8 @@ final class PermissionDirectGuardTests: XCTestCase {
       configurePermissionBehaviorUser(service, granted: [.search])
 
       let viewModel = SubscribeSeasonViewModel(
-        mediaInfo: MediaInfo(tmdb_id: 7003, title: "无权限分季", type: "电视剧")
+        mediaInfo: MediaInfo(tmdb_id: 7003, title: "无权限分季", type: "电视剧"),
+        apiService: service
       )
       viewModel.seasonSubscriptions = [
         1: SeasonSubscriptionSummary(id: 7101, season: 1, episodeGroup: nil)
@@ -384,8 +558,8 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let recommend = RecommendViewModel()
-      let explore = ExploreViewModel()
+      let recommend = RecommendViewModel(apiService: service)
+      let explore = ExploreViewModel(apiService: service)
       try await Task.sleep(nanoseconds: 300_000_000)
 
       XCTAssertNil(recommend.paginator)
@@ -417,7 +591,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let explore = ExploreViewModel()
+      let explore = ExploreViewModel(apiService: service)
       XCTAssertFalse(explore.availableSources.contains(.subscriptionShare))
 
       explore.selectedSource = .subscriptionShare
@@ -436,7 +610,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let resourceViewModel = ResourceResultViewModel(keyword: "无搜索权限")
+      let resourceViewModel = ResourceResultViewModel(keyword: "无搜索权限", apiService: service)
       await resourceViewModel.search()
 
       XCTAssertFalse(resourceViewModel.isLoading)
@@ -454,15 +628,15 @@ final class PermissionDirectGuardTests: XCTestCase {
 private func withPermissionBehaviorBackend(
   operation: (APIService) async throws -> Void
 ) async throws {
-  XCTAssertTrue(URLProtocol.registerClass(PermissionBehaviorURLProtocol.self))
-  defer { URLProtocol.unregisterClass(PermissionBehaviorURLProtocol.self) }
+  XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionBehaviorURLProtocol.self))
+  defer { APIService.removeURLProtocolForTesting(PermissionBehaviorURLProtocol.self) }
 
-  let service = APIService.shared
+  let service = APIService.isolatedTestingInstance()
   let snapshot = PermissionBehaviorServiceSnapshot.capture(service: service)
   defer { snapshot.restore(to: service) }
 
   await PermissionBehaviorURLProtocol.stub.reset()
-  service.baseURL = "http://permission-behavior-tests.local"
+  service.baseURLForTesting = "http://permission-behavior-tests.local"
   try await operation(service)
 }
 
@@ -493,15 +667,17 @@ private func configurePermissionBehaviorUser(
   _ service: APIService,
   granted permissions: Set<UserPermissionKey>
 ) {
-  service.token = "permission-behavior-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "permission-behavior-token"
+  service.currentUserForTesting = Token(
     access_token: "permission-behavior-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
     permissions: permissionBehaviorPermissions(permissions),
+    user_id: 1,
     user_name: "permission-behavior",
     avatar: nil
   )
+  service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
 }
 
 @MainActor
@@ -522,6 +698,23 @@ private func permissionBehaviorPermissions(_ granted: Set<UserPermissionKey>) ->
       ($0.rawValue, granted.contains($0))
     }
   )
+}
+
+private final class PermissionNotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
+  }
 }
 
 @MainActor
@@ -561,9 +754,9 @@ private struct PermissionBehaviorServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
     restoreDefaults(value: accessTokenDefaults, forKey: "accessToken")
     restoreDefaults(value: currentUserDefaults, forKey: "currentUser")

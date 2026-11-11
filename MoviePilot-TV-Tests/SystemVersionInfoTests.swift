@@ -3,63 +3,186 @@ import XCTest
 @testable import MoviePilot_TV
 
 final class SystemVersionInfoTests: XCTestCase {
-  func testVersionInfoFormatsAppAndCompatibleMoviePilotVersions() {
+  func testVersionInfoShowsMinimumAndLatestCompatibleVersions() {
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "0.3.1"), "v0.3.1")
-    XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "1.0"), "v1.0")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "v0.3.1"), "v0.3.1")
-    XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: ""), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "   "), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: nil), "未知")
-    XCTAssertEqual(AppVersionInfo.compatibleMoviePilotVersion, "v2.13.14")
+    XCTAssertEqual(AppVersionInfo.minimumCompatibleMoviePilotVersion, "v3.0.4")
+    XCTAssertEqual(AppVersionInfo.latestCompatibleMoviePilotVersion, "v3.2.5")
   }
 
-  func testMoviePilotVersionComparisonIgnoresPrefixAndReleaseSuffix() {
+  func testProductionRegistryListsSourceReviewedVersions() {
     XCTAssertEqual(
-      AppVersionInfo.compareMoviePilotVersion("v2.13.14", to: "v2.13.14"),
-      .orderedSame
+      BackendCompatibilityRegistry.current.versions.map(\.description),
+      [
+        "v3.0.4", "v3.0.5", "v3.0.7", "v3.0.10", "v3.0.10-1", "v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1",
+        "v3.1.4", "v3.1.6", "v3.1.7", "v3.1.8", "v3.1.9", "v3.2.0", "v3.2.1", "v3.2.2", "v3.2.3",
+        "v3.2.4", "v3.2.5",
+      ]
+    )
+    for version in BackendCompatibilityRegistry.current.versions {
+      XCTAssertNil(BackendVersionWarning(backendVersion: version.description), "\(version) 已登记，不应提示")
+    }
+    XCTAssertNil(BackendVersionWarning(backendVersion: " 3.0.10-1 \n"))
+  }
+
+  func testStableHotfixVersionIsPreservedAndOrdersAfterBaseRelease() throws {
+    XCTAssertEqual(MoviePilotVersion(" V3.0.10-1 \n")?.description, "v3.0.10-1")
+    XCTAssertEqual(MoviePilotVersion("3.0.10-1"), MoviePilotVersion("v3.0.10-1"))
+    XCTAssertNotEqual(MoviePilotVersion("v3.0.10-1"), MoviePilotVersion("v3.0.10"))
+    for (older, newer) in [
+      ("v3.0.4", "v3.0.10"), ("v3.0.10", "v3.0.10-1"),
+      ("v3.0.10-1", "v3.0.10-2"), ("v3.0.10-2", "v3.0.10-10"),
+      ("v3.0.10-100", "v3.0.11"), ("v3.0.99-1", "v3.1.0"),
+      ("v3.99.99-1", "v4.0.0"),
+    ] {
+      XCTAssertLessThan(try XCTUnwrap(MoviePilotVersion(older)), try XCTUnwrap(MoviePilotVersion(newer)))
+    }
+  }
+
+  func testVersionParserRejectsUnrecognizedSuffixesAndMalformedNumbers() {
+    let malformed: [String?] = [
+      nil, "", "未知", "v3.0", "v3.0.10.1", "v3..10", "release-3.0.10",
+      "v3.0.10-beta", "v3.0.10-rc.1", "v3.0.10+build.1", "v3.0.10-1+build",
+      "v3.0.10 custom", "v3.0.10-", "v3.0.10-0", "v3.0.10-01", "v3.0.10--1",
+      "v03.0.10", "v3.0.10-1-2", "v3.beta.10", "v 3.0.10", "+3.0.10",
+      "v３.0.10", "v3.0.10-١", "v999999999999999999999.0.10", "v3.0.10-99999999999999999999",
+    ]
+    for version in malformed {
+      XCTAssertNil(MoviePilotVersion(version), "Unexpected parsed version: \(version ?? "nil")")
+      XCTAssertEqual(BackendCompatibilityRegistry.current.status(for: version), .unparseable)
+    }
+  }
+
+  func testRegistryOnlyTreatsExactVersionsAsCompatible() {
+    let registry = BackendCompatibilityRegistry.current
+    let cases: [(String, BackendCompatibilityStatus)] = [
+      ("v2.15.6", .belowMinimum), ("v3.0.3", .belowMinimum),
+      ("v3.0.4", .registered), ("v3.0.4-1", .unregistered),
+      ("v3.0.5", .registered), ("v3.0.6", .unregistered),
+      ("v3.0.7", .registered), ("v3.0.8", .unregistered), ("v3.0.9", .unregistered),
+      ("v3.0.10", .registered), ("3.0.10-1", .registered), ("v3.0.10-2", .unregistered),
+      ("v3.0.11", .unregistered), ("v3.1.0", .registered),
+      ("v3.1.0-1", .unregistered), ("v3.1.1", .registered),
+      ("v3.1.1-1", .unregistered), ("v3.1.2", .registered),
+      ("v3.1.2-1", .registered), ("3.1.2-1", .registered),
+      ("v3.1.2-2", .unregistered), ("v3.1.3", .unregistered),
+      ("v3.1.4", .registered), ("3.1.4", .registered),
+      ("v3.1.4-1", .unregistered), ("v3.1.5", .unregistered),
+      ("v3.1.6", .registered), ("3.1.6", .registered),
+      ("v3.1.6-1", .unregistered), ("v3.1.7", .registered), ("3.1.7", .registered),
+      ("v3.1.7-1", .unregistered), ("v3.1.8", .registered), ("3.1.8", .registered),
+      ("v3.1.9", .registered), ("3.1.9", .registered),
+      ("v3.1.9-1", .unregistered), ("v3.1.10", .unregistered),
+      ("v3.2.0", .registered), ("3.2.0", .registered),
+      ("v3.2.0-1", .unregistered), ("v3.2.1", .registered), ("3.2.1", .registered),
+      ("v3.2.1-1", .unregistered), ("v3.2.2", .registered), ("3.2.2", .registered),
+      ("v3.2.2-1", .unregistered), ("v3.2.3", .registered), ("3.2.3", .registered),
+      ("v3.2.3-1", .unregistered), ("v3.2.4", .registered), ("3.2.4", .registered),
+      ("v3.2.4-1", .unregistered), ("v3.2.5", .registered), ("3.2.5", .registered),
+      ("v3.2.5-1", .newerThanRegistry), ("v3.2.1-beta", .unparseable),
+      ("v4.0.0", .newerThanRegistry),
+    ]
+    for (version, status) in cases {
+      XCTAssertEqual(registry.status(for: version), status, version)
+    }
+  }
+
+  func testWarningsExplainEachReason() throws {
+    let below = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.3"))
+    XCTAssertEqual(below.title, "MoviePilot 后端版本过低")
+    XCTAssertTrue(below.message.contains("当前后端版本：v3.0.3"))
+    XCTAssertTrue(below.message.contains("最早兼容 v3.0.4"))
+
+    let unregistered = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.8"))
+    XCTAssertEqual(unregistered.title, "兼容性尚未验证")
+    XCTAssertEqual(
+      unregistered.message,
+      "当前后端版本：v3.0.8\n已兼容的版本：v3.0.10...v3.2.5"
+    )
+
+    let newer = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.2.6"))
+    XCTAssertEqual(newer.title, "MoviePilot 后端版本较新")
+    XCTAssertEqual(newer.message, "当前后端版本：v3.2.6\n已兼容的版本：v3.0.4...v3.2.5")
+
+    let unparseable = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.10-1-beta"))
+    XCTAssertEqual(unparseable.title, "无法确认 MoviePilot 后端版本")
+    XCTAssertTrue(unparseable.message.contains("当前后端版本：v3.0.10-1-beta"))
+    XCTAssertTrue(unparseable.message.contains("无法识别该版本号"))
+    let missing = try XCTUnwrap(BackendVersionWarning(backendVersion: nil))
+    XCTAssertTrue(missing.message.contains("当前后端版本：无法确认"))
+    XCTAssertTrue(missing.message.contains("未取得后端版本号"))
+
+    for warning in [below, unregistered, newer, unparseable, missing] {
+      XCTAssertFalse(warning.message.contains("仍可继续使用"))
+      XCTAssertFalse(warning.message.contains("可留意 MoviePilot-TV 更新"))
+      XCTAssertFalse(warning.message.contains("实测"))
+    }
+    for warning in [unparseable, missing] {
+      XCTAssertTrue(warning.message.hasSuffix("已兼容的版本：v3.0.4...v3.2.5"))
+    }
+  }
+
+  func testUnverifiedWarningSelectsNearestHigherVersionUsingNumericHotfixOrder() throws {
+    let registry = BackendCompatibilityRegistry(
+      versions: ["v3.1.4", "v3.0.10-10", "v3.0.4", "v3.0.10", "v3.0.10-1", "v3.1.0"]
+        .map { MoviePilotVersion($0)! }
+    )
+    for (version, nextVersion) in [
+      ("v3.0.9", "v3.0.10"),
+      ("v3.0.10-2", "v3.0.10-10"),
+      ("v3.0.10-11", "v3.1.0"),
+    ] {
+      let warning = try XCTUnwrap(BackendVersionWarning(backendVersion: version, registry: registry))
+      XCTAssertEqual(
+        warning.message,
+        "当前后端版本：\(version)\n已兼容的版本：\(nextVersion)...v3.1.4"
+      )
+    }
+  }
+
+  func testUnverifiedWarningListsLatestVersionOnceWhenItIsAlsoNearestHigherVersion() throws {
+    let registry = BackendCompatibilityTestFixtures.registry(extraVersions: ["v3.1.4"])
+    let warning = try XCTUnwrap(
+      BackendVersionWarning(backendVersion: " v3.1.3\n", registry: registry)
     )
     XCTAssertEqual(
-      AppVersionInfo.compareMoviePilotVersion("2.13.14-1", to: "v2.13.14"),
-      .orderedSame
-    )
-    XCTAssertEqual(
-      AppVersionInfo.compareMoviePilotVersion("v2.13.15", to: "v2.13.14"),
-      .orderedDescending
-    )
-    XCTAssertEqual(
-      AppVersionInfo.compareMoviePilotVersion("v2.13.13", to: "v2.13.14"),
-      .orderedAscending
+      warning.message,
+      "当前后端版本：v3.1.3\n已兼容的版本：v3.1.4"
     )
   }
 
-  func testMoviePilotVersionComparisonRejectsMalformedVersions() {
-    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("v2.beta.14", to: "v2.13.14"))
-    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("v2.13beta.14", to: "v2.13.14"))
-    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("release-2.13.14", to: "v2.13.14"))
+  func testAcknowledgementIdentityOnlyDependsOnBackendVersion() throws {
+    let small = BackendCompatibilityTestFixtures.registry()
+    let grown = BackendCompatibilityTestFixtures.registry(extraVersions: ["v3.0.7", "v3.1.0"])
+    let warning = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.9", registry: small))
+    // 新增其他兼容版本或修改提示文字，不能让同一后端版本的已确认提示重新出现。
+    XCTAssertEqual(warning.id, BackendVersionWarning(backendVersion: "v3.0.9", registry: grown)?.id)
+    XCTAssertEqual(warning.id, BackendVersionWarning(backendVersion: " 3.0.9 ", registry: small)?.id)
+    XCTAssertNotEqual(warning.id, BackendVersionWarning(backendVersion: "v3.0.8", registry: small)?.id)
+    XCTAssertEqual(
+      BackendVersionWarning(backendVersion: "v3.0.10-1-beta", registry: small)?.id, "v3.0.10-1-beta")
+    XCTAssertEqual(BackendVersionWarning(backendVersion: nil, registry: small)?.id, "unknown")
   }
 
-  func testUnsupportedMoviePilotVersionBuildsWarningMessage() {
-    let warning = BackendVersionWarning(
-      backendVersion: "v2.13.13",
-      requiredVersion: "v2.13.14"
-    )
-
-    XCTAssertEqual(warning.title, "MoviePilot 后端版本过低")
-    XCTAssertTrue(warning.message.contains("当前后端版本：v2.13.13"))
-    XCTAssertTrue(warning.message.contains("需要 v2.13.14 或更高版本"))
-    XCTAssertTrue(warning.message.contains("严重功能异常或数据丢失"))
-    XCTAssertTrue(warning.message.contains("仍可继续使用"))
+  func testAppVersionComparisonAcceptsTwoComponentVersions() {
+    XCTAssertEqual(AppVersionInfo.compareAppVersion("v0.9.9", to: "v1.0"), .orderedAscending)
+    XCTAssertEqual(AppVersionInfo.compareAppVersion("1.0", to: "v1.0.0"), .orderedSame)
+    XCTAssertEqual(AppVersionInfo.compareAppVersion("v1.0.1", to: "1.0"), .orderedDescending)
+    XCTAssertEqual(AppVersionInfo.compareAppVersion("v0.3.10", to: "v0.3.9"), .orderedDescending)
+    XCTAssertEqual(AppVersionInfo.compareAppVersion("v1.2.0-beta", to: "v1.2"), .orderedSame)
+    XCTAssertNil(AppVersionInfo.compareAppVersion(nil, to: "v1.0"))
+    XCTAssertNil(AppVersionInfo.compareAppVersion("未知", to: "v1.0"))
+    XCTAssertNil(AppVersionInfo.compareAppVersion("v1.x", to: "v1.0"))
   }
+}
 
-  func testUnknownMoviePilotVersionBuildsUnconfirmedWarningMessage() {
-    let warning = BackendVersionWarning(
-      backendVersion: "未知",
-      requiredVersion: "v2.13.14"
+/// 只用于提示生命周期测试，固定登记表，避免生产登记表增加版本后影响测试。
+nonisolated enum BackendCompatibilityTestFixtures {
+  static func registry(extraVersions: [String] = []) -> BackendCompatibilityRegistry {
+    BackendCompatibilityRegistry(
+      versions: (["v3.0.4", "v3.0.10-1"] + extraVersions).map { MoviePilotVersion($0)! }
     )
-
-    XCTAssertEqual(warning.id, "unknown|v2.13.14")
-    XCTAssertEqual(warning.title, "无法确认 MoviePilot 后端版本")
-    XCTAssertTrue(warning.message.contains("当前后端版本：无法确认"))
-    XCTAssertFalse(warning.title.contains("版本过低"))
   }
 }

@@ -1,49 +1,22 @@
-import Kingfisher
 import SwiftUI
 
-#if DEBUG
-enum DownloadTaskUIPreviewPresentation {
-  case collapsed
-  case deleteConfirmation
-}
-#endif
-
 struct DownloadTaskView: View {
-  @StateObject private var viewModel: DownloadTaskViewModel
-
-  #if DEBUG
-  private let refreshesOnAppear: Bool
-  private let uiPreviewPresentation: DownloadTaskUIPreviewPresentation?
-  #endif
+  private let isSelected: Bool
+  @StateObject private var viewModel = DownloadTaskViewModel()
+  @ObservedObject private var apiService = APIService.shared
+  @EnvironmentObject private var notificationManager: NotificationManager
   @State private var isExpanded = true
 
-  init() {
-    _viewModel = StateObject(wrappedValue: DownloadTaskViewModel())
-    #if DEBUG
-    refreshesOnAppear = true
-    uiPreviewPresentation = nil
-    #endif
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
   }
-
-  #if DEBUG
-  init(
-    viewModel: DownloadTaskViewModel,
-    refreshesOnAppear: Bool,
-    uiPreviewPresentation: DownloadTaskUIPreviewPresentation? = nil
-  ) {
-    _viewModel = StateObject(wrappedValue: viewModel)
-    self.refreshesOnAppear = refreshesOnAppear
-    self.uiPreviewPresentation = uiPreviewPresentation
-    _isExpanded = State(initialValue: uiPreviewPresentation != .collapsed)
-  }
-  #endif
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
       HStack {
         Text("下载任务")
           .font(.body)
-          .fontWeight(.bold)
+          .bold()
           .foregroundStyle(.secondary)
           .padding(.leading, 8)
 
@@ -72,35 +45,46 @@ struct DownloadTaskView: View {
 
       if isExpanded {
         if viewModel.downloads.isEmpty {
-          Text("暂无下载任务")
-            .foregroundColor(.secondary)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .center)
+          if viewModel.clientsLoadFailed {
+            Text("下载器加载失败，正在自动重试")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          } else {
+            Text("暂无下载任务")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          }
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
-              #if DEBUG
               DownloadTaskRow(
                 item: item,
-                viewModel: viewModel,
-                showsDeleteConfirmation: uiPreviewPresentation == .deleteConfirmation && item.id == viewModel.downloads.first?.id
+                clientName: viewModel.loadedClient,
+                viewModel: viewModel
               )
-              #else
-              DownloadTaskRow(item: item, viewModel: viewModel)
-              #endif
+              .disabled(!viewModel.canOperateDownloads)
             }
           }
         }
       }
     }
-    .task {
-      #if DEBUG
-      guard refreshesOnAppear else { return }
-      #endif
+    .task(id: isSelected) {
+      viewModel.setPresentationActive(isSelected)
+      guard isSelected else { return }
       await DownloadTaskView.runAutoRefresh(
         initialLoad: { await viewModel.initialLoad() },
         loadDownloads: { await viewModel.loadDownloads() }
       )
+    }
+    .onChange(of: isSelected) { _, newValue in
+      viewModel.setPresentationActive(newValue)
+    }
+    .onChange(of: viewModel.errorMessage) { _, message in
+      guard let message else { return }
+      notificationManager.show(message: message, type: .error)
+      viewModel.errorMessage = nil
     }
   }
 
@@ -124,65 +108,67 @@ struct DownloadTaskView: View {
 /// 显示一个下载任务（种子）的行视图，包含封面、信息、进度和可交互的操作按钮。
 private struct DownloadTaskRow: View {
   @ObservedObject var item: DownloadingInfo
+  let clientName: String
   let viewModel: DownloadTaskViewModel
-  let presentsDeleteConfirmationOnAppear: Bool
 
   @State private var showingDeleteConfirm = false
 
   // 核心逻辑修正：完全对齐 Vue 的 `isDownloading` 布尔逻辑
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
+  @State private var isToggling = false
 
-  init(
-    item: DownloadingInfo,
-    viewModel: DownloadTaskViewModel,
-    showsDeleteConfirmation: Bool = false
-  ) {
+  init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
+    self.clientName = clientName
     self.viewModel = viewModel
-    self.presentsDeleteConfirmationOnAppear = showsDeleteConfirmation
-    _showingDeleteConfirm = State(initialValue: false)
     _isDownloading = State(initialValue: item.state?.lowercased() == "downloading")
   }
 
   /// 核心交互：对齐 Vue 的 `toggleDownload`
   /// 切换下载状态（暂停/继续）。
   private func toggleDownload() {
+    guard !isToggling else { return }
     guard let hash = item.hash else { return }
 
+    isToggling = true
+    let shouldStop = isDownloading
+    let targetState = !shouldStop
     // 等待服务器真实响应后再翻转，类似 Vue
     Task {
       let operationSuccess: Bool
-      if isDownloading {  // 停止
-        operationSuccess = await viewModel.stopDownload(hash: hash)
+      if shouldStop {  // 停止
+        operationSuccess = await viewModel.stopDownload(clientName: clientName, hash: hash)
       } else {  // 开始
-        operationSuccess = await viewModel.startDownload(hash: hash)
+        operationSuccess = await viewModel.startDownload(clientName: clientName, hash: hash)
       }
 
-      // API 调用成功，则翻转 UI 状态
+      // API 调用成功，则写入发起时冻结的目标状态，避免轮询更新后 toggle 反向。
       if operationSuccess {
-        isDownloading.toggle()
+        isDownloading = targetState
       }
+      isToggling = false
     }
   }
 
   /// 根据当前状态生成的操作按钮描述。
   private var actionDescriptors: [ActionDescriptor] {
     let toggleActionTitle = isDownloading ? "暂停" : "继续"
-    let toggleActionIcon = isDownloading ? "pause.fill" : "play.fill"
+    let toggleActionIcon = isDownloading ? AppSymbol.pause : AppSymbol.resume
 
     return [
       ActionDescriptor(
         id: "toggle",
         title: toggleActionTitle,
         icon: toggleActionIcon,
+        isEnabled: !isToggling,
         role: .normal,
         action: toggleDownload
       ),
       ActionDescriptor(
         id: "delete",
         title: "删除",
-        icon: "trash.fill",
+        icon: AppSymbol.delete,
         role: .destructive,
         action: { showingDeleteConfirm = true }
       ),
@@ -224,19 +210,6 @@ private struct DownloadTaskRow: View {
       }
       .padding()
       .frame(maxWidth: .infinity, alignment: .topLeading)
-    } background: {
-      // MARK: - 背景
-      let backdropUrl = item.media?.imageURLs.image
-      ZStack {
-        KFImage(backdropUrl)
-          .requestModifier(AnyModifier.cookieModifier)
-          .setProcessor(BlurImageProcessor(blurRadius: 2))
-          .resizing(referenceSize: CGSize(width: 500, height: 180), mode: .aspectFill)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-
-        Color.black.opacity(0.6)
-      }
     } progressBar: {
       // MARK: - 进度条
       if let progress = item.progress, progress > 0 {
@@ -246,20 +219,14 @@ private struct DownloadTaskRow: View {
           .padding(.bottom, -7)  // 微调使进度条紧贴底部
       }
     }
-    .alert("确认删除?", isPresented: $showingDeleteConfirm) {
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in showingDeleteConfirm = false }
+    .alert("将永久删除任务及已下载文件，确认继续？", isPresented: $showingDeleteConfirm) {
       Button("删除", role: .destructive) {
         if let hash = item.hash {
-          Task { await viewModel.deleteDownload(hash: hash) }
+          Task { await viewModel.deleteDownload(clientName: clientName, hash: hash) }
         }
       }
       Button("取消", role: .cancel) {}
-    }
-    .onAppear {
-      guard presentsDeleteConfirmationOnAppear else { return }
-      Task { @MainActor in
-        await Task.yield()
-        showingDeleteConfirm = true
-      }
     }
     .onChange(of: item.state) { _, newState in
       // 实时同步来自服务器的状态变更
@@ -272,7 +239,9 @@ private struct DownloadTaskRow: View {
     // 格式: {size} ↑ {upspeed}/s ↓ {dlspeed}/s {left_time}
     var parts: [String] = []
 
-    parts.append(item.size?.formattedBytes() ?? "0 B")
+    if let size = item.size {
+      parts.append(size.formattedBytes())
+    }
     parts.append("↑ \((item.upspeed ?? "0B"))/s")
     parts.append("↓ \((item.dlspeed ?? "0B"))/s")
 
@@ -364,7 +333,6 @@ private struct StateBadge: View {
   var body: some View {
     Text(state.displayText)
       .font(.caption)
-      .fontWeight(.medium)
       .padding(.horizontal, 10)
       .padding(.vertical, 3)
       .background(state.color.opacity(0.3))

@@ -4,27 +4,24 @@
 
 ## 快速配置
 
-`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
+`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、字幕搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
 
-真实后端兼容测试分为只读套件和副作用套件。副作用套件默认开启，会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作；如果只想跑只读检查，请参考 `.env.compatibility.example` 关闭副作用开关。
+真实后端兼容测试分为只读套件和副作用套件。副作用套件默认关闭；只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 才会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。字幕下载另外要求 `MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true`，总开关打开时它仍然默认关闭。
 
-配置完成后运行 Xcode 测试：
+只读套件还包含独立的 OpenAPI 契约检查：对配置的同一个后端读取一次 `GET {baseURL}/api/v1/openapi.json`，核对 TV 已用接口的路径、方法、参数、必填性和响应结构，并输出覆盖缺口与待审查变更。它不执行保存、删除、下载等写操作，也不能代替真实调用测试。读取失败、返回登录页或遇到暂不支持的 schema 记为该项失败，不会改走公共文档站。已确认兼容的 OpenAPI 基线保存在 `MoviePilot-TV-Tests/OpenAPI/Fixtures/openapi-baseline.json`；发现差异后必须经审查再更新基线，测试本身不会自动覆盖。解析、分级和基线比较的离线用例走普通 CI，不访问真实后端。
+
+配置完成后，通过临时测试模拟器运行只读套件：
 
 ```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests
 ```
 
-这里默认关闭 XCTest 并行。未关闭时，Xcode 可能启动多个 `Clone N of Apple TV` 模拟器，把不同测试套件并行分发执行；真实后端兼容测试包含默认开启的副作用套件，串行运行更容易确认执行顺序、定位失败和避免误判。
+日常定向验证默认使用最新可用 tvOS runtime，可用 `--runtime <版本>` 指定；只构建 Testing 宿主并执行 `--only-testing` 指定套件。只有用户明确要求提交时才运行 `python3 scripts/test-tvos.py --full` 做 18.5、26.5 和最新已安装 27.x 的完整验收，最多两个版本同时进行。每次使用独立临时模拟器和专用 DerivedData，不占用日常 Xcode 的构建数据库，结束后只清理本次设备。某一版本的依赖或宿主构建失败时，停止其余版本。Testing App 使用独立身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。普通 `python3 scripts/test-tvos.py` 只做单版本 Debug 构建；本地离线测试显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。CI 固定执行 `--full --runtime 27.2`。发布时如果业务提交的 PR CI 已经通过，版本信息改动只用最新一个 tvOS 跑更新说明测试，不要再跑离线三版本全套。
+
+显式包含真实后端测试时，同一配置会在所选各系统上逐个执行，不会并行；副作用套件启用后也会重复相应动作，仍须遵守独立开关和目标范围。后端测试在某个系统失败会立即停止，不继续向其余系统发起真实请求；普通离线矩阵则同时跑各系统，并汇总失败。矩阵模式指定 `--result-bundle-path` 时，脚本自动在文件名中加入 tvOS 版本，避免结果包互相覆盖。
+
+需要副作用验证时，用 `--only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests` 指定套件，并按下文显式启用独立副作用开关。模拟器与 App 存储隔离不能隔离真实后端的数据修改。
 
 真实后端巡检在 `Testing started` 后可能数分钟没有增量输出。图片巡检会扫描多个 TV 页面入口、实际下载海报/背景图/头像并等待 tvOS 解码；不要只因为短时间无输出就判断卡死，应等待用例结束或查看 `.xcresult` 中的测试摘要和失败详情。
 
@@ -34,11 +31,13 @@ xcodebuild test \
 
 图片巡检尤其要遵守这一点。TV 图片请求失败时，测试应按 MP Web 的图片 URL 规则生成等价请求；若 Web 等价请求也失败，或原始图片值为空、非可请求 URL，导致 Web 本来也没有可下载图片，则应计入 Web 对齐失败并继续。只有 MP Web 等价图片能正常获取，而 TV 端图片失败，才应判定为 TV 端兼容问题。
 
-GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibilityReadOnlyTests` 和 `BackendCompatibilitySideEffectTests`。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。
+GitHub CI 没有真实后端账号，`ci.yml` 通过标准入口显式跳过只读、权限行为和副作用三个真实后端套件。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。OpenAPI 离线契约测试属于普通 XCTest，CI 会运行；针对真实实例的 `testReadOnlyOpenAPIContractCompatibility` 仍留在只读套件内，随真实后端配置执行。
 
 ## 真实后端只读套件
 
-`.env.compatibility` 只用于真实 MoviePilot 后端的只读兼容性检查。已配置时，测试会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
+`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端，巡检 TV 页面使用的 API、模型和部分生产 ViewModel 入口，并额外读取同一实例的 OpenAPI 做已用接口契约检查：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。文档会明确哪些流程只验证 API/模型，不能把它们表述成完整页面交互测试。未配置时，这组测试会自动跳过。
+
+使用普通账号巡检订阅时，测试还会断言 `/subscribe/` 返回记录的 `username` 都属于当前账号，以覆盖 MoviePilot v2.14.2 起的订阅所有权隔离；超级用户仍按后端契约读取全局订阅。
 
 只读套件会把权限敏感接口拆成独立用例，避免一个管理员账号全通过后掩盖普通账号失败：
 
@@ -48,11 +47,60 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
 
-这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只会调用元数据搜索和详情读取；如果搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
+OpenAPI 契约检查只核对声明，不证明运行行为一定兼容。自定义 Response、权限实际执行、字段间业务约束、SSE 结束语义，以及“保存成功后是否正确启用订阅”等，仍由原有真实调用测试覆盖。分级规则：
 
-默认还会检查标题识别、TMDB ID 识别、整理历史读取和订阅状态读取，以覆盖 TV 端现有后台能力。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；这只会调用资源搜索并解码结果，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
+| 检查项 | 处理 |
+| --- | --- |
+| TV 使用的路径、HTTP 方法消失或改变 | 兼容失败 |
+| TV 发出的参数不再被声明，或后端新增必填参数而 TV 没有提供 | 不匹配；已确认例外登记在 `openapi-exceptions.json` |
+| TV 依赖的响应字段、类型、可空性或返回结构不兼容 | 失败 |
+| 已用接口相对基线新增字段、默认值变化、标记废弃 | 待审查；审查后再更新基线 |
+| 新增无关接口、修改描述文字、调整文档顺序 | 不作为兼容失败 |
 
-如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。
+覆盖缺口会对照三份集合：TV 实际依赖的接口、已有测试覆盖的接口、后端 OpenAPI 声明的接口。动态发现/推荐路径按 `/discover/source` 与 `/recommend/source` 的 `api_path` 处理，不要求 TV 覆盖后端全部接口。
+
+这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只用于媒体元数据搜索和详情读取；人物搜索使用独立的 `MOVIEPILOT_COMPAT_PERSON_QUERY` / `MOVIEPILOT_COMPAT_PERSON_QUERIES`，未配置时默认查询“易中天”，避免拿媒体标题作为人物搜索词。如果媒体搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
+
+默认还会检查标题识别、TMDB ID 识别、整理历史读取、整理预览和订阅状态读取，以覆盖 TV 端现有后台能力。整理预览只读取最近一条已有整理历史，经 `ReorganizeViewModel` 的生产表单组装入口，以 `preview=true` 调用 `/transfer/manual?background=false`，并校验可选媒体来源/ID 成对省略、请求不返回 422、预览 envelope、汇总计数以及每个条目的 `success` 值；该检查不执行文件写入或后台整理任务。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；每个显式配置的查询都必须解码出至少一条结果，否则测试失败，不再允许用开关把空结果算作通过。这只会搜索和解码，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口及至少一条资源项，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
+
+MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
+
+- TMDB、豆瓣、Bangumi、AniList 四来源媒体搜索，TMDB 合集搜索，以及 TMDB/豆瓣人物搜索；搜索与识别请求使用 `media_source` 而不是 `source`。
+- AniList 推荐货架、发现、详情与统一分季接口。
+- 详情、订阅查询/取消和精确资源搜索使用 `/{media_id}?media_source=`，不再把 `tmdb:<id>` 作为 path。
+- `/discover/source`、`/recommend/source` 动态来源；已安装 TheTVDB 插件时检查筛选默认值、两页分页结果和 `tvdb` 来源原生 ID。
+- 资源搜索 SSE 的事件解码与终止语义；该项仍由显式开关控制。
+- `/user/current` 成功体可能包在 `{success,data}` 中。
+- 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
+- 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
+
+字幕搜索由 `testReadOnlySubtitleSearchCompatibility` 覆盖。配置 `MOVIEPILOT_COMPAT_SUBTITLE_QUERY` / `MOVIEPILOT_COMPAT_SUBTITLE_QUERIES` 或 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID` / `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_IDS` 后，测试经生产 `MediaActionHandler` 组装请求，再由 `SubtitleSearchSession` 走 SSE；未配置则跳过。媒体 ID 使用 `来源:原生ID`，例如 `tmdb:603`。`MOVIEPILOT_COMPAT_SUBTITLE_SITES` 和 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_TYPE` 可选；`MOVIEPILOT_COMPAT_SUBTITLE_SEASON` 省略则不传季号，`0` 会原样发送。TV 的媒体字幕搜索不传集号。每个显式配置的查询都必须收到至少一条字幕，否则失败。语言、标题和大小按后端合同可缺省，`size` 为 0 也合法，缺这些字段不算不兼容。HTTP 链接仍须保留 `mp_sig` 签名片段。完整字段是否在解码时丢失由离线样本覆盖。单次搜索最多等待 180 秒。同一次检查还会读取 `/download/paths` 并解码目录，不提交下载。搜索会访问字幕站点，并覆盖后端上一次字幕搜索缓存、取消进行中的 AI 推荐；它不下载字幕文件，也不创建下载器任务。普通 GET 回退只在流没有交付 `done` 时由会话调用，离线用例覆盖该路径。
+
+仅运行字幕搜索：
+
+```sh
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlySubtitleSearchCompatibility
+```
+
+MoviePilot v3.1.2 新增手动资源分页参数，TV 从 v3.1.2-1 起使用。`testReadOnlyResourceTitlePagingCompatibility` 和 `testReadOnlyResourceMediaPagingCompatibility` 分别通过生产 `APIService.readResourceSearchPage` 和 `ResourceSearchPage` 验证两个 SSE 端点：第 0 页完整最终包、分块顺序与总数、`sources` 的不透明来源、页号和 `can_continue`，再选择一个成功来源读取下一页并原页重试。若所有成功来源均已结束，则仅验证该来源第 0 页重试，并在日志中明确续页未覆盖；下一页合法空结果不算失败。测试使用已有的 `MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS` 开关，两个入口各自要求配置标题查询、媒体 ID，单次请求最多等待 180 秒。它们不验证完整页面交互，不触发下载或订阅，但会访问站点并更新后端搜索缓存和上次搜索记录。
+
+仅运行这次新增的分页检查及 OpenAPI 检查：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceTitlePagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceMediaPagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyOpenAPIContractCompatibility
+```
+
+OpenAPI 清单按 `/system/global` 返回的后端版本选择搜索参数；v3.1.2-1 及以上核对 `manual_paging`（布尔）、`page`（整数）和 `source`（字符串），旧版仍按 TV 实际使用的旧协议检查。OpenAPI 不能描述完整 SSE 事件，事件契约由上述真实调用测试验证。
+
+分页用例属于固定的只读套件，新后端版本无需另加一份测试。开启 SSE 检查且后端支持分页时，缺少标题查询或媒体 ID 会明确失败，不能以跳过代替覆盖。关闭该开关或连接旧后端仍会按说明跳过分页项；普通离线/CI 测试继续不访问真实后端。测试脚本将命令行 `MOVIEPILOT_COMPAT_*` 覆盖传入 XCTest，包括外部配置路径和副作用关闭开关，不改写工作区的 `.env.compatibility`。
+
+兼容测试要求 OpenAPI 文档可用。`/api/v1/openapi.json` 返回 404、401、HTML 或畸形响应时，该项失败，不再因后端默认关闭 `API_DOCS_ENABLE` 而跳过。运行前需要在 MoviePilot 设置中打开 API 文档。只读测试各步骤保留当前登录会话的资源 Cookie，以便 SSE 使用与 Web 一致的认证；切换账号时不沿用上一账号 Cookie。
+
+如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。`MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false` 时会强制关闭所有副作用子项，即使配置文件中某个 `MOVIEPILOT_COMPAT_TEST_*` 仍为 `true`，也不会发起真实后台动作；这只是总开关的关闭优先级，不是禁止副作用测试，副作用套件仍可在明确接受真实后台影响时启用。
 
 ## 多账号兼容矩阵
 
@@ -60,7 +108,7 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 `MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS` 与额外用户名按顺序对应；本地确实共用密码时可以留空，测试会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。如果某个密码本身包含逗号，在同一行中把该逗号写成 `\,`，例如 `first-password,pa\,ssword` 会解析为两个密码 `first-password` 和 `pa,ssword`。模板文件中应填写自己的测试账号用户名和密码，不要复用示例值。
 
-四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除：
+四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除。该套件除了校验 token 和 Tab，还会分别通过发现分页、搜索站点、首页订阅读取和整理配置的生产 ViewModel 验证唯一权限确实可用：
 
 ```sh
 MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=test_discovery=discovery,test_search=search,test_subscribe=subscribe,test_manage=manage
@@ -70,36 +118,38 @@ MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS=discovery-password,search-password,subscr
 `MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 按 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` 的顺序对应；留空项会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。只想验证权限行为时，直接跑这一小组即可：
 
 ```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation \
-  -only-testing:MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
 ```
 
 ## 副作用套件
 
-副作用测试默认开启。运行 `BackendCompatibilitySideEffectTests` 时，已配置真实后端的情况下会默认执行下面这些流程；如果某次兼容性检查不想跑某一项，可在 `.env.compatibility` 中把对应开关设为 `false`。
+副作用测试默认关闭。只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 后，`BackendCompatibilitySideEffectTests` 才会按下面的子项开关执行；可把某一项设为 `false` 单独排除。
 
 如果配置了额外账号，副作用套件也会用每个账号执行同一批流程；这会按账号重复触发真实后台动作。
 
-- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH=true`：取现有订阅列表中有 ID 和原始状态的条目，触发订阅搜索；执行后会把订阅恢复为原始状态，包括原本已暂停的 `state=S`。
+- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH=true`：取现有订阅列表中有 ID 且 `state=R/S` 的条目，触发订阅搜索；执行后只会把订阅的 `state` 字段写回测试前的值，包括原本已暂停的 `state=S`，已经触发的后台搜索或下载任务无法撤销。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE=true`：读取现有订阅详情，然后用原详情原样保存一次，不修改参数。
-- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME=true`：只取正在订阅的 `state=R` 条目，先暂停为 `S`，再恢复为 `R`；不会把原本已暂停的 `S` 条目恢复。
-- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 和原始状态的条目，重置订阅后立即触发同一条订阅搜索；执行后会把订阅恢复为原始状态，包括原本已暂停的 `state=S`。
-- `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，按 TV 端 `ReorganizeForm` 编码后并发触发后台手动重新整理。
-- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并检查返回的进度流。
+- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME=true`：取 `state=R/S` 条目并临时切换到另一状态，再写回测试前的状态；原本暂停的 `state=S` 会在测试期间短暂恢复为 `R`，可能参与后台调度。
+- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 且 `state=R/S` 的条目，重置订阅后立即触发同一条订阅搜索；执行后只会把订阅的 `state` 字段写回测试前的值，包括原本已暂停的 `state=S`。reset 清除的已下载/已入库记录无法恢复，search 触发的后台搜索或下载任务也无法撤销。
+- `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，通过 TV 端 `ReorganizeViewModel.submit(background: true)` 生产入口并发触发后台手动重新整理。
+- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并通过 TV 端 `APIService.progressStream`（含当前会话的资源 Cookie）检查返回的进度流。
+- `MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true`：即使总开关已打开，此项仍默认关闭。它使用第一条 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID` 通过生产字幕会话搜索，再经 `SubtitleDownloadViewModel.submit()` 下载第一条带链接的字幕。`MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH` 必须与 `/download/paths` 返回的某个本地 `save_path` 完全一致；`storage` 不是 `local` 时在创建目录前失败，避免云盘缺少目录 ID 时把临时目录建到根目录。隔离目录的完整路径在 mkdir 发出前就固定。创建请求已经发出之后被取消、超时或响应丢失时，仍会尝试删除该路径，并在失败信息里留下完整路径；这种情况下删除成功也不表示服务端一定没再把目录建出来。请求还没发出就被取消时不删除。下载超时、取消或断线后也会删除目录，但会先等下载任务结束再判断。只要没收到字幕下载接口的响应，就只记录清理不确定和目录路径，因为服务端同步下载仍可能重新建目录并写入文件。只有下载接口明确返回业务结果后，删除成功才算现场恢复。代理的 502、503、504 不算下载结束。清理请求不继承父任务取消，有 60 秒时限，并等请求结束后再返回。账号需要同时具备搜索和管理权限，管理权限用于创建和删除目录；只有搜索权限的账号会在请求前跳过。这不是下载器任务。搜索同样会覆盖上一次字幕搜索缓存。每个具备权限的账号各下载一条。
 
-这些测试不会新增订阅、删除订阅、添加下载、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
+这些测试不会新增订阅、删除订阅、添加下载器任务、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理和字幕文件下载都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
+
+字幕下载示例：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true \
+MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true \
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests/testSubtitleDownloadCompatibility
+```
 
 `MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT` 控制订阅测试取几条现有订阅，默认 `3`。`MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT` 控制整理测试取几条最近历史，默认 `2`。`MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT` 控制手动重新整理的并发数量，默认 `2`。
+
+订阅状态恢复使用 15 秒清理时限：超过时限后会请求取消，待恢复操作真正结束后报告超期，避免未完成清理与后续副作用步骤或账号切换并发修改状态；这不是强制终止请求的硬超时。
 
 ## 新增测试的副作用规则
 
@@ -107,4 +157,4 @@ xcodebuild test \
 
 如果确实需要覆盖有副作用的接口，必须放进 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件，并满足以下条件：提供独立环境变量开关；限制目标数量和选择条件；保存目标原始状态并在成功、失败和取消路径中尽力恢复；在本文件说明真实影响。不要把会改变用户个人后端状态的检查混进“只读”或普通全量测试说明里。
 
-新增/删除订阅、下载任务增删改、删除整理历史等更强破坏性流程仍不在个人后端兼容套件内；如果后续要测，应使用可丢弃数据库、测试下载器和测试媒体目录的隔离 MoviePilot 后端。
+新增/删除订阅、下载器任务增删改、删除整理历史等更强破坏性流程仍不在个人后端兼容套件内；如果后续要测，应使用可丢弃数据库、测试下载器和测试媒体目录的隔离 MoviePilot 后端。字幕下载只在本地存储上写入并删除当次创建的隔离目录，不删除目录里原有的文件，也不在云盘上创建目录。

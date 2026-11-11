@@ -3,6 +3,7 @@ import Foundation
 enum SubscriptionCancelConfirmation {
   static let title = "取消订阅"
   static let confirmButtonTitle = "确认取消订阅"
+  static let failureMessage = "取消订阅失败，请重试"
 
   static func headerMessage(for media: MediaInfo) -> String {
     message(title: media.cleanedTitle ?? media.title ?? "")
@@ -48,7 +49,7 @@ enum SubscriptionCancelConfirmation {
       return "默认剧集组"
     }
     if let group = episodeGroups.first(where: { $0.id == episodeGroup }) {
-      return group.name
+      return EpisodeGroupDisplayFormatter.name(group.name)
     }
     return "剧集组：\(episodeGroup)"
   }

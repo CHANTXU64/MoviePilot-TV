@@ -24,6 +24,8 @@
 5. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
 6. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
 7. 兼容任务的目标是与 MoviePilot 后端和 MoviePilot Web 前端当前行为对齐。只有当前任务明确涉及新增或修改兼容测试，或用户明确要求诊断兼容失败时，才在测试失败后判断 MP Web / 官方后端是否同样异常；若上游同样异常或 Web 本来也不发起对应请求，不要在 TV 端替 MoviePilot 官方兜底、修 Bug 或新增差异化容错。普通代码、UI、文档或工作流修改遇到兼容测试失败时，只记录结果并停止，不要诊断、重跑或扩大任务范围。
+8. 编码、修 Bug 和普通 Review 都必须执行下方【编码与 Review 的防复发检查】，按改动主题读取 `.agents/engineering-invariants.md` 对应章节。该文档用于预防已审计过的同类错误，不是历史缺陷队列。
+9. 新增只在某个 MoviePilot 后端版本起才成立的功能、入口或提示前，必须先对照官方源码确认起始版本，并在 TV 端做版本限制。已解析的更低版本不得走这条新行为，避免用户还在用旧版 MoviePilot 时碰到新功能带来的错误提示或失败。版本读不出时按失败后果选择极性，细则见 `.agents/engineering-invariants.md` §7。不要把已知缺陷门禁的“未知放行”，或取值可用性门禁的“未知隐藏”，套到另一类判断上。登记表里的旧版本仍在支持范围内，不能把“最新已登记版本才有的行为”说成所有已登记版本都会发生。
 
 ## 任务路由
 
@@ -31,18 +33,45 @@
 
 | 用户意图 | 读取文件 |
 | --- | --- |
-| 最终联合审查、AI + 人工收尾审查、按 ReviewPlan 继续、继续审查下一个文件 | `.agents/prompts/final-review.md` + `.agents/ReviewPlan.md` |
-| 普通 PR Review、检查最近提交、检查分支、临时检查某个文件 | 不读取专项 Prompt；直接查看对应 diff / 提交 / 源码 |
-| 检查 `MoviePilot-Frontend` / `MoviePilot` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` + `.agents/ReviewPlan.md` |
+| 普通 PR Review、检查最近提交、检查分支、临时检查某个文件 | 查看对应 diff / 提交 / 源码；按下方防复发检查表读取工程不变量相关章节，不读取历史审计 Prompt |
+| 检查 `MoviePilot-Frontend` / `MoviePilot` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` |
+| 新增功能、修 Bug、重构、修改生产代码或回归测试 | 先按下方防复发检查表确定相关主题，再读取 `.agents/engineering-invariants.md` 对应章节 |
 | 准备发布、生成 Release Notes、创建 GitHub Release | `.agents/prompts/release.md` |
 | 整理 Prompt、文档、工作流 | 读取被修改的相关文件；如新增专项 Prompt，同步更新本路由表 |
 
 ## 路由边界
 
-1. `.agents/prompts/final-review.md` 只用于明确的最终联合审查；普通 PR Review、最近提交检查、分支检查不要读取它。
-2. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt。
-3. 上游兼容更新分析必须确认 `../MoviePilot-Frontend` 和 `../MoviePilot` 存在且是合法 Git 仓库；如果用户只是临时排查某个运行 Bug，可以说明缺失仓库会降低判断完整性后继续分析。
-4. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
+1. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt 或工程不变量章节。
+2. 上游兼容更新分析必须确认 `../MoviePilot-Frontend` 和 `../MoviePilot` 存在且是合法 Git 仓库；如果用户只是临时排查某个运行 Bug，可以说明缺失仓库会降低判断完整性后继续分析。
+3. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
+
+## 编码与 Review 的防复发检查
+
+全量审计的经验必须用于本次改动的真实调用链。开始编码或 Review 时按下表选择有关主题，仅读取 `.agents/engineering-invariants.md` 对应章节；不要求每次加载全文或重做全量审计。
+
+1. **先找完整路径**：从实际用户入口追到请求/模型、状态/缓存和最终 UI 或远端动作；修改共享 helper、模型字段或身份选择时，检索其调用者与并列入口，不能只证明某个 helper 自身正确。
+2. **先明确语义再实现**：确认数据归谁、什么输入合法、何时算成功、何时过期，以及取消/失败后如何恢复。优先复用现有 owner、身份、编码、分页和通知机制，不为满足清单新建通用框架。
+3. **先问能否从结构上消除**：准备新增守卫、代际计数器、会话快照比对、busy 标志或补救注释前，先按 `.agents/engineering-invariants.md` §0 检查已有结构化机制能否直接覆盖，能覆盖就复用。同一类手写守卫已在两处以上出现、本次要写第三处时，优先抽取或扩展共享机制；语义确实不同的，说明保留独立实现的理由；适合抽取但改动面超出本次任务的，说明范围限制并列为结构性遗留，不要默默复制。
+4. **用相关反例验证**：从下表和详细章节选择本次可能破坏的边界，优先通过生产入口验证用户结果；按风险选择测试，不要求每个小改动跑遍所有矩阵。共享代码修改还须检查其他消费者，不能靠源码字符串或默认初始值断言宣称回归已覆盖。
+5. **保留裁决与证据边界**：规则约束新增行为和本次实际修改；已接受例外只检查是否被扩大。修 Bug 先说明触发与影响，完成后说明实际验证和未验收部分；不因历史编号重新开启已跳过事项。
+
+| 本次改动涉及 | 必须防止的同类错误 | 工程不变量章节 |
+| --- | --- | --- |
+| 新增守卫、计数器、快照比对、补救注释或源码守卫测试 | 已有机制能覆盖却在调用点重复手写；把审计历史写进生产代码 | §0 |
+| 登录、重登、权限、凭据恢复、跨 `await` 发布 | 旧请求写新会话；重试换账号执行；持久化失败让旧凭据复活 | §1 |
+| 模型、媒体/人物/订阅身份、解码与重编码 | UI ID 当业务 ID；来源/季号丢失；合法稀疏字段拖垮整批；原值保存后改变 | §2、§10 |
+| 缓存、图片、预载、页面重入/回前台 | 跨账号复用；旧结果覆盖强刷；缓存清了但 UI 没刷新；任务无人使用仍驻留 | §3 |
+| 保存、删除、Fork、整理、下载等 mutation | 确认后换目标或反转动作；重复提交；畸形 2xx 当成功；部分受理后整批重试 | §4 |
+| 分页、轮询、SSE、多阶段加载 | 排序不稳定；过滤空批当终页；EOF 当成功；辅助失败/慢请求阻断主流程 | §5 |
+| tvOS 控件、Sheet、焦点、图片与长文本 | 模态与底层同时处理 Menu；不可达/无语义控件；静态测试冒充真机验收 | §6 |
+| 上游接口、权限、来源、站点、筛选能力 | 用错版本或权威域；把默认当全部；把未知当启用；以客户端隐藏代替授权 | §7 |
+| 按后端版本阻止某功能（已知缺陷版本门禁） | 范围写宽成 `< 某版本`；版本读不出或未登记时误禁用；把“未知放行”套到权限判断上 | §7“已知缺陷版本门禁” |
+| 新功能、新入口或副作用提示依赖特定后端版本 | 旧版 MoviePilot 误走新行为；门禁极性用反；把最新登记版本的行为说成全部已登记版本都有 | §7“新行为版本限制” |
+| 日志、用户反馈、回归测试 | 失败静默或反馈不可见；测试绕过真实入口；把未运行写成通过 | §8 |
+| baseURL、动态 path、query、表单编码、图片 URL | 特殊字符变参数；重复转义；丢反代前缀；整串替换破坏第三方 URL | §9 |
+| 表单、Picker、筛选/排序、派生显示与子观察对象 | 隐藏值偷偷提交；无法恢复默认/清空；归一化破坏原值；状态改变但画面不更新 | §10 |
+
+具体规则、反例与已接受例外以 `.agents/engineering-invariants.md` 为准。历史 finding 编号只用于按需定位证据，不是新的待办清单。
 
 ## 运行环境与测试策略
 
@@ -71,46 +100,63 @@ xcodebuild -list -project "MoviePilot-TV.xcodeproj"
 xcrun simctl list devices tvOS available
 ```
 
-解析依赖：
+日常修改先让用户能构建、运行和查看效果；只做必要的单版本构建或相关用例验证。**只有用户明确说 Push（推送）时，才运行完整三版本构建和全套测试**；用户说提交（commit）时只做单版本构建或相关用例验证，不跑三版本矩阵。普通修改、修 Bug、Review、看效果不构成全量测试授权；不要以提前验收为由反复跑全套。构建失败先修构建，不继续后续版本或测试。
+
+日常入口（单版本增量 Debug 构建，不运行测试）：
 
 ```bash
-xcodebuild -resolvePackageDependencies \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py
 ```
 
-本机完整构建（优先使用 tvOS Simulator，不要默认改成 `generic/platform=tvOS`）：
+日常默认选择最新可用 tvOS runtime，也可用 `--runtime <版本>` 指定当前调试版本。需要定向回归时使用 `--only-testing <用例或套件>`，只构建 Testing 宿主并运行指定用例。
+
+用户明确要求 Push 前的完整验收入口：
 
 ```bash
-xcodebuild clean build \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --full
 ```
 
-本机测试：
+`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，最多两个版本同时进行：第三个版本等前两个中有一个跑完、删掉自己的模拟器后再开始。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本，排队的版本也不再开始；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本，排队的版本不再开始。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
+
+CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.2`；该镜像提供 Xcode 27 与 tvOS 27.0、27.2 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。Push 前完整验收使用三版本矩阵；日常构建、定向测试与提交（commit）使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
+
+脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
 ```bash
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --runtime 27.2 \
+  --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
+测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 只能与 `--full` 一起使用，跳过依赖解析与 Debug 构建，不能将它单独当作完整验证；只构建模式不接受 `--result-bundle-path`。全套验收复用专用构建目录里的增量产物，不再每次 `clean`。怀疑缓存失真时，只删除这次脚本打印的构建目录，不要删除用户日常的 Xcode DerivedData。
+
+脚本始终传入专用 `-derivedDataPath`，默认在仓库内的 `.test-tvos-cache/DerivedData` 复用增量缓存（已被 Git 忽略，并标记为不进 Time Machine 备份），与日常 Xcode 的 DerivedData 隔离。放在仓库里，删掉克隆或 Fork 时缓存一起删掉；不放在系统临时目录：macOS 会逐个删除那里 3 天没访问过的文件，依赖包产物被删掉一半后，之后的构建会一直失败。每次运行都把该版本的产物放在 `tvos-<版本>` 子目录，所以日常单版本构建和后来的三版本矩阵可以共用同一份增量结果。整次运行仍共用一把锁：这个目录已有脚本在跑时，新的一次会立即退出。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
+
+发布专属的版本信息改动不要再跑三版本全套。先看业务提交的记录和对应 PR 的 CI。那些提交已经通过 CI，或本机已经对它们跑过三版本全套，就只在最新一个 tvOS 上兜底：
+
+```bash
+python3 scripts/test-tvos.py --only-testing MoviePilot-TV-Tests/AppChangelogTests
+```
+
+这次只覆盖更新说明和对应断言。汇报时写明看过的提交、CI 结果，以及这次只跑了这个测试，不能写成三版本全套刚刚又通过。对不上已通过的提交、CI 未通过，或改动里还有版本信息以外的代码时，改为上面的 `--full`。
+
+Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。共享版本和默认身份由 `Configuration/Base.xcconfig` 定义，Testing 继承 Debug 并覆盖独立身份；深链 scheme 由主 App 与扩展 Info.plist 的 `TopShelfURLScheme` 读取，不在代码中写死。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
+
+续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release/Testing 的 target 构建设置）：
+
+```bash
+bash -n scripts/apple-tv-renew.sh
+python3 -m unittest discover -s scripts/tests
+```
+
+该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
+
+每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和多个 tvOS 版本同时跑是两件事：版本之间可以并行（最多两个），同一个版本里的用例仍然逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
+
+模拟器构建和测试必须保留本地 ad-hoc 签名（`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`），不要使用 `CODE_SIGNING_ALLOWED=NO`。测试会覆盖安装主 App 和扩展；关闭签名会丢失 App Group 权限，让 Top Shelf 退回静态图片。宿主测试不启动正常 App 根视图的会话加载与 Top Shelf 同步，避免测试会话写入用户首页。修改签名、打包或共享组时，除测试通过外，还须核对测试结束后的实际共享容器访问和首页展示。
+
+发布 IPA 的真机编译仍可关闭开发者签名，但必须随后通过 `python3 scripts/package-ipa.py --app <构建出的.app> --output <目标.ipa>` 打包；该入口为主 App 和所有扩展保留本地签名的 App Group 元数据并验证一致性。不要直接把未处理的 `.app` 压成 IPA 发布，也不要把本地 ad-hoc 签名当成可直接安装到真机的开发者签名。
+
+PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发布 IPA；`Release` 工作流负责真机 Release 构建、IPA 打包和产物校验。PR 中涉及 App Group 配置时，先核对主 App 与 Top Shelf 扩展的工程构建设置、Info.plist、entitlements 和共享容器调用；产物级验证在发布时执行。
 
 真实后端兼容测试在 `Testing started` 后可能数分钟没有增量输出，尤其是图片巡检会实际扫描 TV 页面入口、下载图片并用 tvOS 解码。不要因为短时间无输出就判断 `xcodebuild test` 卡死；至少等待单个用例的合理超时窗口，或读取 `.xcresult` 中的测试摘要和失败详情后再下结论。
 
@@ -118,11 +164,7 @@ xcodebuild test \
 
 真实后端兼容测试可能包含副作用。新增或修改任何会访问真实 MoviePilot 后端的测试前，必须先明确它是否会改变真实数据或触发后台动作，包括但不限于订阅搜索、订阅 reset、暂停/恢复订阅、保存订阅、手动/AI 重新整理、添加/删除下载或订阅。默认优先写只读测试；确实需要副作用测试时，必须放在 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件中，提供独立开关，限制目标范围，记录目标对象原始状态，并在成功、失败和取消路径中尽力恢复原状态。不要在用户个人后端上用“全量测试”名义新增隐式副作用。
 
-如果本机没有名为 `Apple TV` 的 tvOS Simulator，先用下面命令列出可用模拟器，并选择一个可用 tvOS 目标替换 `-destination`，同时在回复或提交说明中写清楚实际使用的目标：
-
-```bash
-xcrun simctl list devices tvOS available
-```
+真实后端测试也必须通过专用测试设备运行。只有明确要求真实后端验证时才加 `--include-backend-tests`，并用 `--only-testing` 限定所需套件；该参数不替代真实后端副作用套件的独立开关和恢复约束，具体命令见 `docs/backend-compatibility-tests.md`。
 
 `generic/platform=tvOS` 属于 CI/设备归档风格的编译检查，可能触发本机 SDK、runtime 或设备支持校验；它可以作为 GitHub Actions 或额外设备构建检查使用，但不要用它替代本机 Simulator 构建/测试。
 
@@ -139,11 +181,11 @@ xcrun simctl list devices tvOS available
 
 在真实开发环境中：
 
-1. 只要修改了代码、配置、文档或工作流，提交前都必须运行完整验证流程。
-2. 对 Swift / tvOS 代码修改，提交前必须至少运行上方【本项目标准验证命令】中的依赖解析、Simulator 完整构建和测试。
+1. 日常修改不自动运行全量；只有用户明确要求 Push 后，才进入推送前完整验证。用户查看效果期间优先保障日常 Xcode 可用，不并发占用其构建目录。
+2. 用户明确要求 Push Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；单版本定向验证不能替代这一步。只要求提交（commit）时，只做默认单版本构建或相关用例验证，不跑 `--full`。发布专属的版本信息改动除外：先看业务提交和对应 PR CI，已经通过时只跑上一节的 `AppChangelogTests`，并按实际范围汇报。对不上已通过的提交、CI 未通过，或还有其他代码改动时，仍跑 `--full`。
 3. 对文档或 Prompt 修改，也应运行仓库可用的轻量检查；如果没有适用检查，必须说明“文档-only 变更，无可运行测试”。
-4. 测试失败时禁止提交，除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
-5. Commit 前必须在最终回复或提交说明中列出实际运行过的命令和结果。
+4. 单版本构建或定向测试失败时禁止提交；三版本验收失败时禁止 Push。除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
+5. Commit 与 Push 前必须在最终回复或提交说明中列出实际运行过的命令和结果。
 6. 只运行 `swift build`、只运行 `swift test`、只运行依赖解析、只打开 Xcode 不构建，都不能视为通过验证。
 
 ### 2. 非真实开发环境（无 Xcode、只读代码平台、GitHub API、网页编辑器、Linux 容器等）
@@ -177,8 +219,8 @@ xcrun simctl list devices tvOS available
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
 1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
-2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 并明确允许 commit、Push 后，可以直接提交并推送最新 `main`。
-3. 除上述正式发布例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
+2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供三种配置的主 App 与 Top Shelf 扩展继承的 `Configuration/Base.xcconfig` 版本号）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
+3. 除上述正式发布及其新版本信息同步例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
 4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`
    - `ai/fix-paginator-loading-state`
@@ -222,7 +264,9 @@ xcrun simctl list devices tvOS available
 ## 文档维护规则
 
 1. `.agents/prompts/` 下的专项 Prompt 是具体任务的单一事实来源。
-2. `.agents/ReviewPlan.md` 是收尾联合审查的进度与跨文件副作用记录。
-3. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
-4. 如果新增专项 Prompt，应同步更新本文件的任务路由表。
-5. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+2. `.agents/engineering-invariants.md` 只维护经多个模块验证的长期工程底线；不写入一次性修复过程、历史状态统计或尚未裁决的假设。
+3. `.agents/audits/` 下的文件是已完成审计的只读历史证据，不作为普通开发、PR Review 或上游兼容分析的默认上下文。
+4. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
+5. 如果新增专项 Prompt 或工程指南，应同步更新本文件的任务路由表。
+6. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+7. `README.md` 面向用户，只写用户需要看的信息，不写测试数量、测试类名、内部实现或验证流水。

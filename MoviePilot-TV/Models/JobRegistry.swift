@@ -108,3 +108,42 @@ let jobTranslationMap: [String: [AppLanguage: String]] = Dictionary(
 /// 英文职位key到其优先级的映射
 let jobPriorityMap: [String: Int] = Dictionary(
   uniqueKeysWithValues: prioritizedJobs.enumerated().map { index, job in (job.key, index) })
+
+// MARK: - 职位 key 规范化
+
+/// 小写形式到 canonical key 的索引，用于大小写不敏感的职位解析。
+private let jobCanonicalKeyIndex: [String: String] = Dictionary(
+  uniqueKeysWithValues: prioritizedJobs.map { ($0.key.lowercased(), $0.key) })
+
+/// 将单个职位 token 解析为 `prioritizedJobs` 中的 canonical key。
+///
+/// 依次尝试：清理空白与换行 → 精确匹配 → 大小写不敏感匹配。
+/// 无法识别时**原样保真**返回（调用方按未知职位处理，不在解析层丢弃上游信息）。
+/// - Returns: 规范化后的 canonical key；输入全为空白时返回空串。
+func canonicalJobKey(for token: String) -> String {
+  let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+  if trimmed.isEmpty {
+    return ""
+  }
+  if jobPriorityMap[trimmed] != nil {
+    return trimmed
+  }
+  return jobCanonicalKeyIndex[trimmed.lowercased()] ?? trimmed
+}
+
+/// 将 `"/"` 分隔的多职位文本解析为 canonical key 列表。
+///
+/// 逐项清理空白/换行、丢弃空段，并在**规范化之后**去重（保留首次出现顺序），
+/// 供翻译与优先级排序共用同一套 key，避免两者对同一字符串得出不同结论。
+func canonicalJobKeys(from raw: String) -> [String] {
+  var seen = Set<String>()
+  var keys: [String] = []
+  for token in raw.components(separatedBy: "/") {
+    let key = canonicalJobKey(for: token)
+    if key.isEmpty || !seen.insert(key).inserted {
+      continue
+    }
+    keys.append(key)
+  }
+  return keys
+}

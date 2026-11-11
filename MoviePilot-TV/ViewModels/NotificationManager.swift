@@ -23,42 +23,85 @@ enum NotificationType {
   var icon: String {
     switch self {
     case .info:
-      "info.circle.fill"
+      AppSymbol.info
     case .success:
-      "checkmark.circle.fill"
+      AppSymbol.success
     case .warning:
-      "exclamationmark.triangle.fill"
+      AppSymbol.warning
     case .error:
-      "xmark.circle.fill"
+      AppSymbol.failure
     }
   }
 }
 
+@MainActor
 class NotificationManager: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published private(set) var isShowing: Bool = false
   @Published private(set) var message: String = ""
   @Published private(set) var type: NotificationType = .info
 
-  private var task: DispatchWorkItem?
+  private var task: Task<Void, Never>?
+  private var cancellables = Set<AnyCancellable>()
+  private var observedSessionUIIdentity: String
+
+  init() {
+    observedSessionUIIdentity = APIService.shared.uiIdentity
+    APIService.shared.$session
+      .dropFirst()
+      .sink { [weak self] session in
+        guard let self else { return }
+        let shouldHide = session.token == nil
+          || session.uiIdentity != self.observedSessionUIIdentity
+        self.observedSessionUIIdentity = session.uiIdentity
+        guard shouldHide else { return }
+        self.task?.cancel()
+        self.isShowing = false
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .subscriptionSaveDidComplete)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(message: "订阅成功", type: .success)
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .paginatorDidReachErrorLimit)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(message: "加载数据失败，请重试。", type: .error)
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .authenticationNeedsAttention)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(
+          message: "登录状态反复验证失败，请前往设置的连接信息，选择“刷新登录凭据”。",
+          type: .warning
+        )
+      }
+      .store(in: &cancellables)
+  }
 
   func show(message: String, type: NotificationType = .info, duration: TimeInterval = 5) {
-    DispatchQueue.main.async {
-      self.task?.cancel()
+    task?.cancel()
+    self.message = message
+    self.type = type
+    withAnimation(.spring()) {
+      self.isShowing = true
+    }
 
-      self.message = message
-      self.type = type
+    task = Task { [weak self] in
+      let nanoseconds = UInt64(max(0, duration) * 1_000_000_000)
+      try? await Task.sleep(nanoseconds: nanoseconds)
+      guard !Task.isCancelled, let self else { return }
       withAnimation(.spring()) {
-        self.isShowing = true
+        self.isShowing = false
       }
-
-      let task = DispatchWorkItem {
-        withAnimation(.spring()) {
-          self.isShowing = false
-        }
-      }
-      self.task = task
-      DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
     }
   }
 }
-

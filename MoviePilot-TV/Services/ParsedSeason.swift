@@ -40,7 +40,8 @@ struct ParsedSeason {
       }
 
       // 提取起始集号（如果存在 E 标记）
-      if match.range(at: 3).location != NSNotFound,
+      let hasEpisodeMarker = match.range(at: 3).location != NSNotFound
+      if hasEpisodeMarker,
          let eRange = Range(match.range(at: 3), in: original),
          let e = Int(original[eRange]) {
         episodeNum = e
@@ -55,7 +56,11 @@ struct ParsedSeason {
         }
         isWholeSeason = false // 既然有集号，说明不是整季
       } else {
-        isWholeSeason = true  // 只有季号，标记为整季
+        // F-059：只有「压根没有 E 标记」才是整季。带 E 但集号解析失败
+        // （如 `S01E99999999999999999999` 超出 Int 范围）属于畸形输入，
+        // 落进本分支会让一个具体集**冒充整季**混进整季组。按「没有解析出集号」
+        // 处理即可 —— 与「无」一样留在无效组，既有排序位置不变。
+        isWholeSeason = !hasEpisodeMarker
       }
     }
 

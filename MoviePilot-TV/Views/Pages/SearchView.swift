@@ -1,35 +1,24 @@
 import SwiftUI
 
-#if DEBUG
-struct SearchViewUIPreviewDestinations {
-  var collectionViewModel: CollectionDetailViewModel? = nil
-  var personViewModel: PersonDetailViewModel? = nil
-  var personShowsBiographySheet = false
-  var resourceResultViewModel: ResourceResultViewModel? = nil
-  var resourceTorrentsPresentation: TorrentsResultUIPreviewPresentation? = nil
-  var seasonViewModel: SubscribeSeasonViewModel? = nil
-  var seasonPresentation: SubscribeSeasonUIPreviewPresentation? = nil
-  var forkShare: SubscribeShare? = nil
-}
-#endif
-
 struct SearchView: View {
-  @StateObject private var viewModel: SearchViewModel
-
-  #if DEBUG
-  private let loadsSitesOnAppear: Bool
-  private let uiPreviewDestinations: SearchViewUIPreviewDestinations?
-  private let presentsSiteSelectionOnAppear: Bool
-  #endif
-  @State private var path = NavigationPath()
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  private let isSelected: Bool
+  @StateObject private var viewModel = SearchViewModel()
+  @StateObject private var mediaSources = MediaSourceOptionsModel()
+  @ObservedObject private var apiService = APIService.shared
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
+  @State private var subscriptionHandler = SubscriptionHandler()
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
-  @State private var showSiteSelection = false
+
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
+  }
 
   // 焦点管理枚举：定义页面内可获得焦点的区域
   enum Field: Hashable {
-    case searchType(SearchType)  // 搜索类型切换按钮（聚合/资源）
+    case searchType(SearchType)
     case site(Int)  // 站点筛选按钮
+    case mediaSource
   }
   @FocusState private var focusedField: Field?
   @State private var lastFocusedField: Field?
@@ -38,71 +27,30 @@ struct SearchView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
-  init() {
-    _viewModel = StateObject(wrappedValue: SearchViewModel())
-    #if DEBUG
-    loadsSitesOnAppear = true
-    uiPreviewDestinations = nil
-    presentsSiteSelectionOnAppear = false
-    #endif
+  private var visibleFilterSearchType: SearchType {
+    switch focusedField ?? lastFocusedField {
+    case .searchType(let type):
+      return type
+    case .site:
+      return viewModel.searchType == .subtitle ? .subtitle : .resource
+    case .mediaSource:
+      return .unified
+    case nil:
+      return viewModel.searchType
+    }
   }
 
-  #if DEBUG
-  init(
-    viewModel: SearchViewModel,
-    loadsSitesOnAppear: Bool,
-    initialPath: NavigationPath = NavigationPath(),
-    uiPreviewDestinations: SearchViewUIPreviewDestinations? = nil,
-    showsSiteSelection: Bool = false
-  ) {
-    _viewModel = StateObject(wrappedValue: viewModel)
-    self.loadsSitesOnAppear = loadsSitesOnAppear
-    self.uiPreviewDestinations = uiPreviewDestinations
-    presentsSiteSelectionOnAppear = showsSiteSelection
-    _path = State(initialValue: initialPath)
-    _showSiteSelection = State(initialValue: false)
-  }
-  #endif
-
-  /// MARK: - 站点过滤器显示逻辑
-  /// 此逻辑非常关键，用于处理 TV 端遥控器操作时的焦点“粘性”。
-  /// 确保在用户从搜索类型切换到站点筛选，或者在站点筛选内部操作时，过滤器栏不会意外消失。
   private var shouldShowSiteFilter: Bool {
-    // 1. 如果当前正聚焦在“资源”搜索按钮上，显示过滤器
-    if case .searchType(let type) = focusedField, type == .resource {
-      return true
-    }
+    visibleFilterSearchType == .resource || visibleFilterSearchType == .subtitle
+  }
 
-    // 2. 如果当前正聚焦在站点过滤器本身（按钮或内部开关），显示它
-    if case .site = focusedField {
-      return true
-    }
-
-    // 3. 如果当前处于“资源搜索”模式...
-    if viewModel.searchType == .resource {
-      // ...且没有聚焦在“非资源”类的搜索类型按钮上，则保持显示
-      if case .searchType(let type) = focusedField, type != .resource {
-        return false
-      }
-      return true
-    }
-
-    // 4. “粘性”逻辑：当焦点处于切换间隙（nil）时，如果上一个焦点是资源或过滤器，允许短暂保留显示
-    if focusedField == nil {
-      if case .searchType(let type) = lastFocusedField, type == .resource {
-        return true
-      }
-      if case .site = lastFocusedField {
-        return true
-      }
-    }
-
-    return false
+  private var shouldShowMediaSourceFilter: Bool {
+    visibleFilterSearchType == .unified
   }
 
   /// 定义可用的搜索类型
   private var availableSearchTypes: [SearchType] {
-    return [.unified, .resource]
+    viewModel.availableSearchTypes
   }
 
   /// 搜索页眉：包含搜索类型切换组和站点过滤器
@@ -121,8 +69,35 @@ struct SearchView: View {
           }
         }
 
-      HStack(spacing: 20) {
-        // A. 搜索类型按钮组 (聚合 / 资源)
+      HStack(spacing: 30) {
+        ZStack(alignment: .trailing) {
+          // 聚合搜索来源按钮放在左侧，不影响中间搜索类型按钮的位置。
+          if shouldShowMediaSourceFilter {
+            Menu {
+              Picker("搜索来源", selection: $viewModel.mediaSearchSource) {
+                Text("默认").tag(MediaSearchSource?.none)
+                ForEach(mediaSources.options(including: viewModel.mediaSearchSource)) { option in
+                  Text(option.title).tag(Optional(option.source))
+                }
+              }
+              .pickerStyle(.inline)
+            } label: {
+              HStack(spacing: 8) {
+                Image(systemName: AppSymbol.mediaSource)
+                Text("搜索来源：\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? "默认")")
+              }
+              .font(.caption)
+              .foregroundColor(.primary)
+            }
+            .menuStyle(.button)
+            .controlSize(.small)
+            .focused($focusedField, equals: .mediaSource)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+          }
+        }
+        .frame(width: 300, alignment: .trailing)
+
+        // 搜索类型按钮组
         HStack(spacing: 20) {
           ForEach(availableSearchTypes.indices, id: \.self) { index in
             let type = availableSearchTypes[index]
@@ -131,7 +106,7 @@ struct SearchView: View {
               Task { await viewModel.autoSearch() }
             }) {
               HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
+                Image(systemName: AppSymbol.search)
                 Text(type.rawValue)
               }
             }
@@ -145,24 +120,28 @@ struct SearchView: View {
           }
         }
 
-        // B. 站点筛选按钮：仅在资源搜索模式且满足显示条件时可见
-        if shouldShowSiteFilter {
-          Button(action: {
-            showSiteSelection = true
-          }) {
-            HStack(spacing: 8) {
-              Image(systemName: "server.rack")
-              Text(viewModel.siteFilter.siteButtonLabel)
+        ZStack(alignment: .leading) {
+          // 资源与字幕共用当前页面的站点选择。
+          if shouldShowSiteFilter {
+            // 站点改了只影响下一次点搜索，不自动重搜。
+            SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
+              HStack(spacing: 8) {
+                Image(systemName: AppSymbol.site)
+                Text(viewModel.siteFilter.siteButtonLabel)
+              }
+              .font(.caption)
+              .foregroundColor(.primary)
             }
-            .font(.caption)
-            .foregroundColor(.primary)
+            .controlSize(.small)
+            .focused($focusedField, equals: .site(0))
+            .transition(.move(edge: .leading).combined(with: .opacity))
           }
-          .controlSize(.small)
-          .focused($focusedField, equals: .site(0))
-          .transition(.move(edge: .leading).combined(with: .opacity))
         }
+        .frame(width: 300, alignment: .leading)
       }
+      .frame(maxWidth: .infinity)
       .animation(.snappy, value: shouldShowSiteFilter)
+      .animation(.snappy, value: shouldShowMediaSourceFilter)
       .padding(.vertical, 0)
 
       // 焦点重定向：捕获从下方结果列表向上的焦点
@@ -180,9 +159,20 @@ struct SearchView: View {
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       Group {
-        if viewModel.isLoading {
+        if viewModel.searchType == .resource, let search = viewModel.pagedSearch {
+          PagedResourceResultsView(search: search, onCancel: { viewModel.cancelPagedSearch() }) {
+            searchHeader
+          }
+        } else if viewModel.searchType == .subtitle, let search = viewModel.subtitleSearch {
+          SubtitleResultsBody(
+            search: search, imageLifecycle: navigationCoordinator.rootLifecycle,
+            onCancel: { viewModel.cancelSubtitleSearch() }
+          ) {
+            searchHeader
+          }
+        } else if viewModel.isLoading {
           VStack {
             searchHeader
             Spacer()
@@ -204,17 +194,26 @@ struct SearchView: View {
           switch viewModel.searchType {
           case .resource:
             if viewModel.hasSearched {
-              TorrentsResultView(result: viewModel.resourceResults, header: { searchHeader })
+              TorrentsResultView(
+                result: viewModel.resourceResults,
+                emptyDescription: viewModel.resourceErrorMessage,
+                header: { searchHeader }
+              )
             } else {
               VStack {
                 searchHeader
                 Spacer()
               }
             }
+          case .subtitle:
+            VStack {
+              searchHeader
+              Spacer()
+            }
           case .unified:
             UnifiedSearchResult(
               viewModel: viewModel,
-              navigationPath: $path,
+              imageLifecycle: navigationCoordinator.rootLifecycle,
               header: { searchHeader },
               onShareTapped: { share in
                 guard APIService.shared.canAccess(.subscribe) else { return }
@@ -224,169 +223,62 @@ struct SearchView: View {
           }
         }
       }
-      .navigationDestination(for: MediaInfo.self) { detail in
-        mediaDestination(for: detail)
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
-      .navigationDestination(for: Person.self) { person in
-        personDestination(for: person)
+      .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+        subscriptionHandler.cancelPresentation()
+        subscriptionHandler = SubscriptionHandler()
       }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        resourceDestination(for: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        seasonDestination(for: request)
-      }
-      .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
-      .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
-        ForkSubscribeSheet(
-          share: share,
-          onFork: { newSubId in
-            Task {
-              await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
-            }
-          },
-          subscriptionHandler: subscriptionHandler
-        )
-      }
-      .sheet(isPresented: $showSiteSelection) {
-        MultiSelectionSheet(
-          options: viewModel.siteFilter.availableSites,
-          id: \.id,
-          selected: $viewModel.siteFilter.selectedSites,
-          label: { $0.name }
-        )
-      }
+      .mediaSubscriptionAlerts(using: subscriptionHandler)
+
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
       .task {
-        #if DEBUG
-        guard loadsSitesOnAppear else { return }
-        #endif
-        // 当视图出现时加载站点
-        await viewModel.siteFilter.loadSites()
-      }
-      #if DEBUG
-      .onAppear {
-        guard presentsSiteSelectionOnAppear else { return }
-        Task { @MainActor in
-          await Task.yield()
-          showSiteSelection = true
+        viewModel.normalizeSearchTypeForPermissions()
+        if viewModel.availableSearchTypes.contains(.resource)
+          || viewModel.availableSearchTypes.contains(.subtitle)
+        {
+          await viewModel.siteFilter.loadSites()
         }
       }
-      .onAppear {
-        guard let forkShare = uiPreviewDestinations?.forkShare else { return }
-        Task { @MainActor in
-          await Task.yield()
-          subscriptionHandler.forkSheetRequest = forkShare
-        }
+      .task {
+        if viewModel.availableSearchTypes.contains(.unified) { await mediaSources.load() }
       }
-      #endif
       .onChange(of: focusedField) { _, newValue in
         if let newValue = newValue {
           lastFocusedField = newValue
         }
       }
     }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
     .environmentObject(subscriptionHandler)
-  }
-
-  @ViewBuilder
-  private func mediaDestination(for detail: MediaInfo) -> some View {
-    if let collectionId = detail.collection_id {
-      #if DEBUG
-      if let previewViewModel = uiPreviewDestinations?.collectionViewModel {
-        CollectionDetailView(
-          title: detail.title ?? "合集详情",
-          collectionId: collectionId,
-          navigationPath: $path,
-          previewViewModel: previewViewModel
-        )
+    .onAppear { updateStackForeground() }
+    .onChange(of: isSelected) { _, selected in
+      updateStackForeground()
+      if !selected {
+        viewModel.pagedSearch?.deactivate()
       } else {
-        CollectionDetailView(
-          title: detail.title ?? "合集详情",
-          collectionId: collectionId,
-          navigationPath: $path
-        )
+        viewModel.pagedSearch?.refreshRuleAvailability()
       }
-      #else
-      CollectionDetailView(
-        title: detail.title ?? "合集详情",
-        collectionId: collectionId,
-        navigationPath: $path
-      )
-      #endif
-    } else {
-      MediaDetailContainerView(media: detail, navigationPath: $path)
     }
+    .onDisappear {
+      viewModel.pagedSearch?.deactivate()
+    }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
   }
 
-  @ViewBuilder
-  private func personDestination(for person: Person) -> some View {
-    #if DEBUG
-    if let previewViewModel = uiPreviewDestinations?.personViewModel {
-      PersonDetailView(
-        previewViewModel: previewViewModel,
-        navigationPath: $path,
-        showsBiographySheet: uiPreviewDestinations?.personShowsBiographySheet == true
-      )
-    } else {
-      PersonDetailView(person: person, navigationPath: $path)
-    }
-    #else
-    PersonDetailView(person: person, navigationPath: $path)
-    #endif
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 
-  @ViewBuilder
-  private func resourceDestination(for request: ResourceSearchRequest) -> some View {
-    #if DEBUG
-    if let previewViewModel = uiPreviewDestinations?.resourceResultViewModel {
-      ResourceResultView(
-        title: request.title ?? "资源搜索",
-        mediaInfo: request.mediaInfo,
-        previewViewModel: previewViewModel,
-        torrentsPresentation: uiPreviewDestinations?.resourceTorrentsPresentation
-      )
-    } else if UIPreviewMode.isEnabled() {
-      ResourceResultView(
-        title: request.title ?? "资源搜索",
-        mediaInfo: request.mediaInfo,
-        previewViewModel: ResourceResultViewModel(
-          previewTitle: request.title ?? request.keyword,
-          mediaInfo: request.mediaInfo,
-          results: [],
-          isLoading: false
-        )
-      )
-    } else {
-      ResourceResultView(request: request)
-    }
-    #else
-    ResourceResultView(request: request)
-    #endif
-  }
-
-  @ViewBuilder
-  private func seasonDestination(for request: SubscribeSeasonRequest) -> some View {
-    #if DEBUG
-    if let previewViewModel = uiPreviewDestinations?.seasonViewModel {
-      SubscribeSeasonView(
-        previewViewModel: previewViewModel,
-        uiPreviewPresentation: uiPreviewDestinations?.seasonPresentation
-      )
-    } else {
-      SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
-    }
-    #else
-    SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
-    #endif
-  }
 }
 
 // MARK: - 聚合搜索结果
 struct UnifiedSearchResult<Header: View>: View {
   @ObservedObject var viewModel: SearchViewModel
-  @Binding var navigationPath: NavigationPath
+  @ObservedObject var imageLifecycle: PageImageLifecycle
   let header: Header
   let onShareTapped: (SubscribeShare) -> Void
 
@@ -394,12 +286,12 @@ struct UnifiedSearchResult<Header: View>: View {
 
   init(
     viewModel: SearchViewModel,
-    navigationPath: Binding<NavigationPath>,
+    imageLifecycle: PageImageLifecycle,
     @ViewBuilder header: () -> Header,
     onShareTapped: @escaping (SubscribeShare) -> Void
   ) {
     self.viewModel = viewModel
-    self._navigationPath = navigationPath
+    self.imageLifecycle = imageLifecycle
     self.header = header()
     self.onShareTapped = onShareTapped
   }
@@ -425,7 +317,7 @@ struct UnifiedSearchResult<Header: View>: View {
         rowId: rowId,
         items: items,
         isLoadingMore: paginator?.isLoadingMore ?? false,
-        navigationPath: $navigationPath,
+        loadsPageImages: true,
         onLoadMore: { focusedId in
           Task { await paginator?.loadMore(focusedId) }
         },
@@ -455,7 +347,7 @@ struct UnifiedSearchResult<Header: View>: View {
             BestResultRow(
               title: "最佳结果",
               items: bestResults,
-              navigationPath: $navigationPath,
+              loadsPageImages: true,
               scrollPosition: $scrollPosition,
               onShareTapped: onShareTapped
             )
@@ -501,7 +393,7 @@ struct UnifiedSearchResult<Header: View>: View {
             rowId: "persons",
             items: personResults,
             isLoadingMore: viewModel.personPaginator?.isLoadingMore ?? false,
-            navigationPath: $navigationPath,
+            loadsPageImages: true,
             onLoadMore: { focusedId in
               Task { await viewModel.personPaginator?.loadMore(focusedId) }
             },
@@ -521,17 +413,20 @@ struct UnifiedSearchResult<Header: View>: View {
 
 // MARK: - 媒体/系列结果行
 private struct ResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let rowId: String
   let items: [MediaInfo]
   let isLoadingMore: Bool
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   let onLoadMore: (MediaInfo.ID?) -> Void
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   @FocusState private var focusedItemId: MediaInfo.ID?
+  @State private var imageAnchorId: MediaInfo.ID?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
 
@@ -539,35 +434,46 @@ private struct ResultRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
             MediaCard(
               title: item.cleanedTitle ?? "",
               posterUrl: item.imageURLs.poster,
+              posterFallbackUrl: item.imageURLs.posterFallback,
               typeText: item.displayTypeText,
               ratingText: item.vote_average.map { String(format: "%.1f", $0) },
               bottomLeftText: nil,
               bottomLeftSecondaryText: nil,
               source: MediaSource.from(mediaInfo: item),
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { $0.id == id })
+                  },
+                  cardKind: .media,
+                  usesFocusWindow: memoryOptimization.isEnabled
+                ),
               action: {
                 if let share = item.subscribeShare {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preload(for: item)
-                  navigationPath.append(item)
+                  navigationCoordinator.push(item)
                 }
               }
             )
             .focused($focusedItemId, equals: item.id)
             .mediaContextMenu(
-              item: item,
-              navigationPath: $navigationPath
+              item: item
             )
           }
 
@@ -581,13 +487,18 @@ private struct ResultRow: View {
           // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
           preloadDebounceTask?.cancel()
           if let newId = newId, let item = items.first(where: { $0.id == newId }) {
+            imageAnchorId = newId
+            APIService.shared.mediaPreloader.focusDidMove(to: newId, stackID: navigationCoordinator.id)
             // 只有带 collection_id 的合集走 CollectionDetailView，不预加载普通详情。
             // collection-like type 但缺少 collection_id 时仍按普通媒体处理，和 Web 保持一致。
             if item.shouldPreloadDetail {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
+                  for: item,
+                  stackID: navigationCoordinator.id
+                )
               }
             }
             // 分页加载
@@ -613,37 +524,54 @@ private struct ResultRow: View {
 
 // MARK: - 人物结果行
 private struct PersonResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let rowId: String
   let items: [Person]
   let isLoadingMore: Bool
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   let onLoadMore: (Person.ID?) -> Void
   @Binding var scrollPosition: String?
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   @FocusState private var focusedItemId: Person.ID?
+  @State private var imageAnchorId: Person.ID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
-            PersonCard(person: item) {
-              navigationPath.append(item)
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
+            PersonCard(
+              person: item,
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { $0.id == id })
+                  },
+                  cardKind: .person,
+                  usesFocusWindow: memoryOptimization.isEnabled
+                )
+            ) {
+              navigationCoordinator.push(item)
             }
             .focused($focusedItemId, equals: item.id)
             .compositingGroup()
             .contextMenu {
               Button {
-                navigationPath.append(item)
+                navigationCoordinator.push(item)
               } label: {
-                Label("详情", systemImage: "info.circle")
+                Label("详情", systemImage: AppSymbol.details)
               }
             }
           }
@@ -656,6 +584,11 @@ private struct PersonResultRow: View {
         .padding(.bottom, 30)
         .onChange(of: focusedItemId) { _, newId in
           if let newId = newId {
+            imageAnchorId = newId
+            APIService.shared.mediaPreloader.focusDidMove(
+              to: "person:\(newId)",
+              stackID: navigationCoordinator.id
+            )
             scrollPosition = rowId
             onLoadMore(newId)
           }
@@ -678,13 +611,16 @@ private struct PersonResultRow: View {
 
 // MARK: - 最佳结果行
 private struct BestResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let items: [BestResultItem]
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @FocusState private var focusedItemId: String?
+  @State private var imageAnchorId: String?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
 
@@ -696,57 +632,55 @@ private struct BestResultRow: View {
     }
   }
 
-  private func sourceText(for source: String?) -> String {
-    switch source {
-    case "themoviedb": return "TMDB"
-    case "douban": return "豆瓣"
-    case "bangumi": return "Bangumi"
-    default: return source ?? ""
-    }
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHGrid(rows: gridRows, spacing: 26) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
+            let loadsImage = loadsPageImages
+              && ImageLoadWindow.containsHorizontalItem(
+                at: index,
+                itemCount: items.count,
+                anchorIndex: imageAnchorId.flatMap { id in
+                  items.firstIndex(where: { $0.id == id })
+                },
+                cardKind: .media,
+                usesFocusWindow: memoryOptimization.isEnabled
+              )
             switch item {
             case .media(let media):
-              let sourceStr = sourceText(for: media.source)
-              let typeStr = media.subscribeShare != nil ? "订阅分享" : media.type
-              let subtitleParts = [typeStr, media.year, sourceStr].compactMap { $0 }.filter {
-                !$0.isEmpty
-              }
-              let subtitle = subtitleParts.joined(separator: " · ")
+              let subtitle = BestResultCard.mediaSubtitle(for: media)
 
               BestResultCard(
                 title: media.cleanedTitle ?? "",
-                type: media.type,
+                type: media.displayTypeText,
                 posterUrl: media.imageURLs.poster,
+                posterFallbackUrl: media.imageURLs.posterFallback,
                 subtitle: subtitle,
+                loadsImage: loadsImage,
                 action: {
                   if let share = media.subscribeShare {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    MediaPreloader.shared.preload(for: media)
-                    navigationPath.append(media)
+                    navigationCoordinator.push(media)
                   }
                 }
               )
               .focused($focusedItemId, equals: item.id)
               .mediaContextMenu(
-                item: media,
-                navigationPath: $navigationPath
+                item: media
               )
             case .person(let person):
-              let sourceStr = sourceText(for: person.source)
+              let sourceStr = BestResultCard.sourceTitle(for: person.source)
               let jobOrChar =
                 (person.job != nil && !person.job!.isEmpty) ? person.job : person.character
               let subtitleParts = ["人物", jobOrChar, sourceStr].compactMap { $0 }.filter {
@@ -759,15 +693,16 @@ private struct BestResultRow: View {
                 type: "人物",
                 posterUrl: person.imageURLs.profile,
                 subtitle: subtitle,
-                action: { navigationPath.append(person) }
+                loadsImage: loadsImage,
+                action: { navigationCoordinator.push(person) }
               )
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(person)
+                  navigationCoordinator.push(person)
                 } label: {
-                  Label("详情", systemImage: "info.circle")
+                  Label("详情", systemImage: AppSymbol.details)
                 }
               }
             }
@@ -782,13 +717,26 @@ private struct BestResultRow: View {
         // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
         preloadDebounceTask?.cancel()
         if let newId = newId, let item = items.first(where: { $0.id == newId }) {
+          imageAnchorId = newId
           // 仅对媒体类型预加载，人物类型走 PersonDetailView，不需要 MediaPreloader
           if case .media(let media) = item, media.shouldPreloadDetail {
+            APIService.shared.mediaPreloader.focusDidMove(
+              to: media.id,
+              stackID: navigationCoordinator.id
+            )
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preload(for: media)
+              APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
+                for: media,
+                stackID: navigationCoordinator.id
+              )
             }
+          } else {
+            APIService.shared.mediaPreloader.focusDidMove(
+              to: newId,
+              stackID: navigationCoordinator.id
+            )
           }
           scrollPosition = "best"
         }

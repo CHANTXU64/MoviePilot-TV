@@ -1,371 +1,142 @@
 import SwiftUI
 
-#if DEBUG
-enum TorrentsResultUIPreviewPresentation {
-  case filterSelection
-}
-#endif
-
 struct TorrentsResultView<Header: View>: View {
   let result: [Context]
   var overrideMediaInfo: MediaInfo? = nil
+  var emptyDescription: String? = nil
   let header: Header
 
   // 筛选与排序状态
   @State private var filterForm: [String: Set<String>] = [:]
   @State private var sortField: SortField = .default
-  @State private var sortType: SortType = .desc
-
-  // Sheet 状态
-  @State private var activeFilter: FilterConfig?
-  @State private var tempFilterSelection: Set<String> = []
+  @State private var sortType: SortType = .default
 
   // 计算/缓存状态
   @State private var filterOptions: [String: [String]] = [:]
+  @State private var disabledFilterOptions: [String: Set<String>] = [:]
   @State private var filteredResults: [Context] = []
-  #if DEBUG
-  @State private var didPresentPreviewFilter = false
-  private let uiPreviewPresentation: TorrentsResultUIPreviewPresentation?
-  #endif
-
-  // 底部重定向器的焦点管理
-  @FocusState private var focusedItemId: Context.ID?
-  @FocusState private var isBottomRedirectorFocused: Bool
-
-  let columns = [GridItem(.adaptive(minimum: 500, maximum: 600), spacing: 36, alignment: .top)]
 
   init(
     result: [Context],
     overrideMediaInfo: MediaInfo? = nil,
+    emptyDescription: String? = nil,
     @ViewBuilder header: () -> Header
   ) {
     self.result = result
     self.overrideMediaInfo = overrideMediaInfo
+    self.emptyDescription = emptyDescription
     self.header = header()
-    #if DEBUG
-    self.uiPreviewPresentation = nil
-    #endif
   }
-
-  #if DEBUG
-  init(
-    result: [Context],
-    overrideMediaInfo: MediaInfo? = nil,
-    uiPreviewPresentation: TorrentsResultUIPreviewPresentation?,
-    @ViewBuilder header: () -> Header
-  ) {
-    self.result = result
-    self.overrideMediaInfo = overrideMediaInfo
-    self.header = header()
-    self.uiPreviewPresentation = uiPreviewPresentation
-  }
-  #endif
 
   var body: some View {
     ScrollView(.vertical) {
       VStack(spacing: 20) {
         header
 
-        if result.isEmpty {
-          EmptyDataView(  // TODO 对于整页的加个按钮吧
-            title: "未找到相关资源",
-            systemImage: "magnifyingglass"
-          )
-          .padding(.top, 50)
-        } else {
-          // 筛选栏
+        if !result.isEmpty {
+          TorrentResultCount(count: filteredResults.count)
+            .frame(maxWidth: .infinity, alignment: .leading)
           TorrentFilterBar(
             filterOptions: filterOptions,
             filterForm: $filterForm,
             sortField: $sortField,
             sortType: $sortType,
-            activeFilter: $activeFilter,
-            totalCount: filteredResults.count,
-            onFilterClick: { key in
-              // 打开 sheet 时初始化临时选择
-              tempFilterSelection = filterForm[key] ?? []
-              return computeDisabledOptions(for: key)
-            },
-            onSortChange: {
+            disabledOptions: disabledFilterOptions,
+            onFilterChange: {
               updateFilteredResults()
             }
           )
+        }
 
-          LazyVGrid(columns: columns, spacing: 36) {
-            ForEach(filteredResults) { context in
-              TorrentCard(context: context, overrideMediaInfo: overrideMediaInfo)
-                .focused($focusedItemId, equals: context.id)
-            }
+        if result.isEmpty {
+          EmptyDataView(
+            title: "未找到相关资源",
+            systemImage: AppSymbol.search,
+            description: emptyDescription
+          )
+          .padding(.top, 50)
+        } else {
+          TorrentResultsGrid(items: filteredResults, alignment: .top) { context in
+            TorrentCard(context: context, overrideMediaInfo: overrideMediaInfo)
           }
-
-          // 焦点重定向器：捕获从不完整行向下导航时的焦点
-          Color.clear
-            .frame(height: 1)
-            .focusable()
-            .focused($isBottomRedirectorFocused)
-            .onChange(of: isBottomRedirectorFocused) { _, isFocused in
-              if isFocused {
-                // 将焦点重定向到最后一项
-                focusedItemId = filteredResults.last?.id
-                isBottomRedirectorFocused = false
-              }
-            }
         }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
-    .sheet(item: $activeFilter) { config in
-      MultiSelectionSheet(
-        options: config.options,
-        id: \.self,
-        selected: $tempFilterSelection,
-        label: { $0 },
-        disabledOptions: config.disabledOptions,
-        disabledOptionsTitle: "已被其他条件筛选"
-      )
-      .onDisappear {
-        // 当 sheet 消失时提交选择
-        if tempFilterSelection.isEmpty {
-          filterForm.removeValue(forKey: config.id)
-        } else {
-          filterForm[config.id] = tempFilterSelection
-        }
-        updateFilteredResults()
-      }
-    }
+    .onChange(of: filterForm) { _, _ in updateDisabledFilterOptions() }
     .onChange(of: result.map { $0.id }) { _, _ in
       updateFilterOptions()
       updateFilteredResults()
+      updateDisabledFilterOptions()
     }
     .onAppear {
       updateFilterOptions()
       updateFilteredResults()
-      #if DEBUG
-      presentUIPreviewFilterIfNeeded()
-      #endif
+      updateDisabledFilterOptions()
     }
   }
 
-  // MARK: - 逻辑
+  static func normalizedFilterOption(_ value: String?) -> String {
+    ResourceResultSemantics.normalized(value)
+  }
+
+  static func freeStateValue(_ context: Context) -> String? {
+    ResourceResultSemantics.freeState(context)
+  }
 
   private func updateFilterOptions() {
-    var sites = Set<String>()
-    var seasons = Set<String>()
-    var resolutions = Set<String>()
-    var videoCodes = Set<String>()
-    var editions = Set<String>()
-    var releaseGroups = Set<String>()
-    var freeStates = Set<String>()
-
+    var options: [String: Set<String>] = [:]
     for context in result {
-      let site = context.torrent_info?.site_name ?? ""
-      sites.insert(site.isEmpty ? "无" : site)
-
-      let seasonEpisode = context.meta_info?.season_episode ?? ""
-      seasons.insert(seasonEpisode.isEmpty ? "无" : seasonEpisode)
-
-      let res = context.meta_info?.resource_pix ?? ""
-      resolutions.insert(res.isEmpty ? "无" : res)
-
-      let code = context.meta_info?.video_encode ?? ""
-      videoCodes.insert(code.isEmpty ? "无" : code)
-
-      let edition = context.meta_info?.edition ?? ""
-      editions.insert(edition.isEmpty ? "无" : edition)
-
-      let group = context.meta_info?.resource_team ?? ""
-      releaseGroups.insert(group.isEmpty ? "无" : group)
-
-      freeStates.insert(getFreeState(context))
-    }
-
-    // 辅助排序方法：将"无"放在最后
-    let sortWithNoneLast: (Set<String>) -> [String] = { set in
-      set.sorted { a, b in
-        if a == "无" { return false }
-        if b == "无" { return true }
-        return a < b
+      for (key, value) in ResourceResultSemantics.fields(context) {
+        options[key, default: []].insert(value)
       }
     }
-
-    filterOptions = [
-      "site": sortWithNoneLast(sites),
-      "season": ParsedSeason.sortSeasonOptions(Array(seasons)),  // "无" 会被解析为 season 0 放最后
-      "resolution": sortWithNoneLast(resolutions),
-      "videoCode": sortWithNoneLast(videoCodes),
-      "edition": sortWithNoneLast(editions),
-      "releaseGroup": sortWithNoneLast(releaseGroups),
-      "freeState": sortWithNoneLast(freeStates),
-    ]
-  }
-
-  private func contextMatches(_ context: Context, key: String, values: Set<String>) -> Bool {
-    switch key {
-    case "site":
-      let val = context.torrent_info?.site_name ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "season":
-      let val = context.meta_info?.season_episode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "resolution":
-      let val = context.meta_info?.resource_pix ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "videoCode":
-      let val = context.meta_info?.video_encode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "edition":
-      let val = context.meta_info?.edition ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "releaseGroup":
-      let val = context.meta_info?.resource_team ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
-    case "freeState":
-      return values.contains(getFreeState(context))
-    default:
-      return true
-    }
+    filterOptions = ResourceResultSemantics.sortedOptions(options.mapValues(Array.init))
   }
 
   private func computeDisabledOptions(for targetKey: String) -> Set<String> {
-    // 1. 过滤 result，但忽略 targetKey 的筛选条件
-    let partiallyFiltered = result.filter { context in
-      for (key, values) in filterForm where key != targetKey {
-        if values.isEmpty { continue }
-        if !contextMatches(context, key: key, values: values) { return false }
-      }
-      return true
-    }
+    let other = filterForm.filter { $0.key != targetKey }
+    let available = Set(result.compactMap { context -> String? in
+      let fields = ResourceResultSemantics.fields(context)
+      return ResourceResultSemantics.matches(fields, filters: other) ? fields[targetKey] : nil
+    })
+    // 当前已选项始终可取消，与分页结果的筛选规则一致。
+    return Set(filterOptions[targetKey] ?? []).subtracting(available)
+      .subtracting(filterForm[targetKey] ?? [])
+  }
 
-    // 2. 从 partiallyFiltered 中收集 targetKey 的所有可用选项
-    var availableOptions = Set<String>()
-    for context in partiallyFiltered {
-      switch targetKey {
-      case "site":
-        let val = context.torrent_info?.site_name ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "season":
-        let val = context.meta_info?.season_episode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "resolution":
-        let val = context.meta_info?.resource_pix ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "videoCode":
-        let val = context.meta_info?.video_encode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "edition":
-        let val = context.meta_info?.edition ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "releaseGroup":
-        let val = context.meta_info?.resource_team ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
-      case "freeState":
-        availableOptions.insert(getFreeState(context))
-      default:
-        break
-      }
-    }
-
-    // 3. 所有 targetKey 的选项中，不属于 availableOptions 的即为 disabledOptions
-    let allOptions = Set(filterOptions[targetKey] ?? [])
-    return allOptions.subtracting(availableOptions)
+  /// 「已被其他条件筛选」只随结果和筛选条件变化，排序变化不用重算。
+  private func updateDisabledFilterOptions() {
+    disabledFilterOptions = Dictionary(
+      uniqueKeysWithValues: filterOptions.keys.map { ($0, computeDisabledOptions(for: $0)) }
+    )
   }
 
   private func updateFilteredResults() {
-    var results = result
-
-    // 1. 筛选
-    if !filterForm.isEmpty {
-      results = results.filter { context in
-        for (key, values) in filterForm {
-          if values.isEmpty { continue }
-          if !contextMatches(context, key: key, values: values) { return false }
-        }
-        return true
-      }
+    let results = filterForm.isEmpty ? result : result.filter {
+      ResourceResultSemantics.matches(ResourceResultSemantics.fields($0), filters: filterForm)
     }
-
-    // 2. 排序
-    results.sort { (lhs, rhs) -> Bool in
-      let lInfo = lhs.torrent_info
-      let rInfo = rhs.torrent_info
-
-      let isAsc = sortType == .asc
-
-      switch sortField {
-      case .size:
-        return isAsc ? (lInfo?.size ?? 0 < rInfo?.size ?? 0) : (lInfo?.size ?? 0 > rInfo?.size ?? 0)
-      case .seeders:
-        return isAsc
-          ? (lInfo?.seeders ?? 0 < rInfo?.seeders ?? 0)
-          : (lInfo?.seeders ?? 0 > rInfo?.seeders ?? 0)
-      case .peers:
-        return isAsc
-          ? (lInfo?.peers ?? 0 < rInfo?.peers ?? 0) : (lInfo?.peers ?? 0 > rInfo?.peers ?? 0)
-      case .time:
-        let lDate = lInfo?.pubdate ?? ""
-        let rDate = rInfo?.pubdate ?? ""
-        return isAsc ? (lDate < rDate) : (lDate > rDate)
-      case .default:
-        return lhs.torrent_info?.pri_order ?? 0 > rhs.torrent_info?.pri_order ?? 0
-      }
-    }
-
-    // 如果没有选择特定排序或作为次要排序，是否应用默认排序？
-    // 当前逻辑仅替换列表。
-
-    filteredResults = results
+    filteredResults = Self.orderResults(results, by: sortField, type: sortType)
   }
 
-  private func getFreeState(_ context: Context) -> String {
-    let dl = context.torrent_info?.downloadvolumefactor ?? 1.0
-    let up = context.torrent_info?.uploadvolumefactor ?? 1.0
-
-    if dl == 0 {
-      if up > 1 { return "2xFree" }
-      return "Free"
+  static func orderResults(_ results: [Context], by sortField: SortField, type sortType: SortType) -> [Context] {
+    guard sortType != .default else {
+      return results.filter { !$0.isFilteredOut } + results.filter { $0.isFilteredOut }
     }
-    if dl < 1.0 {
-      return "50%"
-    }
-    if up > 1.0 {
-      return "2x"
-    }
-    return "Normal"
+    let inputs = results.enumerated().map { ResourceFilterInput(context: $0.element, order: $0.offset) }
+    return results.indices.sorted { a, b in
+      ResourceResultSemantics.before(inputs[a], softRejected: results[a].isFilteredOut,
+        inputs[b], softRejected: results[b].isFilteredOut, sortField: sortField.rawValue, sortType: sortType.rawValue)
+    }.map { results[$0] }
   }
 
-  #if DEBUG
-  private func presentUIPreviewFilterIfNeeded() {
-    guard uiPreviewPresentation == .filterSelection, !didPresentPreviewFilter else { return }
-    didPresentPreviewFilter = true
-
-    Task { @MainActor in
-      await Task.yield()
-      let key = "site"
-      activeFilter = FilterConfig(
-        id: key,
-        title: "站点",
-        options: filterOptions[key] ?? [],
-        disabledOptions: computeDisabledOptions(for: key)
-      )
-    }
-  }
-  #endif
 }
 
 extension TorrentsResultView where Header == EmptyView {
   init(result: [Context], overrideMediaInfo: MediaInfo? = nil) {
     self.init(result: result, overrideMediaInfo: overrideMediaInfo, header: { EmptyView() })
   }
-}
-
-// MARK: - 模型
-
-struct FilterConfig: Identifiable {
-  let id: String
-  let title: String
-  let options: [String]
-  let disabledOptions: Set<String>
 }
 
 // MARK: - 枚举
@@ -380,6 +151,7 @@ enum SortField: String, CaseIterable, Identifiable {
 }
 
 enum SortType: String, CaseIterable, Identifiable {
+  case `default` = "默认排序"
   case asc = "升序"
   case desc = "降序"
 
@@ -388,32 +160,36 @@ enum SortType: String, CaseIterable, Identifiable {
 
 // MARK: - 子视图
 
+struct TorrentResultCount: View {
+  let count: Int
+  var unit = "个资源"
+
+  var body: some View {
+    Text("\(count) \(unit)")
+      .font(.caption)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+      .background(Color.blue.opacity(0.2))
+      .foregroundColor(.blue)
+      .cornerRadius(20)
+  }
+}
+
 struct TorrentFilterBar: View {
   let filterOptions: [String: [String]]
   @Binding var filterForm: [String: Set<String>]
   @Binding var sortField: SortField
   @Binding var sortType: SortType
-  @Binding var activeFilter: FilterConfig?
-  let totalCount: Int
+  /// 每个筛选项里「已被其他条件筛选」的选项，由结果页预先算好。
+  var disabledOptions: [String: Set<String>] = [:]
 
-  var onFilterClick: (String) -> Set<String>
-  var onSortChange: () -> Void
+  /// 筛选或排序变化后调用，结果页据此重新过滤。
+  var onFilterChange: () -> Void
+  var onReapplyRules: (() -> Void)? = nil
 
   var body: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 12) {
-        // 总数标签
-        Text("\(totalCount) 个资源")
-          .font(.caption)
-          .padding(.horizontal, 12)
-          .padding(.vertical, 6)
-          .background(Color.blue.opacity(0.2))
-          .foregroundColor(.blue)
-          .cornerRadius(20)
-
-        Divider()
-          .frame(height: 20)
-
         // 排序菜单
         Menu {
           Picker("排序字段", selection: $sortField) {
@@ -428,35 +204,44 @@ struct TorrentFilterBar: View {
           }
         } label: {
           HStack(spacing: 4) {
-            Image(systemName: sortType == .asc ? "arrow.up" : "arrow.down")
+            if sortType == .asc {
+              Image(systemName: AppSymbol.sortAscending)
+            } else if sortType == .desc {
+              Image(systemName: AppSymbol.sortDescending)
+            }
             Text(sortField.rawValue)
           }
           .font(.caption)
           .foregroundColor(.primary)
         }
-        .onChange(of: sortField) { _, _ in onSortChange() }
-        .onChange(of: sortType) { _, _ in onSortChange() }
+        .onChange(of: sortField) { _, _ in onFilterChange() }
+        .onChange(of: sortType) { _, _ in onFilterChange() }
 
         Divider()
           .frame(height: 20)
 
-        // 筛选器
+        // 筛选器：系统菜单多选，菜单关闭时才提交并重新过滤一次。
         ForEach(filterKeys, id: \.self) { key in
           if let options = filterOptions[key], !options.isEmpty {
-            Button {
-              let disabled = onFilterClick(key)
-              activeFilter = FilterConfig(
-                id: key,
-                title: filterTitles[key] ?? key,
-                options: options,
-                disabledOptions: disabled
-              )
-            } label: {
+            DeferredMultiSelectionMenu(
+              options: options,
+              id: \.self,
+              selected: filterForm[key] ?? [],
+              label: { $0 },
+              disabledOptions: disabledOptions[key] ?? [],
+              disabledOptionsTitle: "已被其他条件筛选",
+              emptySelectionTitle: "全部",
+              onCommit: { selection in
+                // 空选择从表单里移除，与「未筛选」同一语义。
+                filterForm[key] = selection.isEmpty ? nil : selection
+                onFilterChange()
+              }
+            ) {
               HStack(spacing: 4) {
                 if let selected = filterForm[key], !selected.isEmpty {
-                  Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                  Image(systemName: AppSymbol.filterActive)
                 } else {
-                  Image(systemName: "line.3.horizontal.decrease.circle")
+                  Image(systemName: AppSymbol.filter)
                 }
                 Text(filterTitles[key] ?? key)
                 if let selected = filterForm[key], !selected.isEmpty {
@@ -474,12 +259,16 @@ struct TorrentFilterBar: View {
         if hasActiveFilters {
           Button(action: {
             filterForm = [:]
-            onSortChange()  // 触发更新
+            onFilterChange()
           }) {
             Text("清除筛选")
               .font(.caption)
               .foregroundColor(.red)
           }
+        }
+        if let onReapplyRules {
+          Button("重新应用 TV 过滤", action: onReapplyRules)
+            .font(.caption)
         }
       }
       .padding(.vertical, 8)
@@ -501,5 +290,26 @@ struct TorrentFilterBar: View {
       "releaseGroup": "制作组",
       "freeState": "促销",
     ]
+  }
+}
+
+/// 共用网格和底部焦点重定向，条目身份与卡片动作由各搜索入口提供。
+struct TorrentResultsGrid<Item: Identifiable, Card: View>: View {
+  let items: [Item]
+  var alignment: Alignment = .center
+  @ViewBuilder var card: (Item) -> Card
+  @FocusState private var focusedItem: Item.ID?
+  @FocusState private var bottomFocused: Bool
+
+  var body: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 500, maximum: 600), spacing: 36, alignment: alignment)], spacing: 36) {
+      ForEach(items) { item in
+        card(item).focused($focusedItem, equals: item.id)
+      }
+    }
+    Color.clear.frame(height: 1).focusable().focused($bottomFocused)
+      .onChange(of: bottomFocused) { _, focused in
+        if focused { focusedItem = items.last?.id; bottomFocused = false }
+      }
   }
 }

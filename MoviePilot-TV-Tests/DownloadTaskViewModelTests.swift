@@ -51,13 +51,108 @@ private func withTimeout<T: Sendable>(
 
 @MainActor
 final class DownloadTaskViewModelTests: XCTestCase {
+  func testIndependentPickerLoadCannotPublishAfterRapidTabRoundTrip() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let requestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "stale-picker-hash",
+        title: "Stale Picker Task",
+        username: "old-user",
+        progress: 10
+      ),
+      forClient: "old",
+      waitFor: requestGate
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "old"
+    let pickerLoadTask = Task { @MainActor in
+      await viewModel.loadDownloads()
+    }
+    defer { pickerLoadTask.cancel() }
+
+    try await withTimeout("picker request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+    }
+
+    viewModel.setPresentationActive(false)
+    viewModel.setPresentationActive(true)
+    await requestGate.open()
+    try await withTimeout("stale picker load to finish") {
+      await pickerLoadTask.value
+    }
+
+    XCTAssertTrue(
+      viewModel.downloads.isEmpty,
+      "切走再快速切回后，旧 Picker Task 不能把隐藏期间的下载行写回"
+    )
+  }
+
+  func testStalePickerFailuresCannotPublishAfterRapidTabRoundTrip() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let requestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["old"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(repeating: (json: "{}", gate: requestGate), count: 6),
+      forClient: "old",
+      statusCode: 500
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.loadClientsIfNeeded()
+    XCTAssertEqual(viewModel.selectedClient, "old")
+    let staleTasks = (0..<6).map { _ in
+      Task { @MainActor in await viewModel.loadDownloads() }
+    }
+    defer { staleTasks.forEach { $0.cancel() } }
+
+    try await withTimeout("all stale picker requests to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old", count: 6)
+    }
+
+    viewModel.setPresentationActive(false)
+    viewModel.setPresentationActive(true)
+    await requestGate.open()
+    for task in staleTasks {
+      try await withTimeout("stale picker failure to finish") {
+        await task.value
+      }
+    }
+
+    XCTAssertNil(
+      viewModel.errorMessage,
+      "切走前的失败响应不能在快速切回后累计并发布旧错误"
+    )
+  }
+
   func testOlderClientLoadThatCompletesLaterDoesNotPublishOverCurrentClientDownloads()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -75,10 +170,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       forClient: "new"
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -119,10 +214,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
   }
 
   func testPendingDownloadLoadDoesNotPublishAfterPermissionIsRestricted() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -135,10 +230,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       waitFor: requestGate
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -166,13 +261,53 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testDownloadVisibilityMatchesWebOwnerFilter() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let payload = """
+      [
+        {"hash":"userid-match","userid":"download-manager","username":"legacy-name"},
+        {"hash":"username-match","userid":"other-user","username":"download-manager"},
+        {"hash":"foreign","userid":"other-user","username":"other-user"},
+        {"hash":"ownerless"}
+      ]
+      """
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [(payload, nil), (payload, nil)],
+      forClient: "same"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "same"
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(viewModel.downloads.compactMap(\.hash), ["userid-match", "username-match"])
+
+    configureManageUser(service, superUser: true)
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(
+      Set(viewModel.downloads.compactMap(\.hash)),
+      Set(["userid-match", "username-match", "foreign", "ownerless"])
+    )
+  }
+
   func testOlderClientLoadThatCompletesLaterDoesNotMutateCurrentClientDownloadWithSameId()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -192,10 +327,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       forClient: "new"
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -245,10 +380,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
   func testOlderLoadForSameClientThatCompletesLaterDoesNotMutateCurrentDownload()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -272,10 +407,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       forClient: "same"
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "same"
 
     let olderLoadTask = Task { @MainActor in
@@ -354,11 +489,158 @@ final class DownloadTaskViewModelTests: XCTestCase {
     }
   }
 
-  func testSameDownloadRefreshUpdatesLatestMetadataForExistingRow() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+  func testInitialClientsFailureIsRetriedOnNextPollAndRecovers() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSONSequence([
+      (json: "[]", statusCode: 500),
+      (json: clientsPayload(["qbittorrent"]), statusCode: 200),
+    ])
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "recovered-hash",
+        title: "Recovered Task",
+        username: "user",
+        progress: 42
+      ),
+      forClient: "qbittorrent"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertFalse(viewModel.clientsLoadFailed)
+    XCTAssertEqual(viewModel.clients.map(\.name), ["qbittorrent"])
+    XCTAssertEqual(viewModel.selectedClient, "qbittorrent")
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["recovered-hash"])
+    let clientsRequestCount = await DownloadTaskURLProtocol.stub.clientsRequestCount()
+    XCTAssertEqual(
+      clientsRequestCount,
+      2,
+      "The failed first clients load must be retried before downloads can load."
+    )
+  }
+
+  func testPollingFailuresNotifyOncePerSixConsecutiveFailuresAndResetOnSuccess() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(
+        repeating: (json: "{}", gate: nil),
+        count: 6
+      ),
+      forClient: "qbittorrent",
+      statusCode: 500
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertNil(viewModel.errorMessage)
+    for _ in 0..<4 {
+      await viewModel.loadDownloads()
+    }
+    XCTAssertNil(viewModel.errorMessage, "First five consecutive failures must stay silent.")
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.errorMessage, "下载任务刷新失败，正在自动重试。")
+
+    viewModel.errorMessage = nil
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(
+        repeating: (json: "{}", gate: nil),
+        count: 6
+      ),
+      forClient: "qbittorrent",
+      statusCode: 500
+    )
+    for _ in 0..<5 {
+      await viewModel.loadDownloads()
+    }
+    XCTAssertNil(viewModel.errorMessage)
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.errorMessage, "下载任务刷新失败，正在自动重试。")
+
+    viewModel.errorMessage = nil
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "recovered-hash",
+        title: "Recovered Task",
+        username: "user",
+        progress: 10
+      ),
+      forClient: "qbittorrent"
+    )
+    await viewModel.loadDownloads()
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["recovered-hash"])
+  }
+
+  func testDownloadActionFailureNotifiesImmediately() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "action-hash",
+            title: "Action Task",
+            username: "user",
+            progress: 30
+          ),
+          nil
+        ),
+        ("{\"success\":false,\"message\":\"下载器不可用\"}", nil),
+      ],
+      forClient: "qbittorrent"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["action-hash"])
+
+    let stopped = await viewModel.stopDownload(
+      clientName: "qbittorrent",
+      hash: "action-hash"
+    )
+
+    XCTAssertFalse(stopped)
+    XCTAssertEqual(viewModel.errorMessage, "下载器不可用")
+  }
+
+  func testSameDownloadRefreshUpdatesLatestMetadataForExistingRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -395,10 +677,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       forClient: "same"
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "same"
 
     await viewModel.loadDownloads()
@@ -418,42 +700,174 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(refreshedRow.progress, 80)
   }
 
+  func testOldRowsCannotSendActionsAfterDownloaderSelectionChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10),
+      forClient: "old"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "old"
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(viewModel.loadedClient, "old")
+    XCTAssertTrue(viewModel.canOperateDownloads)
+    let oldRequestCountBeforeSwitch = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "old")
+    XCTAssertEqual(oldRequestCountBeforeSwitch, 1)
+
+    viewModel.selectedClient = "new"
+
+    XCTAssertFalse(viewModel.canOperateDownloads)
+    let didStop = await viewModel.stopDownload(clientName: "old", hash: "shared-hash")
+    let didStart = await viewModel.startDownload(clientName: "old", hash: "shared-hash")
+    await viewModel.deleteDownload(clientName: "old", hash: "shared-hash")
+
+    XCTAssertFalse(didStop)
+    XCTAssertFalse(didStart)
+    let oldRequestCountAfterActions = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "old")
+    let newRequestCountAfterActions = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "new")
+    XCTAssertEqual(oldRequestCountAfterActions, 1)
+    XCTAssertEqual(newRequestCountAfterActions, 0)
+  }
+
+  func testMalformedNonEmptyActionResponseFailsClosedForDownloadActions() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "h1", title: "Task", username: "download-manager", progress: 10),
+          nil
+        ),
+        // 非空但畸形的 2xx body：暂停与删除都必须失败关闭，不得翻转状态或移除仍存在的任务。
+        ("not-json", nil),
+        ("not-json", nil),
+      ],
+      forClient: "client"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "client"
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.downloads.count, 1)
+
+    let didStop = await viewModel.stopDownload(clientName: "client", hash: "h1")
+    XCTAssertFalse(didStop)
+    XCTAssertEqual(
+      viewModel.downloads.count, 1,
+      "A malformed action response must not flip the download state."
+    )
+
+    await viewModel.deleteDownload(clientName: "client", hash: "h1")
+    XCTAssertEqual(
+      viewModel.downloads.count, 1,
+      "A malformed delete response must not remove a task that still exists."
+    )
+  }
+
+  func testEmptyActionResponseRemainsCompatibleSuccess() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "h1", title: "Task", username: "download-manager", progress: 10),
+          nil
+        ),
+        // 零字节空 body 按旧契约兼容为删除成功。
+        ("", nil),
+      ],
+      forClient: "client"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "client"
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.downloads.count, 1)
+
+    await viewModel.deleteDownload(clientName: "client", hash: "h1")
+    XCTAssertEqual(
+      viewModel.downloads.count, 0,
+      "An empty response body must remain a compatible success for delete."
+    )
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DownloadTaskURLProtocol.stub.reset()
     let deleteGate = DownloadTaskAsyncGate()
-    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
-      #"{"success": true, "message": "ok"}"#,
-      forClient: "old",
-      waitFor: deleteGate
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10),
+          nil
+        ),
+        (#"{"success": true, "message": "ok"}"#, deleteGate),
+      ],
+      forClient: "old"
     )
 
-    service.baseURL = "http://download-tests.local"
+    service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
-    viewModel.downloads = try decodeDownloads(
-      downloadPayload(
-        hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10)
-    )
+    await viewModel.loadDownloads()
 
     let deleteTask = Task { @MainActor in
-      await viewModel.deleteDownload(hash: "shared-hash")
+      await viewModel.deleteDownload(clientName: "old", hash: "shared-hash")
     }
     defer { deleteTask.cancel() }
 
     try await withTimeout("old client delete request to start") {
-      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old", count: 2)
     }
+    let oldRequestCount = await DownloadTaskURLProtocol.stub.requestCount(clientName: "old")
+    XCTAssertEqual(oldRequestCount, 2)
 
     viewModel.selectedClient = "new"
     viewModel.downloads = try decodeDownloads(
@@ -482,6 +896,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     mediaTitle: String? = nil,
     mediaImage: String? = nil,
     seasonEpisode: String? = nil,
+    userid: String = "download-manager",
     username: String,
     state: String = "downloading",
     progress: Int
@@ -505,6 +920,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
           "season": "S01",
           "episode": "E01"
         },
+        "userid": "\(userid)",
         "username": "\(username)"
       }
     ]
@@ -515,11 +931,11 @@ final class DownloadTaskViewModelTests: XCTestCase {
     try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
 
-  private func configureManageUser(_ service: APIService) {
-    service.currentUser = Token(
+  private func configureManageUser(_ service: APIService, superUser: Bool = false) {
+    service.currentUserForTesting = Token(
       access_token: "download-task-tests",
       token_type: "bearer",
-      super_user: FlexibleBool(false),
+      super_user: FlexibleBool(superUser),
       permissions: [
         UserPermissionKey.discovery.rawValue: false,
         UserPermissionKey.search.rawValue: false,
@@ -532,7 +948,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
   }
 
   private func configureRestrictedUser(_ service: APIService) {
-    service.currentUser = Token(
+    service.currentUserForTesting = Token(
       access_token: "download-task-restricted-tests",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -545,6 +961,15 @@ final class DownloadTaskViewModelTests: XCTestCase {
       user_name: "download-restricted",
       avatar: nil
     )
+  }
+
+  private func clientsPayload(_ names: [String]) -> String {
+    let items = names.map { name in
+      """
+      {"name":"\(name)","type":"qbittorrent","enabled":true}
+      """
+    }
+    return "[" + items.joined(separator: ",") + "]"
   }
 }
 
@@ -569,8 +994,8 @@ private struct DownloadTaskServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.currentUserForTesting = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -618,11 +1043,35 @@ private struct DownloadTaskHTTPStubResponse: Sendable {
 
 private actor DownloadTaskURLProtocolStub {
   private var responsesByClient: [String: [DownloadTaskHTTPStubResponse]] = [:]
+  private var clientsResponses: [DownloadTaskHTTPStubResponse] = []
   private var requestedClients: [String] = []
+  private var requestedClientsLoads = 0
 
   func reset() {
     responsesByClient.removeAll()
+    clientsResponses.removeAll()
     requestedClients.removeAll()
+    requestedClientsLoads = 0
+  }
+
+  func setClientsJSON(_ json: String, statusCode: Int = 200) {
+    clientsResponses = [
+      DownloadTaskHTTPStubResponse(
+        statusCode: statusCode,
+        data: Data(json.utf8),
+        gate: nil
+      )
+    ]
+  }
+
+  func setClientsJSONSequence(_ sequence: [(json: String, statusCode: Int)]) {
+    clientsResponses = sequence.map { item in
+      DownloadTaskHTTPStubResponse(
+        statusCode: item.statusCode,
+        data: Data(item.json.utf8),
+        gate: nil
+      )
+    }
   }
 
   func setDownloadsJSON(
@@ -657,9 +1106,24 @@ private actor DownloadTaskURLProtocolStub {
   func response(for request: URLRequest) async throws -> DownloadTaskHTTPStubResponse {
     guard
       let url = request.url,
-      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-      let clientName = components.queryItems?.first(where: { $0.name == "name" })?.value
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else {
+      throw URLError(.badURL)
+    }
+
+    if components.path == "/api/v1/download/clients" {
+      requestedClientsLoads += 1
+      guard let response = clientsResponses.first else {
+        throw URLError(.unsupportedURL)
+      }
+      clientsResponses.removeFirst()
+      if let gate = response.gate {
+        await gate.wait()
+      }
+      return response
+    }
+
+    guard let clientName = components.queryItems?.first(where: { $0.name == "name" })?.value else {
       throw URLError(.badURL)
     }
 
@@ -691,6 +1155,14 @@ private actor DownloadTaskURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func requestCount(clientName: String) -> Int {
+    requestedClients.filter { $0 == clientName }.count
+  }
+
+  func clientsRequestCount() -> Int {
+    requestedClientsLoads
   }
 
   private func recordRequest(for clientName: String) {

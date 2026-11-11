@@ -9,10 +9,16 @@ struct TorrentCard: View {
   let torrent: TorrentInfo?
   private let apiService = APIService.shared
 
-  init(context: Context, overrideMediaInfo: MediaInfo? = nil) {
+  let isCandidate: Bool
+  var onDownloadPresentationChange: ((Bool) -> Void)?
+
+  init(context: Context, overrideMediaInfo: MediaInfo? = nil, isCandidate: Bool = false,
+    onDownloadPresentationChange: ((Bool) -> Void)? = nil) {
+    self.isCandidate = isCandidate
+    self.onDownloadPresentationChange = onDownloadPresentationChange
     self.context = context
     // 如果提供了 overrideMediaInfo，则使用它，否则使用 context.media_info
-    media = overrideMediaInfo ?? context.media_info
+    media = isCandidate ? nil : overrideMediaInfo ?? context.media_info
     meta = context.meta_info
     torrent = context.torrent_info
   }
@@ -34,17 +40,32 @@ struct TorrentCard: View {
     apiService.canAccess(.search)
   }
 
+  /// 主标题规范链：media.title → meta.name → torrent.title；纯空白视为缺值。
+  static func displayTitle(media: MediaInfo?, meta: MetaInfo?, torrent: TorrentInfo?) -> String {
+    MediaIdentifier.normalizedString(media?.title)
+      ?? MediaIdentifier.normalizedString(meta?.name)
+      ?? MediaIdentifier.normalizedString(torrent?.title)
+      ?? ""
+  }
+
+  /// 副标题规范链：meta.subtitle → torrent.description；纯空白视为缺值。
+  static func descriptionText(meta: MetaInfo?, torrent: TorrentInfo?) -> String? {
+    MediaIdentifier.normalizedString(meta?.subtitle)
+      ?? MediaIdentifier.normalizedString(torrent?.description)
+  }
+
   @State private var showDownload = false
   @FocusState private var isButtonFocused: Bool
 
   var body: some View {
-    if let meta = meta, let torrent = torrent {
+    if let torrent = torrent {
+      let displayTitle = Self.displayTitle(media: media, meta: meta, torrent: torrent)
       VStack(alignment: .leading, spacing: 8) {
         // 媒体标题
         HStack(alignment: .top, spacing: 12) {
           HStack(spacing: 8) {
             if context.isFilteredOut {
-              Image(systemName: "line.3.horizontal.decrease.circle")
+              Image(systemName: AppSymbol.filter)
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -54,17 +75,17 @@ struct TorrentCard: View {
                 )
                 .foregroundColor(.white)
             }
-            Text(media?.title ?? meta.name)
+            Text(displayTitle)
               .font(.headline)
-              .fontWeight(.bold)
+              .bold()
               .lineLimit(2)
               .multilineTextAlignment(.leading)
           }
           Spacer(minLength: 0)
-          if !meta.season_episode.isEmpty {
-            Text(meta.season_episode.formattedSeasonEpisode())
+          if let seasonEpisode = MediaIdentifier.normalizedString(meta?.season_episode) {
+            Text(seasonEpisode.formattedSeasonEpisode())
               .font(.caption2)
-              .fontWeight(.semibold)
+              .bold()
               .padding(.horizontal, 8)
               .padding(.vertical, 4)
               .background(
@@ -74,20 +95,22 @@ struct TorrentCard: View {
           }
         }
 
-        let descriptionText = meta.subtitle ?? torrent.description
-        let shouldShowDescription = (descriptionText?.isEmpty == false)
+        if isCandidate {
+          Text("未完成匹配").font(.caption2).foregroundColor(.secondary)
+        }
+        let descriptionText = Self.descriptionText(meta: meta, torrent: torrent)
 
         // 种子内容
-        if let title = torrent.title {
+        if let title = MediaIdentifier.normalizedString(torrent.title) {
           Text(title)
             .font(.caption)
             .foregroundColor(.secondary)
-            .lineLimit(shouldShowDescription ? 2 : 4)
+            .lineLimit(descriptionText == nil ? 4 : 2)
         }
 
         // 种子描述
-        if shouldShowDescription {
-          Text(descriptionText!)
+        if let descriptionText {
+          Text(descriptionText)
             .font(.caption2)
             .foregroundColor(.secondary)
             .lineLimit(2)
@@ -118,7 +141,7 @@ struct TorrentCard: View {
             }
             if let seeders = torrent.seeders {
               if seeders > 0 {
-                Image(systemName: "arrow.up")
+                Image(systemName: AppSymbol.uploads)
                   .foregroundColor(seeders <= 5 ? .orange : .green)
                 Text("\(seeders)")
                   .foregroundColor(seeders <= 5 ? .orange : .green)
@@ -136,28 +159,28 @@ struct TorrentCard: View {
         // 资源标签区
         HFlow(itemSpacing: 20, rowSpacing: 8) {
           // 站点
-          if let site_name = torrent.site_name {
-            TorrentCardTag(text: site_name)
+          if let siteName = MediaIdentifier.normalizedString(torrent.site_name) {
+            TorrentCardTag(text: siteName)
           }
           // 流媒体平台
-          if meta.web_source != nil && !meta.web_source!.isEmpty {
-            TorrentCardTag(text: meta.web_source!)
+          if let webSource = MediaIdentifier.normalizedString(meta?.web_source) {
+            TorrentCardTag(text: webSource)
           }
-          // <!-- 版本标签 -->
-          if meta.edition != nil && !meta.edition!.isEmpty {
-            TorrentCardTag(text: meta.edition!)
+          // 版本标签
+          if let edition = MediaIdentifier.normalizedString(meta?.edition) {
+            TorrentCardTag(text: edition)
           }
-          // <!-- 分辨率标签 -->
-          if let resource_pix = meta.resource_pix {
-            TorrentCardTag(text: resource_pix)
+          // 分辨率标签
+          if let resourcePix = MediaIdentifier.normalizedString(meta?.resource_pix) {
+            TorrentCardTag(text: resourcePix)
           }
-          // <!-- 编码标签 -->
-          if let video_encode = meta.video_encode {
-            TorrentCardTag(text: video_encode)
+          // 编码标签
+          if let videoEncode = MediaIdentifier.normalizedString(meta?.video_encode) {
+            TorrentCardTag(text: videoEncode)
           }
-          // <!-- 制作组标签 -->
-          if meta.resource_team != nil && !meta.resource_team!.isEmpty {
-            TorrentCardTag(text: meta.resource_team!)
+          // 制作组标签
+          if let resourceTeam = MediaIdentifier.normalizedString(meta?.resource_team) {
+            TorrentCardTag(text: resourceTeam)
           }
         }
         .font(.caption2)
@@ -165,15 +188,7 @@ struct TorrentCard: View {
       }
       .padding(20)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.ultraThinMaterial)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
-      .shadow(
-        color: .black.opacity(isButtonFocused ? 0.5 : 0),
-        radius: 20,
-        y: 10
-      )
-      .scaleEffect(isButtonFocused ? 1.08 : 1.0)
-      .animation(.easeInOut(duration: 0.2), value: isButtonFocused)
+      .textCardFocusAppearance(isFocused: isButtonFocused)
       .opacity(context.isFilteredOut ? 0.6 : 1.0)
       .grayscale(context.isFilteredOut ? 0.7 : 0.0)
       .focusable(true)
@@ -182,12 +197,13 @@ struct TorrentCard: View {
         guard canAddDownload else { return }
         showDownload = true
       }
+      .onChange(of: showDownload) { _, visible in onDownloadPresentationChange?(visible) }
       .contextMenu {
         if canAddDownload {
           Button {
             showDownload = true
           } label: {
-            Label("下载", systemImage: "arrow.down.circle")
+            Label("下载", systemImage: AppSymbol.download)
           }
         }
       }
@@ -200,13 +216,16 @@ struct TorrentCard: View {
           }
         }
       ) {
-        AddDownloadSheet(torrent: torrent, media: media) {
+        AddDownloadSheet(torrent: torrent, media: media, meta: meta) {
           showDownload = false
         }
       }
-    } else {
-      // 记录缺失的数据（可选，依赖内存或控制台，但根据请求隐藏）
-      EmptyView()
+      .onReceive(
+        NotificationCenter.default.publisher(
+          for: .imageNavigationPresentationWillReset, object: APIService.shared)
+      ) { _ in
+        showDownload = false
+      }
     }
   }
 }

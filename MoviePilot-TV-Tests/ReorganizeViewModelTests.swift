@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class ReorganizeViewModelTests: XCTestCase {
-  func testHistoryTargetStorageSurvivesEmptyTargetPathUpdates() async throws {
+  func testHistoryTargetStorageSurvivesEmptyTargetPathUpdates() {
     let viewModel = ReorganizeViewModel(
       logIds: [42],
       fileItem: nil,
@@ -12,75 +12,663 @@ final class ReorganizeViewModelTests: XCTestCase {
     )
     viewModel.directories = [directory(path: "/media/movie", storage: "local")]
 
-    try await waitForFormDebounce()
-
     XCTAssertEqual(viewModel.form.target_storage, "archive")
     XCTAssertNil(viewModel.form.transfer_type)
     XCTAssertNil(viewModel.form.scrape)
 
-    viewModel.form.target_path = "/media/movie"
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("/media/movie")
     XCTAssertEqual(viewModel.form.target_storage, "local")
     XCTAssertEqual(viewModel.form.transfer_type, "move")
     XCTAssertEqual(viewModel.form.scrape, false)
 
-    viewModel.form.target_path = ""
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("")
     XCTAssertEqual(viewModel.form.target_storage, "archive")
     XCTAssertNil(viewModel.form.transfer_type)
     XCTAssertNil(viewModel.form.scrape)
   }
 
-  func testDirectoryInferredTargetStorageClearsWhenReturningToAutomaticPath() async throws {
+  func testDirectoryInferredTargetStorageClearsWhenReturningToAutomaticPath() {
     let viewModel = ReorganizeViewModel(fileItem: nil)
     viewModel.directories = [directory(path: "/media/movie", storage: "local")]
 
-    viewModel.form.target_path = "/media/movie"
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("/media/movie")
     XCTAssertEqual(viewModel.form.target_storage, "local")
     XCTAssertEqual(viewModel.form.transfer_type, "move")
 
-    viewModel.form.target_path = ""
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("")
     XCTAssertNil(viewModel.form.target_storage)
     XCTAssertNil(viewModel.form.transfer_type)
   }
 
-  func testDirectoryInferredTargetStorageClearsWhenSwitchingToManualPath() async throws {
+  func testDirectoryInferredTargetStorageClearsWhenSwitchingToManualPath() {
     let viewModel = ReorganizeViewModel(fileItem: nil)
     viewModel.directories = [directory(path: "/media/movie", storage: "local")]
 
-    viewModel.form.target_path = "/media/movie"
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("/media/movie")
     XCTAssertEqual(viewModel.form.target_storage, "local")
 
-    viewModel.form.target_path = "/manual/library"
-    try await waitForFormDebounce()
-
+    viewModel.selectTargetPath("/manual/library")
     XCTAssertNil(viewModel.form.target_storage)
     XCTAssertEqual(viewModel.form.transfer_type, "move")
   }
 
-  private func waitForFormDebounce() async throws {
-    try await Task.sleep(nanoseconds: 250_000_000)
+  func testSelectingCurrentTargetPathKeepsManualOverrides() {
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.directories = [directory(path: "/media/movie", storage: "local")]
+    viewModel.selectTargetPath("/media/movie")
+    viewModel.form.target_storage = "archive"
+    viewModel.form.transfer_type = "copy"
+
+    viewModel.selectTargetPath("/media/movie")
+
+    XCTAssertEqual(viewModel.form.target_storage, "archive")
+    XCTAssertEqual(viewModel.form.transfer_type, "copy")
   }
 
-  private func directory(path: String, storage: String) -> TransferDirectoryConf {
+  func testHistoryRedoKeepsManualIdentityEmptyUntilSubmission() {
+    let viewModel = ReorganizeViewModel(logIds: [81], fileItem: nil)
+
+    XCTAssertEqual(viewModel.form.logid, 81)
+    XCTAssertFalse(viewModel.form.from_history)
+    XCTAssertEqual(viewModel.mediaId, "")
+    XCTAssertNil(viewModel.form.media_id)
+    XCTAssertNil(viewModel.form.tmdbid)
+    XCTAssertNil(viewModel.form.doubanid)
+    XCTAssertNil(viewModel.form.bangumiid)
+    XCTAssertNil(viewModel.form.anilistid)
+
+    viewModel.form.from_history = true
+    let submitted = viewModel.preparedSingleSubmissionForm()
+
+    XCTAssertTrue(submitted.from_history)
+    XCTAssertNil(submitted.media_source)
+    XCTAssertNil(submitted.media_id)
+  }
+
+  func testChangingSourceClearsOldIdentityAndEpisodeGroup() {
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.mediaId = "42"
+    viewModel.form.tmdbid = 42
+    viewModel.form.media_source = "themoviedb"
+    viewModel.form.media_id = "42"
+    viewModel.form.episode_group = "group-a"
+
+    viewModel.selectMediaSource(.anilist)
+
+    XCTAssertEqual(viewModel.mediaSource, .anilist)
+    XCTAssertEqual(viewModel.mediaId, "")
+    XCTAssertNil(viewModel.form.tmdbid)
+    XCTAssertNil(viewModel.form.doubanid)
+    XCTAssertNil(viewModel.form.bangumiid)
+    XCTAssertNil(viewModel.form.anilistid)
+    XCTAssertEqual(viewModel.form.media_source, "anilist")
+    XCTAssertNil(viewModel.form.media_id)
+    XCTAssertNil(viewModel.form.episode_group)
+  }
+
+  func testChangingAwayFromTVClearsEpisodeGroupBeforeSubmission() {
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.selectMediaSource(.themoviedb)
+    viewModel.selectMediaType("电视剧")
+    viewModel.mediaId = "42"
+    viewModel.form.episode_group = "group-a"
+
+    viewModel.selectMediaType("电影")
+
+    XCTAssertNil(viewModel.form.episode_group)
+    XCTAssertNil(viewModel.preparedSingleSubmissionForm().episode_group)
+  }
+
+  func testManualAniListSelectionUsesNativeIDAndUpdatesRecognizedType() {
+    let media = MediaInfo(
+      tmdb_id: 42,
+      anilist_id: 154_587,
+      source: "anilist",
+      media_id: "154587",
+      title: "葬送的芙莉莲",
+      type: "tv"
+    )
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.selectMediaSource(.anilist)
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .anilist)
+    viewModel.selectManualMedia(media, mediaId: selectedID ?? "")
+
+    XCTAssertEqual(selectedID, "154587")
+    XCTAssertEqual(viewModel.mediaId, "154587")
+    XCTAssertEqual(viewModel.form.type_name, "电视剧")
+    let submitted = viewModel.preparedSingleSubmissionForm()
+    XCTAssertEqual(submitted.media_source, "anilist")
+    XCTAssertEqual(submitted.media_id, "154587")
+    XCTAssertNil(submitted.episode_group)
+  }
+
+  func testManualTMDBSelectionPrefersNativeIDOverPrefixedMediaID() {
+    let media = MediaInfo(
+      tmdb_id: 42,
+      source: "themoviedb",
+      media_id: "tmdb:999",
+      title: "测试电影",
+      type: "movie"
+    )
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .themoviedb)
+    viewModel.selectManualMedia(media, mediaId: selectedID ?? "")
+
+    XCTAssertEqual(selectedID, "42")
+    XCTAssertEqual(viewModel.mediaId, "42")
+  }
+
+  func testManualSelectionFallsBackToMediaIDWhenNativeIDIsZero() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      source: "themoviedb",
+      media_id: "tmdb:999",
+      title: "测试电影",
+      type: "movie"
+    )
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .themoviedb)
+
+    XCTAssertEqual(selectedID, "tmdb:999")
+  }
+
+  func testManualSelectionFallsBackToMediaIDWhenNativeIDIsNegative() {
+    let media = MediaInfo(
+      anilist_id: -1,
+      source: "anilist",
+      media_id: "anilist:7",
+      title: "测试番剧",
+      type: "tv"
+    )
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .anilist)
+
+    XCTAssertEqual(selectedID, "anilist:7")
+  }
+
+  func testManualSelectionKeepsZeroNativeIDWithNoFallbackAsUnselectable() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      source: "themoviedb",
+      media_id: nil,
+      title: "测试电影",
+      type: "movie"
+    )
+
+    XCTAssertNil(ManualMediaSelection.mediaId(for: media, source: .themoviedb))
+  }
+
+  func testPreviewFileNameMatchesWebPathPresentation() {
+    XCTAssertEqual(
+      manualTransferPreviewFileName(from: "/media/电影名称.2025.2160p.mkv"),
+      "电影名称.2025.2160p.mkv"
+    )
+    XCTAssertEqual(
+      manualTransferPreviewFileName(from: #"D:\Media\Movie.2025.1080p.mkv"#),
+      "Movie.2025.1080p.mkv"
+    )
+    XCTAssertNil(manualTransferPreviewFileName(from: nil))
+  }
+
+  func testRejectedDuplicatePreviewDoesNotPresentStaleResult() async {
+    let service = APIService.isolatedTestingInstance()
+    service.tokenForTesting = "reorganize-preview-token"
+    service.currentUserForTesting = Token(
+      access_token: "reorganize-preview-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(true),
+      permissions: nil,
+      user_id: 901,
+      user_name: "reorganize-preview-user",
+      avatar: nil
+    )
+
+    var previousPreview = ManualTransferPreviewData.empty
+    previousPreview.message = "previous-preview"
+    var refreshedPreview = ManualTransferPreviewData.empty
+    refreshedPreview.message = "refreshed-preview"
+    let gate = ReorganizePreviewRequestGate()
+    let viewModel = ReorganizeViewModel(
+      logIds: [42],
+      fileItem: nil,
+      previewRequest: { _ in
+        await gate.run()
+        return refreshedPreview
+      },
+      apiService: service
+    )
+    viewModel.previewData = previousPreview
+
+    let firstPreview = Task { await viewModel.preview() }
+    await gate.waitUntilStarted()
+
+    let duplicateOutcome = await viewModel.preview()
+    XCTAssertEqual(duplicateOutcome, .notGenerated)
+    XCTAssertFalse(duplicateOutcome.shouldPresent)
+    XCTAssertEqual(viewModel.previewData?.message, "previous-preview")
+
+    await gate.open()
+    let firstOutcome = await firstPreview.value
+    XCTAssertEqual(firstOutcome, .generated(allSucceeded: true))
+    XCTAssertTrue(firstOutcome.shouldPresent)
+    XCTAssertEqual(viewModel.previewData?.message, "refreshed-preview")
+  }
+
+  /// 预览和整理不同时进行：预览请求还没返回时按「开始整理」不发起提交，
+  /// 提交中也不再开始预览。
+  func testSubmitIsIgnoredWhilePreviewIsRunning() async {
+    let service = manageService(version: "v3.1.9")
+    let gate = ReorganizePreviewRequestGate()
+    let validation = PreviewTransferCapture()
+    let viewModel = ReorganizeViewModel(
+      logIds: [42],
+      fileItem: nil,
+      validateBeforeSubmit: {
+        validation.calls.append("validate")
+        return nil
+      },
+      previewRequest: { _ in
+        await gate.run()
+        return ManualTransferPreviewData.empty
+      },
+      apiService: service
+    )
+
+    let preview = Task { await viewModel.preview() }
+    await gate.waitUntilStarted()
+    XCTAssertTrue(viewModel.isPreviewing)
+
+    let submitted = await viewModel.submit(background: true)
+    XCTAssertFalse(submitted)
+    XCTAssertFalse(viewModel.isSubmitting)
+    // 提交在任何校验和请求之前就被拒绝。
+    XCTAssertTrue(validation.calls.isEmpty)
+
+    await gate.open()
+    let outcome = await preview.value
+    XCTAssertEqual(outcome, .generated(allSucceeded: true))
+  }
+
+  /// 目录还没加载出来时，「目的目录」也有「自动」可显示，不会显示成「未选择」。
+  func testTargetDirectoryShowsAutomaticBeforeConfigLoads() {
+    let viewModel = reorganizeViewModel(service: manageService(version: "v3.1.9"))
+    XCTAssertEqual(viewModel.targetDirectoryOptions.map(\.value), [""])
+    XCTAssertEqual(
+      SheetPicker<String>.displayTitle(
+        for: viewModel.form.target_path, in: viewModel.targetDirectoryOptions),
+      "自动"
+    )
+  }
+
+  func testPreviewRetainsSamePathsFromDifferentV310Storages() async throws {
+    let items = try JSONDecoder().decode([ManualTransferPreviewItem].self, from: Data(
+      #"[{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"alist"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"}]"#.utf8))
+    let service = APIService.isolatedTestingInstance()
+    service.currentUserForTesting = Token(
+      access_token: "preview-storage-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_id: 902,
+      user_name: "preview-storage", avatar: nil)
+    let viewModel = ReorganizeViewModel(
+      logIds: [1, 2], fileItem: nil,
+      previewRequest: { _ in
+        ManualTransferPreviewData(
+          summary: ManualTransferPreviewSummary(total: 3, success: 3, failed: 0),
+          items: items, message: nil)
+      }, apiService: service)
+
+    let outcome = await viewModel.preview()
+
+    XCTAssertEqual(outcome, .generated(allSucceeded: true))
+    XCTAssertEqual(viewModel.previewData?.items.map(\.source_storage), ["local", "alist"])
+    XCTAssertEqual(viewModel.previewData?.summary.total, 2)
+  }
+
+  func testPreviewStorageFallbackAndOldDTOStayDecodable() throws {
+    let old = try JSONDecoder().decode(ManualTransferPreviewItem.self, from: Data(
+      #"{"source":"/same.mkv","target":"/target.mkv","success":true}"#.utf8))
+    XCTAssertNil(old.source_storage)
+    XCTAssertNil(old.source_item)
+    let current = try JSONDecoder().decode(ManualTransferPreviewItem.self, from: Data(
+      #"{"source":"/same.mkv","target":"/target.mkv","success":true,"source_item":{"storage":"alist","type":"file","path":"/same.mkv","name":"same.mkv"}}"#.utf8))
+    XCTAssertEqual(current.source_item?.storage, "alist")
+  }
+
+  func testReflinkTransferTypeRequiresBackendV319() {
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: nil))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: ""))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "unknown"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9.1"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-0"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-beta"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.7"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.8"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "3.1.9"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-1"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.10"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v4.0.0"))
+  }
+
+  func testTransferTypesFollowBackendVersion() {
+    let service = APIService.isolatedTestingInstance()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.8")
+    let viewModel = ReorganizeViewModel(fileItem: nil, apiService: service)
+    XCTAssertEqual(viewModel.transferTypes, ["", "copy", "move", "link", "softlink"])
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+    XCTAssertEqual(viewModel.transferTypes, ["", "copy", "move", "link", "softlink", "reflink"])
+  }
+
+  func testUnsupportedDirectoryTransferTypeIsNotCopiedOrSubmitted() async {
+    let capture = PreviewTransferCapture()
+    let service = manageService(version: "v3.1.8")
+    let viewModel = reorganizeViewModel(service: service, logIds: [11, 12], capture: capture)
+    let configured = directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    viewModel.directories = [configured]
+
+    viewModel.selectTargetPath("/media/movie")
+
+    XCTAssertNil(viewModel.form.transfer_type)
+    XCTAssertEqual(viewModel.directories.first?.transfer_type, "reflink")
+    XCTAssertEqual(viewModel.selectableTransferTypes, ["copy", "move", "link", "softlink"])
+    XCTAssertEqual(
+      viewModel.transferTypeGateMessage,
+      "该目录的整理方式是「引用链接」，当前后端不支持。请改选其他整理方式。"
+    )
+    let prepared = viewModel.preparedSubmissionForms()
+    XCTAssertEqual(prepared.map(\.logid), [11, 12])
+    XCTAssertTrue(prepared.allSatisfy { $0.transfer_type == nil })
+
+    let preview = await viewModel.preview()
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertEqual(preview, .notGenerated)
+    XCTAssertFalse(submitted)
+    XCTAssertFalse(viewModel.isPreviewing)
+    XCTAssertFalse(viewModel.isSubmitting)
+    XCTAssertEqual(viewModel.errorMessage, viewModel.transferTypeGateMessage)
+    XCTAssertTrue(capture.calls.isEmpty)
+
+    viewModel.selectTargetPath("")
+    XCTAssertNil(viewModel.form.transfer_type)
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertTrue(viewModel.selectableTransferTypes.contains(""))
+  }
+
+  func testExplicitAllowedTransferTypeOverridesUnsupportedDirectory() async {
+    let capture = PreviewTransferCapture()
+    let service = manageService(version: "v3.1.8")
+    let viewModel = reorganizeViewModel(service: service, capture: capture)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    viewModel.selectTargetPath("/media/movie")
+    let blocked = await viewModel.submit(background: true)
+    XCTAssertFalse(blocked)
+
+    viewModel.form.transfer_type = "copy"
+
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.selectableTransferTypes, ["copy", "move", "link", "softlink"])
+    XCTAssertEqual(viewModel.preparedSingleSubmissionForm().transfer_type, "copy")
+    XCTAssertEqual(viewModel.preparedSubmissionForms().map(\.transfer_type), ["copy"])
+
+    let preview = await viewModel.preview()
+    XCTAssertEqual(preview, .generated(allSucceeded: true))
+    XCTAssertEqual(capture.calls, ["copy"])
+  }
+
+  func testSupportedDirectoryReflinkFillsSubmission() async {
+    let capture = PreviewTransferCapture()
+    let service = manageService(version: "v3.1.9")
+    let viewModel = reorganizeViewModel(service: service, capture: capture)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+
+    viewModel.selectTargetPath("/media/movie")
+
+    XCTAssertEqual(viewModel.form.transfer_type, "reflink")
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertEqual(
+      viewModel.selectableTransferTypes,
+      ["", "copy", "move", "link", "softlink", "reflink"]
+    )
+    XCTAssertEqual(viewModel.preparedSingleSubmissionForm().transfer_type, "reflink")
+
+    let preview = await viewModel.preview()
+    XCTAssertEqual(preview, .generated(allSucceeded: true))
+    XCTAssertEqual(capture.calls, ["reflink"])
+  }
+
+  func testUnreadableBackendVersionDoesNotCopyDirectoryReflink() {
+    let versions: [String?] = [nil, "", "unknown", "v3.1.9-beta"]
+    for version in versions {
+      let service = manageService(version: version)
+      let viewModel = reorganizeViewModel(service: service)
+      viewModel.directories = [
+        directory(path: "/media/movie", storage: "local", transferType: "reflink")
+      ]
+
+      viewModel.selectTargetPath("/media/movie")
+
+      XCTAssertNil(viewModel.form.transfer_type, "version=\(version ?? "nil")")
+      XCTAssertNotNil(viewModel.transferTypeGateMessage, "version=\(version ?? "nil")")
+      XCTAssertFalse(viewModel.selectableTransferTypes.contains(""))
+      XCTAssertNil(viewModel.preparedSingleSubmissionForm().transfer_type)
+    }
+  }
+
+  func testOlderBackendStillFillsSupportedDirectoryTransferType() {
+    let service = manageService(version: "v3.1.8")
+    let viewModel = reorganizeViewModel(service: service)
+    viewModel.directories = [directory(path: "/media/movie", storage: "local", transferType: "move")]
+
+    viewModel.selectTargetPath("/media/movie")
+
+    XCTAssertEqual(viewModel.form.transfer_type, "move")
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertEqual(viewModel.preparedSingleSubmissionForm().transfer_type, "move")
+    XCTAssertTrue(viewModel.selectableTransferTypes.contains(""))
+  }
+
+  func testLateSupportedVersionFillsOnlyEmptyDirectoryTransferType() {
+    let service = manageService(version: "v3.1.8")
+    let viewModel = reorganizeViewModel(service: service)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    viewModel.selectTargetPath("/media/movie")
+    viewModel.form.scrape = true
+    viewModel.form.library_type_folder = true
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+
+    XCTAssertEqual(viewModel.form.transfer_type, "reflink")
+    XCTAssertEqual(viewModel.form.scrape, true)
+    XCTAssertEqual(viewModel.form.library_type_folder, true)
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertEqual(viewModel.preparedSingleSubmissionForm().transfer_type, "reflink")
+
+    let explicitService = manageService(version: "v3.1.8")
+    let explicit = reorganizeViewModel(service: explicitService)
+    explicit.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    explicit.selectTargetPath("/media/movie")
+    explicit.form.transfer_type = "copy"
+    explicit.form.scrape = true
+    explicitService.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+
+    XCTAssertEqual(explicit.form.transfer_type, "copy")
+    XCTAssertEqual(explicit.form.scrape, true)
+  }
+
+  func testDowngradeKeepsExplicitReflinkVisibleAndBlocksSubmission() async {
+    let capture = PreviewTransferCapture()
+    let service = manageService(version: "v3.1.9")
+    let viewModel = reorganizeViewModel(service: service, capture: capture)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    viewModel.selectTargetPath("/media/movie")
+    XCTAssertEqual(viewModel.form.transfer_type, "reflink")
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.8")
+
+    XCTAssertEqual(viewModel.form.transfer_type, "reflink")
+    XCTAssertEqual(
+      viewModel.transferTypeGateMessage,
+      "当前后端不支持整理方式「引用链接」，请改选其他方式。"
+    )
+    XCTAssertEqual(
+      viewModel.selectableTransferTypes,
+      ["copy", "move", "link", "softlink", "reflink"]
+    )
+    XCTAssertEqual(ReorganizeTransferCapability.title(for: "reflink"), "引用链接")
+    XCTAssertEqual(viewModel.preparedSingleSubmissionForm().transfer_type, "reflink")
+
+    let preview = await viewModel.preview()
+    let submitted = await viewModel.submit(background: true)
+    XCTAssertEqual(preview, .notGenerated)
+    XCTAssertFalse(submitted)
+    XCTAssertTrue(capture.calls.isEmpty)
+  }
+
+  func testAutomaticChoiceSurvivesSameVersionSettingsRefresh() {
+    let service = manageService(version: "v3.1.9")
+    let viewModel = reorganizeViewModel(service: service)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    viewModel.selectTargetPath("/media/movie")
+    viewModel.form.transfer_type = nil
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+
+    XCTAssertNil(viewModel.form.transfer_type)
+    XCTAssertNil(viewModel.transferTypeGateMessage)
+    XCTAssertTrue(viewModel.selectableTransferTypes.contains(""))
+    XCTAssertNil(viewModel.preparedSingleSubmissionForm().transfer_type)
+  }
+
+  func testDowngradeBlocksAutomaticWhenDirectoryTypeBecomesUnavailable() async {
+    let capture = PreviewTransferCapture()
+    let service = manageService(version: "v3.1.9")
+    let viewModel = reorganizeViewModel(service: service, capture: capture)
+    viewModel.directories = [
+      directory(path: "/media/movie", storage: "local", transferType: "reflink")
+    ]
+    viewModel.selectTargetPath("/media/movie")
+    viewModel.form.scrape = true
+    viewModel.form.transfer_type = nil
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.8")
+
+    XCTAssertNil(viewModel.form.transfer_type)
+    XCTAssertEqual(viewModel.form.scrape, true)
+    XCTAssertEqual(
+      viewModel.transferTypeGateMessage,
+      "该目录的整理方式是「引用链接」，当前后端不支持。请改选其他整理方式。"
+    )
+    XCTAssertFalse(viewModel.selectableTransferTypes.contains(""))
+    XCTAssertNil(viewModel.preparedSingleSubmissionForm().transfer_type)
+    let submitted = await viewModel.submit(background: true)
+    XCTAssertFalse(submitted)
+    XCTAssertTrue(capture.calls.isEmpty)
+  }
+
+  private func manageService(version: String?) -> APIService {
+    let service = APIService.isolatedTestingInstance()
+    service.tokenForTesting = "reorganize-gate-token"
+    service.currentUserForTesting = Token(
+      access_token: "reorganize-gate-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(true),
+      permissions: nil,
+      user_id: 919,
+      user_name: "reorganize-gate",
+      avatar: nil
+    )
+    if let version {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+    }
+    return service
+  }
+
+  private func reorganizeViewModel(
+    service: APIService,
+    logIds: [Int] = [],
+    capture: PreviewTransferCapture? = nil
+  ) -> ReorganizeViewModel {
+    ReorganizeViewModel(
+      logIds: logIds,
+      fileItem: nil,
+      previewRequest: { form in
+        capture?.calls.append(form.transfer_type)
+        return ManualTransferPreviewData.empty
+      },
+      apiService: service
+    )
+  }
+
+  private func directory(
+    path: String,
+    storage: String,
+    transferType: String = "move"
+  ) -> TransferDirectoryConf {
     TransferDirectoryConf(
       name: "电影",
       storage: "download",
       download_path: "/downloads",
       library_path: path,
       library_storage: storage,
-      transfer_type: "move",
+      transfer_type: transferType,
       scraping: FlexibleBool(false),
       library_category_folder: FlexibleBool(false),
       library_type_folder: FlexibleBool(false)
     )
+  }
+}
+
+private final class PreviewTransferCapture: @unchecked Sendable {
+  var calls: [String?] = []
+}
+
+private actor ReorganizePreviewRequestGate {
+  private var isStarted = false
+  private var isOpen = false
+  private var startWaiters: [CheckedContinuation<Void, Never>] = []
+  private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func run() async {
+    isStarted = true
+    let pendingStartWaiters = startWaiters
+    startWaiters.removeAll()
+    pendingStartWaiters.forEach { $0.resume() }
+
+    if !isOpen {
+      await withCheckedContinuation { continuation in
+        requestWaiters.append(continuation)
+      }
+    }
+  }
+
+  func waitUntilStarted() async {
+    guard !isStarted else { return }
+    await withCheckedContinuation { continuation in
+      startWaiters.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    let pendingRequestWaiters = requestWaiters
+    requestWaiters.removeAll()
+    pendingRequestWaiters.forEach { $0.resume() }
   }
 }
