@@ -115,7 +115,24 @@ https://testflight.apple.com/join/UK3qEnVU
 
 ### UI 预览测试分支
 
-UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并到 `main`。Debug 构建运行时添加启动参数 `-uiPreviewMode`。
+UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并到 `main`。
+
+该分支在 Debug 构建中内置了一套 **UI 预览目录**：用真实页面和真实 ViewModel 渲染，只把网络请求替换为本地固定数据，不需要连接 MoviePilot 后端，也不会读写你的登录状态、服务器地址或观看记录。预览数据全部是演示用的假数据。
+
+启动方式：
+
+1. 在 Xcode 中打开工程，选择 `MoviePilot-TV` scheme，在 **Edit Scheme → Run → Arguments Passed On Launch** 添加 `-uiPreviewMode`，然后运行到 Apple TV 模拟器；启动后会先进入「UI 预览」目录。
+2. 也可以指定启动场景，直接打开某个预览页面：
+
+   ```text
+   -uiPreviewMode -uiPreviewScene home.dashboard
+   ```
+
+   场景 ID 见预览目录中各分组的列表；不加 `-uiPreviewScene` 时显示完整目录。
+
+预览目录按「应用启动与全局 / 主框架与一级页面 / 详情 / 搜索 / 设置、登录与日志 / 播放器 / 核心组件」等分组，覆盖加载中、空数据、加载失败、超时、无权限、低权限、提交中等状态。预览代码只在 Debug 编译，Release 产物不包含任何预览入口（由 `Release Preview Guard` 工作流校验）。
+
+预览模式仅用于界面走查，其中的订阅、下载、整理等按钮点击结果都是模拟结果，不会改动真实 MoviePilot 数据。
 
 ## 反馈与贡献
 
