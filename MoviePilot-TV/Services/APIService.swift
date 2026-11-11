@@ -3154,6 +3154,16 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 电视剧默认订阅配置里的包含规则。试看订阅创建时包含规则写成拒绝所有资源，写试看规则时没指定包含规则就换回它；
+  /// 其余默认项 MoviePilot 新建订阅时已经填好。
+  func fetchDefaultTvSubscribeInclude() async throws -> String? {
+    struct Config: Decodable { let include: String? }
+    struct ConfigValue: Decodable { let value: Config? }
+    let data = try await makeRequest(endpoint: "/system/setting/public/DefaultTvSubscribeConfig")
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
+    return MediaIdentifier.normalizedString(config.value?.include)
+  }
+
   /// 获取配置的搜索站点 (IndexerSites)
   func fetchIndexerSites() async throws -> [Int] {
     struct ConfigValue: Decodable {
@@ -3370,7 +3380,8 @@ class APIService: ObservableObject {
     return batch
   }
 
-  /// 停止试看订阅的这次搜索。已经越过下载边界或已结束时后端返回 success=false，调用方照常删除订阅。
+  /// 停止试看订阅的这次搜索，只停还没越过下载提交那一步的任务。批次已结束或找不到时后端返回 success=false，
+  /// 调用方须再查一次批次确认已结束，才能删除订阅。
   func cancelEpisodeTrialBatch(id: String) async throws -> Bool {
     guard EpisodeTrialBatch.isValidID(id) else { throw APIError.invalidURL }
     let data = try await makeRequest(endpoint: "/subscribe/execution/batches/\(id)/cancel", method: "PUT")
@@ -3434,6 +3445,11 @@ class APIService: ObservableObject {
   ) async throws -> (
     success: Bool, message: String?
   ) {
+    let session = sessionSnapshot()
+    if try await episodeTrialHoldsDeletion(identity: identity, season: season) {
+      return (false, EpisodeTrialHoldNotice.deleteBlockedMessage)
+    }
+    guard isSessionUnchanged(from: session) else { throw CancellationError() }
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
@@ -3448,6 +3464,17 @@ class APIService: ObservableObject {
       invalidateSubscriptionCaches()
     }
     return result
+  }
+
+  /// 按媒体删除不分剧集组，会把同一部剧、同一季的试看订阅一起删掉，绕过试看服务停搜索的那一步。
+  /// 试看订阅只有管理员在支持试看的版本上建得出来，MoviePilot 也只让管理员删别人的订阅，其他情况不多查一次。
+  private func episodeTrialHoldsDeletion(identity: MediaIdentity, season: Int?) async throws -> Bool {
+    guard canRequestSuperUserEndpoints,
+      EpisodeTrialAvailability.supports(backendVersion: settings?.BACKEND_VERSION)
+    else { return false }
+    return try await fetchSubscriptions(forceRefresh: true).contains {
+      $0.isEpisodeTrial(of: identity, season: season)
+    }
   }
 
   /// 复用（Fork）一个订阅分享

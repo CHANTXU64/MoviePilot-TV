@@ -1328,7 +1328,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
   func testRestoringDefaultDownloaderClearsPreviouslySelectedDownloader() async throws {
     try await checkSubscriptionEdit(
-      edit: { $0.downloaderSelection = "" },
+      // 下载器选「默认」时，规则设置行把空选择记为未指定。
+      edit: { $0.subscribe.downloader = nil },
       check: { body, saved in
         XCTAssertTrue(body["downloader"] is NSNull)
         XCTAssertNil(saved.downloader)
@@ -1830,6 +1831,34 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await viewModel.cancel()
   }
 
+  /// 复用分享时后端可能拿回同季的试看订阅，按编辑打开它也不能改：不加载设置，只提示等试看结束。
+  func testEpisodeTrialRowIsNeverOpenedForEditing() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSuperSubscriber(service)
+
+    let trial = Subscribe(
+      id: 818, name: "试看中", type: "电视剧", season: 1, tmdbid: 123484, filter: "tv-episode-trial-1800000000-e")
+    let viewModel = SubscribeSheetViewModel(subscribe: trial, isNewSubscription: false, apiService: service)
+    let loaded = await viewModel.loadData()
+    XCTAssertFalse(loaded)
+    XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
+    XCTAssertFalse(viewModel.canCancelEpisodeTrial, "编辑的就是试看订阅，不提供取消后继续")
+    let siteRequests = await SubscribeSheetURLProtocol.stub.requestCount(method: "GET", path: "/api/v1/site/rss")
+    XCTAssertEqual(siteRequests, 0)
+    let saved = await viewModel.save()
+    XCTAssertFalse(saved)
+    let writes = await SubscribeSheetURLProtocol.stub.requestCount(method: "PUT")
+    XCTAssertEqual(writes, 0, "不写入试看订阅")
+  }
+
   func testCreatedReceiptForEpisodeTrialRowIsNeitherEditedNorRolledBack() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
@@ -1864,9 +1893,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE", path: "/api/v1/subscribe/815")
+    let pauseCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe/status/815")
     XCTAssertFalse(loaded)
     XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
     XCTAssertNil(viewModel.subscribe.id)
+    XCTAssertEqual(pauseCount, 0, "认出是试看订阅之前不暂停")
     XCTAssertEqual(deleteCount, 0)
   }
 
@@ -1992,6 +2024,9 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe",
       json: #"{"success":true,"message":"任意展示文案","data":{"id":813}}"#
     )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/813",
+      json: #"{"id":813,"name":"晚到创建","type":"电影","tmdbid":123458,"state":"R"}"#)
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
@@ -2017,6 +2052,50 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "DELETE", path: "/api/v1/subscribe/813")
     XCTAssertEqual(pauseRequestCount, 0)
     XCTAssertEqual(deleteRequestCount, 1)
+  }
+
+  /// 新增请求还没返回时关掉面板，返回的却是同季的试看订阅：不能把它当成刚建的订阅暂停或回滚删掉。
+  func testDismissDuringPostKeepsReturnedEpisodeTrialRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/media/123482", json: "{}")
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe")
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "POST", path: "/api/v1/subscribe",
+      json: #"{"success":true,"message":"订阅已存在","data":{"id":816}}"#)
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/816",
+      json: #"{"id":816,"name":"晚到试看","type":"电视剧","tmdbid":123482,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-c"}"#)
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(name: "晚到试看", type: "电视剧", season: 1, tmdbid: 123482),
+      isNewSubscription: true,
+      apiService: service
+    )
+    let loadTask = Task { await viewModel.loadData() }
+    try await waitUntil("subscription POST starts") {
+      await SubscribeSheetURLProtocol.stub.requestCount(method: "POST", path: "/api/v1/subscribe") == 1
+    }
+    await viewModel.cancel()
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe")
+    await loadTask.value
+    await viewModel.cancel()
+
+    let pauseCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe/status/816")
+    let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/816")
+    XCTAssertEqual(pauseCount, 0)
+    XCTAssertEqual(deleteCount, 0)
   }
 
   func testNewSubscriptionLoadStopsWhenPauseFails() async throws {
@@ -2049,7 +2128,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "GET", path: "/api/v1/subscribe/801")
     let siteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "GET", path: "/api/v1/site/rss")
-    XCTAssertEqual(firstDetailRequestCount, 0)
+    XCTAssertEqual(firstDetailRequestCount, 1, "暂停前先读一遍，认清不是试看订阅")
     XCTAssertEqual(siteRequestCount, 0)
     XCTAssertTrue(viewModel.canRetryLoad)
 
@@ -2070,7 +2149,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "GET", path: "/api/v1/subscribe/801")
     XCTAssertEqual(postCountWithoutSlash + postCountWithSlash, 1)
     XCTAssertEqual(pauseRequestCount, 2)
-    XCTAssertEqual(finalDetailRequestCount, 1)
+    XCTAssertEqual(finalDetailRequestCount, 2, "重试不再重读认领，只在暂停后读一次")
     XCTAssertNil(viewModel.loadErrorMessage)
     XCTAssertFalse(viewModel.canRetryLoad)
   }

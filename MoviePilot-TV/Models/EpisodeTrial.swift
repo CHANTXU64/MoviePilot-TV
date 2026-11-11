@@ -22,7 +22,7 @@ nonisolated enum EpisodeTrialAvailability {
   }
 }
 
-/// 与服务器和账号绑定的试看订阅配置，具体的季集来自每次请求。全部留空表示沿用 MoviePilot 的默认设置。
+/// 与服务器和账号绑定的试看订阅配置，具体的季集来自每次请求。没指定的项保留 MoviePilot 默认订阅配置的值。
 /// 不含整理类别：试看的这一集按 MoviePilot 自动识别的类别整理，和正式订阅进同一个媒体库。
 nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
   var sites: [Int]? = nil
@@ -71,22 +71,24 @@ nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
 
   var isDefault: Bool { self == EpisodeTrialRule() }
 
-  func apply(to draft: inout Subscribe) {
-    draft.sites = sites
-    draft.search_imdbid = searchByIMDb ? 1 : 0
-    draft.keyword = nonEmpty(keyword)
-    draft.quality = nonEmpty(quality)
-    draft.resolution = nonEmpty(resolution)
-    draft.effect = nonEmpty(effect)
-    draft.include = nonEmpty(include)
-    draft.exclude = nonEmpty(exclude)
-    draft.custom_words = nonEmpty(customWords)
-    draft.filter_groups = filterGroups
-    draft.downloader = nonEmpty(downloader)
-    draft.save_path = nonEmpty(savePath)
+  /// 只写规则里指定了的项，没指定的保留草稿原值：试看订阅上是 MoviePilot 新建时按默认订阅配置填好的值，
+  /// 规则编辑表单上是空。包含规则例外：试看订阅创建时写成了拒绝所有资源，没指定就换成 `includeFallback`。
+  /// IMDb 搜索只有开和不指定两种，不指定时沿用原值。
+  func apply(to draft: inout Subscribe, includeFallback: String? = nil) {
+    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
+    if let sites = sites, !sites.isEmpty { draft.sites = sites }
+    if searchByIMDb { draft.search_imdbid = 1 }
+    if let keyword = text(keyword) { draft.keyword = keyword }
+    if let quality = text(quality) { draft.quality = quality }
+    if let resolution = text(resolution) { draft.resolution = resolution }
+    if let effect = text(effect) { draft.effect = effect }
+    draft.include = text(include) ?? includeFallback
+    if let exclude = text(exclude) { draft.exclude = exclude }
+    if let customWords = text(customWords) { draft.custom_words = customWords }
+    if let filterGroups = filterGroups, !filterGroups.isEmpty { draft.filter_groups = filterGroups }
+    if let downloader = text(downloader) { draft.downloader = downloader }
+    if let savePath = text(savePath) { draft.save_path = savePath }
   }
-
-  private func nonEmpty(_ value: String?) -> String? { value == "" ? nil : value }
 }
 
 nonisolated struct EpisodeTrialRequest: Sendable {
@@ -191,8 +193,12 @@ nonisolated struct EpisodeTrialJob: Codable, Sendable {
   var searchFinished = false
   /// 补搜已受理且不能排除提交过下载。为真时不得重新发起，只能沿下载历史继续跟踪。
   var searchMayHaveDownloaded = false
+  /// 补搜回执没拿到时订阅就没了，从这时起按下载历史等那次搜索的结果；过了搜索最长运行时间仍没有就不会再有。
+  var searchLostSince: Date?
   var downloadHash: String?
   var downloader: String?
+  /// 下载在下载器、整理队列和整理历史里都确认找不到的起始时刻。
+  var downloadMissingSince: Date?
   /// MoviePilot 识别出的标准标题，整理历史按它查询。
   var historyTitle: String?
   var previousDownloadHistoryIDs: Set<Int> = []
@@ -210,6 +216,16 @@ nonisolated struct EpisodeTrialJob: Codable, Sendable {
     if progress == .organizationFailed { return temporary == nil && creationMarker == nil }
     return !progress.isReady && formalSubscriptionID == nil && temporary == nil && creationMarker == nil
       && !searchPending && !searchMayHaveDownloaded && downloadHash == nil
+  }
+
+  /// 媒体库里这一集可能刚有或刚没：从没查过、整理中或整理完在等入库、整理失败（可能在 MoviePilot 重新整理）、
+  /// 已经可以播放（可能又被删掉）时。
+  /// 其余时候（搜索、下载中）这一集不会进媒体库，按集索引缓存查就够了，不用每次轮询都重读各台媒体服务器。
+  var libraryMayChange: Bool {
+    switch progress {
+    case .checking, .organizing, .organizationFailed, .waitingForLibrary, .ready: true
+    default: false
+    }
   }
 
   /// 服务器上可能还留着本任务的临时订阅，需要定时对账并清理。
@@ -264,6 +280,9 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
   let owner: String
   // 只保存表单指纹。用户从其他入口编辑过这条订阅时，TV 放弃自动清理。
   var fingerprints: Set<String> = []
+  /// 本服务写进去的试看规则按含义归一后的摘要。写入后没读回来时，后端对空值或站点顺序的整理让表单指纹对不上，
+  /// 按这个认出仍是自己写的样子。
+  var writtenSettings: String?
 
   static func fingerprint(_ row: Subscribe) throws -> String {
     let blank = Subscribe(id: row.id, name: "", type: "")
@@ -286,18 +305,31 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
   /// 回读的订阅是否仍是这次写入的试看设置。季集锁定和洗版开关必须原样保留；
   /// 规则按含义比较：空文本与缺省相同，站点与缺省的空列表相同且不计顺序。
   static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
+    guard let written = try? settingsDigest(draft), let read = try? settingsDigest(row) else { return false }
+    return written == read
+  }
+
+  /// `preservesSettings` 比较的那组字段按含义归一后的摘要。
+  static func settingsDigest(_ row: Subscribe) throws -> String {
+    struct Settings: Encodable {
+      let season, start, total, bestVersion, bestVersionFull: Int?
+      let searchIMDb: Int
+      let sites: [Int]
+      let filterGroups: [String]
+      let texts: [String?]
+    }
     func text(_ value: String?) -> String? { value == "" ? nil : value }
-    guard row.season == draft.season, row.start_episode == draft.start_episode,
-      row.total_episode == draft.total_episode, row.best_version == draft.best_version,
-      row.best_version_full == draft.best_version_full,
-      (row.search_imdbid ?? 0) == (draft.search_imdbid ?? 0),
-      Set(row.sites ?? []) == Set(draft.sites ?? []), (row.filter_groups ?? []) == (draft.filter_groups ?? [])
-    else { return false }
-    let texts: [KeyPath<Subscribe, String?>] = [
-      \.keyword, \.quality, \.resolution, \.effect, \.include, \.exclude, \.custom_words, \.downloader,
-      \.save_path,
-    ]
-    return texts.allSatisfy { text(row[keyPath: $0]) == text(draft[keyPath: $0]) }
+    let settings = Settings(
+      season: row.season, start: row.start_episode, total: row.total_episode, bestVersion: row.best_version,
+      bestVersionFull: row.best_version_full, searchIMDb: row.search_imdbid ?? 0,
+      sites: Array(Set(row.sites ?? [])).sorted(), filterGroups: row.filter_groups ?? [],
+      texts: [
+        row.keyword, row.quality, row.resolution, row.effect, row.include, row.exclude, row.custom_words,
+        row.downloader, row.save_path,
+      ].map(text))
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return String(decoding: try encoder.encode(settings), as: UTF8.self)
   }
 }
 
@@ -449,6 +481,22 @@ nonisolated extension Subscribe {
   /// 单集试看建的临时订阅。期间占着这一季，不能另建、编辑、暂停或取消，试看结束后自动删除。
   var isEpisodeTrial: Bool { EpisodeTrialTemporarySubscription.isTrialRow(self) }
 
+  /// 是否是按这个媒体身份和季删除时会被一起删掉的试看订阅。MoviePilot 按来源对应的 ID 列匹配，
+  /// 不看剧集组；`season` 为空时整部剧都算。
+  func isEpisodeTrial(of identity: MediaIdentity, season: Int?) -> Bool {
+    guard isEpisodeTrial, season == nil || self.season == season else { return false }
+    if self.identity == identity { return true }
+    let sourceID: String? =
+      switch identity.source {
+      case "themoviedb": tmdbid.map(String.init)
+      case "douban": doubanid
+      case "bangumi": bangumiid.map(String.init)
+      case "anilist": anilistid.map(String.init)
+      default: nil
+      }
+    return sourceID == identity.mediaId
+  }
+
   /// 试看的是哪一季哪一集，例如「第 2 季第 5 集」，订阅卡上代替集数进度显示。
   var episodeTrialTargetText: String? {
     guard isEpisodeTrial, let episode = start_episode, episode > 0 else { return nil }
@@ -469,6 +517,8 @@ nonisolated enum EpisodeTrialHoldNotice {
   static let cancelAndSubscribeTitle = "取消试看，继续订阅"
   static let backTitle = "返回"
   static let cancelFailure = "暂时无法取消试看，请稍后重试。"
+  /// 按季或整部剧取消订阅时，同一季还有试看订阅（可能在另一个剧集组）。
+  static let deleteBlockedMessage = "这一季正在试看，先取消试看再取消订阅。"
 }
 
 /// 试看的这一集入库后的提示。用户多半已经离开详情页，看不到进度，所以用全局提示告诉他可以播放了。

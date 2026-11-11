@@ -308,7 +308,6 @@ class HomeViewModel: ObservableObject {
     return success
   }
 
-  /// 删除订阅
   /// 当前账号能否取消试看订阅（管理员）。
   var canCancelEpisodeTrial: Bool { apiService.sessionScope.episodeTrial.canCancelTrial }
 
@@ -322,6 +321,7 @@ class HomeViewModel: ObservableObject {
     return true
   }
 
+  /// 删除订阅
   func deleteSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }

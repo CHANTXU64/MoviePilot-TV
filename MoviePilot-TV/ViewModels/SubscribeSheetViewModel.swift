@@ -33,6 +33,8 @@ class SubscribeSheetViewModel: ObservableObject {
     let id: Int
     let profileKey: String
     let session: APIServiceSessionSnapshot
+    /// 读过这条订阅、确认不是试看订阅。后端按季去重，“新增”可能拿回同季的试看订阅，认清之前不能暂停或回滚它。
+    var isClaimed = false
   }
   // 仅在最后一次查询明确不存在后，绑定本次 POST 返回的 ID、账号与会话。
   private var createdSubscriptionReceipt: CreatedSubscriptionReceipt?
@@ -43,9 +45,7 @@ class SubscribeSheetViewModel: ObservableObject {
 
   private let apiService: APIService
 
-  let qualityOptions = SubscribeRuleChoices.quality
   let resolutionOptions = SubscribeRuleChoices.resolution
-  let effectOptions = SubscribeRuleChoices.effect
 
   var seasonOptions: [Int] {
     Array(0...100)
@@ -55,11 +55,6 @@ class SubscribeSheetViewModel: ObservableObject {
     get { subscribe.total_episode.map(String.init) ?? "" }
     // 总集数只接受非负整数；空白、非法文本和负数都恢复为后端的自动值 nil。
     set { subscribe.total_episode = Int(newValue).flatMap { $0 >= 0 ? $0 : nil } }
-  }
-
-  var downloaderSelection: String {
-    get { subscribe.downloader ?? "" }
-    set { subscribe.downloader = newValue.isEmpty ? nil : newValue }
   }
 
   /// 订阅方式：沿用 Web「选择订阅方式」的三种说法，映射到 `best_version` / `best_version_full`。
@@ -158,11 +153,6 @@ class SubscribeSheetViewModel: ObservableObject {
     SubscribeRuleChoices.sitesSummary(subscribe.sites, sites: sites, empty: empty, count: count)
   }
 
-  /// 规则组摘要：不选表示使用默认规则。
-  var filterGroupsSummary: String {
-    SubscribeRuleChoices.filterGroupsSummary(subscribe.filter_groups)
-  }
-
   /// 规则类设置行的可选值。
   var ruleOptions: SubscribeRuleOptions {
     SubscribeRuleOptions(
@@ -223,6 +213,11 @@ class SubscribeSheetViewModel: ObservableObject {
     guard !isLoading else { return false }
     guard apiService.canAccess(.subscribe) else {
       clearLoadedOptions()
+      return false
+    }
+    // 试看订阅由试看服务管着，哪个入口（订阅卡、复用分享拿回的同季订阅）都不能打开来编辑。
+    if !isNewSubscription, subscribe.isEpisodeTrial {
+      showEpisodeTrialInProgress(id: subscribe.id)
       return false
     }
 
@@ -408,6 +403,14 @@ class SubscribeSheetViewModel: ObservableObject {
     id: Int,
     from snapshot: APIServiceSessionSnapshot
   ) async throws -> Bool {
+    if createdSubscriptionReceipt?.isClaimed != true {
+      guard try await claimCreatedSubscription(id: id, from: snapshot) else { return false }
+      if shouldRollbackCreatedSubscription {
+        await rollbackCreatedSubscriptionIfNeeded()
+        clearLoadedOptions()
+        return false
+      }
+    }
     let pauseResult = try await apiService.updateSubscriptionStatus(id: id, state: "S")
     guard pauseResult.success else {
       canRetryLoad = true
@@ -431,13 +434,6 @@ class SubscribeSheetViewModel: ObservableObject {
       clearLoadedOptions()
       return false
     }
-    // 后端按季去重，同季试看订阅还在时“新增”会拿回它。它不是本次创建的，不能当成自己的订阅回滚或编辑。
-    if fullSubscribe.isEpisodeTrial {
-      createdSubscriptionReceipt = nil
-      subscribe.id = nil
-      showEpisodeTrialInProgress(id: fullSubscribe.id)
-      return false
-    }
     if shouldRollbackCreatedSubscription {
       await rollbackCreatedSubscriptionIfNeeded()
       clearLoadedOptions()
@@ -446,6 +442,24 @@ class SubscribeSheetViewModel: ObservableObject {
     self.subscribe = fullSubscribe
     self.original = fullSubscribe
     isCreatedAndPaused = true
+    return true
+  }
+
+  /// 先读一遍“新增”拿回的订阅。后端按季去重，同季试看订阅还在时拿回的是它：它不是本次创建的，
+  /// 放下回执，不暂停、不回滚也不编辑，改为提示这一季正在试看。
+  private func claimCreatedSubscription(id: Int, from snapshot: APIServiceSessionSnapshot) async throws -> Bool {
+    let row = try await apiService.fetchSubscription(id: id)
+    guard canPublishLoadResult(from: snapshot), currentCreatedSubscriptionReceipt()?.id == id else {
+      clearLoadedOptions()
+      return false
+    }
+    guard !row.isEpisodeTrial else {
+      createdSubscriptionReceipt = nil
+      subscribe.id = nil
+      showEpisodeTrialInProgress(id: id)
+      return false
+    }
+    createdSubscriptionReceipt?.isClaimed = true
     return true
   }
 
@@ -459,9 +473,10 @@ class SubscribeSheetViewModel: ObservableObject {
     isHeldByEpisodeTrial = false
   }
 
-  /// 当前账号能否取消试看订阅（管理员）。
+  /// 当前账号能否取消试看订阅（管理员）。只在新增订阅时提供：取消后接着准备的是这次新增；
+  /// 编辑的就是那条试看订阅时，取消后没有可编辑的了，只提示等试看结束。
   var canCancelEpisodeTrial: Bool {
-    heldTrialSubscriptionID != nil && apiService.sessionScope.episodeTrial.canCancelTrial
+    isNewSubscription && heldTrialSubscriptionID != nil && apiService.sessionScope.episodeTrial.canCancelTrial
   }
 
   /// 「取消试看，继续订阅」：先取消占着这一季的试看订阅，再重新准备这次订阅；失败时可以重试。
@@ -510,6 +525,10 @@ class SubscribeSheetViewModel: ObservableObject {
     guard !isSaving else { return false }
     guard (subscribe.id ?? 0) > 0 else {
       errorMessage = "订阅信息不完整，无法保存。"
+      return false
+    }
+    guard !original.isEpisodeTrial else {
+      showEpisodeTrialInProgress(id: original.id)
       return false
     }
     isSaving = true
@@ -624,6 +643,15 @@ class SubscribeSheetViewModel: ObservableObject {
     defer { isRollingBackCreatedSubscription = false }
 
     do {
+      // 还没认清的回执先读一遍，拿回的是试看订阅就不删。
+      if !receipt.isClaimed {
+        let row = try await apiService.fetchSubscription(id: receipt.id)
+        guard currentCreatedSubscriptionReceipt()?.id == receipt.id else { return }
+        guard !row.isEpisodeTrial else {
+          createdSubscriptionReceipt = nil
+          return
+        }
+      }
       guard try await apiService.deleteSubscription(id: receipt.id),
         currentCreatedSubscriptionReceipt()?.id == receipt.id
       else {
