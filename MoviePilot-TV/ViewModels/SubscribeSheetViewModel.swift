@@ -19,6 +19,8 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var errorMessage: String?
   @Published var loadErrorMessage: String?
   @Published var canRetryLoad = false
+  /// 这一季正被试看订阅占着。Sheet 用系统提示框告知后关闭，等试看结束再订阅。
+  @Published private(set) var isHeldByEpisodeTrial = false
 
   // 最后一次查询确认不存在时才保持为新订阅；查到既有记录后切换为编辑。
   @Published private(set) var isNewSubscription: Bool
@@ -297,6 +299,10 @@ class SubscribeSheetViewModel: ObservableObject {
               clearLoadedOptions()
               return false
             }
+            guard !EpisodeTrialTemporarySubscription.isTrialRow(fullSubscribe) else {
+              showEpisodeTrialInProgress()
+              return false
+            }
             self.subscribe = fullSubscribe
             self.original = fullSubscribe
             isNewSubscription = false
@@ -451,6 +457,13 @@ class SubscribeSheetViewModel: ObservableObject {
       clearLoadedOptions()
       return false
     }
+    // 后端按季去重，同季试看订阅还在时“新增”会拿回它。它不是本次创建的，不能当成自己的订阅回滚或编辑。
+    if EpisodeTrialTemporarySubscription.isTrialRow(fullSubscribe) {
+      createdSubscriptionReceipt = nil
+      subscribe.id = nil
+      showEpisodeTrialInProgress()
+      return false
+    }
     if shouldRollbackCreatedSubscription {
       await rollbackCreatedSubscriptionIfNeeded()
       clearLoadedOptions()
@@ -460,6 +473,15 @@ class SubscribeSheetViewModel: ObservableObject {
     self.original = fullSubscribe
     isCreatedAndPaused = true
     return true
+  }
+
+  /// 后端按季去重，试看订阅还在时这一季没法另建订阅。
+  private func showEpisodeTrialInProgress() {
+    isHeldByEpisodeTrial = true
+  }
+
+  func acknowledgeEpisodeTrialHold() {
+    isHeldByEpisodeTrial = false
   }
 
   private func clearLoadedOptions() {

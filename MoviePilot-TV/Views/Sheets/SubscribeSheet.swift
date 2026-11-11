@@ -56,6 +56,21 @@ struct SubscribeSheet: View {
     } message: {
       Text(SubscribeIdentityResetConfirmation.message)
     }
+    .alert(
+      "这一季正在试看",
+      isPresented: Binding(
+        get: { viewModel.isHeldByEpisodeTrial },
+        set: { isPresented in
+          guard !isPresented, viewModel.isHeldByEpisodeTrial else { return }
+          viewModel.acknowledgeEpisodeTrialHold()
+          dismiss()
+        }
+      )
+    ) {
+      Button("好", role: .cancel) {}
+    } message: {
+      Text("试看结束后再订阅这一季。")
+    }
     .onAppear {
       guard !hasAppeared else { return }
       hasAppeared = true

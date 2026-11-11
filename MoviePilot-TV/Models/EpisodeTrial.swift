@@ -71,6 +71,10 @@ nonisolated struct EpisodeTrialRequest: Sendable {
   var seasonKey: String { "\(playbackContext.tmdbID)|\(season)|\(episodeGroup ?? "")" }
   var key: String { "\(seasonKey)|\(episodeID)|\(episodeNumber)" }
 
+  var target: EpisodeTrialTarget {
+    EpisodeTrialTarget(identity: identity, season: season, episodeGroup: episodeGroup, seasonKey: seasonKey)
+  }
+
   var knownIdentities: Set<MediaIdentity> {
     var identities: Set<MediaIdentity> = [identity]
     for (source, id) in playbackContext.expected.externalIDs {
@@ -80,6 +84,25 @@ nonisolated struct EpisodeTrialRequest: Sendable {
     }
     return identities
   }
+}
+
+/// 临时订阅属于哪一季。随任务持久化，定时清理不需要用户重新打开这一集。
+nonisolated struct EpisodeTrialTarget: Codable, Equatable, Sendable {
+  let source: String
+  let mediaId: String
+  let season: Int
+  let episodeGroup: String?
+  let seasonKey: String
+
+  init(identity: MediaIdentity, season: Int, episodeGroup: String?, seasonKey: String) {
+    source = identity.source
+    mediaId = identity.mediaId
+    self.season = season
+    self.episodeGroup = episodeGroup
+    self.seasonKey = seasonKey
+  }
+
+  var identity: MediaIdentity { MediaIdentity(source: source, mediaId: mediaId) }
 }
 
 nonisolated enum EpisodeTrialProgress: Equatable, Codable, Sendable {
@@ -105,6 +128,7 @@ nonisolated enum EpisodeTrialProgress: Equatable, Codable, Sendable {
 
 nonisolated struct EpisodeTrialJob: Codable, Sendable {
   var progress: EpisodeTrialProgress = .checking
+  var target: EpisodeTrialTarget?
   var formalSubscriptionID: Int?
   var temporary: EpisodeTrialTemporarySubscription?
   var finishedTemporaryID: Int?
@@ -118,18 +142,28 @@ nonisolated struct EpisodeTrialJob: Codable, Sendable {
   var searchMayHaveDownloaded = false
   var downloadHash: String?
   var downloader: String?
+  /// MoviePilot 识别出的标准标题，整理历史按它查询。
+  var historyTitle: String?
   var previousDownloadHistoryIDs: Set<Int> = []
 
   var isTracking: Bool {
     if progress.isReady { return temporary != nil || creationMarker != nil }
     return formalSubscriptionID != nil || temporary != nil || creationMarker != nil || searchPending
-      || batchID != nil || searchMayHaveDownloaded || downloadHash != nil
+      || (batchID != nil && !searchFinished) || searchMayHaveDownloaded || downloadHash != nil
   }
 
   /// 服务器上不再有本任务的临时订阅，也不会有本任务提交的下载时，才允许重新发起。
   var canRestart: Bool {
     !progress.isReady && formalSubscriptionID == nil && temporary == nil && creationMarker == nil
       && !searchPending && !searchMayHaveDownloaded && downloadHash == nil
+  }
+
+  /// 服务器上可能还留着本任务的临时订阅，需要定时对账并清理。
+  var needsCleanup: Bool { target != nil && (temporary != nil || creationMarker != nil) }
+
+  /// 临时订阅的创建时间，用来决定清理频率。
+  var cleanupStartedAt: Date? {
+    (temporary?.marker ?? creationMarker).flatMap(EpisodeTrialTemporarySubscription.creationDate(of:))
   }
 
   func isPending(at now: Date) -> Bool {
@@ -159,6 +193,10 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
     return Date(timeIntervalSince1970: value)
   }
 
+  static func isTrialRow(_ row: Subscribe) -> Bool {
+    row.filter?.hasPrefix(markerPrefix) == true
+  }
+
   /// 只创建、还没写入试看规则的占位订阅拒绝所有资源，删除它不会丢失用户设置或打断下载。
   static func isAbandonedPlaceholder(_ row: Subscribe, owner: String, now: Date) -> Bool {
     guard let id = row.id, id > 0, row.type == "电视剧", row.username == owner,
@@ -184,11 +222,30 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
     return Data(SHA256.hash(data: bytes)).base64EncodedString()
   }
 
-  func matches(_ row: Subscribe, request: EpisodeTrialRequest) -> Bool {
+  func matches(_ row: Subscribe, target: EpisodeTrialTarget) -> Bool {
     row.id == id && row.username == owner && row.type == "电视剧"
-      && row.identity == request.identity && row.season == request.season
-      && trimmedNonEmpty([row.episode_group]) == request.episodeGroup
+      && row.identity == target.identity && row.season == target.season
+      && trimmedNonEmpty([row.episode_group]) == target.episodeGroup
       && row.filter == marker
+  }
+
+  /// 回读的订阅是否仍是这次写入的试看设置。季集锁定和洗版开关必须原样保留；
+  /// 规则按含义比较：空文本与缺省相同，站点与缺省的空列表相同且不计顺序。
+  static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
+    func text(_ value: String?) -> String? { value == "" ? nil : value }
+    guard row.season == draft.season, row.start_episode == draft.start_episode,
+      row.total_episode == draft.total_episode, row.best_version == draft.best_version,
+      row.best_version_full == draft.best_version_full,
+      (row.search_imdbid ?? 0) == (draft.search_imdbid ?? 0),
+      Set(row.sites ?? []) == Set(draft.sites ?? []), (row.filter_groups ?? []) == (draft.filter_groups ?? [])
+    else { return false }
+    let texts: [KeyPath<Subscribe, String?>] = [
+      \.keyword, \.quality, \.resolution, \.effect, \.include, \.exclude, \.custom_words, \.downloader,
+      \.save_path,
+    ]
+    guard texts.allSatisfy({ text(row[keyPath: $0]) == text(draft[keyPath: $0]) }) else { return false }
+    guard let category = text(draft.media_category_id) else { return true }
+    return text(row.media_category_id) == category
   }
 }
 
@@ -273,6 +330,7 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   }
 
   let id: Int
+  let title: String?
   let media_source: String?
   let media_id: String?
   let seasons: String?
@@ -284,12 +342,14 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let note: Note?
 
   private enum CodingKeys: String, CodingKey {
-    case id, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status, note
+    case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
+    case note
   }
 
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(Int.self, forKey: .id)
+    title = try? values.decodeIfPresent(String.self, forKey: .title)
     media_source = try values.decodeIfPresent(String.self, forKey: .media_source)
     media_id = try values.decodeIfPresent(String.self, forKey: .media_id)
     seasons = try values.decodeIfPresent(String.self, forKey: .seasons)
