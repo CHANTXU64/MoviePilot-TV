@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -799,8 +800,43 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await catalog.load(tmdbID: 987_654, apiService: service)
 
     XCTAssertTrue(catalog.groups.isEmpty)
+    XCTAssertTrue(catalog.hasLoadFailed)
     let requests = await stub.requestCount(path: "/api/v1/media/groups/987654")
     XCTAssertEqual(requests, 2)
+  }
+
+  func testFailedEpisodeGroupCatalogShowsRetryAndRecoversManually() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.failEpisodeGroupRequests(2)
+    await stub.setEpisodeGroupsResponse(#"[{"id":"group-a","name":"Story Arc","group_count":2,"episode_count":10}]"#)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "episode-group-manual-retry")
+
+    let catalog = EpisodeGroupCatalog(apiService: service)
+    let menu = EpisodeGroupMenu(catalog: catalog, selection: .constant(""))
+    XCTAssertFalse(menu.isVisible)
+    let session = service.sessionSnapshot()
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+    XCTAssertTrue(catalog.hasLoadFailed)
+    XCTAssertTrue(menu.isVisible, "连续失败后应显示重试入口")
+
+    let failedKey = catalog.loadKey(session: session)
+    catalog.retryLoad()
+    XCTAssertFalse(catalog.hasLoadFailed)
+    XCTAssertNotEqual(catalog.loadKey(session: session), failedKey, "手动重试必须让界面加载任务重新执行")
+    try await catalog.load(tmdbID: 987_654, apiService: service)
+
+    XCTAssertEqual(catalog.groups.map(\.id), ["group-a"])
+    XCTAssertFalse(catalog.hasLoadFailed)
+    XCTAssertTrue(menu.isVisible)
+    let requests = await stub.requestCount(path: "/api/v1/media/groups/987654")
+    XCTAssertEqual(requests, 3)
   }
 
   func testEpisodeBrowserCompletesPartialDefaultSeasonsEvenWithASeasonHint() async throws {
@@ -1117,6 +1153,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
 
     let initial = try await service.getGroupSeasons(groupId: "group-retry")
     XCTAssertTrue(initial.isEmpty)
+    let initialRequests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-retry")
+    XCTAssertEqual(initialRequests, 1, "空结果按 Web 原样返回，不在同一次读取里重查")
 
     await stub.setGroupSeasons(groupId: "group-retry", seasonNumber: 2)
     let retried = try await service.getGroupSeasons(groupId: "group-retry")
@@ -1124,10 +1162,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(retried.compactMap(\.season_number), [2])
     XCTAssertEqual(updated.compactMap(\.season_number), [2])
     let requests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-retry")
-    XCTAssertEqual(requests, 3)
+    XCTAssertEqual(requests, 2)
   }
 
-  func testSeasonManagementRetriesEmptyOnceAndCanRecoverOnReentry() async throws {
+  func testSeasonManagementDoesNotRetryEmptyButRecoversOnReentry() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
@@ -1147,7 +1185,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertFalse(firstVisit.hasSeasonLoadError)
     XCTAssertFalse(firstVisit.isLoading)
     let firstVisitRequests = await stub.requestCount(path: "/api/v1/media/seasons")
-    XCTAssertEqual(firstVisitRequests, 2)
+    XCTAssertEqual(firstVisitRequests, 1)
 
     await stub.setUnfilteredSeasonsResponse(#"[{"season_number":2,"episode_count":12}]"#)
     let secondVisit = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
@@ -1157,7 +1195,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(secondVisit.defaultSeasonInfos.compactMap(\.episode_count), [12])
     XCTAssertFalse(secondVisit.hasSeasonLoadError)
     let secondVisitRequests = await stub.requestCount(path: "/api/v1/media/seasons")
-    XCTAssertEqual(secondVisitRequests, 3)
+    XCTAssertEqual(secondVisitRequests, 2)
   }
 
   func testSubscriptionRecoveryUpdatesEpisodeBrowsersSharedSeasonList() async throws {
@@ -1187,7 +1225,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(episodeCatalog.seasonsByGroup["group-a"]?.compactMap(\.season_number), [2])
     XCTAssertFalse(viewModel.hasSeasonLoadError)
     let requests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-a")
-    XCTAssertEqual(requests, 3)
+    XCTAssertEqual(requests, 2)
   }
 
   func testSharedEpisodeSeasonsRecoverAfterSameAccountTokenRefresh() async throws {

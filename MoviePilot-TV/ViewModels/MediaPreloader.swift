@@ -209,7 +209,10 @@ class MediaPreloadTask: ObservableObject {
   @Published var isDetailReady = false
   @Published private(set) var isDetailFailed = false
   @Published private(set) var detailRetryNumber: Int?
-  fileprivate var hasNavigationOwner = false
+  /// 详情终止加载的原因，供过渡画面说明。
+  @Published private(set) var detailFailureReason: String?
+  /// 由预加载器提供：当前是否有导航页面持有本任务。只在预加载器的 owner 表里记录一份。
+  fileprivate var isNavigationOwned: @MainActor () -> Bool = { false }
 
   // 可选预加载数据（持久存在，加载完直接显示）
   @Published var tmdbId: Int?
@@ -259,6 +262,7 @@ class MediaPreloadTask: ObservableObject {
     isDetailReady = true
     isDetailFailed = false
     detailRetryNumber = nil
+    detailFailureReason = nil
   }
 
   nonisolated static func hasDisplayableDetail(_ detail: MediaInfo) -> Bool {
@@ -367,7 +371,7 @@ class MediaPreloadTask: ObservableObject {
     guard let uiIdentity = apiService?.uiIdentity,
       partialMedia.identity != nil, trimmedNonEmpty([partialMedia.type]) != nil
     else {
-      isDetailFailed = true
+      markDetailFailed(reason: nil)
       return
     }
 
@@ -399,22 +403,21 @@ class MediaPreloadTask: ObservableObject {
             metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
           )
         }
-      } catch APIError.invalidURL {
-        guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-        isDetailFailed = true
-        detailRetryNumber = nil
-        return
       } catch {
         guard !Task.isCancelled, apiService.uiIdentity == uiIdentity else { return }
         Logger.error(
           "加载详情失败（第 \(attempt) 次，\(type(of: error))）",
           metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
         )
+        // 会话已更换时，旧请求的错误不代表当前结果，按可重试处理。
+        if apiService.isSessionUnchanged(from: snapshot), !Self.canRetryDetail(after: error) {
+          markDetailFailed(reason: Self.detailFailureReason(for: error))
+          return
+        }
       }
       // 焦点候选只短暂预载。实际打开的详情在导航 owner 存活期间继续等待。
-      if attempt >= 3, !hasNavigationOwner {
-        isDetailFailed = true
-        detailRetryNumber = nil
+      if attempt >= 3, !isNavigationOwned() {
+        markDetailFailed(reason: nil)
         return
       }
       detailRetryNumber = attempt
@@ -425,6 +428,33 @@ class MediaPreloadTask: ObservableObject {
       }
       delay = min(delay * 2, .seconds(8))
     }
+  }
+
+  private func markDetailFailed(reason: String?) {
+    isDetailFailed = true
+    detailRetryNumber = nil
+    detailFailureReason = reason
+  }
+
+  /// 连接故障、网关错误、5xx、空详情和同账号重登打断的请求会继续重试；
+  /// 权限拒绝、4xx、业务失败和无法解析的响应重试也不会变化，直接停下并说明原因。
+  nonisolated static func canRetryDetail(after error: Error) -> Bool {
+    if error is CancellationError { return true }
+    guard let error = error as? APIError else { return false }
+    switch error {
+    case .networkError, .gatewayStatus:
+      return true
+    case .serverMessage(let message):
+      guard let status = APIService.httpStatusCode(fromServerMessage: message) else { return false }
+      return status >= 500 || status == 408 || status == 429
+    case .invalidURL, .decodingError, .authenticationChallenge, .credentialsRejected,
+      .mfaUnsupported, .unauthorized, .unknown:
+      return false
+    }
+  }
+
+  nonisolated static func detailFailureReason(for error: Error) -> String? {
+    trimmedNonEmpty([(error as? LocalizedError)?.errorDescription])
   }
 
   // MARK: - ② 预热背景图
@@ -851,6 +881,7 @@ class MediaPreloader: ObservableObject {
     let task = MediaPreloadTask(
       partialMedia: media, apiService: apiService, preparedContent: preparedContent
     )
+    task.isNavigationOwned = { [weak self] in self?.navigationOwners[key] != nil }
     guard apiService != nil else {
       task.cancel()
       return task
@@ -1002,14 +1033,12 @@ class MediaPreloader: ObservableObject {
       )
     }
     navigationOwners[key, default: []].insert(owner)
-    cache[key]?.hasNavigationOwner = true
   }
 
   private func unpin(key: String, owner: UUID) {
     navigationOwners[key]?.remove(owner)
     if navigationOwners[key]?.isEmpty == true {
       navigationOwners.removeValue(forKey: key)
-      cache[key]?.hasNavigationOwner = false
     }
   }
 

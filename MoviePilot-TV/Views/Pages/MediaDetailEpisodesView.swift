@@ -100,10 +100,10 @@ private struct LocalEpisodeGroupView<Content: View>: View {
     let session = apiService.sessionSnapshot()
     content(
       trimmedNonEmpty([selectedGroupID]),
-      EpisodeGroupMenu(groups: catalog.groups, selection: $selectedGroupID),
+      EpisodeGroupMenu(catalog: catalog, selection: $selectedGroupID),
       catalog
     )
-    .task(id: isActive ? session : nil) {
+    .task(id: isActive ? catalog.loadKey(session: session) : nil) {
       guard isActive, apiService.isSessionUnchanged(from: session) else { return }
       try? await catalog.load(tmdbID: tmdbID, apiService: apiService)
     }
@@ -374,7 +374,7 @@ private struct EpisodeBrowser: View {
           .frame(maxWidth: .infinity, alignment: .leading)
         episodePagePicker
         supplementalSeasonRetry
-        if let groupMenu, !groupMenu.groups.isEmpty {
+        if let groupMenu, groupMenu.isVisible {
           groupMenu.control(defaultSeasons: defaultMenuSeasons)
             .frame(maxWidth: 540, alignment: .trailing)
         }

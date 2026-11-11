@@ -301,13 +301,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     } else {
       let loadedSeasons: [TmdbSeason]
       if isSeasonManagementContext {
-        let initial = try await apiService.getMediaSeasons(media: mediaInfo)
-        if initial.isEmpty {
-          try validateSeasonLoad(load, snapshot: snapshot)
-          loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo, forceRefresh: true)
-        } else {
-          loadedSeasons = initial
-        }
+        loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo)
       } else {
         loadedSeasons = mediaInfo.season_info ?? []
       }

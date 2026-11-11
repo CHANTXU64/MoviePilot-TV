@@ -1549,6 +1549,13 @@ class APIService: ObservableObject {
     return APIError.serverMessage(description)
   }
 
+  /// 读回 `serverMessageError` 写入的 HTTP 状态码；业务失败等其他来源的消息返回 nil。
+  nonisolated static func httpStatusCode(fromServerMessage message: String) -> Int? {
+    let prefix = message.prefix { $0 != ":" }
+    guard prefix.count == 3, let status = Int(prefix), (100...599).contains(status) else { return nil }
+    return status
+  }
+
   private struct ErrorPayload: Decodable {
     let message: String?
     let message_i18n: String?
@@ -3186,8 +3193,10 @@ class APIService: ObservableObject {
       "season": allSeasons ? nil : media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
+    // 后端查询失败时也会回空列表。空结果不跨页面复用，下次进入按 Web 一样重新读取。
     return try await sessionCachedValue(
-      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh
+      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
+      acceptsCachedValue: { !$0.isEmpty }
     ) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
@@ -3200,20 +3209,14 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
-    let snapshot = sessionSnapshot()
+    // 与标准季表相同：空结果可能是后端查询失败，不跨页面复用。
     return try await sessionCachedValue(
       sessionScope.groupSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
       acceptsCachedValue: { !$0.isEmpty }
     ) { [weak self] in
       guard let self else { throw CancellationError() }
-      let data = try await makeRequest(endpoint: endpoint)
-      let seasons = try await decodeOrUnwrap([TmdbSeason].self, from: data)
-      guard seasons.isEmpty, !forceRefresh else { return seasons }
-
-      // 后端查询失败也可能回空。由同一个在途读取重查，所有等待者一起收到最终结果。
-      try validateSessionSnapshot(snapshot)
-      let retried = try await makeRequest(endpoint: endpoint)
-      return try await decodeOrUnwrap([TmdbSeason].self, from: retried)
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
     }
   }
 

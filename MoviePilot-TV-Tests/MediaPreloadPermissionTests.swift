@@ -44,6 +44,62 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(task.isDetailFailed)
   }
 
+  func testNavigatedDetailStopsOnClientErrorAndExplainsReason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 126, title: "不存在的详情", type: "电视剧")
+    let preloader = service.mediaPreloader
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: media, owner: UUID()))
+    defer { preloader.tearDown() }
+
+    try await waitUntil("4xx 直接终止") { task.isDetailFailed }
+    XCTAssertNil(task.detailRetryNumber)
+    XCTAssertEqual(task.detailFailureReason, "404: Not Found")
+    try await Task.sleep(for: .milliseconds(1700))
+    XCTAssertEqual(stub.requestPaths().filter { $0 == "/api/v1/media/126" }.count, 1)
+    XCTAssertTrue(preloader.preload(for: media) === task, "仍被导航持有的终态任务不重建")
+  }
+
+  func testDetailRetryPolicySeparatesTransientAndPermanentErrors() {
+    let retryable: [Error] = [
+      CancellationError(),
+      APIError.networkError(URLError(.timedOut)),
+      APIError.gatewayStatus(502, "502"),
+      APIService.serverMessageError(statusCode: 500, data: Data("{}".utf8)),
+      APIService.serverMessageError(statusCode: 429, data: Data()),
+    ]
+    for error in retryable {
+      XCTAssertTrue(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    let permanent: [Error] = [
+      APIError.invalidURL,
+      APIError.decodingError(URLError(.cannotDecodeContentData)),
+      APIError.authenticationChallenge(statusCode: 403, message: "无权访问"),
+      APIError.credentialsRejected,
+      APIError.mfaUnsupported,
+      APIError.unauthorized,
+      APIError.unknown,
+      APIService.serverMessageError(statusCode: 404, data: Data(#"{"detail":"Not Found"}"#.utf8)),
+      APIService.serverMessageError(statusCode: 422, data: Data()),
+      APIError.serverMessage("500 部影片未识别"),
+      APIError.serverMessage("Request failed"),
+    ]
+    for error in permanent {
+      XCTAssertFalse(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    XCTAssertEqual(
+      MediaPreloadTask.detailFailureReason(for: APIError.authenticationChallenge(statusCode: 403, message: nil)),
+      "HTTP 403"
+    )
+  }
+
   func testPoppingRetryingDetailReactivatesSourceAndCancelsRetry() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
@@ -1009,6 +1065,8 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       default:
         return (200, jsonData(#"{"tmdb_id":125,"title":"完整详情","type":"电视剧","season_info":[{"season_number":2},{"season_number":3}]}"#))
       }
+    case "/api/v1/media/126":
+      return (404, jsonData(#"{"detail":"Not Found"}"#))
     case "/api/v1/media/456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/987":

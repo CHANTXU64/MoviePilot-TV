@@ -1,8 +1,12 @@
 import SwiftUI
 
 struct EpisodeGroupMenu {
-  let groups: [EpisodeGroup]
+  let catalog: EpisodeGroupCatalog
   let selection: Binding<String>
+
+  var groups: [EpisodeGroup] { catalog.groups }
+  /// 有剧集组可选，或读取失败需要显示重试入口。
+  var isVisible: Bool { !groups.isEmpty || catalog.hasLoadFailed }
 
   @ViewBuilder
   func control(defaultSeasons: [TmdbSeason]?) -> some View {
@@ -13,6 +17,8 @@ struct EpisodeGroupMenu {
         options: EpisodeGroupPickerOptions.make(groups, defaultSeasons: defaultSeasons),
         label: { "剧集组：\($0)" }
       )
+    } else if catalog.hasLoadFailed {
+      Button("重试剧集组", systemImage: AppSymbol.retry, action: catalog.retryLoad)
     }
   }
 }

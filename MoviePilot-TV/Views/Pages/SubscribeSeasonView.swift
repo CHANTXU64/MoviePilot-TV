@@ -135,7 +135,7 @@ struct SubscribeSeasonContentView: View {
         expandedGrid(imageLifecycle: imageLifecycle)
       }
     }
-    .task(id: allowsEpisodeGroupRequests ? session : nil) {
+    .task(id: allowsEpisodeGroupRequests ? viewModel.episodeGroupCatalog.loadKey(session: session) : nil) {
       guard allowsEpisodeGroupRequests, apiService.isSessionUnchanged(from: session) else { return }
       try? await viewModel.loadEpisodeGroups()
     }
@@ -213,7 +213,7 @@ struct SubscribeSeasonContentView: View {
       lastFocus: seasons.last?.season_number
     ) {
       DetailExpansionHeader(title: "订阅   \(viewModel.mediaInfo.title ?? "")") {
-        if allSeasons.count > Self.seasonPageSize || !viewModel.episodeGroups.isEmpty {
+        if allSeasons.count > Self.seasonPageSize || episodeGroupMenu.isVisible {
           HStack(spacing: 20) {
             Spacer(minLength: 0)
             if allSeasons.count > Self.seasonPageSize {
@@ -247,8 +247,12 @@ struct SubscribeSeasonContentView: View {
     .fixedSize(horizontal: true, vertical: false)
   }
 
+  private var episodeGroupMenu: EpisodeGroupMenu {
+    EpisodeGroupMenu(catalog: viewModel.episodeGroupCatalog, selection: $viewModel.selectedGroupId)
+  }
+
   private var episodeGroupPicker: some View {
-    EpisodeGroupMenu(groups: viewModel.episodeGroups, selection: $viewModel.selectedGroupId)
+    episodeGroupMenu
       .control(defaultSeasons: viewModel.defaultSeasonInfos)
       .onChange(of: viewModel.selectedGroupId) { _, _ in
         seasonPageOffset = 0
@@ -276,7 +280,7 @@ struct SubscribeSeasonContentView: View {
       }
       .padding(.horizontal, 89)
 
-      if !viewModel.episodeGroups.isEmpty || viewModel.seasonInfos.count > 10 {
+      if episodeGroupMenu.isVisible || viewModel.seasonInfos.count > 10 {
         content.focusSection()
       } else {
         content
