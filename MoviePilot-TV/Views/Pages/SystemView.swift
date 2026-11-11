@@ -1300,6 +1300,8 @@ struct SystemView: View {
       return "开启后，管理员可以在应用内直接播放 \(MediaServerAdapters.supportedNames) 中的电影和剧集；关闭后详情页和首页都不再提供应用内播放。（只影响 TV 端）"
     case (.playback, .homeMediaTapPlaysInApp):
       return "开启后，首页“最近添加”中的电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
+    case (.memoryOptimization, .memoryOptimizationMode(let mode)):
+      return memoryOptimizationModeDescription(for: mode)
     case (.playback, .autoPlayNextEpisode):
       return "从详情页按集播放时，播完一集自动接着播下一集；播放期间刚入库的下一集也能接上。播放界面里的“自动播放”按钮是同一个设置。（只影响 TV 端）"
     default:
@@ -1339,7 +1341,18 @@ struct SystemView: View {
   }
 
   private var memoryOptimizationDescription: String {
-    "应用内播放可用且已开启时，自动关闭内存优化。"
+    "开启后，及时释放暂时看不到的图片，减少内存占用。往回滚动或返回页面时，图片可能需要重新加载。（只影响 TV 端）"
+  }
+
+  private func memoryOptimizationModeDescription(for mode: MemoryOptimizationMode) -> String {
+    switch mode {
+    case .automatic:
+      return "能在应用内播放时关闭，让浏览更流畅；其他情况下开启。（只影响 TV 端）"
+    case .enabled:
+      return memoryOptimizationDescription
+    case .disabled:
+      return "保留已加载的图片，滚动和返回页面更流畅，但占用更多内存。（只影响 TV 端）"
+    }
   }
 
   private func filterRulePreviewDescription(for ruleId: String) -> String {
