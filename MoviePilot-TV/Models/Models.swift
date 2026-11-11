@@ -1666,6 +1666,8 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   var mediaid: String?
   /// 洗版订阅的剧集优先级状态；公共写入 DTO 不发送。
   var episode_priority: [String: Int]?
+  /// 搜索已被后端受理但 TV 丢失回执时，可从订阅列表恢复批次。
+  var execution_status: EpisodeTrialExecutionStatus? = nil
 
   /// 定时搜索间隔（小时），nil 跟随系统设置
   var search_interval: Int?
@@ -1699,7 +1701,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
       episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date,
       search_interval, music_type, total_tracks, audio_quality, audio_format, min_bitrate,
-      min_bit_depth, min_sample_rate, media_category_id
+      min_bit_depth, min_sample_rate, media_category_id, execution_status
   }
 
   init(from decoder: Decoder) throws {
@@ -1755,6 +1757,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
+    execution_status = try? container.decodeIfPresent(EpisodeTrialExecutionStatus.self, forKey: .execution_status)
     search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
     music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
     total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)

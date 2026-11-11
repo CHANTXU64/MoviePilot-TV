@@ -2311,6 +2311,28 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
   }
 
+  func fetchEpisodeTrialDownloadHistory() async throws -> [EpisodeTrialHistoryRecord] {
+    let endpoint = try buildEndpoint(path: "/history/download", params: ["page": "1", "count": "100"])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([EpisodeTrialHistoryRecord].self, from: data)
+  }
+
+  func fetchEpisodeTrialTransferHistory(title: String?) async throws -> [EpisodeTrialHistoryRecord] {
+    struct Page: Decodable {
+      let list: [EpisodeTrialHistoryRecord]
+    }
+    let endpoint = try buildEndpoint(
+      path: "/history/transfer", params: ["page": "1", "count": "30", "title": title])
+    let data = try await makeRequest(endpoint: endpoint)
+    let page = try await decodeOrUnwrap(Page.self, from: data)
+    return page.list
+  }
+
+  func fetchEpisodeTrialTransferQueue() async throws -> [EpisodeTrialTransferJob] {
+    let data = try await makeRequest(endpoint: "/transfer/queue")
+    return try await decodeOrUnwrap([EpisodeTrialTransferJob].self, from: data)
+  }
+
   /// 暂停下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/DownloadingCard.vue (toggleDownload)
   /// - 应用场景: 在下载任务列表页暂停指定的下载任务。
@@ -3301,6 +3323,51 @@ class APIService: ObservableObject {
       return id
     }
     return nil
+  }
+
+  func createEpisodeTrialSubscription(
+    _ request: EpisodeTrialCreateSubscription
+  ) async throws -> EpisodeTrialCreateReceipt {
+    struct Receipt: Decodable { let id: Int? }
+    let data = try await makeRequest(
+      endpoint: "/subscribe/", method: "POST", body: JSONEncoder().encode(request))
+    let response = try JSONDecoder().decode(ApiResponse<Receipt>.self, from: data)
+    if response.success == false, (response.data?.id ?? 0) == 0 { return .rejected }
+    guard response.success == true, let id = response.data?.id, id > 0 else { return .unconfirmed }
+    invalidateSubscriptionCaches()
+    switch response.message {
+    case "新增订阅成功": return .created(id)
+    case "订阅已存在": return .reused(id)
+    default: return .unconfirmed
+    }
+  }
+
+  func searchEpisodeTrialSubscription(id: Int) async throws -> EpisodeTrialSearchReceipt {
+    struct Receipt: Decodable {
+      let batch_id: String?
+      let batch_ids: [String]
+      let single: Bool
+      let target_count: Int
+    }
+    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)", method: "POST")
+    let response = try JSONDecoder().decode(ApiResponse<Receipt>.self, from: data)
+    if response.success == false, response.data == nil { return .rejected }
+    guard response.success == true, let receipt = response.data, receipt.single,
+      receipt.target_count == 1, let batchID = receipt.batch_id, receipt.batch_ids == [batchID],
+      EpisodeTrialBatch.isValidID(batchID)
+    else { return .unconfirmed }
+    invalidateSubscriptionCaches()
+    return .scheduled(batchID)
+  }
+
+  func fetchEpisodeTrialBatch(id: String) async throws -> EpisodeTrialBatch {
+    guard EpisodeTrialBatch.isValidID(id) else { throw APIError.invalidURL }
+    let data = try await makeRequest(endpoint: "/subscribe/execution/batches/\(id)")
+    let batch = try await decodeOrUnwrap(EpisodeTrialBatch.self, from: data)
+    guard batch.batch_id == id, batch.total_count > 0 else {
+      throw APIError.serverMessage("试看搜索批次无法确认")
+    }
+    return batch
   }
 
   /// 通过订阅 ID 删除订阅
