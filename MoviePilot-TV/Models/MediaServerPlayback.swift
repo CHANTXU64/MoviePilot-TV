@@ -140,19 +140,29 @@ nonisolated enum InAppPlaybackAvailability {
     userEnabled && supports(backendVersion: backendVersion)
   }
 
+  static func isEnabledForSession(
+    canRequestSuperUserEndpoints: Bool, backendVersion: String?, userEnabled: Bool
+  ) -> Bool {
+    canRequestSuperUserEndpoints && isEnabled(backendVersion: backendVersion, userEnabled: userEnabled)
+  }
+
   /// 只有管理员能读取媒体服务器地址和密钥；支持电影和剧集。
   static func offers(
     mediaType: String?, canRequestSuperUserEndpoints: Bool, backendVersion: String?,
     userEnabled: Bool = PlaybackPreferences.isInAppPlaybackEnabled
   ) -> Bool {
-    canRequestSuperUserEndpoints && isEnabled(backendVersion: backendVersion, userEnabled: userEnabled)
-      && (mediaType == "电影" || mediaType == "电视剧")
+    isEnabledForSession(
+      canRequestSuperUserEndpoints: canRequestSuperUserEndpoints,
+      backendVersion: backendVersion,
+      userEnabled: userEnabled
+    ) && (mediaType == "电影" || mediaType == "电视剧")
   }
 }
 
 /// 播放相关的本机设置（只影响 TV 端），设置页「播放」和播放界面共用。
 nonisolated enum PlaybackPreferences {
   static let inAppPlaybackKey = "inAppPlaybackEnabled"
+  static let defaultInAppPlaybackEnabled = true
   /// 应用内播放开关变化后发出，已打开的页面据此收起或补回播放入口。
   static let inAppPlaybackDidChangeNotification = Notification.Name("InAppPlaybackPreferenceDidChange")
   /// 自动播放变化后发出：播放界面工具栏也能改，设置页据此同步。
@@ -161,7 +171,9 @@ nonisolated enum PlaybackPreferences {
   static let autoPlayNextEpisodeKey = "swiftfin.enableNextEpisodeAutoPlay"
 
   /// 应用内播放开关，默认开。后端低于 `InAppPlaybackAvailability.minimumBackendVersion` 时不管它是什么都不提供。
-  static var isInAppPlaybackEnabled: Bool { bool(forKey: inAppPlaybackKey, default: true) }
+  static var isInAppPlaybackEnabled: Bool {
+    bool(forKey: inAppPlaybackKey, default: defaultInAppPlaybackEnabled)
+  }
 
   static func setInAppPlaybackEnabled(_ enabled: Bool) {
     UserDefaults.standard.set(enabled, forKey: inAppPlaybackKey)

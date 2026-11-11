@@ -413,6 +413,7 @@ struct UnifiedSearchResult<Header: View>: View {
 
 // MARK: - 媒体/系列结果行
 private struct ResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let rowId: String
   let items: [MediaInfo]
@@ -458,7 +459,8 @@ private struct ResultRow: View {
                   anchorIndex: imageAnchorId.flatMap { id in
                     items.firstIndex(where: { $0.id == id })
                   },
-                  cardKind: .media
+                  cardKind: .media,
+                  usesFocusWindow: memoryOptimization.isEnabled
                 ),
               action: {
                 if let share = item.subscribeShare {
@@ -522,6 +524,7 @@ private struct ResultRow: View {
 
 // MARK: - 人物结果行
 private struct PersonResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let rowId: String
   let items: [Person]
@@ -556,7 +559,8 @@ private struct PersonResultRow: View {
                   anchorIndex: imageAnchorId.flatMap { id in
                     items.firstIndex(where: { $0.id == id })
                   },
-                  cardKind: .person
+                  cardKind: .person,
+                  usesFocusWindow: memoryOptimization.isEnabled
                 )
             ) {
               navigationCoordinator.push(item)
@@ -607,6 +611,7 @@ private struct PersonResultRow: View {
 
 // MARK: - 最佳结果行
 private struct BestResultRow: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let items: [BestResultItem]
   let loadsPageImages: Bool
@@ -647,7 +652,8 @@ private struct BestResultRow: View {
                 anchorIndex: imageAnchorId.flatMap { id in
                   items.firstIndex(where: { $0.id == id })
                 },
-                cardKind: .media
+                cardKind: .media,
+                usesFocusWindow: memoryOptimization.isEnabled
               )
             switch item {
             case .media(let media):

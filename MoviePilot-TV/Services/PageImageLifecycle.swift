@@ -13,11 +13,23 @@ enum PageImagePhase: Equatable {
   case released
 }
 
+enum PageImageRole: String {
+  case content
+  case activePage
+  case detailBackdrop
+  case detailBackdropFallback
+
+  var isDetailBackdrop: Bool {
+    self == .detailBackdrop || self == .detailBackdropFallback
+  }
+}
+
 /// 页面图片的实际渲染资源。生命周期直接驱动 surface，不依赖隐藏的 SwiftUI 页面重算 body。
 @MainActor
 protocol PageImageResource: AnyObject {
+  var role: PageImageRole { get }
   var hasLoadedPageImage: Bool { get }
-  func setPageImagePermissions(contentAllowed: Bool, activePageAllowed: Bool)
+  func setPageImageAllowed(_ isAllowed: Bool)
 }
 
 /// NavigationStack 的图片展示状态；普通导航深度只改变 PageImagePhase，不改变该状态。
@@ -56,9 +68,12 @@ final class PageImageLifecycle: ObservableObject {
   @Published private(set) var retainsImagesForSceneReturn = false
   @Published private(set) var isRemoved = false
   @Published private(set) var stackReleaseEpoch: UInt = 0
+  @Published private var isDetailBackdropVisible = false
+  @Published private var isDetailBackdropBlocked = false
   private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
+  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)?
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
@@ -71,9 +86,39 @@ final class PageImageLifecycle: ObservableObject {
     keepsStackImages && phase != .released
   }
 
-  /// 背景、人物头图和加载海报只在当前页保留。
+  /// 人物头图和加载海报只在当前页保留。
   var keepsActivePageImages: Bool {
     keepsStackImages && phase == .active
+  }
+
+  var keepsDetailBackdrop: Bool {
+    keepsActivePageImages && isDetailBackdropVisible && !isDetailBackdropBlocked
+  }
+
+  func setDetailBackdropVisible(_ isVisible: Bool) {
+    guard !isRemoved, isDetailBackdropVisible != isVisible else { return }
+    isDetailBackdropVisible = isVisible
+    if !isVisible { detailBackdropPreview = nil }
+    for resource in imageResources.values where resource.role.isDetailBackdrop {
+      updateImageResource(resource)
+    }
+  }
+
+  func backdropPreview(for key: String) -> UIImage? {
+    guard detailBackdropPreview?.key == key else { return nil }
+    return detailBackdropPreview?.image
+  }
+
+  func prepareBackdropPreview(for key: String, role: PageImageRole, makePreview: () -> UIImage?) {
+    guard !isRemoved, isDetailBackdropVisible, detailBackdropPreview?.key != key else { return }
+    // 本地卡片在详情背景下方。只要主背景仍属于该页，转场也应使用它的小图。
+    if role == .detailBackdropFallback, let preview = detailBackdropPreview,
+      preview.role == .detailBackdrop, imageResources[preview.key] != nil
+    {
+      return
+    }
+    guard let image = makePreview() else { return }
+    detailBackdropPreview = (key, role, image)
   }
 
   private var keepsStackImages: Bool {
@@ -95,10 +140,7 @@ final class PageImageLifecycle: ObservableObject {
 
   func register(_ resource: any PageImageResource) {
     imageResources["object:\(ObjectIdentifier(resource))"] = resource
-    resource.setPageImagePermissions(
-      contentAllowed: keepsContentImages,
-      activePageAllowed: keepsActivePageImages
-    )
+    updateImageResource(resource)
   }
 
   func unregister(_ resource: any PageImageResource) {
@@ -123,10 +165,7 @@ final class PageImageLifecycle: ObservableObject {
     }
     let resource = create()
     imageResources[key] = resource
-    resource.setPageImagePermissions(
-      contentAllowed: keepsContentImages,
-      activePageAllowed: keepsActivePageImages
-    )
+    updateImageResource(resource)
     return resource
   }
 
@@ -142,10 +181,12 @@ final class PageImageLifecycle: ObservableObject {
     phase: PageImagePhase,
     isStackForeground: Bool,
     isStackInteractive: Bool,
-    retainsImagesForSceneReturn: Bool
+    retainsImagesForSceneReturn: Bool,
+    isDetailBackdropBlocked: Bool = false
   ) {
     let previousContentPermission = keepsContentImages
     let previousActivePermission = keepsActivePageImages
+    let previousBackdropPermission = keepsDetailBackdrop
     let previousStackState = stackState
     let previouslyKeptStackImages = keepsStackImages
     if self.phase != phase {
@@ -158,6 +199,9 @@ final class PageImageLifecycle: ObservableObject {
     if self.retainsImagesForSceneReturn != retainsImagesForSceneReturn {
       self.retainsImagesForSceneReturn = retainsImagesForSceneReturn
     }
+    if self.isDetailBackdropBlocked != isDetailBackdropBlocked {
+      self.isDetailBackdropBlocked = isDetailBackdropBlocked
+    }
     if previouslyKeptStackImages, !keepsStackImages {
       stackReleaseEpoch &+= 1
     }
@@ -167,8 +211,11 @@ final class PageImageLifecycle: ObservableObject {
     }
     if previousContentPermission != keepsContentImages
       || previousActivePermission != keepsActivePageImages
+      || previousBackdropPermission != keepsDetailBackdrop
     {
-      updateImageResources()
+      for resource in imageResources.values {
+        updateImageResource(resource)
+      }
     }
   }
 
@@ -180,6 +227,7 @@ final class PageImageLifecycle: ObservableObject {
 
   /// Pop 动画结束后的终态。即使 SwiftUI 继续持有旧 destination，也会同步清空其图片 surface。
   fileprivate func finishRemoval() {
+    detailBackdropPreview = nil
     update(
       phase: .released,
       isStackForeground: false,
@@ -197,15 +245,13 @@ final class PageImageLifecycle: ObservableObject {
     )
   }
 
-  private func updateImageResources() {
-    let contentAllowed = keepsContentImages
-    let activePageAllowed = keepsActivePageImages
-    for resource in imageResources.values {
-      resource.setPageImagePermissions(
-        contentAllowed: contentAllowed,
-        activePageAllowed: activePageAllowed
-      )
+  private func updateImageResource(_ resource: any PageImageResource) {
+    let isAllowed = switch resource.role {
+    case .content: keepsContentImages
+    case .activePage: keepsActivePageImages
+    case .detailBackdrop, .detailBackdropFallback: keepsDetailBackdrop
     }
+    resource.setPageImageAllowed(isAllowed)
   }
 
   private func notifyStackObservers(_ state: PageImageStackState) {
@@ -655,6 +701,7 @@ final class ImageNavigationCoordinator: ObservableObject {
       self?.lifecycles.removeValue(forKey: id)
       self?.preloadTasks.removeValue(forKey: id)
       self?.removedLifecycleCleanupTasks.removeValue(forKey: id)
+      self?.reconcileLifecycles()
     }
   }
 
@@ -673,6 +720,8 @@ final class ImageNavigationCoordinator: ObservableObject {
 
   private func reconcileLifecycles() {
     let topIndex = entries.count
+    // Pop 先保留源页面的背景供转场使用，释放后再允许目标页解码。
+    let isDetailBackdropBlocked = lifecycles.values.contains { $0.isRemoved && $0.keepsDetailBackdrop }
     rootLifecycle.update(
       phase: phase(for: 0, topIndex: topIndex),
       isStackForeground: isStackForeground,
@@ -686,7 +735,8 @@ final class ImageNavigationCoordinator: ObservableObject {
         phase: phase,
         isStackForeground: isStackForeground,
         isStackInteractive: isStackInteractive,
-        retainsImagesForSceneReturn: retainsImagesForSceneReturn
+        retainsImagesForSceneReturn: retainsImagesForSceneReturn,
+        isDetailBackdropBlocked: phase == .active && isDetailBackdropBlocked
       )
       if case .media(let media) = entry.route,
         !(isStackForeground || retainsImagesForSceneReturn) || phase != .active

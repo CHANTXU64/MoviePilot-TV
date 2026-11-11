@@ -8,7 +8,7 @@ struct MoviePilot_TVApp: App {
   @StateObject private var topShelfNavigationRouter = TopShelfNavigationRouter()
 
   init() {
-    KingfisherCachePolicy.apply()
+    KingfisherCachePolicy.apply(memoryOptimizationEnabled: true)
     Self.bootstrapLogging()
   }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
   @StateObject private var viewModel: ContentViewModel
+  private var memoryOptimization = MemoryOptimizationSettings()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var topShelfNavigationRouter: TopShelfNavigationRouter
   @EnvironmentObject private var topShelfManager: TopShelfManager
@@ -48,6 +49,9 @@ struct ContentView: View {
       updateTopShelfPriority()
       topShelfManager.start()
       await viewModel.prepareStartupIfNeeded()
+    }
+    .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in
+      KingfisherCachePolicy.apply(memoryOptimizationEnabled: enabled)
     }
     .onOpenURL { url in
       if topShelfNavigationRouter.handle(url), let route = topShelfNavigationRouter.pendingRoute {

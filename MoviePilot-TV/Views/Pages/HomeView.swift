@@ -166,6 +166,7 @@ enum HomeSubscribeFocusID {
 // MARK: - 子视图
 
 private struct MediaSectionView: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let items: [MediaServerPlayItem]
   let servers: [String]
@@ -253,7 +254,8 @@ private struct MediaSectionView: View {
                     anchorIndex: imageAnchorId.flatMap { id in
                       items.firstIndex(where: { $0.id == id })
                     },
-                    cardKind: .media
+                    cardKind: .media,
+                    usesFocusWindow: memoryOptimization.isEnabled
                   ),
                 action: canPlayInApp(item) || canOpenMediaLibrary(item)
                   ? { activateMediaItem(item) }
@@ -407,6 +409,7 @@ private struct MediaSectionView: View {
 }
 
 private struct SubscribeSectionView: View {
+  private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let items: [Subscribe]
   var isFirstRow: Bool = false
@@ -459,7 +462,8 @@ private struct SubscribeSectionView: View {
                   anchorIndex: imageAnchorId.flatMap { id in
                     items.firstIndex(where: { HomeSubscribeFocusID.value(for: $0.id) == id })
                   },
-                  cardKind: .media
+                  cardKind: .media,
+                  usesFocusWindow: memoryOptimization.isEnabled
                 ),
               viewModel: viewModel,
               onEdit: { onEdit(item) },

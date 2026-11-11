@@ -150,6 +150,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
 struct MediaGridView<Header: View, ContextMenu: View>: View {
   @ObservedObject private var apiService = APIService.shared
   @ObservedObject var imageLifecycle: PageImageLifecycle
+  private var memoryOptimization = MemoryOptimizationSettings()
   let listIdentity: GridListIdentity
   let items: [MediaInfo]
   let isLoading: Bool
@@ -376,6 +377,9 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     )
     .onScrollPhaseChange { _, newPhase in
       domRetention.scrollPhaseChanged(newPhase)
+    }
+    .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in
+      imageRetention.setUsesFocusWindow(enabled)
     }
     .onAppear {
       domRetention.reconcile(listIdentity: listIdentity, itemIDs: items.map(\.id))

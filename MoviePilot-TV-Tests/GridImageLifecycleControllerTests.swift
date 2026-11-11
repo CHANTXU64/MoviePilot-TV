@@ -32,6 +32,65 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(allowed, Set(0...11).union(24...53))
   }
 
+  func testRelaxedGridKeepsMidListPosterAndReusesMemoryCacheAfterSurfaceRecreation() async throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+    let imageData = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 48)).pngData { context in
+      UIColor.red.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 32, height: 48))
+    }
+    try imageData.write(to: url)
+    let processor = DownsamplingImageProcessor(size: CGSize(width: 32, height: 48))
+    let cacheKey = APIService.shared.imageSource(for: url).cacheKey
+    defer {
+      try? FileManager.default.removeItem(at: url)
+      ImageCache.default.removeImage(forKey: cacheKey, processorIdentifier: processor.identifier)
+    }
+
+    let listIdentity = GridListIdentity.make()
+    let lifecycle = PageImageLifecycle()
+    let controller = makeController(listIdentity: listIdentity, itemCount: 60, lifecycle: lifecycle)
+    controller.setUsesFocusWindow(false)
+    let slot = PageImageSlot(
+      key: cacheKey, url: url, processor: processor, role: .content,
+      skipsMemoryCache: true, loadsDiskFileSynchronously: false, fadeDuration: 0
+    )
+    slot.setGridImageDemandContext(
+      GridImageDemandContext(controller: controller, listIdentity: listIdentity, itemID: "item-18", itemIndex: 18)
+    )
+    let demandID = UUID()
+    slot.setDemand(id: demandID, isEnabled: true)
+    let originalSurface = PageManagedImageView()
+    slot.attach(originalSurface, demandID: demandID)
+    for _ in 0..<200 where originalSurface.image == nil {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let loadedImage = try XCTUnwrap(originalSurface.image)
+
+    XCTAssertTrue(controller.cardFocusChanged(
+      listIdentity: listIdentity, itemID: "item-54", itemIndex: 54, isFocused: true
+    ))
+    XCTAssertTrue(originalSurface.image === loadedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1)
+
+    slot.detach(originalSurface)
+    XCTAssertFalse(slot.hasLoadedPageImage)
+    XCTAssertEqual(
+      ImageCache.default.imageCachedType(forKey: cacheKey, processorIdentifier: processor.identifier), .memory
+    )
+    let restoredSurface = PageManagedImageView()
+    slot.attach(restoredSurface, demandID: demandID)
+    for _ in 0..<200 where restoredSurface.image == nil {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(restoredSurface.image === loadedImage)
+
+    controller.setUsesFocusWindow(true)
+    XCTAssertNil(restoredSurface.image)
+    slot.removeDemand(id: demandID)
+    slot.detach(restoredSurface)
+  }
+
   func testNewListRestoresOnlyTopRowsEvenWithIdenticalItemsAndRejectsOldFocus() {
     let oldListIdentity = GridListIdentity.make()
     let newListIdentity = GridListIdentity.make()

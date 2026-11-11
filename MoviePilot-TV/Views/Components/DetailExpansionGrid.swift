@@ -66,6 +66,7 @@ struct DetailExpansionGrid<Focus: Hashable, Header: View, Status: View, Card: Vi
   @State private var listIdentity: GridListIdentity
   @StateObject private var dom: GridDOMRetentionController
   @StateObject private var images: GridImageLifecycleController
+  private var memoryOptimization = MemoryOptimizationSettings()
   @FocusState private var topFocused: Bool
   @FocusState private var bottomFocused: Bool
 
@@ -147,6 +148,9 @@ struct DetailExpansionGrid<Focus: Hashable, Header: View, Status: View, Card: Vi
             .accessibilityHidden(true)
         }
       }
+    }
+    .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in
+      images.setUsesFocusWindow(enabled)
     }
     .focusSection()
     .onScrollGeometryChange(
