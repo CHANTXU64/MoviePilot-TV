@@ -2311,8 +2311,12 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
   }
 
-  func fetchEpisodeTrialDownloadHistory() async throws -> [EpisodeTrialHistoryRecord] {
-    let endpoint = try buildEndpoint(path: "/history/download", params: ["page": "1", "count": "100"])
+  static let episodeTrialHistoryPageSize = 100
+
+  /// 下载历史按下载时间倒序，一页 `episodeTrialHistoryPageSize` 条。
+  func fetchEpisodeTrialDownloadHistory(page: Int = 1) async throws -> [EpisodeTrialHistoryRecord] {
+    let endpoint = try buildEndpoint(
+      path: "/history/download", params: ["page": String(page), "count": String(Self.episodeTrialHistoryPageSize)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([EpisodeTrialHistoryRecord].self, from: data)
   }
@@ -3345,11 +3349,8 @@ class APIService: ObservableObject {
     if response.success == false, (response.data?.id ?? 0) == 0 { return .rejected }
     guard response.success == true, let id = response.data?.id, id > 0 else { return .unconfirmed }
     invalidateSubscriptionCaches()
-    switch response.message {
-    case "新增订阅成功": return .created(id)
-    case "订阅已存在": return .reused(id)
-    default: return .unconfirmed
-    }
+    // 新建和同季已有都返回成功和 ID，提示语会随版本变，由调用方读回这条订阅按标记区分。
+    return .accepted(id)
   }
 
   func searchEpisodeTrialSubscription(id: Int) async throws -> EpisodeTrialSearchReceipt {

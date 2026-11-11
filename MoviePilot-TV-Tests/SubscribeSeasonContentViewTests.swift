@@ -1789,9 +1789,9 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
     let summaries = SeasonSubscriptionSummary.indexBySeason(
       from: [
-        Subscribe(id: 71, name: "航海王", type: "电视剧", season: 1, tmdbid: 12_345, filter: marker),
+        Subscribe(id: 71, name: "航海王", type: "电视剧", season: 1, state: "S", tmdbid: 12_345, filter: marker),
         Subscribe(id: 72, name: "航海王", type: "电视剧", season: 1, tmdbid: 12_345, episode_group: "group-a"),
-        Subscribe(id: 73, name: "航海王", type: "电视剧", season: 2, tmdbid: 12_345, filter: marker),
+        Subscribe(id: 73, name: "航海王", type: "电视剧", season: 2, state: "S", tmdbid: 12_345, filter: marker),
       ],
       matching: media)
 
@@ -1817,7 +1817,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     await SubscriptionSnapshotURLProtocol.stub.reset()
     let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
     try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
-      Subscribe(id: 63, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345, start_episode: 5, filter: marker)
+      Subscribe(id: 63, name: "航海王", type: "电视剧", season: 3, state: "S", tmdbid: 12_345, start_episode: 5, filter: marker)
     ])
     await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(#"{"success":true}"#)
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
@@ -1866,7 +1866,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
     try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
       Subscribe(id: 71, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345, episode_group: "group-a"),
-      Subscribe(id: 72, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345, start_episode: 5, filter: marker),
+      Subscribe(id: 72, name: "航海王", type: "电视剧", season: 3, state: "S", tmdbid: 12_345, start_episode: 5, filter: marker),
     ])
     await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(#"{"success":true}"#)
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
@@ -1890,12 +1890,27 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
 
   func testEpisodeTrialSubscriptionCardNamesTheEpisode() {
     let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
-    let trial = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, start_episode: 5, filter: marker)
+    let trial = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, state: "S", start_episode: 5, filter: marker)
     XCTAssertTrue(trial.isEpisodeTrial)
     XCTAssertEqual(trial.episodeTrialTargetText, "第 2 季第 5 集")
     let formal = Subscribe(id: 2, name: "航海王", type: "电视剧", season: 2, start_episode: 5, filter: "手写过滤")
     XCTAssertFalse(formal.isEpisodeTrial)
     XCTAssertNil(formal.episodeTrialTargetText)
+  }
+
+  /// 试看订阅在别处被重新启用后就是正式订阅了：不再显示试看中、不再拦着编辑和取消订阅。
+  /// 刚创建、还没暂停的占位仍算试看。
+  func testOnlyPausedOrPlaceholderTrialRowIsHeld() {
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    let paused = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, state: "S", filter: marker)
+    XCTAssertTrue(paused.isEpisodeTrial)
+    var placeholder = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, state: "N", filter: marker)
+    placeholder.include = EpisodeTrialTemporarySubscription.blockedInclude
+    XCTAssertTrue(placeholder.isEpisodeTrial)
+    var reenabled = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, state: "R", filter: marker)
+    reenabled.include = "WEB"
+    XCTAssertFalse(reenabled.isEpisodeTrial)
+    XCTAssertFalse(SeasonSubscriptionSummary(subscribe: reenabled)?.isEpisodeTrial ?? true)
   }
 
   func testSingleSeasonDeletePublishesBeforeFollowUpRefreshFails() async throws {

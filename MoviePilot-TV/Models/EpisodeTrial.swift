@@ -280,15 +280,22 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
   let owner: String
   // 只保存表单指纹。用户从其他入口编辑过这条订阅时，TV 放弃自动清理。
   var fingerprints: Set<String> = []
-  /// 本服务写进去的试看规则按含义归一后的摘要。写入后没读回来时，后端对空值或站点顺序的整理让表单指纹对不上，
-  /// 按这个认出仍是自己写的样子。
-  var writtenSettings: String?
 
+  /// 全部可写字段的指纹。只把后端会整理的几处先统一：空文本当作没填，站点去重排序，空列表当作没填。
+  /// 写入后没读回来时，后端整理过的样子也能认出是自己写的；别处改过任何字段都对不上。
   static func fingerprint(_ row: Subscribe) throws -> String {
     let blank = Subscribe(id: row.id, name: "", type: "")
     var settings = row
     // 分类路径由 MoviePilot 从稳定 ID 派生。
     if settings.media_category_id != nil { settings.media_category = nil }
+    let texts: [WritableKeyPath<Subscribe, String?>] = [
+      \.year, \.keyword, \.quality, \.resolution, \.effect, \.include, \.exclude, \.downloader, \.save_path,
+      \.custom_words, \.filter, \.episode_group, \.media_category, \.music_type, \.audio_quality, \.audio_format,
+      \.media_category_id,
+    ]
+    for keyPath in texts where settings[keyPath: keyPath] == "" { settings[keyPath: keyPath] = nil }
+    settings.sites = settings.sites.flatMap { $0.isEmpty ? nil : Array(Set($0)).sorted() }
+    if settings.filter_groups?.isEmpty == true { settings.filter_groups = nil }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let bytes = try encoder.encode(SubscriptionWriteDTO(original: blank, draft: settings))
@@ -364,8 +371,8 @@ nonisolated struct EpisodeTrialCreateSubscription: Encodable {
 }
 
 nonisolated enum EpisodeTrialCreateReceipt {
-  case created(Int)
-  case reused(Int)
+  /// 后端受理并给出订阅 ID：可能是新建的，也可能是同季已有的那条。
+  case accepted(Int)
   case rejected
   case unconfirmed
 }
@@ -478,8 +485,13 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
 }
 
 nonisolated extension Subscribe {
-  /// 单集试看建的临时订阅。期间占着这一季，不能另建、编辑、暂停或取消，试看结束后自动删除。
-  var isEpisodeTrial: Bool { EpisodeTrialTemporarySubscription.isTrialRow(self) }
+  /// 还在试看中的临时订阅。期间占着这一季，不能另建、编辑、暂停或取消，试看结束后自动删除。
+  /// 试看订阅一直暂停着，只有刚创建、还没暂停的几秒里是拒绝所有资源的占位。在别处被重新启用、
+  /// 不再暂停的就已经是正式订阅，不再按试看拦着；带不带试看标记只决定它归不归试看服务收尾。
+  var isEpisodeTrial: Bool {
+    EpisodeTrialTemporarySubscription.isTrialRow(self)
+      && (state == "S" || include == EpisodeTrialTemporarySubscription.blockedInclude)
+  }
 
   /// 是否是按这个媒体身份和季删除时会被一起删掉的试看订阅。MoviePilot 按来源对应的 ID 列匹配，
   /// 不看剧集组；`season` 为空时整部剧都算。

@@ -40,6 +40,25 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  /// 新建还是拿回同季已有的订阅，按读回的这条订阅带不带这次的标记认，不看提示语：上游改了措辞也照常。
+  func testCreateOutcomeDoesNotDependOnMessageWording() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    fixture.setCreateMessage("已添加订阅")
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+    }
+
+    fixture.reset()
+    fixture.setMode(.reuse)
+    fixture.setCreateMessage("已添加订阅")
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .waitingForSubscription)
+      XCTAssertEqual(fixture.mutations, ["POST subscribe"], "拿回的已有订阅不暂停、不改、不补搜")
+    }
+  }
+
   func testNativeSearchKeepsExactEpisodeAndTracksAfterSubscriptionDisappears() async throws {
     let fixture = EpisodeTrialURLProtocol.fixture
     try await withService { api, service, defaults, request in
@@ -247,6 +266,19 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  /// 这期间又有一整页别的下载，试看的下载记录落到第二页，也要找到。
+  func testTrialDownloadIsFoundBeyondTheFirstHistoryPage() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      fixture.setMode(.downloading)
+      fixture.overflowHistory()
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+    }
+  }
+
   func testFailedSearchBatchAllowsStartingAgain() async throws {
     let fixture = EpisodeTrialURLProtocol.fixture
     try await withService { _, service, _, request in
@@ -439,6 +471,23 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let cleaned = await service.refresh(request)
       XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
       XCTAssertEqual(cleaned, .unavailable("上次试看准备未完成，可以重新发起"))
+    }
+  }
+
+  /// 别处只改了名称、搜索间隔这类不属于试看规则的项，订阅也还暂停着，照样算被改过，不自动删。
+  func testEditOutsideTrialRuleStillPreventsDeletion() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    for (key, value) in [("name", "用户改的名字" as Any), ("search_interval", 6 as Any)] {
+      fixture.reset()
+      try await withService { _, service, _, request in
+        let start = await service.start(request)
+        XCTAssertEqual(start, .searching)
+        fixture.editTemporary(key, value)
+        fixture.setMode(.noResource)
+        let finished = await service.refresh(request)
+        XCTAssertEqual(finished, .unavailable("试看订阅已由其他入口修改"), key)
+        XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"), key)
+      }
     }
   }
 
@@ -766,6 +815,19 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  /// 在别处被重新启用的试看订阅已经是正式订阅，不能再当试看删掉。
+  func testReenabledTrialRowIsNotCancelledAsATrial() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      fixture.editTemporary("state", "R")
+      let cancelled = await service.cancelTrial(subscriptionID: 81)
+      XCTAssertFalse(cancelled)
+      XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))
+    }
+  }
+
   func testTrialStartedElsewhereCanBeCancelled() async throws {
     let fixture = EpisodeTrialURLProtocol.fixture
     fixture.setPlaceholder(marker: EpisodeTrialTemporarySubscription.makeMarker(at: Date()))
@@ -1053,6 +1115,10 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
   private var cancelOutcome = CancelOutcome.stopped
   /// 写入试看规则后的第一次回读失败。
   private var failsReadBackAfterWrite = false
+  /// 换掉新增订阅接口的提示语，模拟上游改了措辞。
+  private var createMessage: String?
+  /// 试看开始后又有一整页别的下载，试看的那条落到第二页。
+  private var historyOverflows = false
   private var readBackFails = false
   private var temporary: [String: Any]?
   private var placeholder: [String: Any]?
@@ -1073,6 +1139,8 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       cancelOutcome = .stopped
       failsReadBackAfterWrite = false
       readBackFails = false
+      createMessage = nil
+      historyOverflows = false
       temporary = nil
       placeholder = nil
       requests = []
@@ -1085,8 +1153,12 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
   func setMode(_ mode: Mode) { lock.withLock { self.mode = mode } }
   func setCancelOutcome(_ outcome: CancelOutcome) { lock.withLock { cancelOutcome = outcome } }
   func failReadBackAfterWrite() { lock.withLock { failsReadBackAfterWrite = true } }
+  func setCreateMessage(_ message: String) { lock.withLock { createMessage = message } }
+  func overflowHistory() { lock.withLock { historyOverflows = true } }
   /// 临时订阅被别处删掉。
   func removeTemporary() { lock.withLock { temporary = nil } }
+  /// 别处改了临时订阅的某一项。
+  func editTemporary(_ key: String, _ value: Any) { lock.withLock { temporary?[key] = value } }
 
   /// 发起方中断后留下的占位订阅：拒绝所有资源，与目标同季。
   func setPlaceholder(marker: String) {
@@ -1148,7 +1220,9 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       }
       return rows
     case ("POST", "subscribe"):
-      if mode == .reuse { return ["success": true, "message": "订阅已存在", "data": ["id": 81]] as [String: Any] }
+      if mode == .reuse {
+        return ["success": true, "message": createMessage ?? "订阅已存在", "data": ["id": 81]] as [String: Any]
+      }
       if mode == .lostCreate { throw URLError(.timedOut) }
       var fields = try body(request)
       created = Values(fields)
@@ -1162,7 +1236,7 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       // 后端把未提交的列表字段存成空列表。
       if mode == .normalizesWrites { fields["filter_groups"] = [] as [String] }
       temporary = fields
-      return ["success": true, "message": "新增订阅成功", "data": ["id": 81]] as [String: Any]
+      return ["success": true, "message": createMessage ?? "新增订阅成功", "data": ["id": 81]] as [String: Any]
     case ("GET", "subscribe/81"):
       if readBackFails {
         readBackFails = false
@@ -1215,6 +1289,13 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       return accepted
     case ("GET", "system/setting/public/DefaultTvSubscribeConfig"):
       return ["value": ["include": "MP 默认包含", "quality": "MP 默认质量"]]
+    case ("GET", "history/download") where historyOverflows && query["page"] == "1":
+      return (0..<100).map { offset -> [String: Any] in
+        [
+          "id": 1_100 - offset, "media_source": "tmdb", "media_id": "777", "seasons": "S01", "episodes": "E01",
+          "download_hash": "other-\(offset)",
+        ]
+      }
     case ("GET", "history/download"):
       if mode == .formalEndedOrganized { return [formalDownload] }
       if earlierDownload {

@@ -1845,7 +1845,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     configureSuperSubscriber(service)
 
     let trial = Subscribe(
-      id: 818, name: "试看中", type: "电视剧", season: 1, tmdbid: 123484, filter: "tv-episode-trial-1800000000-e")
+      id: 818, name: "试看中", type: "电视剧", season: 1, state: "S", tmdbid: 123484,
+      filter: "tv-episode-trial-1800000000-e")
     let viewModel = SubscribeSheetViewModel(subscribe: trial, isNewSubscription: false, apiService: service)
     let loaded = await viewModel.loadData()
     XCTAssertFalse(loaded)

@@ -21,6 +21,7 @@ final class EpisodeTrialService: ObservableObject {
   private static let missingDownloadWindow: TimeInterval = 60 * 60
   /// 补搜回执丢了、订阅也没了时，MoviePilot 那次搜索最多还能运行的时长（搜索执行权两小时），再留些余量。
   private static let lostSearchWindow: TimeInterval = 130 * 60
+  private static let historyPageLimit = 20
   private static let cancelFailed = EpisodeTrialProgress.unavailable(EpisodeTrialHoldNotice.cancelFailure)
   /// 临时订阅创建后这段时间内补搜通常还在进行，清理检查得勤一些；之后放慢，直到服务器上没有本服务的临时订阅。
   private static let activeCleanupPeriod: TimeInterval = 20 * 60
@@ -465,8 +466,7 @@ final class EpisodeTrialService: ObservableObject {
 
     if job.creationMarker != nil { return }
     if job.temporary != nil || job.searchPending || job.searchMayHaveDownloaded {
-      let history = try await operation.api.fetchEpisodeTrialDownloadHistory()
-      try operation.check()
+      let history = try await downloadHistory(since: job.previousDownloadHistoryIDs.max() ?? 0, operation: operation)
       if let id = job.temporary?.id ?? job.finishedTemporaryID,
         let record = history.first(where: {
           $0.note?.subscription_download?.subscription_id == id
@@ -554,7 +554,7 @@ final class EpisodeTrialService: ObservableObject {
     if let row = related.first(where: {
       $0.season == request.season && trimmedNonEmpty([$0.episode_group]) == request.episodeGroup
         && $0.identity.map(request.knownIdentities.contains) == true
-        && !EpisodeTrialTemporarySubscription.isTrialRow($0)
+        && !$0.isEpisodeTrial
     }), let id = row.id, id > 0 {
       job.formalSubscriptionID = id
       job.previousDownloadHistoryIDs = Set(history.map(\.id))
@@ -562,7 +562,7 @@ final class EpisodeTrialService: ObservableObject {
       return
     }
     if !related.isEmpty {
-      job.progress = related.contains(where: EpisodeTrialTemporarySubscription.isTrialRow)
+      job.progress = related.contains(where: \.isEpisodeTrial)
         ? .seasonTrialInProgress : .unavailable("已有相关订阅，无法确认与当前季集使用同一套编号")
       return
     }
@@ -572,6 +572,20 @@ final class EpisodeTrialService: ObservableObject {
       return
     }
     try await submit(&job, request: request, rule: rule, history: history, operation: operation)
+  }
+
+  /// 这次试看开始以来的下载记录。App 长时间没开时期间的下载可能超过一页，往后翻到试看开始前的记录为止
+  /// （下载记录 ID 随下载递增；`floor` 是发起时最新一条的 ID）。最多翻 `historyPageLimit` 页。
+  private func downloadHistory(since floor: Int, operation: Operation) async throws -> [EpisodeTrialHistoryRecord] {
+    var records: [EpisodeTrialHistoryRecord] = []
+    for page in 1...Self.historyPageLimit {
+      let batch = try await operation.api.fetchEpisodeTrialDownloadHistory(page: page)
+      try operation.check()
+      records += batch
+      guard batch.count >= APIService.episodeTrialHistoryPageSize, !batch.contains(where: { $0.id <= floor })
+      else { break }
+    }
+    return records
   }
 
   private func isRelated(_ row: Subscribe, to request: EpisodeTrialRequest) -> Bool {
@@ -627,22 +641,8 @@ final class EpisodeTrialService: ObservableObject {
     let receipt = try await operation.api.createEpisodeTrialSubscription(
       EpisodeTrialCreateSubscription(request: request, marker: marker))
     try operation.check()
+    let id: Int
     switch receipt {
-    case .reused(let id):
-      job.creationMarker = nil
-      job.pendingSince = nil
-      job.formalSubscriptionID = id
-      try save(job, key: key)
-      let row = try await operation.api.fetchSubscription(id: id)
-      try operation.check()
-      if EpisodeTrialTemporarySubscription.isTrialRow(row) {
-        job.formalSubscriptionID = nil
-        job.progress = .seasonTrialInProgress
-      } else {
-        job.formalSubscriptionID = id
-        job.progress = row.state == "S" ? .subscriptionPaused : .waitingForSubscription
-      }
-      return
     case .rejected:
       job.creationMarker = nil
       job.pendingSince = nil
@@ -651,16 +651,28 @@ final class EpisodeTrialService: ObservableObject {
     case .unconfirmed:
       job.progress = .submissionUnconfirmed
       return
-    case .created(let id):
-      job.temporary = EpisodeTrialTemporarySubscription(id: id, marker: marker, owner: owner)
-      job.creationMarker = nil
-      job.pendingSince = nil
-      try save(job, key: key)
+    case .accepted(let acceptedID):
+      id = acceptedID
     }
 
-    guard let temporary = job.temporary else { return }
-    let row = try await operation.api.fetchSubscription(id: temporary.id)
+    // 后端按季去重，同季已有订阅时返回的是那一条。按这次写入的唯一标记认：标记是自己的才是新建的。
+    // 读不到时创建标记还留着，之后按标记对账。
+    let row = try await operation.api.fetchSubscription(id: id)
     try operation.check()
+    job.creationMarker = nil
+    job.pendingSince = nil
+    guard row.filter == marker else {
+      if row.isEpisodeTrial {
+        job.progress = .seasonTrialInProgress
+      } else {
+        job.formalSubscriptionID = id
+        job.progress = row.state == "S" ? .subscriptionPaused : .waitingForSubscription
+      }
+      return
+    }
+    let temporary = EpisodeTrialTemporarySubscription(id: id, marker: marker, owner: owner)
+    job.temporary = temporary
+    try save(job, key: key)
     guard temporary.matches(row, target: target), row.include == EpisodeTrialTemporarySubscription.blockedInclude,
       row.best_version == 1, row.best_version_full == 0
     else { throw APIError.serverMessage("试看订阅的保护条件未生效") }
@@ -722,7 +734,6 @@ final class EpisodeTrialService: ObservableObject {
   ) async throws {
     guard let temporary = job.temporary else { throw CancellationError() }
     job.temporary?.fingerprints.insert(try EpisodeTrialTemporarySubscription.fingerprint(draft))
-    job.temporary?.writtenSettings = try EpisodeTrialTemporarySubscription.settingsDigest(draft)
     try save(job, key: key)
     let result = try await operation.api.saveSubscription(original: row, draft: draft)
     try operation.check()
@@ -828,11 +839,8 @@ final class EpisodeTrialService: ObservableObject {
     if let row = try await subscriptions().first(where: { $0.id == temporary.id }) {
       let guarded = row.include == EpisodeTrialTemporarySubscription.blockedInclude
       let unchanged = temporary.fingerprints.contains(try EpisodeTrialTemporarySubscription.fingerprint(row))
-      // 写入后没读回来：后端整理过空值或站点顺序，表单指纹对不上，但仍是暂停着的、自己写的样子。
-      let ownWrite = row.state == "S"
-        && temporary.writtenSettings == (try? EpisodeTrialTemporarySubscription.settingsDigest(row))
       let untouched = temporary.matches(row, target: target)
-        && (unchanged || ownWrite || (guarded && temporary.fingerprints.isEmpty)) && (row.state == "S" || guarded)
+        && (unchanged || (guarded && temporary.fingerprints.isEmpty)) && (row.state == "S" || guarded)
       guard untouched else {
         job.finishedTemporaryID = temporary.id
         job.temporary = nil
@@ -989,7 +997,10 @@ final class EpisodeTrialService: ObservableObject {
         return true
       }
     } else {
-      guard let history = try? await operation.api.fetchEpisodeTrialDownloadHistory() else {
+      guard
+        let history = try? await downloadHistory(
+          since: job.previousDownloadHistoryIDs.max() ?? 0, operation: operation)
+      else {
         try operation.check()
         return nil
       }
