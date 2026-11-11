@@ -512,72 +512,44 @@ private struct SubscribeItemView: View {
   let onViewDetail: () -> Void
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var showUnsubscribeConfirm = false
+  @State private var showsEpisodeTrialNotice = false
 
   var body: some View {
+    let isEpisodeTrial = item.isEpisodeTrial
     MediaCard(
       title: item.name,
       posterUrl: item.imageURLs.poster,
-      typeText: formatState(item.state),
+      typeText: isEpisodeTrial ? "试看" : formatState(item.state),
       ratingText: nil,
-      bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),
+      bottomLeftText: isEpisodeTrial
+        ? item.episodeTrialTargetText : formatProgress(total: item.total_episode, lack: item.lack_episode),
       bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
       source: nil,
       loadsImage: loadsImage,
       action: {
-        onEdit()
+        if isEpisodeTrial {
+          showsEpisodeTrialNotice = true
+        } else {
+          onEdit()
+        }
       }
     )
     .compositingGroup()
     .contextMenu {
-      // 1. 编辑订阅
-      Button {
-        onEdit()
-      } label: {
-        Label("编辑订阅", systemImage: AppSymbol.editSubscription)
-      }
-
-      // 2. 详情
-      Button {
-        onViewDetail()
-      } label: {
-        Label("详情", systemImage: AppSymbol.details)
-      }
-
-      // 3. 搜索订阅
-      Button {
-        searchSubscribe()
-      } label: {
-        Label("搜索订阅", systemImage: AppSymbol.search)
-      }
-
-      // 4. 启用/暂停
-      Button {
-        toggleSubscribeStatus()
-      } label: {
-        if item.state == "S" {
-          Label("启用订阅", systemImage: AppSymbol.resume)
-        } else {
-          Label("暂停订阅", systemImage: AppSymbol.pause)
+      if isEpisodeTrial {
+        Button {
+          onViewDetail()
+        } label: {
+          Label("详情", systemImage: AppSymbol.details)
         }
-      }
-
-      // 5. 重置订阅
-      Button {
-        resetSubscribe()
-      } label: {
-        Label("重置订阅", systemImage: AppSymbol.resetSubscription)
-      }
-
-      Divider()
-
-      // 6. 取消订阅
-      Button(role: .destructive) {
-        showUnsubscribeConfirm = true
-      } label: {
-        Label("取消订阅", systemImage: AppSymbol.unsubscribe)
+      } else {
+        actionMenu
       }
     }
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in showUnsubscribeConfirm = false }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      showUnsubscribeConfirm = false
+      showsEpisodeTrialNotice = false
+    }
     .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
@@ -585,6 +557,62 @@ private struct SubscribeItemView: View {
       }
     } message: {
       Text(SubscriptionCancelConfirmation.message(for: item))
+    }
+    .alert(EpisodeTrialHoldNotice.title, isPresented: $showsEpisodeTrialNotice) {
+      Button("好", role: .cancel) {}
+    } message: {
+      Text(EpisodeTrialHoldNotice.manageMessage)
+    }
+  }
+
+  @ViewBuilder
+  private var actionMenu: some View {
+    // 1. 编辑订阅
+    Button {
+      onEdit()
+    } label: {
+      Label("编辑订阅", systemImage: AppSymbol.editSubscription)
+    }
+
+    // 2. 详情
+    Button {
+      onViewDetail()
+    } label: {
+      Label("详情", systemImage: AppSymbol.details)
+    }
+
+    // 3. 搜索订阅
+    Button {
+      searchSubscribe()
+    } label: {
+      Label("搜索订阅", systemImage: AppSymbol.search)
+    }
+
+    // 4. 启用/暂停
+    Button {
+      toggleSubscribeStatus()
+    } label: {
+      if item.state == "S" {
+        Label("启用订阅", systemImage: AppSymbol.resume)
+      } else {
+        Label("暂停订阅", systemImage: AppSymbol.pause)
+      }
+    }
+
+    // 5. 重置订阅
+    Button {
+      resetSubscribe()
+    } label: {
+      Label("重置订阅", systemImage: AppSymbol.resetSubscription)
+    }
+
+    Divider()
+
+    // 6. 取消订阅
+    Button(role: .destructive) {
+      showUnsubscribeConfirm = true
+    } label: {
+      Label("取消订阅", systemImage: AppSymbol.unsubscribe)
     }
   }
 

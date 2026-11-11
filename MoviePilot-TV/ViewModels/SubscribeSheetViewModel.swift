@@ -40,32 +40,9 @@ class SubscribeSheetViewModel: ObservableObject {
 
   private let apiService: APIService
 
-  let qualityOptions = [
-    (title: "全部", value: ""),
-    (title: "蓝光原盘", value: "Blu-?Ray.+VC-?1|Blu-?Ray.+AVC|UHD.+blu-?ray.+HEVC|MiniBD"),
-    (title: "Remux", value: "Remux"),
-    (title: "蓝光", value: "Blu-?Ray"),
-    (title: "UHD", value: "UHD|UltraHD"),
-    (title: "WEB-DL", value: "WEB-?DL|WEB-?RIP"),
-    (title: "HDTV", value: "HDTV"),
-    (title: "H265", value: "[Hx].?265|HEVC"),
-    (title: "H264", value: "[Hx].?264|AVC"),
-  ]
-
-  let resolutionOptions = [
-    (title: "全部", value: ""),
-    (title: "4K", value: "4K|2160p|x2160"),
-    (title: "1080P", value: "1080[pi]|x1080"),
-    (title: "720P", value: "720[pi]|x720"),
-  ]
-
-  let effectOptions = [
-    (title: "全部", value: ""),
-    (title: "杜比视界", value: "Dolby[\\s.]+Vision|DOVI|[\\s.]+DV[\\s.]+"),
-    (title: "杜比全景声", value: "Dolby[\\s.]*\\+?Atmos|Atmos"),
-    (title: "HDR", value: "[\\s.]+HDR[\\s.]+|HDR10|HDR10\\+"),
-    (title: "SDR", value: "[\\s.]+SDR[\\s.]+"),
-  ]
+  let qualityOptions = SubscribeRuleChoices.quality
+  let resolutionOptions = SubscribeRuleChoices.resolution
+  let effectOptions = SubscribeRuleChoices.effect
 
   var seasonOptions: [Int] {
     Array(0...100)
@@ -175,17 +152,18 @@ class SubscribeSheetViewModel: ObservableObject {
   /// 站点摘要：不选表示使用默认站点；选了一个显示站点名，找不到名字或选了多个时显示数量。
   /// 菜单行和设置标签共用这一套规则，只是文案不同。
   func sitesSummary(empty: String = "默认", count: (Int) -> String = { "已选 \($0) 个" }) -> String {
-    let ids = subscribe.sites ?? []
-    if ids.isEmpty { return empty }
-    if ids.count == 1, let site = sites.first(where: { $0.id == ids[0] }) { return site.name }
-    return count(ids.count)
+    SubscribeRuleChoices.sitesSummary(subscribe.sites, sites: sites, empty: empty, count: count)
   }
 
   /// 规则组摘要：不选表示使用默认规则。
   var filterGroupsSummary: String {
-    let groups = subscribe.filter_groups ?? []
-    if groups.isEmpty { return "默认" }
-    return groups.count == 1 ? groups[0] : "已选 \(groups.count) 个"
+    SubscribeRuleChoices.filterGroupsSummary(subscribe.filter_groups)
+  }
+
+  /// 规则类设置行的可选值。
+  var ruleOptions: SubscribeRuleOptions {
+    SubscribeRuleOptions(
+      sites: sites, downloaders: downloaders, savePaths: savePathOptions, filterGroups: filterGroups)
   }
 
   /// 分辨率的显示名；值不在选项里时照原样显示。
@@ -220,15 +198,8 @@ class SubscribeSheetViewModel: ObservableObject {
       || subscribe.music_type != original.music_type
   }
 
-  // F-135：与 `AddDownloadViewModel.targetDirectories` 同一套规范化 —— 先 trim、再丢空、
-  // 最后去重。原实现先去重、从不 trim，于是纯空白路径会被当成合法项留在列表里。
   var savePathOptions: [String] {
-    var seen = Set<String>()
-    return directories.compactMap {
-      $0.download_path?.trimmingCharacters(in: .whitespacesAndNewlines)
-    }.filter {
-      !$0.isEmpty && seen.insert($0).inserted
-    }
+    SubscribeRuleChoices.savePaths(from: directories)
   }
 
   init(
@@ -299,7 +270,7 @@ class SubscribeSheetViewModel: ObservableObject {
               clearLoadedOptions()
               return false
             }
-            guard !EpisodeTrialTemporarySubscription.isTrialRow(fullSubscribe) else {
+            guard !fullSubscribe.isEpisodeTrial else {
               showEpisodeTrialInProgress()
               return false
             }
@@ -458,7 +429,7 @@ class SubscribeSheetViewModel: ObservableObject {
       return false
     }
     // 后端按季去重，同季试看订阅还在时“新增”会拿回它。它不是本次创建的，不能当成自己的订阅回滚或编辑。
-    if EpisodeTrialTemporarySubscription.isTrialRow(fullSubscribe) {
+    if fullSubscribe.isEpisodeTrial {
       createdSubscriptionReceipt = nil
       subscribe.id = nil
       showEpisodeTrialInProgress()

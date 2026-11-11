@@ -17,8 +17,13 @@ final class EpisodeTrialService: ObservableObject {
   private static let activeCleanupPeriod: TimeInterval = 20 * 60
   private static let activeCleanupInterval = Duration.seconds(20)
   private static let idleCleanupInterval = Duration.seconds(10 * 60)
+  /// 页面可见时的刷新间隔：试看进行中跟得紧一些；只是在等正式订阅时放慢。
+  nonisolated static let activePollInterval = Duration.seconds(10)
+  nonisolated static let formalPollInterval = Duration.seconds(60)
 
   @Published private(set) var progress: [String: EpisodeTrialProgress] = [:]
+  /// 当前账号保存的试看规则；没保存过时是默认规则，沿用 MoviePilot 的默认站点、规则组和下载设置。
+  @Published private(set) var rule = EpisodeTrialRule()
   private weak var api: APIService?
   private let defaults: UserDefaults
   private let storageKey: String?
@@ -62,19 +67,20 @@ final class EpisodeTrialService: ObservableObject {
       jobs = saved
       progress = saved.mapValues(\.progress)
     }
+    if let storageKey, let data = defaults.data(forKey: storageKey + ".rule"),
+      let saved = try? JSONDecoder().decode(EpisodeTrialRule.self, from: data)
+    {
+      rule = saved
+    }
     self.availability = availability
     scheduleCleanup()
   }
 
-  var rule: EpisodeTrialRule? {
-    guard let storageKey, let data = defaults.data(forKey: storageKey + ".rule") else { return nil }
-    return try? JSONDecoder().decode(EpisodeTrialRule.self, from: data)
-  }
-
-  func saveRule(_ rule: EpisodeTrialRule?) throws {
+  /// 规则只影响之后发起的试看；已经写进服务器的临时订阅不跟着改。
+  func saveRule(_ rule: EpisodeTrialRule) throws {
     guard !isTornDown, let storageKey else { throw CancellationError() }
-    let data = try rule.map { try JSONEncoder().encode($0) }
-    defaults.set(data, forKey: storageKey + ".rule")
+    defaults.set(try JSONEncoder().encode(rule), forKey: storageKey + ".rule")
+    self.rule = rule
   }
 
   func start(_ request: EpisodeTrialRequest) async -> EpisodeTrialProgress {
@@ -87,6 +93,24 @@ final class EpisodeTrialService: ObservableObject {
     await enqueue(seasonKey: request.seasonKey, key: request.key, kind: .refresh) { service in
       await service.run(request, mayCreate: false)
     }
+  }
+
+  /// 页面可见期间按间隔刷新这一集的进度，调用方在页面的 `.task` 里等待它，页面离开时任务取消就停。
+  /// 只推进已有的试看，不会发起新的；这一集没有需要跟踪的事（可以播放、已结束或从没发起）时自己停下。
+  /// 停下后由页面在用户操作或重新出现时再调用。
+  func poll(_ request: EpisodeTrialRequest) async {
+    while !Task.isCancelled, !isTornDown {
+      _ = await refresh(request)
+      guard !Task.isCancelled, let delay = pollDelay(for: request.key) else { return }
+      do { try await sleep(delay) } catch { return }
+    }
+  }
+
+  private func pollDelay(for key: String) -> Duration? {
+    guard let job = jobs[key], job.isTracking else { return nil }
+    let followsFormalOnly = job.formalSubscriptionID != nil && job.temporary == nil && job.creationMarker == nil
+      && job.downloadHash == nil
+    return followsFormalOnly ? Self.formalPollInterval : Self.activePollInterval
   }
 
   func tearDown() {
@@ -139,10 +163,12 @@ final class EpisodeTrialService: ObservableObject {
     return result
   }
 
-  /// 试看只对 v3.2.6 起的管理员会话开放；清理沿用同一前提，旧版本或无权限时不碰服务器。
+  /// 试看只对支持的版本和管理员会话开放；清理沿用同一前提，旧版本或无权限时不碰服务器。
   private func availableAPI() -> APIService? {
-    guard !isTornDown, !Task.isCancelled, let api, storageKey != nil, api.canRequestSuperUserEndpoints,
-      InAppPlaybackAvailability.supports(backendVersion: api.settings?.BACKEND_VERSION)
+    guard !isTornDown, !Task.isCancelled, let api, storageKey != nil,
+      EpisodeTrialAvailability.isAvailable(
+        canRequestSuperUserEndpoints: api.canRequestSuperUserEndpoints,
+        backendVersion: api.settings?.BACKEND_VERSION)
     else { return nil }
     return api
   }
@@ -150,7 +176,7 @@ final class EpisodeTrialService: ObservableObject {
   private func run(_ request: EpisodeTrialRequest, mayCreate: Bool) async -> EpisodeTrialProgress {
     guard !isTornDown, !Task.isCancelled else { return Self.interrupted }
     guard let api = availableAPI() else {
-      return .unavailable("试看需要 MoviePilot v3.2.6 或更高版本和管理员账号")
+      return .unavailable(EpisodeTrialAvailability.requirementMessage)
     }
 
     var job = jobs[request.key] ?? EpisodeTrialJob()
@@ -350,10 +376,6 @@ final class EpisodeTrialService: ObservableObject {
 
     guard library == .notOnServer else {
       job.progress = .unavailable(library?.message ?? "无法确认媒体库是否已有这一集")
-      return
-    }
-    guard let rule else {
-      job.progress = .unavailable("请先保存试看订阅规则")
       return
     }
     try await submit(&job, request: request, rule: rule, history: history, operation: operation)

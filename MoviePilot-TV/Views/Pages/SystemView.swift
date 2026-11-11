@@ -30,6 +30,7 @@ struct SystemView: View {
   @State private var selectedDetail: SystemSettingsDetailItem?
   @State private var updateNotice: AppChangelogEntry?
   @State private var showLogoutConfirmation = false
+  @State private var showsEpisodeTrialRule = false
   @State private var route: [SystemSettingsPage] = []
   @State private var displayedRoute: [SystemSettingsPage] = []
   @State private var pageOffsetDepth = 0
@@ -69,6 +70,14 @@ struct SystemView: View {
 
   private var canConfigureCustomFilters: Bool {
     apiService.canRequestSuperUserEndpoints
+  }
+
+  /// 试看规则只在试看可用时显示：管理员，且后端版本支持（见 `EpisodeTrialAvailability`）。
+  private var canConfigureEpisodeTrial: Bool {
+    canConfigureSubscriptions
+      && EpisodeTrialAvailability.isAvailable(
+        canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+        backendVersion: apiService.settings?.BACKEND_VERSION)
   }
 
   private var selectedLogRecordBinding: Binding<LogRecord?> {
@@ -143,6 +152,7 @@ struct SystemView: View {
       selectedDetail = nil
       updateNotice = nil
       showLogoutConfirmation = false
+      showsEpisodeTrialRule = false
     }
     .onChange(of: isSelected) { _, selected in
       guard selected else { return }
@@ -155,6 +165,9 @@ struct SystemView: View {
     }
     .sheet(isPresented: $showAppInfo) {
       appInfoSheet
+    }
+    .sheet(isPresented: $showsEpisodeTrialRule) {
+      EpisodeTrialRuleSheet(service: apiService.sessionScope.episodeTrial, apiService: apiService)
     }
     .sheet(item: $selectedDetail) { detail in
       // 更新历史和日志详情共用这一个 item sheet，写法与版本更新历史相同。
@@ -297,7 +310,7 @@ struct SystemView: View {
           // 会同时触发 scrollTo(top)，随后焦点恢复又滚回原行，形成"先上滑再下滑"。
           isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root
             && !showAppInfo && updateNotice == nil && selectedDetail == nil
-            && !showLogoutConfirmation,
+            && !showLogoutConfirmation && !showsEpisodeTrialRule,
           onExitPress: {
             focusedItem = nil
             withAnimation(.easeInOut(duration: 0.24)) {
@@ -326,6 +339,17 @@ struct SystemView: View {
           )
           .font(.body.bold())
           .focused($focusedItem, equals: .autoSearch)
+
+          if canConfigureEpisodeTrial {
+            Button {
+              showsEpisodeTrialRule = true
+            } label: {
+              EpisodeTrialRuleSummary(service: apiService.sessionScope.episodeTrial) {
+                row("试看规则", value: $0)
+              }
+            }
+            .focused($focusedItem, equals: .episodeTrialRule)
+          }
         }
       }
 
@@ -1240,6 +1264,8 @@ struct SystemView: View {
       switch focusedItem {
       case .autoSearch:
         return "新增订阅后立即开始搜索，无需等待 MoviePilot 稍后自动处理。（只影响 TV 端）"
+      case .episodeTrialRule:
+        return "试看一集时，临时订阅使用的站点、质量、规则组和下载设置。按当前账号保存在这台 Apple TV 上。"
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .playbackSettings:
@@ -1459,6 +1485,7 @@ enum SystemSettingsFocus: Hashable {
   case subtitleSite(Int)
   case appInfo
   case autoSearch
+  case episodeTrialRule
   case homeMediaTapPlaysInApp
   case playbackSettings
   case inAppPlayback
@@ -1639,5 +1666,15 @@ enum SystemFilterRulePreview {
       return nil
     }
     return trimmed
+  }
+}
+
+/// 「试看规则」一行的摘要，跟着当前账号保存的规则变化。
+private struct EpisodeTrialRuleSummary<Label: View>: View {
+  @ObservedObject var service: EpisodeTrialService
+  @ViewBuilder let label: (String) -> Label
+
+  var body: some View {
+    label(service.rule.isDefault ? "默认" : "已自定义")
   }
 }

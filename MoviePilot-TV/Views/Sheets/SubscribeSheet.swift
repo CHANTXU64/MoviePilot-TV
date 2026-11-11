@@ -57,7 +57,7 @@ struct SubscribeSheet: View {
       Text(SubscribeIdentityResetConfirmation.message)
     }
     .alert(
-      "这一季正在试看",
+      EpisodeTrialHoldNotice.title,
       isPresented: Binding(
         get: { viewModel.isHeldByEpisodeTrial },
         set: { isPresented in
@@ -69,7 +69,7 @@ struct SubscribeSheet: View {
     ) {
       Button("好", role: .cancel) {}
     } message: {
-      Text("试看结束后再订阅这一季。")
+      Text(EpisodeTrialHoldNotice.subscribeMessage)
     }
     .onAppear {
       guard !hasAppeared else { return }

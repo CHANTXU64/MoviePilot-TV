@@ -61,7 +61,7 @@ struct SubscribeSeasonContentView: View {
           guard refreshed, navigationCoordinator.isCurrent(source) else { return nil }
           return viewModel.isSeasonSubscribed(seasonNumber)
         },
-        showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+        showUnsubscribeConfirm: { viewModel.requestUnsubscribe(season: $0) },
         prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) })
     }
   }
@@ -143,6 +143,7 @@ struct SubscribeSeasonContentView: View {
       selectedSeasonDetail = nil
       viewModel.sheetSubscribe = nil
       viewModel.showUnsubscribeConfirm = nil
+      viewModel.episodeTrialNoticeSeason = nil
     }
     .sheet(item: $selectedSeasonDetail) { season in
       SeasonDetailSheet(season: season, mediaInfo: viewModel.mediaInfo)
@@ -172,6 +173,17 @@ struct SubscribeSeasonContentView: View {
       if let season = viewModel.showUnsubscribeConfirm {
         Text(viewModel.unsubscribeConfirmationMessage(for: season))
       }
+    }
+    .alert(
+      EpisodeTrialHoldNotice.title,
+      isPresented: Binding(
+        get: { viewModel.episodeTrialNoticeSeason != nil },
+        set: { if !$0 { viewModel.episodeTrialNoticeSeason = nil } }
+      )
+    ) {
+      Button("好", role: .cancel) {}
+    } message: {
+      Text(EpisodeTrialHoldNotice.manageMessage)
     }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
@@ -351,6 +363,7 @@ struct SubscribeSeasonContentView: View {
   ) -> some View {
     let seasonNumber = season.season_number ?? 0
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
+    let isHeldByTrial = viewModel.isSeasonHeldByEpisodeTrial(seasonNumber)
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
     let title = SeasonDisplayFormatter.cardTitle(
@@ -381,7 +394,7 @@ struct SubscribeSeasonContentView: View {
       showBadges: showBadges,
       loadsImage: loadsImages,
       footerLabel: (
-        icon: isSubscribed ? AppSymbol.unsubscribe : AppSymbol.subscribe,
+        icon: isHeldByTrial ? AppSymbol.subscriptionTrial : isSubscribed ? AppSymbol.unsubscribe : AppSymbol.subscribe,
         text: footerText
       ),
       action: {
@@ -392,7 +405,9 @@ struct SubscribeSeasonContentView: View {
     )
     .compositingGroup()
     .contextMenu {
-      if isSubscribed {
+      if isHeldByTrial {
+        // 试看订阅不能取消；菜单只留详情，按卡片本身会说明原因。
+      } else if isSubscribed {
         Button(role: .destructive) {
           guard !isProcessing else { return }
           performSeasonAction(season, isSubscribed: true)

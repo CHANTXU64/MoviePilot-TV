@@ -5,16 +5,20 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   let id: Int
   let season: Int
   let episodeGroup: String?
+  /// 试看一集用的临时订阅占着这一季：标成「试看中」，不能取消，也不能另建订阅。
+  let isEpisodeTrial: Bool
 
-  init(id: Int, season: Int, episodeGroup: String?) {
+  init(id: Int, season: Int, episodeGroup: String?, isEpisodeTrial: Bool = false) {
     self.id = id
     self.season = season
     self.episodeGroup = Self.normalizedEpisodeGroup(episodeGroup)
+    self.isEpisodeTrial = isEpisodeTrial
   }
 
   init?(subscribe: Subscribe) {
     guard let id = subscribe.id, let season = subscribe.season else { return nil }
-    self.init(id: id, season: season, episodeGroup: subscribe.episode_group)
+    self.init(
+      id: id, season: season, episodeGroup: subscribe.episode_group, isEpisodeTrial: subscribe.isEpisodeTrial)
   }
 
   static func indexBySeason(from subscriptions: [Subscribe], matching media: MediaInfo)
@@ -24,7 +28,8 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
 
     for subscription in subscriptions where matches(subscription, media: media) {
       guard let summary = SeasonSubscriptionSummary(subscribe: subscription) else { continue }
-      if summaries[summary.season] == nil {
+      // 不同剧集组可以各有一条：正式订阅优先显示，试看订阅只在这一季没有正式订阅时出现。
+      if summaries[summary.season].map({ $0.isEpisodeTrial && !summary.isEpisodeTrial }) ?? true {
         summaries[summary.season] = summary
       }
     }
@@ -40,7 +45,7 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 
   func statusDisplayText(episodeGroups: [EpisodeGroup]) -> String {
-    "已订阅 · \(groupDisplayName(episodeGroups: episodeGroups))"
+    "\(isEpisodeTrial ? "试看中" : "已订阅") · \(groupDisplayName(episodeGroups: episodeGroups))"
   }
 
   private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
@@ -121,6 +126,8 @@ class SubscribeSeasonViewModel: ObservableObject {
   // 各季的订阅状态
   @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
   @Published var subscribedSeasons: Set<Int> = []
+  /// 按到了试看中的季：用系统提示框说明这一季暂时不能取消或另建订阅。
+  @Published var episodeTrialNoticeSeason: Int?
   @Published var subscribingSeasons: Set<Int> = []
 
   // 订阅配置弹窗所需数据
@@ -591,8 +598,14 @@ class SubscribeSeasonViewModel: ObservableObject {
     do {
       try await refreshSubscriptionSummaries(forceRefresh: true)
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-      guard seasonSubscriptions[seasonNumber] != nil else {
+      guard let summary = seasonSubscriptions[seasonNumber] else {
         showUnsubscribeConfirm = nil
+        return
+      }
+      // 按季删除会连试看的临时订阅一起删掉；试看订阅由试看服务自己收尾。
+      guard !summary.isEpisodeTrial else {
+        showUnsubscribeConfirm = nil
+        episodeTrialNoticeSeason = seasonNumber
         return
       }
 
@@ -644,6 +657,19 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   func isSeasonSubscribed(_ seasonNumber: Int) -> Bool {
     seasonSubscriptions[seasonNumber] != nil
+  }
+
+  func isSeasonHeldByEpisodeTrial(_ seasonNumber: Int) -> Bool {
+    seasonSubscriptions[seasonNumber]?.isEpisodeTrial == true
+  }
+
+  /// 已订阅的季按下后：正式订阅确认取消；试看中的季只提示，不进入取消流程。
+  func requestUnsubscribe(season seasonNumber: Int) {
+    if isSeasonHeldByEpisodeTrial(seasonNumber) {
+      episodeTrialNoticeSeason = seasonNumber
+    } else {
+      showUnsubscribeConfirm = seasonNumber
+    }
   }
 
   func isSeasonSubscribing(_ seasonNumber: Int) -> Bool {

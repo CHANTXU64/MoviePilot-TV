@@ -244,82 +244,10 @@ struct SubscribePanel: View {
           get: { String(viewModel.subscribe.start_episode ?? 0) },
           set: { viewModel.subscribe.start_episode = Int($0) }),
         keyboardType: .numberPad)
-    case .quality:
-      SheetPicker(
-        title: field.title,
-        selection: Binding(
-          get: { viewModel.subscribe.quality ?? "" }, set: { viewModel.subscribe.quality = $0 }),
-        options: viewModel.qualityOptions.map { PickerOption(title: $0.title, value: $0.value) })
-    case .resolution:
-      SheetPicker(
-        title: field.title,
-        selection: Binding(
-          get: { viewModel.subscribe.resolution ?? "" },
-          set: { viewModel.subscribe.resolution = $0 }),
-        options: viewModel.resolutionOptions.map { PickerOption(title: $0.title, value: $0.value) })
-    case .effect:
-      SheetPicker(
-        title: field.title,
-        selection: Binding(
-          get: { viewModel.subscribe.effect ?? "" }, set: { viewModel.subscribe.effect = $0 }),
-        options: viewModel.effectOptions.map { PickerOption(title: $0.title, value: $0.value) })
-    case .sites:
-      SheetMultiPicker(
-        title: field.title, summary: viewModel.sitesSummary(), emptySelectionTitle: "默认站点",
-        options: viewModel.sites, id: \.id,
-        selected: Binding(
-          get: { Set(viewModel.subscribe.sites ?? []) },
-          set: { viewModel.subscribe.sites = Array($0) }),
-        label: { $0.name })
-    case .downloader:
-      SheetPicker(
-        title: field.title, selection: $viewModel.downloaderSelection,
-        options: [PickerOption(title: "默认", value: "")]
-          + viewModel.downloaders.map { PickerOption(title: $0.name, value: $0.name) })
-    case .savePath:
-      SheetPicker(
-        title: field.title,
-        selection: Binding(
-          get: { viewModel.subscribe.save_path ?? "" },
-          set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }),
-        options: [PickerOption(title: "自动", value: "")]
-          + viewModel.savePathOptions.map { PickerOption(title: $0, value: $0) })
     case .subscribeMode:
       SheetPicker(
         title: field.title, selection: $viewModel.subscribeMode,
         options: viewModel.subscribeModeOptions.map { PickerOption(title: $0.title, value: $0.value) })
-    case .searchImdb:
-      Toggle(
-        field.title,
-        isOn: Binding(
-          get: { (viewModel.subscribe.search_imdbid ?? 0) == 1 },
-          set: { viewModel.subscribe.search_imdbid = $0 ? 1 : 0 }))
-    case .keyword:
-      textRow(
-        field,
-        text: Binding(
-          get: { viewModel.subscribe.keyword ?? "" },
-          set: { viewModel.subscribe.keyword = $0.isEmpty ? nil : $0 }))
-    case .include:
-      textRow(
-        field,
-        text: Binding(
-          get: { viewModel.subscribe.include ?? "" },
-          set: { viewModel.subscribe.include = $0.isEmpty ? nil : $0 }))
-    case .exclude:
-      textRow(
-        field,
-        text: Binding(
-          get: { viewModel.subscribe.exclude ?? "" },
-          set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }))
-    case .filterGroups:
-      SheetMultiPicker(
-        title: field.title, summary: viewModel.filterGroupsSummary, emptySelectionTitle: "默认规则",
-        options: viewModel.filterGroups, id: \.name,
-        selected: Binding(
-          get: { Set(viewModel.subscribe.filter_groups ?? []) },
-          set: { viewModel.subscribe.filter_groups = Array($0) }),
-        label: { $0.name })
     case .episodeGroup:
       SheetPicker(
         title: field.title,
@@ -337,12 +265,9 @@ struct SubscribePanel: View {
           + viewModel.seasonOptions.map { PickerOption(title: "第 \($0) 季", value: String($0)) })
     case .mediaCategory:
       textRow(field, text: $viewModel.mediaCategoryText)
-    case .customWords:
-      textRow(
-        field,
-        text: Binding(
-          get: { viewModel.subscribe.custom_words ?? "" },
-          set: { viewModel.subscribe.custom_words = $0.isEmpty ? nil : $0 }))
+    case .quality, .resolution, .effect, .sites, .downloader, .savePath, .searchImdb, .keyword, .include,
+      .exclude, .filterGroups, .customWords:
+      SubscribeRuleFieldRow(field: field, subscribe: $viewModel.subscribe, options: viewModel.ruleOptions)
     }
   }
 

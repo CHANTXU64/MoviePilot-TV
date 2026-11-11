@@ -318,8 +318,166 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testVersionGateFollowsNewBehaviorPolarity() {
+    XCTAssertEqual(EpisodeTrialAvailability.minimumBackendVersion, "v3.2.6")
+    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: "v3.2.5"))
+    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.2.6"))
+    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.2.6-1"), "热修复版本照常提供")
+    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.3.0"), "未登记的更新版本照常提供")
+    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: nil), "读不出版本时不提供")
+    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: "dev"), "无法解析的版本不提供")
+    XCTAssertFalse(
+      EpisodeTrialAvailability.isAvailable(canRequestSuperUserEndpoints: false, backendVersion: "v3.2.6"),
+      "普通用户不提供")
+  }
+
+  func testUnsupportedBackendNeverTouchesServer() async throws {
+    try await withService { api, service, _, request in
+      for version in ["v3.2.5", "dev"] {
+        api.settings?.BACKEND_VERSION = version
+        let progress = await service.start(request)
+        XCTAssertEqual(progress, .unavailable(EpisodeTrialAvailability.requirementMessage))
+      }
+      api.settings?.BACKEND_VERSION = nil
+      let missing = await service.start(request)
+      XCTAssertEqual(missing, .unavailable(EpisodeTrialAvailability.requirementMessage))
+      XCTAssertEqual(EpisodeTrialURLProtocol.fixture.requestCount, 0)
+    }
+  }
+
+  func testWithoutSavedRuleTrialUsesMoviePilotDefaults() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    try await withService(rule: nil) { _, service, _, request in
+      XCTAssertTrue(service.rule.isDefault)
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      XCTAssertEqual(fixture.searchValues, .init(
+        season: 2, start: 5, total: 5, include: nil, bestVersion: 1, fullPack: 0, quality: nil))
+    }
+  }
+
+  func testSavedRuleIsPublishedAndKeptForTheAccount() async throws {
+    try await withService(rule: nil) { api, service, defaults, _ in
+      let rule = EpisodeTrialRule(sites: [3], resolution: "1080[pi]|x1080", downloader: "qb")
+      try service.saveRule(rule)
+      XCTAssertEqual(service.rule, rule)
+
+      let reopened = EpisodeTrialService(api: api, defaults: defaults) { _ in .notOnServer }
+      defer { reopened.tearDown() }
+      XCTAssertEqual(reopened.rule, rule)
+
+      service.tearDown()
+      XCTAssertThrowsError(try service.saveRule(EpisodeTrialRule()), "拆除后的服务不能再写规则")
+      XCTAssertEqual(reopened.rule, rule)
+    }
+  }
+
+  func testRuleRoundTripsThroughTheEditingDraft() {
+    let rule = EpisodeTrialRule(
+      sites: [9, 2], searchByIMDb: true, keyword: "Show", quality: "WEB-?DL|WEB-?RIP", include: "简中",
+      exclude: "预告", customWords: "A => B", filterGroups: ["高清"], downloader: "qb", savePath: "/tv")
+    var draft = Subscribe(id: nil, name: "试看规则", type: "电视剧")
+    rule.apply(to: &draft)
+    XCTAssertEqual(EpisodeTrialRule(settingsOf: draft), EpisodeTrialRule(
+      sites: [2, 9], searchByIMDb: true, keyword: "Show", quality: "WEB-?DL|WEB-?RIP", include: "简中",
+      exclude: "预告", customWords: "A => B", filterGroups: ["高清"], downloader: "qb", savePath: "/tv"))
+
+    // 选「全部」「默认」或清空输入框，都回到未指定。
+    draft.quality = ""
+    draft.sites = []
+    draft.filter_groups = []
+    draft.keyword = ""
+    draft.search_imdbid = 0
+    let cleared = EpisodeTrialRule(settingsOf: draft)
+    XCTAssertNil(cleared.quality)
+    XCTAssertNil(cleared.sites)
+    XCTAssertNil(cleared.filterGroups)
+    XCTAssertNil(cleared.keyword)
+    XCTAssertFalse(cleared.searchByIMDb)
+    XCTAssertTrue(EpisodeTrialRule(settingsOf: Subscribe(id: nil, name: "", type: "电视剧")).isDefault)
+  }
+
+  func testRuleEditorSavesOnlyWhenAsked() async throws {
+    try await withService(rule: nil) { api, service, _, _ in
+      try service.saveRule(EpisodeTrialRule(quality: "Remux"))
+      let editor = EpisodeTrialRuleViewModel(service: service, apiService: api)
+      XCTAssertEqual(editor.draft.quality, "Remux")
+
+      editor.draft.quality = ""
+      editor.draft.downloader = "tr"
+      XCTAssertEqual(service.rule, EpisodeTrialRule(quality: "Remux"), "改草稿不写规则，按 Menu 关掉就不保存")
+
+      XCTAssertTrue(editor.save())
+      XCTAssertEqual(service.rule, EpisodeTrialRule(downloader: "tr"))
+
+      service.tearDown()
+      editor.draft.downloader = "qb"
+      XCTAssertFalse(editor.save())
+      XCTAssertNotNil(editor.saveErrorMessage)
+    }
+  }
+
+  func testPollKeepsRefreshingUntilTrialFinishes() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    let sleeper = PollSleeper { fixture.setMode(.noResource) }
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+
+      await service.poll(request)
+      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
+      XCTAssertEqual(service.progress[request.key], .noEligibleResource)
+      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
+    }
+  }
+
+  func testPollNeverStartsATrial() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    let sleeper = PollSleeper {}
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      await service.poll(request)
+      XCTAssertEqual(sleeper.pollDelays, [])
+      XCTAssertEqual(fixture.mutations, [])
+    }
+  }
+
+  func testPollFollowsFormalSubscriptionSlowly() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    fixture.setMode(.pausedFormal)
+    let sleeper = PollSleeper { fixture.setMode(.missingFormal) }
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let paused = await service.start(request)
+      XCTAssertEqual(paused, .subscriptionPaused)
+
+      await service.poll(request)
+      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.formalPollInterval])
+      XCTAssertEqual(service.progress[request.key], .unavailable("原订阅已结束，可以发起试看"))
+      XCTAssertEqual(fixture.mutations, [])
+    }
+  }
+
+  func testLeavingThePageStopsPollingButKeepsTheTrial() async throws {
+    let sleeper = PollSleeper(suspendsPolls: true) {}
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+
+      let page = Task { await service.poll(request) }
+      for _ in 0..<300 where sleeper.pollDelays.isEmpty {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
+      page.cancel()
+      await page.value
+      XCTAssertEqual(service.progress[request.key], .searching)
+      XCTAssertFalse(EpisodeTrialURLProtocol.fixture.mutations.contains("DELETE subscribe/81"))
+    }
+  }
+
   private func withService(
     library: EpisodeAvailability = .notOnServer, clock: TrialClock = TrialClock(),
+    rule: EpisodeTrialRule? = EpisodeTrialRule(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"),
+    sleep: EpisodeTrialService.Sleep? = nil,
     _ body: (APIService, EpisodeTrialService, UserDefaults, EpisodeTrialRequest) async throws -> Void
   ) async throws {
     let persistence = APIServicePersistenceSnapshot.capture()
@@ -334,14 +492,48 @@ final class EpisodeTrialServiceTests: XCTestCase {
       permissions: nil, user_id: 81, user_name: "fixture", avatar: nil)
     api.replaceSessionForTesting(baseURL: "https://episode-trial.local", token: token.access_token, currentUser: token)
     api.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
-    let service = EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }) { _ in library }
+    let service = sleep.map { sleep in
+      EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, sleep: sleep) { _ in library }
+    } ?? EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }) { _ in library }
     defer { service.tearDown() }
-    try service.saveRule(.init(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"))
+    if let rule { try service.saveRule(rule) }
     let request = try XCTUnwrap(EpisodeTrialRequest(
       media: MediaInfo(tmdb_id: 91, title: "试看测试", type: "电视剧"),
       episode: MoviePilotEpisode(TmdbEpisode(id: 234, episodeNumber: 5), season: 2, index: 4)
     ))
     try await body(api, service, defaults, request)
+  }
+}
+
+/// 页面轮询的等待：记下间隔，执行一次服务器变化后立即返回（或一直挂起到页面离开）；
+/// 定时清理的等待一直挂起，不干扰轮询的断言。
+nonisolated private final class PollSleeper: @unchecked Sendable {
+  private let lock = NSLock()
+  private var requested: [Duration] = []
+  private let suspendsPolls: Bool
+  private let onPoll: @Sendable () -> Void
+
+  init(suspendsPolls: Bool = false, onPoll: @escaping @Sendable () -> Void) {
+    self.suspendsPolls = suspendsPolls
+    self.onPoll = onPoll
+  }
+
+  var pollDelays: [Duration] { lock.withLock { requested } }
+
+  var sleep: EpisodeTrialService.Sleep {
+    { [self] delay in
+      let polls = [EpisodeTrialService.activePollInterval, EpisodeTrialService.formalPollInterval]
+      guard polls.contains(delay) else {
+        try await Task.sleep(for: .seconds(3600))
+        return
+      }
+      lock.withLock { requested.append(delay) }
+      if suspendsPolls {
+        try await Task.sleep(for: .seconds(3600))
+      } else {
+        onPoll()
+      }
+    }
   }
 }
 
@@ -438,10 +630,13 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
   private var temporary: [String: Any]?
   private var placeholder: [String: Any]?
   private var requests: [String] = []
+  private var totalRequests = 0
   private var created: Values?
   private var searched: Values?
 
   var mutations: [String] { lock.withLock { requests } }
+  /// 读和写都算，用来证明某条路径完全没有访问服务器。
+  var requestCount: Int { lock.withLock { totalRequests } }
   var createdValues: Values? { lock.withLock { created } }
   var searchValues: Values? { lock.withLock { searched } }
 
@@ -451,6 +646,7 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       temporary = nil
       placeholder = nil
       requests = []
+      totalRequests = 0
       created = nil
       searched = nil
     }
@@ -474,6 +670,7 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       let path = request.url?.path.split(separator: "/").dropFirst(2).joined(separator: "/") ?? ""
       let items = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
       let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+      totalRequests += 1
       if method != "GET" { requests.append("\(method) \(path)") }
       let response = try responseValue(method: method, path: path, query: query, request: request)
       return try JSONSerialization.data(withJSONObject: response)

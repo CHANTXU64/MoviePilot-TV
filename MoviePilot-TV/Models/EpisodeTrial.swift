@@ -1,7 +1,29 @@
 import Foundation
 import CryptoKit
 
-/// 与服务器和账号绑定的试看订阅配置，具体的季集来自每次请求。
+/// 单集试看的入口判断，试看服务和设置页共用。
+nonisolated enum EpisodeTrialAvailability {
+  /// 试看从 MoviePilot v3.2.6 起开放：整季包从这个版本起只下载订阅范围内的集，单集试看才不会整季下载；
+  /// 按集定位也依赖这个版本起季集列表返回的 TMDB 单集 ID。
+  /// 极性属于「新行为版本限制」：低于该版本、读不出或无法解析时不提供；可解析且不低于该版本（含热修复）时提供。
+  static let minimumBackendVersion = "v3.2.6"
+
+  static func supports(backendVersion: String?) -> Bool {
+    BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
+  }
+
+  /// 试看要读写所有人的订阅、下载器和整理记录，只对管理员开放。
+  static func isAvailable(canRequestSuperUserEndpoints: Bool, backendVersion: String?) -> Bool {
+    canRequestSuperUserEndpoints && supports(backendVersion: backendVersion)
+  }
+
+  static var requirementMessage: String {
+    "试看需要 MoviePilot \(minimumBackendVersion) 或更高版本和管理员账号"
+  }
+}
+
+/// 与服务器和账号绑定的试看订阅配置，具体的季集来自每次请求。全部留空表示沿用 MoviePilot 的默认设置。
+/// 不含整理类别：试看的这一集按 MoviePilot 自动识别的类别整理，和正式订阅进同一个媒体库。
 nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
   var sites: [Int]? = nil
   var searchByIMDb = false
@@ -15,7 +37,39 @@ nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
   var filterGroups: [String]? = nil
   var downloader: String? = nil
   var savePath: String? = nil
-  var mediaCategoryID: String? = nil
+
+  init(
+    sites: [Int]? = nil, searchByIMDb: Bool = false, keyword: String? = nil, quality: String? = nil,
+    resolution: String? = nil, effect: String? = nil, include: String? = nil, exclude: String? = nil,
+    customWords: String? = nil, filterGroups: [String]? = nil, downloader: String? = nil, savePath: String? = nil
+  ) {
+    self.sites = sites
+    self.searchByIMDb = searchByIMDb
+    self.keyword = keyword
+    self.quality = quality
+    self.resolution = resolution
+    self.effect = effect
+    self.include = include
+    self.exclude = exclude
+    self.customWords = customWords
+    self.filterGroups = filterGroups
+    self.downloader = downloader
+    self.savePath = savePath
+  }
+
+  /// 从规则编辑表单的草稿读回，和 `apply(to:)` 互逆：空文本、空列表都记为未指定。
+  init(settingsOf draft: Subscribe) {
+    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
+    func list<T>(_ value: [T]?) -> [T]? { value?.isEmpty == false ? value : nil }
+    self.init(
+      sites: list(draft.sites).map { Array(Set($0)).sorted() }, searchByIMDb: draft.search_imdbid == 1,
+      keyword: text(draft.keyword), quality: text(draft.quality), resolution: text(draft.resolution),
+      effect: text(draft.effect), include: text(draft.include), exclude: text(draft.exclude),
+      customWords: text(draft.custom_words), filterGroups: list(draft.filter_groups),
+      downloader: text(draft.downloader), savePath: text(draft.save_path))
+  }
+
+  var isDefault: Bool { self == EpisodeTrialRule() }
 
   func apply(to draft: inout Subscribe) {
     draft.sites = sites
@@ -30,9 +84,6 @@ nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
     draft.filter_groups = filterGroups
     draft.downloader = nonEmpty(downloader)
     draft.save_path = nonEmpty(savePath)
-    if let mediaCategoryID = nonEmpty(mediaCategoryID) {
-      draft.media_category_id = mediaCategoryID
-    }
   }
 
   private func nonEmpty(_ value: String?) -> String? { value == "" ? nil : value }
@@ -243,9 +294,7 @@ nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
       \.keyword, \.quality, \.resolution, \.effect, \.include, \.exclude, \.custom_words, \.downloader,
       \.save_path,
     ]
-    guard texts.allSatisfy({ text(row[keyPath: $0]) == text(draft[keyPath: $0]) }) else { return false }
-    guard let category = text(draft.media_category_id) else { return true }
-    return text(row.media_category_id) == category
+    return texts.allSatisfy { text(row[keyPath: $0]) == text(draft[keyPath: $0]) }
   }
 }
 
@@ -391,4 +440,22 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     }
     return matched
   }
+}
+
+nonisolated extension Subscribe {
+  /// 单集试看建的临时订阅。期间占着这一季，不能另建、编辑、暂停或取消，试看结束后自动删除。
+  var isEpisodeTrial: Bool { EpisodeTrialTemporarySubscription.isTrialRow(self) }
+
+  /// 试看的是哪一季哪一集，例如「第 2 季第 5 集」，订阅卡上代替集数进度显示。
+  var episodeTrialTargetText: String? {
+    guard isEpisodeTrial, let episode = start_episode, episode > 0 else { return nil }
+    return season.map { "第 \($0) 季第 \(episode) 集" } ?? "第 \(episode) 集"
+  }
+}
+
+/// 碰到试看订阅时的系统提示框文字，订阅面板、首页订阅卡和季订阅页共用。
+nonisolated enum EpisodeTrialHoldNotice {
+  static let title = "这一季正在试看"
+  static let subscribeMessage = "试看结束后再订阅这一季。"
+  static let manageMessage = "这是试看一集用的临时订阅，试看结束后会自动删除，期间不能编辑、暂停或取消。"
 }
