@@ -325,6 +325,63 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertNil(itemID(try item("电影"), backendVersion: nil), "读不出版本时不提供")
     XCTAssertEqual(itemID(try item("电影"), backendVersion: "v3.2.6-1"), "m1")
   }
+
+  func testPlaybackFailureMessageFollowsErrorCategoryAndLibmpvCode() {
+    typealias M = PlaybackFailureMessage
+    func message(_ error: MPVPlayerError) -> String { M.message(for: error) }
+
+    // 原生输出拒绝：原因文本取自 MPVUI 补丁原文。
+    for reason in [
+      "software Dolby Vision needs libplacebo reshaping",
+      "decoder supplied no validated native Dolby Vision sample metadata",
+      "P7 conversion was not explicitly enabled for this output",
+      "missing, malformed, duplicate, or unconvertible current-frame RPU",
+    ] {
+      XCTAssertEqual(message(.nativeVideoOutputUnavailable(reason)), M.dolbyVisionUnavailable, reason)
+    }
+    XCTAssertEqual(
+      message(.nativeVideoOutputUnavailable("no color space for native CI overlay")), M.nativeOutputUnavailable,
+      "非杜比视界的画面格式不说杜比视界")
+    XCTAssertEqual(
+      message(.nativeVideoOutputUnavailable("software color signal cannot be represented by CoreVideo metadata")),
+      M.nativeOutputUnavailable)
+
+    // 读取阶段：只有 LOADING_FAILED（片源流打不开）才提网络。
+    XCTAssertEqual(message(.loadFailed(code: -13, message: "loading failed")), M.sourceUnreachable)
+    XCTAssertEqual(message(.loadFailed(code: -17, message: "unrecognized file format")), M.unknownFormat)
+    XCTAssertEqual(message(.loadFailed(code: -16, message: "no audio or video data played")), M.nothingToPlay)
+    XCTAssertEqual(message(.loadFailed(code: -15, message: "vo init failed")), M.videoOutputFailed)
+    XCTAssertEqual(message(.loadFailed(code: -14, message: "audio output initialization failed")), M.audioOutputFailed)
+    XCTAssertEqual(message(.loadFailed(code: -12, message: "error running command")), M.loadFailedGeneric, "命令被拒不是网络问题")
+    XCTAssertEqual(message(.loadFailed(code: -20, message: "something happened")), M.loadFailedGeneric)
+
+    // 播放阶段：起播后 mpv 清零错误码，残留的 -13 也不当成网络问题。
+    XCTAssertEqual(message(.playbackFailed(code: -13, message: "loading failed")), M.playbackInterrupted)
+    XCTAssertEqual(message(.playbackFailed(code: -20, message: "something happened")), M.playbackInterrupted)
+    XCTAssertEqual(message(.playbackFailed(code: -15, message: "vo init failed")), M.videoOutputFailed)
+
+    for error: MPVPlayerError in [
+      .clientCreationFailed, .clientUnavailable,
+      .initializationFailed(context: "Initialize mpv", code: -1, message: "event queue full"),
+    ] {
+      XCTAssertEqual(message(error), M.playerInitializationFailed, "\(error)")
+    }
+    XCTAssertEqual(message(.seekTimedOut), M.playbackFailedGeneric)
+
+    let all: [MPVPlayerError] = [
+      .nativeVideoOutputUnavailable("software Dolby Vision needs libplacebo reshaping"),
+      .nativeVideoOutputUnavailable("no color space for native CI overlay"),
+      .loadFailed(code: -17, message: ""), .loadFailed(code: -12, message: ""), .loadFailed(code: -20, message: ""),
+      .playbackFailed(code: -13, message: ""), .playbackFailed(code: -20, message: ""),
+      .clientCreationFailed, .clientUnavailable, .initializationFailed(context: "", code: -1, message: ""),
+      .seekTimedOut,
+    ]
+    for error in all {
+      XCTAssertFalse(message(error).contains("网络"), "没有指向网络的证据时不提网络：\(error)")
+      XCTAssertLessThanOrEqual(message(error).count, 30, "提示在全局通知里单行显示")
+    }
+    XCTAssertLessThanOrEqual(M.sourceUnreachable.count, 30)
+  }
 }
 
 // MARK: - 播完后的动作
@@ -1185,6 +1242,32 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let session = try XCTUnwrap(coordinator.session)
     XCTAssertEqual(session.userID, "u-bob", "服务器配置的用户名是 admin，但登录的是 bob")
     coordinator.endCurrentSession()
+  }
+
+  /// mpv 报错经会话的 `onFailure` 交到协调器，提示按错误类别给出，不再一律说网络连接。
+  func testMPVFailureShowsMessageMatchingErrorCategory() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSession(coordinator)
+
+    // 模拟器上杜比视界 P5 被原生输出拒绝时 mpv 实际发来的错误。
+    session.handle(
+      .stateChanged(.failed(.nativeVideoOutputUnavailable("software Dolby Vision needs libplacebo reshaping"))))
+
+    XCTAssertEqual(coordinator.failure?.message, "该片源为杜比视界格式，这台设备无法硬件解码")
+    XCTAssertNil(coordinator.session, "播放失败后结束会话")
+
+    let other = makeCoordinator(makeService())
+    let next = try await startEpisodeSession(other)
+    var received: [String] = []
+    next.onFailure = { received.append($0) }
+    next.handle(.error(.loadFailed(code: -17, message: "unrecognized file format"), fatal: true))
+    next.handle(.error(.loadFailed(code: -13, message: "loading failed"), fatal: true))
+    next.handle(.error(.seekTimedOut, fatal: false))
+
+    XCTAssertEqual(
+      received, ["无法识别该片源的格式，文件可能已损坏", "无法从媒体服务器读取片源，请检查网络和服务器状态"],
+      "格式无法识别不说网络；片源打不开才提网络；非致命错误不提示")
+    other.endCurrentSession()
   }
 
   private func startEpisodeSession(_ coordinator: PlaybackCoordinator) async throws -> PlaybackSession {

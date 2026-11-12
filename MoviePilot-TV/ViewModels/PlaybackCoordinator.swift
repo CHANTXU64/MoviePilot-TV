@@ -1397,7 +1397,7 @@ final class PlaybackSession: Identifiable {
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
-      onFailure?("无法播放该影片，请检查与媒体服务器的网络连接")
+      onFailure?(PlaybackFailureMessage.message(for: error))
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
