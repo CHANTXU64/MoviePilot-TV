@@ -1364,6 +1364,31 @@ final class PlaybackCoordinatorTests: XCTestCase {
     return session
   }
 
+  func testFailureFromZlibCompressedTracksSaysSoInsteadOfBlamingTheNetwork() async throws {
+    // MPVUI 的 libmpv 没编 zlib：画面和声音都压缩了的 MKV 一帧都解不出来。mpv 先警告跳过轨道，最后报什么都没播出来。
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSession(coordinator)
+    session.record(
+      MPVLogMessage(prefix: "mkv", level: .warning, message: "Track 1 was compressed with zlib but mpv has not been compiled"))
+    session.record(MPVLogMessage(prefix: "mkv", level: .warning, message: "with support for zlib compression. Skipping track."))
+    session.handle(.stateChanged(.failed(.playbackFailed(code: -16, message: "no audio or video data played"))))
+
+    XCTAssertEqual(
+      coordinator.failure?.message, "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放")
+    XCTAssertNil(coordinator.session, "播放失败后结束会话")
+  }
+
+  func testOtherPlaybackFailuresKeepTheGeneralMessage() {
+    let general = "无法播放该影片，请检查与媒体服务器的网络连接"
+    XCTAssertEqual(
+      PlaybackSession.failureMessage(
+        for: .playbackFailed(code: -16, message: "no audio or video data played"), skippedCompressedTrack: false),
+      general, "没看到 zlib 警告时不猜原因")
+    XCTAssertEqual(
+      PlaybackSession.failureMessage(for: .loadFailed(code: -13, message: "loading failed"), skippedCompressedTrack: true),
+      general, "只是字幕轨压缩、失败另有原因时不说成 zlib")
+  }
+
   func testReportsOfOnePlaybackAreSentInOrderWithEventNames() async throws {
     let coordinator = makeCoordinator(makeService())
     let reporter = coordinator.reporterForTesting

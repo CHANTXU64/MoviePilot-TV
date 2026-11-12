@@ -1422,6 +1422,11 @@ final class PlaybackSession: Identifiable {
   let id = UUID()
   /// 在播放界面出现时创建，未展示就不启动解码。
   private(set) var mpvPlayer: MPVPlayer?
+  /// 当前条目已经记进日志的 mpv 警告和错误条数（见 `record`）。
+  private var loggedMPVMessages = 0
+  /// mpv 打开当前文件时跳过了 zlib 压缩的轨道：MPVUI 的 libmpv 没编 zlib，解不开。只是字幕轨压缩时字幕不显示；
+  /// 画面和声音都压缩时一帧都解不出来，播放失败时据此说明原因。
+  private var skippedCompressedTrack = false
   /// mpv 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
   var onFailure: ((String) -> Void)?
   /// 按集播放时，播放界面的队列从这里取上一集、下一集和同季列表。
@@ -1461,9 +1466,29 @@ final class PlaybackSession: Identifiable {
     if let mpvPlayer { return mpvPlayer }
     let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
     let player = MPVPlayer(configuration: Self.mpvConfiguration(dolbyDecoding: Self.dolbyDecoding(for: outputs)))
+    player.logHandler = { [weak self] message in self?.record(message) }
     mpvPlayer = player
     return player
   }
+
+  /// mpv 自己的警告和错误（MPVUI 默认只转发这两级）写进日志：播放失败时看得出卡在哪一步，比如读不到数据、解不了码。
+  /// 解码出错时可能每帧都报，每个条目只记前 `mpvLogLimit` 条。流地址和密钥照常隐去。测试也直接调用它模拟 mpv。
+  func record(_ message: MPVLogMessage) {
+    if message.prefix == "mkv", message.message.contains("compressed with zlib") { skippedCompressedTrack = true }
+    guard loggedMPVMessages < Self.mpvLogLimit else { return }
+    loggedMPVMessages += 1
+    let text = message.message.trimmingCharacters(in: .whitespacesAndNewlines)
+    let line = "[Playback] mpv[\(message.prefix)] \(PlaybackLog.redacted(text))"
+    switch message.level {
+    case .fatal, .error: Logger.error(line)
+    default: Logger.warning(line)
+    }
+    if loggedMPVMessages == Self.mpvLogLimit {
+      Logger.warning("[Playback] mpv 在这个条目上已经记了 \(Self.mpvLogLimit) 条警告和错误，后面的不再记")
+    }
+  }
+
+  static let mpvLogLimit = 50
 
   private var currentSeconds: Double {
     let seconds = mpvPlayer?.position.seconds ?? 0
@@ -1495,6 +1520,8 @@ final class PlaybackSession: Identifiable {
     guard !isStopped else { return }
     endCurrentItem()
     mpvPlayer?.stop()
+    loggedMPVMessages = 0
+    skippedCompressedTrack = false
     prepared = next
     self.startPosition = startPosition
     lastReportedPause = false
@@ -1574,13 +1601,24 @@ final class PlaybackSession: Identifiable {
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
-      onFailure?("无法播放该影片，请检查与媒体服务器的网络连接")
+      onFailure?(Self.failureMessage(for: error, skippedCompressedTrack: skippedCompressedTrack))
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
       break
     }
   }
+
+  /// 播放失败时给用户的说明。能确认原因的单独说：mpv 跳过了 zlib 压缩的轨道，结果一帧画面、一段声音都没播出来。
+  static func failureMessage(for error: MPVPlayerError, skippedCompressedTrack: Bool) -> String {
+    if skippedCompressedTrack, case .playbackFailed(let code, _) = error, code == nothingToPlay {
+      return "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放"
+    }
+    return "无法播放该影片，请检查与媒体服务器的网络连接"
+  }
+
+  /// libmpv 的 `MPV_ERROR_NOTHING_TO_PLAY`：没有任何音频或视频数据被播放出来。
+  private static let nothingToPlay: Int32 = -16
 
   private func handlePauseChange(isPaused: Bool) {
     guard isItemLoaded, isPaused != lastReportedPause else { return }
