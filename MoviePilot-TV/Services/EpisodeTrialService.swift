@@ -22,9 +22,9 @@ final class EpisodeTrialService: ObservableObject {
   static let untrackable = EpisodeTrialProgress.unavailable("提交过下载，但找不到下载记录，无法继续跟踪")
   static let batchLost = EpisodeTrialProgress.unavailable("MoviePilot 找不到这次试看搜索的记录，可以重新发起")
   static let downloadGone = EpisodeTrialProgress.unavailable("下载器、整理队列和整理记录里都找不到这次试看的下载，可以重新发起")
-  /// MoviePilot 每 5 分钟整理一次下载器里下完的任务；下载器、整理队列和整理记录连续这么久（两轮整理）都明确
-  /// 查不到，就当下载任务已经不在了（比如在下载器里删掉了）。
-  nonisolated static let missingDownloadLimit: TimeInterval = 10 * 60
+  /// MoviePilot 每 5 分钟整理一次下载器里下完的任务；下载器、整理队列和整理记录连续这么久都明确查不到，
+  /// 就当下载任务已经不在了（比如在下载器里删掉了）。留半小时，整理积压或下载器晚标记下完时不至于过早放弃。
+  nonisolated static let missingDownloadLimit: TimeInterval = 30 * 60
   /// 有本机试看订阅需要推进或收尾时，按这个间隔对账。
   nonisolated static let driveInterval = Duration.seconds(20)
   /// 页面可见时的刷新间隔：试看进行中跟得紧一些；等整理入库、等正式订阅时放慢。
