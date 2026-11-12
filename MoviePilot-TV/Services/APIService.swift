@@ -2311,6 +2311,30 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
   }
 
+  static let episodeTrialHistoryPageSize = 100
+
+  /// 下载历史按下载时间倒序，一页 `episodeTrialHistoryPageSize` 条。
+  func fetchEpisodeTrialDownloadHistory(page: Int = 1) async throws -> [EpisodeTrialHistoryRecord] {
+    let endpoint = try buildEndpoint(
+      path: "/history/download", params: ["page": String(page), "count": String(Self.episodeTrialHistoryPageSize)])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([EpisodeTrialHistoryRecord].self, from: data)
+  }
+
+  /// 试看按下载 hash 找整理记录：只解码试看用到的字段，和整理历史页各自按自己的记录类型解码，
+  /// 一方需要的字段缺失不会让另一方整批失败。
+  func fetchEpisodeTrialTransferHistory(title: String?) async throws -> [EpisodeTrialHistoryRecord] {
+    struct Page: Decodable {
+      let list: [EpisodeTrialHistoryRecord]
+    }
+    return try await transferHistoryPage(Page.self, page: 1, count: 30, title: title).list
+  }
+
+  func fetchEpisodeTrialTransferQueue() async throws -> [EpisodeTrialTransferJob] {
+    let data = try await makeRequest(endpoint: "/transfer/queue")
+    return try await decodeOrUnwrap([EpisodeTrialTransferJob].self, from: data)
+  }
+
   /// 暂停下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/DownloadingCard.vue (toggleDownload)
   /// - 应用场景: 在下载任务列表页暂停指定的下载任务。
@@ -2359,6 +2383,13 @@ class APIService: ObservableObject {
   func fetchTransferHistory(page: Int, count: Int, title: String?) async throws
     -> TransferHistoryResponse
   {
+    try await transferHistoryPage(TransferHistoryResponse.self, page: page, count: count, title: title)
+  }
+
+  /// 整理历史的一页，按调用方给的类型解码。
+  private func transferHistoryPage<Page: Decodable>(
+    _ type: Page.Type, page: Int, count: Int, title: String?
+  ) async throws -> Page {
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
       params: [
@@ -2367,7 +2398,7 @@ class APIService: ObservableObject {
         "title": title,
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try await decodeOrUnwrap(TransferHistoryResponse.self, from: data)
+    return try await decodeOrUnwrap(type, from: data)
   }
 
   /// 删除整理历史记录
@@ -3132,6 +3163,16 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 电视剧默认订阅配置里的包含规则。试看订阅创建时包含规则写成拒绝所有资源，写试看规则时没指定包含规则就换回它；
+  /// 其余默认项 MoviePilot 新建订阅时已经填好。
+  func fetchDefaultTvSubscribeInclude() async throws -> String? {
+    struct Config: Decodable { let include: String? }
+    struct ConfigValue: Decodable { let value: Config? }
+    let data = try await makeRequest(endpoint: "/system/setting/public/DefaultTvSubscribeConfig")
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
+    return MediaIdentifier.normalizedString(config.value?.include)
+  }
+
   /// 获取配置的搜索站点 (IndexerSites)
   func fetchIndexerSites() async throws -> [Int] {
     struct ConfigValue: Decodable {
@@ -3303,6 +3344,56 @@ class APIService: ObservableObject {
     return nil
   }
 
+  func createEpisodeTrialSubscription(
+    _ request: EpisodeTrialCreateSubscription
+  ) async throws -> EpisodeTrialCreateReceipt {
+    struct Receipt: Decodable { let id: Int? }
+    let data = try await makeRequest(
+      endpoint: "/subscribe/", method: "POST", body: JSONEncoder().encode(request))
+    let response = try JSONDecoder().decode(ApiResponse<Receipt>.self, from: data)
+    if response.success == false, (response.data?.id ?? 0) == 0 { return .rejected }
+    guard response.success == true, let id = response.data?.id, id > 0 else { return .unconfirmed }
+    invalidateSubscriptionCaches()
+    // 新建和同季已有都返回成功和 ID，提示语会随版本变，由调用方读回这条订阅按标记区分。
+    return .accepted(id)
+  }
+
+  func searchEpisodeTrialSubscription(id: Int) async throws -> EpisodeTrialSearchReceipt {
+    struct Receipt: Decodable {
+      let batch_id: String?
+      let batch_ids: [String]
+      let single: Bool
+      let target_count: Int
+    }
+    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)", method: "POST")
+    let response = try JSONDecoder().decode(ApiResponse<Receipt>.self, from: data)
+    if response.success == false, response.data == nil { return .rejected }
+    guard response.success == true, let receipt = response.data, receipt.single,
+      receipt.target_count == 1, let batchID = receipt.batch_id, receipt.batch_ids == [batchID],
+      EpisodeTrialBatch.isValidID(batchID)
+    else { return .unconfirmed }
+    invalidateSubscriptionCaches()
+    return .scheduled(batchID)
+  }
+
+  func fetchEpisodeTrialBatch(id: String) async throws -> EpisodeTrialBatch {
+    guard EpisodeTrialBatch.isValidID(id) else { throw APIError.invalidURL }
+    let data = try await makeRequest(endpoint: "/subscribe/execution/batches/\(id)")
+    let batch = try await decodeOrUnwrap(EpisodeTrialBatch.self, from: data)
+    guard batch.batch_id == id, batch.total_count > 0 else {
+      throw APIError.serverMessage("试看搜索批次无法确认")
+    }
+    return batch
+  }
+
+  /// 停止试看订阅的这次搜索，只停还没越过下载提交那一步的任务。批次已结束或找不到时后端返回 success=false，
+  /// 调用方须再查一次批次确认已结束，才能删除订阅。
+  func cancelEpisodeTrialBatch(id: String) async throws -> Bool {
+    guard EpisodeTrialBatch.isValidID(id) else { throw APIError.invalidURL }
+    let data = try await makeRequest(endpoint: "/subscribe/execution/batches/\(id)/cancel", method: "PUT")
+    return try decodeStrictActionResponseSync(from: data).success
+  }
+
   /// 通过订阅 ID 删除订阅
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
@@ -3457,8 +3548,18 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
+    guard let subscription = try await fetchSubscriptionIfPresent(id: id) else {
+      throw APIError.serverMessage("订阅详情缺少匹配的有效 ID，请刷新后重试")
+    }
+    return subscription
+  }
+
+  /// 按 ID 读订阅。MoviePilot 对不存在或当前账号无权查看的订阅返回空对象，这时返回 nil；
+  /// 返回了别的 ID 仍按无法确认抛错。
+  func fetchSubscriptionIfPresent(id: Int) async throws -> Subscribe? {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
     let subscription = try await decodeOrUnwrap(Subscribe.self, from: data)
+    if id > 0, subscription.id == nil { return nil }
     guard id > 0, subscription.id == id else {
       throw APIError.serverMessage("订阅详情缺少匹配的有效 ID，请刷新后重试")
     }

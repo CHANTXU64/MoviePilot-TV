@@ -13,6 +13,7 @@ final class SessionScope {
   let mediaPreloader: MediaPreloader
   let imageWarmer: MPImageWarmer
   let playbackCoordinator: PlaybackCoordinator
+  let episodeTrial: EpisodeTrialService
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
@@ -35,7 +36,12 @@ final class SessionScope {
     self.uiIdentity = uiIdentity
     imageWarmer = MPImageWarmer(apiService: apiService)
     mediaPreloader = MediaPreloader(apiService: apiService)
-    playbackCoordinator = PlaybackCoordinator(apiService: apiService)
+    let playback = PlaybackCoordinator(apiService: apiService)
+    playbackCoordinator = playback
+    episodeTrial = EpisodeTrialService(api: apiService) { [weak playback] request, fresh in
+      await playback?.episodeAvailability(
+        for: [request.episode], context: request.playbackContext, forceRefresh: fresh)?.first
+    }
   }
 
   /// 订阅相关 mutation 后失效：订阅状态与订阅列表快照。
@@ -61,5 +67,6 @@ final class SessionScope {
     imageWarmer.tearDown()
     mediaPreloader.tearDown()
     playbackCoordinator.tearDown()
+    episodeTrial.tearDown()
   }
 }

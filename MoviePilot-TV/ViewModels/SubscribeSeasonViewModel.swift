@@ -5,26 +5,35 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   let id: Int
   let season: Int
   let episodeGroup: String?
+  /// 本机试看一集用的临时订阅占着这一季：标成「试看中」，按季取消订阅时改为取消试看。
+  /// 别的设备留下的试看订阅按普通订阅处理。
+  let trialState: EpisodeTrialState?
 
-  init(id: Int, season: Int, episodeGroup: String?) {
+  var isEpisodeTrial: Bool { trialState != nil }
+
+  init(id: Int, season: Int, episodeGroup: String?, trialState: EpisodeTrialState? = nil) {
     self.id = id
     self.season = season
     self.episodeGroup = Self.normalizedEpisodeGroup(episodeGroup)
+    self.trialState = trialState
   }
 
-  init?(subscribe: Subscribe) {
+  init?(subscribe: Subscribe, trialState: EpisodeTrialState? = nil) {
     guard let id = subscribe.id, let season = subscribe.season else { return nil }
-    self.init(id: id, season: season, episodeGroup: subscribe.episode_group)
+    self.init(id: id, season: season, episodeGroup: subscribe.episode_group, trialState: trialState)
   }
 
-  static func indexBySeason(from subscriptions: [Subscribe], matching media: MediaInfo)
-    -> [Int: SeasonSubscriptionSummary]
-  {
+  static func indexBySeason(
+    from subscriptions: [Subscribe], matching media: MediaInfo,
+    trialState: (Subscribe) -> EpisodeTrialState? = { _ in nil }
+  ) -> [Int: SeasonSubscriptionSummary] {
     var summaries: [Int: SeasonSubscriptionSummary] = [:]
 
     for subscription in subscriptions where matches(subscription, media: media) {
-      guard let summary = SeasonSubscriptionSummary(subscribe: subscription) else { continue }
-      if summaries[summary.season] == nil {
+      guard let summary = SeasonSubscriptionSummary(subscribe: subscription, trialState: trialState(subscription))
+      else { continue }
+      // 不同剧集组可以各有一条：正式订阅优先显示，试看订阅只在这一季没有正式订阅时出现。
+      if summaries[summary.season].map({ $0.isEpisodeTrial && !summary.isEpisodeTrial }) ?? true {
         summaries[summary.season] = summary
       }
     }
@@ -40,7 +49,7 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 
   func statusDisplayText(episodeGroups: [EpisodeGroup]) -> String {
-    "已订阅 · \(groupDisplayName(episodeGroups: episodeGroups))"
+    "\(isEpisodeTrial ? "试看中" : "已订阅") · \(groupDisplayName(episodeGroups: episodeGroups))"
   }
 
   private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
@@ -121,6 +130,8 @@ class SubscribeSeasonViewModel: ObservableObject {
   // 各季的订阅状态
   @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
   @Published var subscribedSeasons: Set<Int> = []
+  /// 按到了试看中的季：用系统提示框说明这一季暂时不能取消或另建订阅。
+  @Published var episodeTrialNoticeSeason: Int?
   @Published var subscribingSeasons: Set<Int> = []
 
   // 订阅配置弹窗所需数据
@@ -546,7 +557,10 @@ class SubscribeSeasonViewModel: ObservableObject {
   {
     guard let apiService else { throw CancellationError() }
     let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
-    return SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo)
+    let trials = apiService.sessionScope.episodeTrial
+    return SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo) {
+      trials.trialState(of: $0)
+    }
   }
 
   private func applySubscriptionSummaries(_ summaries: [Int: SeasonSubscriptionSummary]) {
@@ -591,8 +605,14 @@ class SubscribeSeasonViewModel: ObservableObject {
     do {
       try await refreshSubscriptionSummaries(forceRefresh: true)
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-      guard seasonSubscriptions[seasonNumber] != nil else {
+      guard let summary = seasonSubscriptions[seasonNumber] else {
         showUnsubscribeConfirm = nil
+        return
+      }
+      // 本机的试看订阅要先停搜索再删，交给试看服务；按季删除不会停搜索。
+      guard !summary.isEpisodeTrial else {
+        showUnsubscribeConfirm = nil
+        episodeTrialNoticeSeason = seasonNumber
         return
       }
 
@@ -644,6 +664,49 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   func isSeasonSubscribed(_ seasonNumber: Int) -> Bool {
     seasonSubscriptions[seasonNumber] != nil
+  }
+
+  /// 页面显示期间跟着本机试看订阅刷新各季状态：发起、取消、收尾或在别处改过删过而放手后，重新读取订阅列表。
+  /// 调用方在页面的 `.task` 里等待它，页面离开、任务取消时返回。
+  func followEpisodeTrials() async {
+    guard let trials = apiService?.sessionScope.episodeTrial else { return }
+    let changes = trials.$credentials.map(EpisodeTrialHold.holds(in:)).removeDuplicates().dropFirst().values
+    for await _ in changes {
+      await checkSubscriptionStatus(forceRefresh: true)
+    }
+  }
+
+  /// 当前账号能否取消试看订阅（管理员）。
+  var canCancelEpisodeTrial: Bool { apiService?.sessionScope.episodeTrial.canCancelTrial == true }
+
+  /// 取消这一季的试看订阅：请求停止搜索，搜索结束后删掉订阅，再刷新各季订阅状态。
+  /// 搜索还没停下来时这一季显示「取消试看中」，由试看服务在后台收尾。
+  func cancelEpisodeTrial(season seasonNumber: Int) async {
+    guard let apiService, let summary = seasonSubscriptions[seasonNumber], summary.isEpisodeTrial else { return }
+    subscribingSeasons.insert(seasonNumber)
+    defer { subscribingSeasons.remove(seasonNumber) }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let outcome = await apiService.sessionScope.episodeTrial.cancelTrial(subscriptionID: summary.id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    if outcome == .failed { errorMessage = EpisodeTrialHoldNotice.cancelFailure }
+    _ = try? await refreshSubscriptionSummaries(forceRefresh: true)
+  }
+
+  func isSeasonHeldByEpisodeTrial(_ seasonNumber: Int) -> Bool {
+    seasonSubscriptions[seasonNumber]?.isEpisodeTrial == true
+  }
+
+  func isSeasonCancellingTrial(_ seasonNumber: Int) -> Bool {
+    seasonSubscriptions[seasonNumber]?.trialState == .cancelling
+  }
+
+  /// 已订阅的季按下后：正式订阅确认取消；试看中的季只提示，不进入取消流程。
+  func requestUnsubscribe(season seasonNumber: Int) {
+    if isSeasonHeldByEpisodeTrial(seasonNumber) {
+      episodeTrialNoticeSeason = seasonNumber
+    } else {
+      showUnsubscribeConfirm = seasonNumber
+    }
   }
 
   func isSeasonSubscribing(_ seasonNumber: Int) -> Bool {

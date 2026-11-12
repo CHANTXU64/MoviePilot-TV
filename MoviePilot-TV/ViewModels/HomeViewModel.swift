@@ -308,6 +308,22 @@ class HomeViewModel: ObservableObject {
     return success
   }
 
+  /// 本机发起的试看。订阅卡片据此标「试看」；别的设备留下的试看订阅按普通订阅显示。
+  var episodeTrials: EpisodeTrialService { apiService.sessionScope.episodeTrial }
+
+  /// 当前账号能否取消试看订阅（管理员）。
+  var canCancelEpisodeTrial: Bool { episodeTrials.canCancelTrial }
+
+  /// 取消试看：请求停止搜索，搜索结束后删掉这条试看订阅；删掉了就刷新订阅列表。
+  func cancelEpisodeTrial(subscribe: Subscribe) async -> EpisodeTrialCancelOutcome {
+    guard let id = subscribe.id else { return .failed }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let outcome = await episodeTrials.cancelTrial(subscriptionID: id)
+    guard outcome == .done, apiService.isSessionUnchanged(from: sessionSnapshot) else { return outcome }
+    await refreshSubscriptions(forceRefresh: true)
+    return outcome
+  }
+
   /// 删除订阅
   func deleteSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }

@@ -8,6 +8,8 @@ extension Notification.Name {
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
   /// 用户在保存订阅期间返回，保存最终成功后显示一次成功提示
   static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
+  /// 试看的一集入库可以播放了，且当时没有页面在显示它；object 是所属的 APIService
+  static let episodeTrialDidBecomeReady = Notification.Name("episodeTrialDidBecomeReady")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
   /// 同一会话反复遇到无法明确归类的认证挑战，提示用户前往设置手动刷新凭据
@@ -1572,6 +1574,12 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
+/// 订阅最近一次搜索的执行状态：来源（新增、手动等）和搜索批次。只解码 TV 用到的字段。
+nonisolated struct SubscribeExecutionStatus: Decodable, Hashable {
+  let source: String?
+  let batch_id: String?
+}
+
 nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
@@ -1666,6 +1674,8 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   var mediaid: String?
   /// 洗版订阅的剧集优先级状态；公共写入 DTO 不发送。
   var episode_priority: [String: Int]?
+  /// 订阅列表附带的最近一次搜索状态（订阅详情不带）。搜索已被后端受理但 TV 丢失回执时，可从这里恢复批次。
+  var execution_status: SubscribeExecutionStatus? = nil
 
   /// 定时搜索间隔（小时），nil 跟随系统设置
   var search_interval: Int?
@@ -1699,7 +1709,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
       episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date,
       search_interval, music_type, total_tracks, audio_quality, audio_format, min_bitrate,
-      min_bit_depth, min_sample_rate, media_category_id
+      min_bit_depth, min_sample_rate, media_category_id, execution_status
   }
 
   init(from decoder: Decoder) throws {
@@ -1755,6 +1765,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
+    execution_status = try? container.decodeIfPresent(SubscribeExecutionStatus.self, forKey: .execution_status)
     search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
     music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
     total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)

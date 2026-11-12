@@ -56,6 +56,19 @@ struct SubscribeSheet: View {
     } message: {
       Text(SubscribeIdentityResetConfirmation.message)
     }
+    .episodeTrialNotice(
+      isPresented: Binding(
+        get: { viewModel.isHeldByEpisodeTrial },
+        set: { isPresented in
+          guard !isPresented, viewModel.isHeldByEpisodeTrial else { return }
+          viewModel.acknowledgeEpisodeTrialHold()
+          dismiss()
+        }
+      ),
+      context: .subscribe, isCancelling: viewModel.isHeldTrialCancelling, canCancel: viewModel.canCancelEpisodeTrial
+    ) {
+      viewModel.cancelEpisodeTrialAndContinue()
+    }
     .onAppear {
       guard !hasAppeared else { return }
       hasAppeared = true
