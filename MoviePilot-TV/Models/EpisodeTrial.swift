@@ -223,7 +223,8 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case organizing
   /// 整理完成，等媒体服务器把这一集入库。
   case waitingForLibrary
-  case ready(server: String)
+  /// 已经入库。`uncertain` 不为 nil 时只是按季号集号在 `server` 上找到了文件，可能不是这一集，播放前要说明。
+  case ready(server: String, uncertain: UncertainEpisodeMatch? = nil)
   /// 试看结束了，没能看成（含用户取消）。
   case concluded(EpisodeTrialEnding)
   /// 现在不能试看，或这次没查成（不满足条件、已有相关订阅、请求失败、查询中断等）。不是结局，不保存。
@@ -564,25 +565,9 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     return true
   }
 
+  /// 有一段格式不对就整条不认。
   private static func contains(_ number: Int, in value: String, prefix: String, single: Bool) -> Bool {
-    let parts = value.uppercased().split(
-      omittingEmptySubsequences: false, whereSeparator: { $0 == "," || $0 == "、" })
-    if single && parts.count != 1 { return false }
-    var matched = false
-    for part in parts {
-      let bounds = part.split(separator: "-", omittingEmptySubsequences: false)
-      let numbers = bounds.compactMap { component -> Int? in
-        let token = component.trimmingCharacters(in: .whitespaces)
-        let digits = token.hasPrefix(prefix) ? String(token.dropFirst()) : token
-        guard !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
-        return Int(digits)
-      }
-      guard numbers.count == bounds.count, let first = numbers.first, let last = numbers.last,
-        first <= last, (1...2).contains(numbers.count), !single || numbers.count == 1
-      else { return false }
-      matched = matched || (first...last).contains(number)
-    }
-    return matched
+    EpisodeNumberText.ranges(in: value, prefix: prefix, single: single)?.contains { $0.contains(number) } == true
   }
 }
 

@@ -71,6 +71,9 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let locationType: String?
   /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它；单集条目上的 `Tmdb` 是 TMDB 单集 ID。
   let providerIDs: [String: String]?
+  /// 服务器上的文件路径。列表接口要在 `Fields` 里点名才给。
+  let path: String?
+  let premiereDate: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
@@ -84,6 +87,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     case seriesName = "SeriesName"
     case locationType = "LocationType"
     case providerIDs = "ProviderIds"
+    case path = "Path"
+    case premiereDate = "PremiereDate"
   }
 
   init(from decoder: Decoder) throws {
@@ -99,6 +104,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
     locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
     providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
+    path = try? container.decodeIfPresent(String.self, forKey: .path)
+    premiereDate = try? container.decodeIfPresent(String.self, forKey: .premiereDate)
   }
 
   var playbackPositionTicks: Int64 {
@@ -130,7 +137,9 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
       hasFile: locationType?.lowercased() != "virtual",
-      externalIDs: ExternalMediaID.normalizedTable(providerIDs))
+      externalIDs: ExternalMediaID.normalizedTable(providerIDs),
+      path: path,
+      premiereDate: premiereDate)
   }
 }
 

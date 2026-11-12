@@ -259,11 +259,16 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   /// 外部编号：规范来源（见 `ExternalMediaID.normalizedSource`）→ 有效编号。
   /// 剧集的单集条目上，`tmdb` 是 TMDB 单集 ID，不是剧的 ID。
   let externalIDs: [String: String]
+  /// 服务器看到的文件路径；服务器没给（或这个用户看不到）时为 nil。单集对应拿它和 MoviePilot 的整理记录比。
+  let path: String?
+  /// 首播日期，服务器给的原样（如 `2025-01-05T00:00:00.0000000Z`）；单集对应按季号集号对上时用来核对。
+  let premiereDate: String?
 
   init(
     id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
     episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
-    resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:]
+    resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:],
+    path: String? = nil, premiereDate: String? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -276,6 +281,8 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     self.resumePositionSeconds = resumePositionSeconds
     self.hasFile = hasFile
     self.externalIDs = externalIDs
+    self.path = trimmedNonEmpty([path])
+    self.premiereDate = trimmedNonEmpty([premiereDate])
   }
 
   /// 指定来源的外部编号，没有或无效时为 nil。

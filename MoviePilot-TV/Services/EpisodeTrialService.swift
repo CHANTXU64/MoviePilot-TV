@@ -480,10 +480,12 @@ final class EpisodeTrialService: ObservableObject {
       }
     }
 
-    if case .playable(let server) = library {
+    // 只按季号集号对上也算入库：这一步只看媒体服务器上有没有这一集的文件（试看订阅在搜索结束时已经删掉），
+    // 可能不是这一集，由单集面板说明。
+    if let ready = Self.ready(library) {
       observations[key] = nil
       clearEnding(key)
-      return .ready(server: server)
+      return ready
     }
     if observations[key] != nil {
       let observed = try await observe(key, operation: operation)
@@ -499,6 +501,14 @@ final class EpisodeTrialService: ObservableObject {
       request, library: library, mayCreate: mayCreate, marker: reusableMarker, operation: operation)
     if examined == .notStarted, let ending = ending(for: key) { return ending }
     return examined
+  }
+
+  private static func ready(_ library: EpisodeAvailability?) -> EpisodeTrialProgress? {
+    switch library {
+    case .playable(let server): .ready(server: server)
+    case .uncertain(let server, let match): .ready(server: server, uncertain: match)
+    default: nil
+    }
   }
 
   /// 按服务器现状推导这一集：已有订阅、已在下载或整理时照实显示；都没有、媒体库也确认没有时才新建。

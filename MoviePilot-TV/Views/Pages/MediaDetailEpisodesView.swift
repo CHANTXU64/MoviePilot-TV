@@ -675,13 +675,13 @@ private struct EpisodeBrowser: View {
     }
   }
 
-  /// 遥控器播放键：能播就播；不能播时说明原因。没有应用内播放时不响应。
+  /// 遥控器播放键（见 `EpisodeEntry.playPauseAction`）。没有应用内播放时不响应。
   private func playPause(_ episode: MoviePilotEpisode) {
-    guard let entry = entry(for: episode) else { return }
-    if entry.isPlayable {
-      play(episode)
-    } else if let message = entry.notPlayableMessage {
-      notificationManager.show(message: message, type: .info)
+    switch entry(for: episode)?.playPauseAction {
+    case .play: play(episode)
+    case .openPanel: panelEpisode = episode
+    case .explain(let message): notificationManager.show(message: message, type: .info)
+    case nil: break
     }
   }
 
@@ -757,7 +757,7 @@ private struct EpisodeBrowser: View {
     let entry = entry(for: episode) ?? EpisodeEntry(availability: nil)
     let request = trialRequest(for: episode)
     // 只在可能有试看要跟的时候刷新进度：已经能播、或不能试看时不请求后端。
-    let pollsTrial = request != nil && !entry.isPlayable
+    let pollsTrial = request != nil && !entry.offersPlayback
       && (entry.availability == .notOnServer || entry.trial.subscriptionID != nil || entry.trial.progress != nil)
     EpisodeActionSheet(
       episode: episode,

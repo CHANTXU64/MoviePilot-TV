@@ -177,6 +177,40 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(ready.panel.buttons, [.play])
   }
 
+  // MARK: 只按季号集号找到的
+
+  private let numberMatch = UncertainEpisodeMatch(season: 1, episode: 5, episodeGroup: nil, airDate: .matches)
+
+  func testNumberMatchShowsThePlayBadgeButExplainsBeforePlaying() {
+    let uncertain = entry(.uncertain(server: "客厅", match: numberMatch))
+    XCTAssertEqual(uncertain.cardStatus, .playable, "卡片上照样是播放角标")
+    XCTAssertEqual(uncertain.primaryAction, .openPanel, "按下先看说明")
+    XCTAssertEqual(uncertain.playPauseAction, .openPanel, "播放键也先看说明")
+    XCTAssertEqual(uncertain.menuActions, [.details], "长按不能绕过说明直接播")
+    XCTAssertFalse(uncertain.canStartTrial)
+    XCTAssertNil(uncertain.notPlayableMessage)
+    XCTAssertEqual(uncertain.accessibilityStatus, "可以播放，可能不是这一集")
+    XCTAssertEqual(uncertain.panel.buttons, [.play])
+    XCTAssertEqual(
+      uncertain.panel.message,
+      "“客厅”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按季号集号找到的第 1 季第 5 集，"
+        + "播出日期也对得上，但仍可能不是这一集。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+    XCTAssertEqual(
+      entry(.uncertain(server: "客厅", match: numberMatch), block: .unsupported).panel.message,
+      numberMatch.message(server: "客厅"), "本来就不能试看时不提试看")
+    XCTAssertEqual(entry(.playable(server: "客厅")).playPauseAction, .play)
+    XCTAssertEqual(entry(.notOnServer).playPauseAction, .explain(EpisodeAvailability.notOnServerMessage))
+  }
+
+  func testTrialThatLandsAsANumberMatchSaysItMayNotBeThisEpisode() {
+    let ready = entry(.notOnServer, trial: trial(.ready(server: "客厅", uncertain: numberMatch)))
+    XCTAssertFalse(ready.isPlayable)
+    XCTAssertEqual(ready.primaryAction, .openPanel)
+    XCTAssertEqual(ready.cardStatus, .playable)
+    XCTAssertEqual(ready.panel.buttons, [.play])
+    XCTAssertEqual(ready.panel.message, "试看的这一集已经整理入库。" + numberMatch.message(server: "客厅"))
+  }
+
   // MARK: 试看结局
 
   func testEndingsAreShownInTheMiddleOfTheCardExceptTheUsersOwnCancel() {

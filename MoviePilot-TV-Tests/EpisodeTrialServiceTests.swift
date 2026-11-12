@@ -99,6 +99,26 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testEpisodeFoundOnlyByNumbersCountsAsInTheLibrary() async throws {
+    // 入库后服务器上的文件没有 TMDB 单集编号，只按季号集号对上：入库这一步只看服务器上有没有文件，也算入库，但要标明。
+    let library = LibraryBox()
+    let match = UncertainEpisodeMatch(season: 1, episode: 5, episodeGroup: nil, airDate: .unknown)
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.moveToQueue("target-hash")
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+
+      library.value = .uncertain(server: "测试媒体库", match: match)
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库", uncertain: match))
+    }
+  }
+
   func testOrganizationFailureEndsTheTrial() async throws {
     try await withService { _, service, _, request in
       _ = await service.start(request)

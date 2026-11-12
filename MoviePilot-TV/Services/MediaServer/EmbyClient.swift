@@ -154,13 +154,13 @@ struct EmbyClient {
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 剧集的全部集（按 Emby 顺序，带用户观看数据和外部编号），不含缺失的集。
-  /// 单集条目的 `ProviderIds.Tmdb` 是 TMDB 单集 ID，按集播放靠它对应 MoviePilot 集列表里的集。
+  /// 剧集的全部集（按 Emby 顺序，带用户观看数据、外部编号、文件路径和首播日期），不含缺失的集。
+  /// 单集对应（见 `EpisodeMatching.swift`）先看 `ProviderIds.Tmdb`（TMDB 单集 ID），没有时拿路径对整理记录、按季号集号和首播日期对。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds"]))
+        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds,Path,PremiereDate"]))
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 

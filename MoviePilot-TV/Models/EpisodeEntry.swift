@@ -84,18 +84,30 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
 
   // MARK: 播放
 
-  /// 能播的服务器：查到能播，或试看的这一集已经入库。
+  /// 确定能播的服务器：查到确定能播，或试看的这一集已经入库、而且确定是这一集。
   var playableServer: String? {
     if case .playable(let server) = availability { return server }
-    if case .ready(let server) = trial.progress { return server }
+    if case .ready(let server, nil) = trial.progress { return server }
     return nil
   }
 
+  /// 确定能播：按下直接播。
   var isPlayable: Bool { playableServer != nil }
 
-  /// 遥控器播放键在不能播的集上提示的原因；能播时为 nil。
+  /// 只按季号集号找到了文件（可能不是这一集）：能播，但要先在面板里说明。确定能播时为 nil。
+  var uncertainMatch: (server: String, match: UncertainEpisodeMatch)? {
+    guard playableServer == nil else { return nil }
+    if case .uncertain(let server, let match) = availability { return (server, match) }
+    if case .ready(let server, let match?) = trial.progress { return (server, match) }
+    return nil
+  }
+
+  /// 卡片上显示播放角标、面板里有「播放」：确定能播，或按季号集号找到了文件。
+  var offersPlayback: Bool { isPlayable || uncertainMatch != nil }
+
+  /// 遥控器播放键在不能播的集上提示的原因；能播（含按季号集号找到了文件）时为 nil。
   var notPlayableMessage: String? {
-    guard !isPlayable else { return nil }
+    guard !offersPlayback else { return nil }
     if isCheckingAvailability { return "正在检查这一集能不能播放" }
     if trial.isInProgress, let indicator = Self.trialIndicator(trial) {
       return "这一集正在试看（\(indicator.label)），入库后才能播放"
@@ -133,7 +145,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
 
   // MARK: 卡片
 
-  /// 卡片上的状态。能播放的放在角上（已入库的剧可能整季都能播，不能每张都大大地标）；
+  /// 卡片上的状态。能播放的放在角上（已入库的剧可能整季都能播，不能每张都大大地标），只按季号集号找到的也一样；
   /// 试看进行中和试看结局放在剧照正中；个别集没法对应时在角上提示。读取失败通常整季都一样，在行头提示一次。
   enum CardStatus: Equatable, Sendable {
     case playable
@@ -150,7 +162,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   }
 
   var cardStatus: CardStatus? {
-    if isPlayable { return .playable }
+    if offersPlayback { return .playable }
     if trial.isInProgress, let indicator = Self.trialIndicator(trial) { return .trialInProgress(indicator) }
     if let stoppedEnding { return .trialStopped(stoppedEnding) }
     switch availability {
@@ -181,7 +193,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   /// 读屏读到的状态，跟在单集信息后面。
   var accessibilityStatus: String? {
     switch cardStatus {
-    case .playable: return "可以播放"
+    case .playable: return isPlayable ? "可以播放" : "可以播放，可能不是这一集"
     case .trialInProgress(let indicator):
       let percent = indicator.fraction.map { "，\(Int(($0 * 100).rounded()))%" } ?? ""
       return "试看中，\(indicator.label)\(percent)"
@@ -198,8 +210,22 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case openPanel
   }
 
-  /// 按下卡片：能播就直接播，否则打开单集面板。
+  /// 按下卡片：确定能播就直接播，否则打开单集面板（只按季号集号找到的，先在面板里说明再播）。
   var primaryAction: PrimaryAction { isPlayable ? .play : .openPanel }
+
+  enum PlayPauseAction: Equatable, Sendable {
+    case play
+    case openPanel
+    /// 不能播，提示原因
+    case explain(String)
+  }
+
+  /// 遥控器播放键：确定能播就播；只按季号集号找到的打开面板；不能播时说明原因。
+  var playPauseAction: PlayPauseAction? {
+    if isPlayable { return .play }
+    if uncertainMatch != nil { return .openPanel }
+    return notPlayableMessage.map(PlayPauseAction.explain)
+  }
 
   enum MenuAction: Equatable, Sendable {
     case play
@@ -209,6 +235,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   }
 
   /// 长按菜单：只列现在能做的，最后是详情。菜单里的操作单集面板里都有。
+  /// 只按季号集号找到的集不放「播放」：要先看面板里的说明，从「详情」进去播。
   var menuActions: [MenuAction] {
     var actions: [MenuAction] = []
     if isPlayable {
@@ -255,6 +282,15 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     if let server = playableServer {
       return Panel(message: "在“\(server)”上可以播放", isWorking: false, steps: [], buttons: [.play])
     }
+    if let uncertain = uncertainMatch {
+      var message = uncertain.match.message(server: uncertain.server)
+      if trial.progress?.isReady == true {
+        message = "试看的这一集已经整理入库。" + message
+      } else if trialBlock == nil {
+        message += "。按季号集号算这一集已经在媒体服务器上，所以不提供试看"
+      }
+      return Panel(message: message, isWorking: false, steps: [], buttons: [.play])
+    }
     if trial.isStarting {
       // 发起期间留着「试看」按钮（显示加载中），结果到了同一个位置换成「取消试看」，焦点不跳。
       return Panel(
@@ -297,7 +333,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       return Panel(message: nil, isWorking: false, steps: [], buttons: [])
     }
     switch availability {
-    case .playable:
+    case .playable, .uncertain:
       return Panel(message: nil, isWorking: false, steps: [], buttons: [.play])
     case .failed, .unmatched, .unidentifiable:
       // 读取失败、个别文件没编号、没法按编号对应：都不能确认服务器上没有，不提供试看。
