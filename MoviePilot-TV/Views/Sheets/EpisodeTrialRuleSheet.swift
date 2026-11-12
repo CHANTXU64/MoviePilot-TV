@@ -41,7 +41,9 @@ struct EpisodeTrialRuleSheet: View {
         if viewModel.save() { dismiss() }
       }
     } row: { field in
-      SubscribeRuleFieldRow(field: field, subscribe: $viewModel.draft, options: viewModel.options)
+      SubscribeRuleFieldRow(
+        field: field, subscribe: $viewModel.draft, options: viewModel.options,
+        unspecifiedChoiceTitle: EpisodeTrialRuleViewModel.unspecifiedChoiceTitle)
     }
     .task { await viewModel.load() }
   }

@@ -85,7 +85,9 @@ struct SubscribePanel: View {
   /// 左侧栏：媒体区、信息（新增是随设置变化的标签，编辑是固定信息）、居中的当前项说明，主按钮固定在底部。
   /// 右边设置不分组，平铺成两列，一次全部显示、不滚动；改完任意一项往左就能订阅。
   private var expandedPanel: some View {
-    SheetSettingsPanel(
+    // 规则类设置行共用一份可选值，不在每一行各算一次。
+    let ruleOptions = viewModel.ruleOptions
+    return SheetSettingsPanel(
       fields: SubscribeSettingField.visibleFields(isTV: viewModel.subscribe.type == "电视剧"),
       focusedField: $focusedField,
       helpText: focusedField?.help
@@ -95,7 +97,7 @@ struct SubscribePanel: View {
       messageBlock(spacingEdges: .bottom, spacing: 20)
       subscribeButton(focus: $isConfirmFocused)
     } row: { field in
-      row(field)
+      row(field, ruleOptions: ruleOptions)
     }
   }
 
@@ -229,7 +231,7 @@ struct SubscribePanel: View {
   // MARK: - 设置行
 
   @ViewBuilder
-  private func row(_ field: SubscribeSettingField) -> some View {
+  private func row(_ field: SubscribeSettingField, ruleOptions: SubscribeRuleOptions) -> some View {
     switch field {
     case .totalEpisode:
       textRow(
@@ -267,7 +269,7 @@ struct SubscribePanel: View {
       textRow(field, text: $viewModel.mediaCategoryText)
     case .quality, .resolution, .effect, .sites, .downloader, .savePath, .searchImdb, .keyword, .include,
       .exclude, .filterGroups, .customWords:
-      SubscribeRuleFieldRow(field: field, subscribe: $viewModel.subscribe, options: viewModel.ruleOptions)
+      SubscribeRuleFieldRow(field: field, subscribe: $viewModel.subscribe, options: ruleOptions)
     }
   }
 

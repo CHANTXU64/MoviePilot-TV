@@ -666,6 +666,16 @@ class SubscribeSeasonViewModel: ObservableObject {
     seasonSubscriptions[seasonNumber] != nil
   }
 
+  /// 页面显示期间跟着本机试看订阅刷新各季状态：发起、取消、收尾或在别处改过删过而放手后，重新读取订阅列表。
+  /// 调用方在页面的 `.task` 里等待它，页面离开、任务取消时返回。
+  func followEpisodeTrials() async {
+    guard let trials = apiService?.sessionScope.episodeTrial else { return }
+    let changes = trials.$credentials.map(EpisodeTrialHold.holds(in:)).removeDuplicates().dropFirst().values
+    for await _ in changes {
+      await checkSubscriptionStatus(forceRefresh: true)
+    }
+  }
+
   /// 当前账号能否取消试看订阅（管理员）。
   var canCancelEpisodeTrial: Bool { apiService?.sessionScope.episodeTrial.canCancelTrial == true }
 

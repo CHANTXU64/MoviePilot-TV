@@ -8,6 +8,8 @@ final class EpisodeTrialRuleViewModel: ObservableObject {
   nonisolated deinit {}
 
   static let fields = SubscribeRuleFieldRow.fields
+  /// 质量、分辨率、特效不指定时沿用 MoviePilot 默认订阅配置，和站点、下载器等行一样叫「默认」。
+  static let unspecifiedChoiceTitle = "默认"
 
   /// 借用订阅模型承载表单，设置行和订阅大面板共用；只用到规则类字段。
   @Published var draft: Subscribe

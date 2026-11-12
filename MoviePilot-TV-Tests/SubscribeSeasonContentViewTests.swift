@@ -1830,7 +1830,9 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
         seasonKey: "season-test", episodeKey: "season-test|5", episodeNumber: 5, title: "航海王"),
       owner: "subscription-snapshot")
     credential.subscriptionID = 63
-    try service.sessionScope.episodeTrial.recordCredentialForTesting(credential)
+    let trials = service.sessionScope.episodeTrial
+    defer { trials.clearStoredStateForTesting() }
+    try trials.recordCredentialForTesting(credential)
 
     let viewModel = SubscribeSeasonViewModel(
       mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
@@ -1853,6 +1855,61 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(viewModel.showUnsubscribeConfirm)
     XCTAssertEqual(viewModel.episodeTrialNoticeSeason, 3)
     XCTAssertTrue(viewModel.isSeasonHeldByEpisodeTrial(3))
+  }
+
+  func testSeasonPageFollowsLocalTrialChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    let preloader = APIService.shared.mediaPreloader
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
+      Subscribe(id: 64, name: "航海王", type: "电视剧", season: 3, state: "S", tmdbid: 12_345, start_episode: 5, filter: marker)
+    ])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let trials = service.sessionScope.episodeTrial
+    defer { trials.clearStoredStateForTesting() }
+    let target = EpisodeTrialTarget(
+      identity: MediaIdentity(source: "themoviedb", mediaId: "12345"), season: 3, episodeGroup: nil,
+      seasonKey: "season-follow-test", episodeKey: "season-follow-test|5", episodeNumber: 5, title: "航海王")
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
+      apiService: service
+    )
+    await viewModel.checkSubscriptionStatus(forceRefresh: true)
+    XCTAssertFalse(viewModel.isSeasonHeldByEpisodeTrial(3), "还没有本机凭据时按普通订阅显示")
+
+    let following = Task { await viewModel.followEpisodeTrials() }
+    defer { following.cancel() }
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    var credential = EpisodeTrialCredential(marker: marker, target: target, owner: "subscription-snapshot")
+    credential.subscriptionID = 64
+    try trials.recordCredentialForTesting(credential)
+    try await waitUntil { viewModel.isSeasonHeldByEpisodeTrial(3) }
+    XCTAssertEqual(viewModel.subscriptionStatusText(for: 3), "试看中 · 默认剧集组")
+
+    credential.cancelRequested = true
+    try trials.recordCredentialForTesting(credential)
+    try await waitUntil { viewModel.isSeasonCancellingTrial(3) }
+
+    // 同一季换成另一条凭据，原来那条就不再是本机的试看（相当于收尾或放手后移除了凭据）。
+    let other = EpisodeTrialCredential(
+      marker: EpisodeTrialTemporarySubscription.makeMarker(at: Date()), target: target, owner: "subscription-snapshot")
+    try trials.recordCredentialForTesting(other)
+    try await waitUntil { !viewModel.isSeasonHeldByEpisodeTrial(3) }
+    XCTAssertEqual(viewModel.subscriptionStatusText(for: 3), "已订阅 · 默认剧集组")
   }
 
   func testEpisodeTrialSubscriptionCardNamesTheEpisode() {

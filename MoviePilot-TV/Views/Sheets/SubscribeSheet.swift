@@ -56,8 +56,7 @@ struct SubscribeSheet: View {
     } message: {
       Text(SubscribeIdentityResetConfirmation.message)
     }
-    .alert(
-      EpisodeTrialHoldNotice.title,
+    .episodeTrialNotice(
       isPresented: Binding(
         get: { viewModel.isHeldByEpisodeTrial },
         set: { isPresented in
@@ -65,16 +64,10 @@ struct SubscribeSheet: View {
           viewModel.acknowledgeEpisodeTrialHold()
           dismiss()
         }
-      )
+      ),
+      context: .subscribe, isCancelling: viewModel.isHeldTrialCancelling, canCancel: viewModel.canCancelEpisodeTrial
     ) {
-      if viewModel.canCancelEpisodeTrial {
-        Button(EpisodeTrialHoldNotice.cancelAndSubscribeTitle, role: .destructive) {
-          viewModel.cancelEpisodeTrialAndContinue()
-        }
-      }
-      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
-    } message: {
-      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.subscribeMessage : EpisodeTrialHoldNotice.waitMessage)
+      viewModel.cancelEpisodeTrialAndContinue()
     }
     .onAppear {
       guard !hasAppeared else { return }

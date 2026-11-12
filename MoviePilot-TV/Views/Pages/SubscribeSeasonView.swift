@@ -179,25 +179,15 @@ struct SubscribeSeasonContentView: View {
         Text(viewModel.unsubscribeConfirmationMessage(for: season))
       }
     }
-    .alert(
-      noticeIsCancelling ? EpisodeTrialHoldNotice.cancellingTitle : EpisodeTrialHoldNotice.title,
+    .episodeTrialNotice(
       isPresented: Binding(
         get: { viewModel.episodeTrialNoticeSeason != nil },
         set: { if !$0 { viewModel.episodeTrialNoticeSeason = nil } }
-      )
+      ),
+      context: .manage, isCancelling: noticeIsCancelling, canCancel: viewModel.canCancelEpisodeTrial
     ) {
-      if viewModel.canCancelEpisodeTrial, !noticeIsCancelling {
-        Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
-          guard let season = viewModel.episodeTrialNoticeSeason else { return }
-          Task { await viewModel.cancelEpisodeTrial(season: season) }
-        }
-      }
-      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
-    } message: {
-      Text(
-        noticeIsCancelling
-          ? EpisodeTrialHoldNotice.cancellingMessage
-          : viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
+      guard let season = viewModel.episodeTrialNoticeSeason else { return }
+      Task { await viewModel.cancelEpisodeTrial(season: season) }
     }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
@@ -213,6 +203,7 @@ struct SubscribeSeasonContentView: View {
         await viewModel.checkSubscriptionStatus(forceRefresh: true)
       }
     }
+    .task { await viewModel.followEpisodeTrials() }
     .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)

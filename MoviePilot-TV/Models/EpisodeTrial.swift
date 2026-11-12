@@ -1,6 +1,9 @@
 import Foundation
 import CryptoKit
 
+/// 空文本当作没填。
+nonisolated private func specified(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
+
 /// 单集试看的入口判断，试看服务和设置页共用。
 nonisolated enum EpisodeTrialAvailability {
   /// 试看从 MoviePilot v3.2.6 起开放：整季包从这个版本起只下载订阅范围内的集，单集试看才不会整季下载；
@@ -59,14 +62,14 @@ nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
 
   /// 从规则编辑表单的草稿读回，和 `apply(to:)` 互逆：空文本、空列表都记为未指定。
   init(settingsOf draft: Subscribe) {
-    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
     func list<T>(_ value: [T]?) -> [T]? { value?.isEmpty == false ? value : nil }
     self.init(
       sites: list(draft.sites).map { Array(Set($0)).sorted() }, searchByIMDb: draft.search_imdbid == 1,
-      keyword: text(draft.keyword), quality: text(draft.quality), resolution: text(draft.resolution),
-      effect: text(draft.effect), include: text(draft.include), exclude: text(draft.exclude),
-      customWords: text(draft.custom_words), filterGroups: list(draft.filter_groups),
-      downloader: text(draft.downloader), savePath: text(draft.save_path))
+      keyword: specified(draft.keyword), quality: specified(draft.quality),
+      resolution: specified(draft.resolution), effect: specified(draft.effect), include: specified(draft.include),
+      exclude: specified(draft.exclude), customWords: specified(draft.custom_words),
+      filterGroups: list(draft.filter_groups), downloader: specified(draft.downloader),
+      savePath: specified(draft.save_path))
   }
 
   var isDefault: Bool { self == EpisodeTrialRule() }
@@ -75,19 +78,18 @@ nonisolated struct EpisodeTrialRule: Codable, Equatable, Sendable {
   /// 规则编辑表单上是空。包含规则例外：试看订阅创建时写成了拒绝所有资源，没指定就换成 `includeFallback`。
   /// IMDb 搜索只有开和不指定两种，不指定时沿用原值。
   func apply(to draft: inout Subscribe, includeFallback: String? = nil) {
-    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
     if let sites = sites, !sites.isEmpty { draft.sites = sites }
     if searchByIMDb { draft.search_imdbid = 1 }
-    if let keyword = text(keyword) { draft.keyword = keyword }
-    if let quality = text(quality) { draft.quality = quality }
-    if let resolution = text(resolution) { draft.resolution = resolution }
-    if let effect = text(effect) { draft.effect = effect }
-    draft.include = text(include) ?? includeFallback
-    if let exclude = text(exclude) { draft.exclude = exclude }
-    if let customWords = text(customWords) { draft.custom_words = customWords }
+    if let keyword = specified(keyword) { draft.keyword = keyword }
+    if let quality = specified(quality) { draft.quality = quality }
+    if let resolution = specified(resolution) { draft.resolution = resolution }
+    if let effect = specified(effect) { draft.effect = effect }
+    draft.include = specified(include) ?? includeFallback
+    if let exclude = specified(exclude) { draft.exclude = exclude }
+    if let customWords = specified(customWords) { draft.custom_words = customWords }
     if let filterGroups = filterGroups, !filterGroups.isEmpty { draft.filter_groups = filterGroups }
-    if let downloader = text(downloader) { draft.downloader = downloader }
-    if let savePath = text(savePath) { draft.save_path = savePath }
+    if let downloader = specified(downloader) { draft.downloader = downloader }
+    if let savePath = specified(savePath) { draft.save_path = savePath }
   }
 }
 
@@ -126,8 +128,8 @@ nonisolated struct EpisodeTrialRequest: Sendable {
 
   var target: EpisodeTrialTarget {
     EpisodeTrialTarget(
-      identity: identity, season: season, episodeGroup: episodeGroup, seasonKey: seasonKey,
-      episodeKey: key, episodeNumber: episodeNumber, title: trimmedNonEmpty([media.title]))
+      identity: identity, tmdbID: playbackContext.tmdbID, season: season, episodeGroup: episodeGroup,
+      seasonKey: seasonKey, episodeKey: key, episodeNumber: episodeNumber, title: trimmedNonEmpty([media.title]))
   }
 
   var knownIdentities: Set<MediaIdentity> {
@@ -145,6 +147,9 @@ nonisolated struct EpisodeTrialRequest: Sendable {
 nonisolated struct EpisodeTrialTarget: Codable, Equatable, Sendable {
   let source: String
   let mediaId: String
+  /// 这部剧的 TMDB 编号。发起时的身份是豆瓣、Bangumi 等来源时，MoviePilot 新建订阅会换成 TMDB 身份，
+  /// 订阅和下载记录上看到的是它。
+  let tmdbID: Int?
   let season: Int
   let episodeGroup: String?
   let seasonKey: String
@@ -155,11 +160,12 @@ nonisolated struct EpisodeTrialTarget: Codable, Equatable, Sendable {
   let title: String?
 
   init(
-    identity: MediaIdentity, season: Int, episodeGroup: String?, seasonKey: String, episodeKey: String,
-    episodeNumber: Int, title: String?
+    identity: MediaIdentity, tmdbID: Int? = nil, season: Int, episodeGroup: String?, seasonKey: String,
+    episodeKey: String, episodeNumber: Int, title: String?
   ) {
     source = identity.source
     mediaId = identity.mediaId
+    self.tmdbID = tmdbID
     self.season = season
     self.episodeGroup = episodeGroup
     self.seasonKey = seasonKey
@@ -169,10 +175,16 @@ nonisolated struct EpisodeTrialTarget: Codable, Equatable, Sendable {
   }
 
   var identity: MediaIdentity { MediaIdentity(source: source, mediaId: mediaId) }
+
+  /// 订阅和下载记录上可能出现的这部剧的身份：发起时的身份，以及 MoviePilot 换成的 TMDB 身份。
+  var identities: Set<MediaIdentity> {
+    var identities: Set<MediaIdentity> = [identity]
+    if let tmdbID { identities.insert(MediaIdentity(source: "themoviedb", mediaId: String(tmdbID))) }
+    return identities
+  }
 }
 
 nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
-  case checking
   /// 可以试看：媒体库、订阅和下载里都没有这一集。
   case notStarted
   case waitingForSubscription
@@ -197,6 +209,38 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   }
 }
 
+/// 能保存下来的试看结局，只覆盖试看结束时会出现的几种进度。
+nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
+  case noEligibleResource
+  case organizationFailed
+  case unavailable(String)
+
+  /// 不是结局的进度（还在进行、可以试看等）为 nil。
+  init?(_ progress: EpisodeTrialProgress) {
+    switch progress {
+    case .noEligibleResource: self = .noEligibleResource
+    case .organizationFailed: self = .organizationFailed
+    case .unavailable(let message): self = .unavailable(message)
+    default: return nil
+    }
+  }
+
+  var progress: EpisodeTrialProgress {
+    switch self {
+    case .noEligibleResource: .noEligibleResource
+    case .organizationFailed: .organizationFailed
+    case .unavailable(let message): .unavailable(message)
+    }
+  }
+}
+
+/// 按账号保存的一集的结局。`key` 与 `EpisodeTrialRequest.key` 相同。
+nonisolated struct EpisodeTrialStoredEnding: Codable, Equatable, Sendable {
+  let key: String
+  let ending: EpisodeTrialEnding
+  let endedAt: Date
+}
+
 /// 证明服务器上某条订阅是本机为试看建的。只在 TV 核对后删掉了它、读到订阅列表里已经没有它，
 /// 或者发现它在别处被改过时消失。下载和入库的跟踪不在这里，只在内存里。
 nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
@@ -207,12 +251,15 @@ nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
   /// 拿到回执、或在订阅列表里按标记认出后补上。
   var subscriptionID: Int?
   /// 写入试看规则后这条订阅的指纹。为空表示还是拒绝所有资源的占位，按 `include` 核对。
-  /// 写入后没读回来时同时记着写入前后两个，下次核对时按服务器实际的样子认。
+  /// 先记本机写入的样子，写入后没读回来时下次也认得出；读回来与写入的不一致时再记上读回的样子，
+  /// 收尾时认得出这是自己写过的订阅，核对后删掉。
   var fingerprints: Set<String> = []
   /// 补搜回执给的批次；回执丢了从订阅行的手动搜索状态补。
   var batchID: String?
   /// 用户要求取消。发出停止请求之前就保存，App 中途退出后接着收尾。
   var cancelRequested = false
+  /// 重试也不会变的失败的说明。记下后不再推进，只停掉搜索、核对后删掉订阅，结局显示这段说明。
+  var failure: String?
 }
 
 nonisolated enum EpisodeTrialTemporarySubscription {
@@ -232,7 +279,7 @@ nonisolated enum EpisodeTrialTemporarySubscription {
   static func isUntouched(_ row: Subscribe, by credential: EpisodeTrialCredential) -> Bool {
     let target = credential.target
     guard row.id == credential.subscriptionID, row.filter == credential.marker, row.username == credential.owner,
-      row.type == "电视剧", row.identity == target.identity, row.season == target.season,
+      row.type == "电视剧", row.identity.map(target.identities.contains) == true, row.season == target.season,
       trimmedNonEmpty([row.episode_group]) == target.episodeGroup
     else { return false }
     if row.include == blockedInclude { return true }
@@ -251,7 +298,6 @@ nonisolated enum EpisodeTrialTemporarySubscription {
       let filterGroups: [String]?
       let texts: [String?]
     }
-    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
     let settings = Settings(
       type: row.type, season: row.season, start: row.start_episode, total: row.total_episode,
       bestVersion: row.best_version, bestVersionFull: row.best_version_full, searchIMDb: row.search_imdbid,
@@ -263,8 +309,8 @@ nonisolated enum EpisodeTrialTemporarySubscription {
         row.keyword, row.quality, row.resolution, row.effect, row.include, row.exclude, row.custom_words,
         row.downloader, row.save_path, row.filter, row.episode_group, row.audio_quality, row.audio_format,
         // 分类路径由 MoviePilot 从稳定 ID 派生。
-        text(row.media_category_id) ?? row.media_category,
-      ].map(text))
+        specified(row.media_category_id) ?? row.media_category,
+      ].map(specified))
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     return Data(SHA256.hash(data: try encoder.encode(settings))).base64EncodedString()
@@ -334,11 +380,6 @@ nonisolated struct EpisodeTrialBatch: Decodable {
   }
 }
 
-nonisolated struct EpisodeTrialExecutionStatus: Decodable, Hashable {
-  let source: String?
-  let batch_id: String?
-}
-
 nonisolated struct EpisodeTrialTransferJob: Decodable {
   struct Transfer: Decodable {
     let downloader: String?
@@ -399,7 +440,7 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
 
   func matches(_ target: EpisodeTrialTarget) -> Bool {
     matches(
-      identities: [target.identity], season: target.season, episodeGroup: target.episodeGroup,
+      identities: target.identities, season: target.season, episodeGroup: target.episodeGroup,
       episode: target.episodeNumber)
   }
 
@@ -448,9 +489,32 @@ nonisolated extension Subscribe {
 }
 
 /// 本机正在试看的订阅处在哪一步，订阅卡片和季订阅页据此显示。
-nonisolated enum EpisodeTrialState: Equatable, Sendable {
+nonisolated enum EpisodeTrialState: Equatable, Hashable, Sendable {
   case active
   case cancelling
+}
+
+/// 本机试看凭据里决定订阅卡片和季订阅页显示的部分：哪条订阅、带哪个标记、是否在取消。
+/// 只随认领、取消和了结变化，写指纹、记批次和刷新进度时不变，页面据此跟随而不必观察整个试看服务。
+nonisolated struct EpisodeTrialHold: Hashable, Sendable {
+  let subscriptionID: Int
+  let marker: String
+  let state: EpisodeTrialState
+
+  static func holds(in credentials: [EpisodeTrialCredential]) -> Set<EpisodeTrialHold> {
+    Set(credentials.compactMap { credential in
+      credential.subscriptionID.map {
+        EpisodeTrialHold(
+          subscriptionID: $0, marker: credential.marker, state: credential.cancelRequested ? .cancelling : .active)
+      }
+    })
+  }
+
+  /// 这条订阅是不是本机正在试看的订阅。别的设备留下的、带标记的订阅不算，按普通订阅处理。
+  static func state(of subscribe: Subscribe, in holds: Set<EpisodeTrialHold>) -> EpisodeTrialState? {
+    guard let id = subscribe.id, let marker = subscribe.filter else { return nil }
+    return holds.first { $0.subscriptionID == id && $0.marker == marker }?.state
+  }
 }
 
 /// 取消试看的结果。`pending` 表示已经请求停止，等搜索结束后由服务在后台删掉订阅。
@@ -476,6 +540,30 @@ nonisolated enum EpisodeTrialHoldNotice {
   static let backTitle = "返回"
   static let cancelFailure = "暂时无法取消试看，请稍后重试。"
   static let cancelPending = "正在取消试看，搜索停下来后会自动完成。"
+
+  /// 提示框出现在哪里：管理这条试看订阅（首页订阅卡、季订阅页），或想订阅被试看占着的这一季（订阅面板）。
+  enum Context {
+    case manage
+    case subscribe
+  }
+
+  static func title(isCancelling: Bool) -> String { isCancelling ? cancellingTitle : title }
+
+  static func cancelButtonTitle(for context: Context) -> String {
+    switch context {
+    case .manage: cancelTitle
+    case .subscribe: cancelAndSubscribeTitle
+    }
+  }
+
+  /// 已在取消时只说明进度；能取消（管理员）时说明取消的后果，不能取消时说明要等试看结束。
+  static func message(for context: Context, isCancelling: Bool, canCancel: Bool) -> String {
+    if isCancelling { return cancellingMessage }
+    switch context {
+    case .manage: return canCancel ? manageMessage : infoMessage
+    case .subscribe: return canCancel ? subscribeMessage : waitMessage
+    }
+  }
 }
 
 /// 试看的这一集入库后的提示。用户多半已经离开详情页，看不到进度，所以用全局提示告诉他可以播放了。

@@ -24,16 +24,20 @@ class SubscribeSheetViewModel: ObservableObject {
   /// 正在取消占着这一季的试看订阅，之后接着准备订阅。
   @Published private(set) var isReleasingEpisodeTrial = false
   private var heldTrialSubscriptionID: Int?
+  /// 占着这一季的试看正在取消：提示框只说明进度，不再提供取消。
+  @Published private(set) var isHeldTrialCancelling = false
 
   // 最后一次查询确认不存在时才保持为新订阅；查到既有记录后切换为编辑。
   @Published private(set) var isNewSubscription: Bool
-  // 标记初始的“创建并暂停”操作序列是否成功
-  private var isCreatedAndPaused = false
+  /// 新增流程已经准备好可编辑的订阅：本次新建并暂停的，或者确认原本就有、改为编辑的（那条不会被暂停）。
+  private var hasPreparedSubscription = false
   private struct CreatedSubscriptionReceipt {
     let id: Int
     let profileKey: String
     let session: APIServiceSessionSnapshot
-    /// 读过这条订阅、确认不带试看标记。后端按季去重，“新增”可能拿回同季的试看订阅，认清之前不能暂停或回滚它。
+    /// 发“新增”之前当前账号能看到的订阅。后端按季去重，“新增”拿回的 ID 在这里面就是原本就有的订阅。
+    let preexistingIDs: Set<Int>
+    /// 读过这条订阅、确认是本次新建的。认清之前不能暂停或回滚它。
     var isClaimed = false
   }
   // 仅在最后一次查询明确不存在后，绑定本次 POST 返回的 ID、账号与会话。
@@ -222,7 +226,7 @@ class SubscribeSheetViewModel: ObservableObject {
     defer { isLoading = false }
 
     // 1. 如果是新订阅，最后确认不存在后再执行“创建 -> 暂停 -> 获取”序列
-    if isNewSubscription && !isCreatedAndPaused {
+    if isNewSubscription && !hasPreparedSubscription {
       do {
         if let receipt = currentCreatedSubscriptionReceipt() {
           if shouldRollbackCreatedSubscription {
@@ -238,6 +242,13 @@ class SubscribeSheetViewModel: ObservableObject {
           guard media.apiMediaId != nil else {
             canRetryLoad = true
             loadErrorMessage = "暂时无法确认订阅状态，请重试。"
+            return false
+          }
+          // 后端按季去重，“新增”可能拿回原本就有的订阅。先记下当前账号能看到的订阅，拿回的 ID 在里面就不是
+          // 本次新建的，不暂停也不回滚。读不到就不新增，按加载失败处理，可以重试。
+          let preexistingIDs = Set(try await apiService.fetchSubscriptions(forceRefresh: true).compactMap(\.id))
+          guard canPublishLoadResult(from: sessionSnapshot), !shouldRollbackCreatedSubscription else {
+            clearLoadedOptions()
             return false
           }
 
@@ -262,14 +273,14 @@ class SubscribeSheetViewModel: ObservableObject {
               clearLoadedOptions()
               return false
             }
-            guard episodeTrials.trialState(of: fullSubscribe) == nil else {
-              showEpisodeTrialInProgress(id: fullSubscribe.id)
+            if let trialState = episodeTrials.trialState(of: fullSubscribe) {
+              showEpisodeTrialInProgress(id: fullSubscribe.id, state: trialState)
               return false
             }
             self.subscribe = fullSubscribe
             self.original = fullSubscribe
             isNewSubscription = false
-            isCreatedAndPaused = true
+            hasPreparedSubscription = true
           } else {
             guard let profileKey = apiService.profileKey,
               let newId = try await apiService.addSubscription(
@@ -290,7 +301,8 @@ class SubscribeSheetViewModel: ObservableObject {
             createdSubscriptionReceipt = CreatedSubscriptionReceipt(
               id: newId,
               profileKey: profileKey,
-              session: sessionSnapshot
+              session: sessionSnapshot,
+              preexistingIDs: preexistingIDs
             )
             if shouldRollbackCreatedSubscription {
               await rollbackCreatedSubscriptionIfNeeded()
@@ -439,7 +451,7 @@ class SubscribeSheetViewModel: ObservableObject {
     }
     self.subscribe = fullSubscribe
     self.original = fullSubscribe
-    isCreatedAndPaused = true
+    hasPreparedSubscription = true
     return true
   }
 
@@ -448,43 +460,71 @@ class SubscribeSheetViewModel: ObservableObject {
     case created
     /// 后端按季去重拿回的已有订阅，已改为编辑它。
     case existing
-    /// 不能继续（会话变了、面板要关、或这一季正在试看）。
+    /// 不能继续（会话变了、面板要关、这一季正在试看，或拿回的订阅当前账号看不到）。
     case stop
   }
 
-  /// 先读一遍“新增”拿回的订阅。后端按季去重，同季已有试看订阅时拿回的是它：它不是本次创建的，放下回执，
-  /// 不暂停也不回滚。本机正在试看的提示这一季正在试看；别的设备留下的按已有订阅打开编辑。
+  /// “新增”拿回的这条订阅是什么。只有 `created` 是本次新建的，才能暂停、回滚删除。
+  private enum CreatedRow {
+    case created
+    /// 本机正在试看的订阅。
+    case localTrial(EpisodeTrialState)
+    /// 原本就有的订阅：在发“新增”前的列表里，或带试看标记（别的设备留下的）。
+    case existing(Subscribe)
+    /// 读不到：不存在，或当前账号无权查看（MoviePilot 对普通用户只返回自己的订阅，别人的返回空对象）。
+    case inaccessible
+  }
+
+  private func classify(_ row: Subscribe?, receipt: CreatedSubscriptionReceipt) -> CreatedRow {
+    guard let row, row.id == receipt.id else { return .inaccessible }
+    if let state = episodeTrials.trialState(of: row) { return .localTrial(state) }
+    if row.hasEpisodeTrialMarker || receipt.preexistingIDs.contains(receipt.id) { return .existing(row) }
+    return .created
+  }
+
+  /// 先读一遍“新增”拿回的订阅。后端按季去重，拿回的可能是原本就有的：它不是本次创建的，放下回执，
+  /// 不暂停也不回滚。本机正在试看的提示这一季正在试看；其他已有订阅按已有订阅打开编辑；读不到的不能继续。
   private func claimCreatedSubscription(
     id: Int, from snapshot: APIServiceSessionSnapshot
   ) async throws -> CreatedSubscriptionClaim {
-    let row = try await apiService.fetchSubscription(id: id)
-    guard canPublishLoadResult(from: snapshot), currentCreatedSubscriptionReceipt()?.id == id else {
+    let row = try await apiService.fetchSubscriptionIfPresent(id: id)
+    guard canPublishLoadResult(from: snapshot), let receipt = currentCreatedSubscriptionReceipt(), receipt.id == id
+    else {
       clearLoadedOptions()
       return .stop
     }
-    if episodeTrials.trialState(of: row) != nil {
+    switch classify(row, receipt: receipt) {
+    case .localTrial(let state):
       createdSubscriptionReceipt = nil
       subscribe.id = nil
-      showEpisodeTrialInProgress(id: id)
+      showEpisodeTrialInProgress(id: id, state: state)
       return .stop
-    }
-    if row.hasEpisodeTrialMarker {
+    case .existing(let row):
       createdSubscriptionReceipt = nil
       subscribe = row
       original = row
       isNewSubscription = false
-      isCreatedAndPaused = true
+      hasPreparedSubscription = true
       return .existing
+    case .inaccessible:
+      createdSubscriptionReceipt = nil
+      subscribe.id = nil
+      clearLoadedOptions()
+      canRetryLoad = false
+      loadErrorMessage = "这一季已有订阅，但当前账号无法查看或修改它。"
+      return .stop
+    case .created:
+      createdSubscriptionReceipt?.isClaimed = true
+      return .created
     }
-    createdSubscriptionReceipt?.isClaimed = true
-    return .created
   }
 
   private var episodeTrials: EpisodeTrialService { apiService.sessionScope.episodeTrial }
 
   /// 后端按季去重，试看订阅还在时这一季没法另建订阅。
-  private func showEpisodeTrialInProgress(id: Int?) {
+  private func showEpisodeTrialInProgress(id: Int?, state: EpisodeTrialState) {
     heldTrialSubscriptionID = id
+    isHeldTrialCancelling = state == .cancelling
     isHeldByEpisodeTrial = true
   }
 
@@ -663,11 +703,11 @@ class SubscribeSheetViewModel: ObservableObject {
     defer { isRollingBackCreatedSubscription = false }
 
     do {
-      // 还没认清的回执先读一遍，拿回的是带试看标记的订阅（不论哪台设备建的）就不是本次新建的，不删。
+      // 还没认清的回执先读一遍：只删确认是本次新建的那条；原本就有的、试看订阅、读不到的都不删。
       if !receipt.isClaimed {
-        let row = try await apiService.fetchSubscription(id: receipt.id)
+        let row = try await apiService.fetchSubscriptionIfPresent(id: receipt.id)
         guard currentCreatedSubscriptionReceipt()?.id == receipt.id else { return }
-        guard !row.hasEpisodeTrialMarker else {
+        guard case .created = classify(row, receipt: receipt) else {
           createdSubscriptionReceipt = nil
           return
         }

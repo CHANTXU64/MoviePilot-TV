@@ -1,3 +1,4 @@
+import Combine
 import Kingfisher
 import SwiftUI
 
@@ -509,15 +510,30 @@ private struct SubscribeItemView: View {
   let item: Subscribe
   let loadsImage: Bool
   @ObservedObject var viewModel: HomeViewModel
-  @ObservedObject var trials: EpisodeTrialService
+  /// 只跟随本机试看订阅的认领、取消和了结，试看进度刷新时不重算整排订阅卡。
+  let trials: EpisodeTrialService
   let onEdit: () -> Void
   let onViewDetail: () -> Void
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var showUnsubscribeConfirm = false
   @State private var showsEpisodeTrialNotice = false
+  @State private var trialHolds: Set<EpisodeTrialHold>
+
+  init(
+    item: Subscribe, loadsImage: Bool, viewModel: HomeViewModel, trials: EpisodeTrialService,
+    onEdit: @escaping () -> Void, onViewDetail: @escaping () -> Void
+  ) {
+    self.item = item
+    self.loadsImage = loadsImage
+    self.viewModel = viewModel
+    self.trials = trials
+    self.onEdit = onEdit
+    self.onViewDetail = onViewDetail
+    _trialHolds = State(initialValue: EpisodeTrialHold.holds(in: trials.credentials))
+  }
 
   var body: some View {
-    let trialState = trials.trialState(of: item)
+    let trialState = EpisodeTrialHold.state(of: item, in: trialHolds)
     let isEpisodeTrial = trialState != nil
     let isCancellingTrial = trialState == .cancelling
     MediaCard(
@@ -563,6 +579,9 @@ private struct SubscribeItemView: View {
       showUnsubscribeConfirm = false
       showsEpisodeTrialNotice = false
     }
+    .onReceive(trials.$credentials.map(EpisodeTrialHold.holds(in:)).removeDuplicates()) { holds in
+      trialHolds = holds
+    }
     .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
@@ -571,21 +590,11 @@ private struct SubscribeItemView: View {
     } message: {
       Text(SubscriptionCancelConfirmation.message(for: item))
     }
-    .alert(
-      isCancellingTrial ? EpisodeTrialHoldNotice.cancellingTitle : EpisodeTrialHoldNotice.title,
-      isPresented: $showsEpisodeTrialNotice
+    .episodeTrialNotice(
+      isPresented: $showsEpisodeTrialNotice, context: .manage, isCancelling: isCancellingTrial,
+      canCancel: viewModel.canCancelEpisodeTrial
     ) {
-      if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
-        Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
-          cancelEpisodeTrial()
-        }
-      }
-      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
-    } message: {
-      Text(
-        isCancellingTrial
-          ? EpisodeTrialHoldNotice.cancellingMessage
-          : viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
+      cancelEpisodeTrial()
     }
   }
 

@@ -1574,6 +1574,12 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
+/// 订阅最近一次搜索的执行状态：来源（新增、手动等）和搜索批次。只解码 TV 用到的字段。
+nonisolated struct SubscribeExecutionStatus: Decodable, Hashable {
+  let source: String?
+  let batch_id: String?
+}
+
 nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
@@ -1668,8 +1674,8 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   var mediaid: String?
   /// 洗版订阅的剧集优先级状态；公共写入 DTO 不发送。
   var episode_priority: [String: Int]?
-  /// 搜索已被后端受理但 TV 丢失回执时，可从订阅列表恢复批次。
-  var execution_status: EpisodeTrialExecutionStatus? = nil
+  /// 订阅列表附带的最近一次搜索状态（订阅详情不带）。搜索已被后端受理但 TV 丢失回执时，可从这里恢复批次。
+  var execution_status: SubscribeExecutionStatus? = nil
 
   /// 定时搜索间隔（小时），nil 跟随系统设置
   var search_interval: Int?
@@ -1759,7 +1765,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
-    execution_status = try? container.decodeIfPresent(EpisodeTrialExecutionStatus.self, forKey: .execution_status)
+    execution_status = try? container.decodeIfPresent(SubscribeExecutionStatus.self, forKey: .execution_status)
     search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
     music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
     total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)

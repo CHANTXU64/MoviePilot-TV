@@ -76,6 +76,9 @@ struct SubscribeRuleFieldRow: View {
   let field: SubscribeSettingField
   @Binding var subscribe: Subscribe
   let options: SubscribeRuleOptions
+  /// 质量、分辨率、特效不指定（存成空值）时那一项的名字。订阅面板里是「全部」；试看规则里空值表示沿用
+  /// MoviePilot 默认订阅配置，和站点、下载器等行一样叫「默认」。
+  var unspecifiedChoiceTitle = "全部"
 
   var body: some View {
     switch field {
@@ -131,14 +134,21 @@ struct SubscribeRuleFieldRow: View {
     }
   }
 
-  /// 质量、分辨率、特效选「全部」时保存空文本，与原订阅面板一致。
+  /// 质量、分辨率、特效选不指定的那一项时保存空文本，与原订阅面板一致。
   private func choice(
     _ keyPath: WritableKeyPath<Subscribe, String?>, _ choices: [(title: String, value: String)]
   ) -> some View {
     SheetPicker(
       title: field.title,
       selection: Binding(get: { subscribe[keyPath: keyPath] ?? "" }, set: { subscribe[keyPath: keyPath] = $0 }),
-      options: choices.map { PickerOption(title: $0.title, value: $0.value) })
+      options: Self.choiceOptions(choices, unspecifiedTitle: unspecifiedChoiceTitle))
+  }
+
+  /// 选项列表，空值那一项改叫 `unspecifiedTitle`。
+  static func choiceOptions(
+    _ choices: [(title: String, value: String)], unspecifiedTitle: String
+  ) -> [PickerOption<String>] {
+    choices.map { PickerOption(title: $0.value.isEmpty ? unspecifiedTitle : $0.title, value: $0.value) }
   }
 
   /// 清空即恢复默认：空文本记为未指定。
