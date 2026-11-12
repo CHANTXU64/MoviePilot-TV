@@ -105,9 +105,20 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
 // MARK: - 按集播放的上下文
 
 /// MoviePilot 入库查询给的整剧条目。条目 ID 只在所属服务器内唯一；旧缓存可能没有服务器名。
-nonisolated struct MediaServerItemRef: Equatable, Sendable {
+nonisolated struct MediaServerItemRef: Hashable, Codable, Sendable {
   let itemID: String
   let server: String?
+}
+
+/// 详情页集列表的按集播放和试看：电视剧在应用内播放可用（管理员、后端版本支持、设置里没关、有能播放的服务器）时才有。
+/// `libraryItem` 是 MoviePilot 入库查询给的整剧条目，这部剧不在媒体库里时为 nil（每集都不在，可以试看）。
+nonisolated struct EpisodePlaybackSource: Hashable, Codable, Sendable {
+  let libraryItem: MediaServerItemRef?
+
+  /// `episodeGroup` 是详情页当前的剧集组（nil 为默认顺序），`seasons` 是详情页的季顺序（剧集组下是组内季号）。
+  func context(media: MediaInfo, episodeGroup: String?, seasons: [Int]) -> EpisodePlaybackContext? {
+    EpisodePlaybackContext(media: media, episodeGroup: episodeGroup, seasons: seasons, libraryItem: libraryItem)
+  }
 }
 
 /// 按集播放的冻结上下文：开播时确定，之后详情页切换剧集组、刷新季列表都不影响正在播的队列。
@@ -170,7 +181,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 或按外部编号查找、按 ID 补查有一步失败。读到的照常用，找不到某一集时不能说这台上没有。
   let incompleteReason: String?
 
-  init(serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String? = nil) {
+  /// 一个文件包含多集（如 `S01E09-E10`）时，服务器通常只给文件记第一集的 TMDB 单集 ID。`defaultSeasons` 是这些文件
+  /// 所在季的 MoviePilot 默认顺序集列表（键是 TMDB 季号，见 `multiEpisodeSeasons`）：在列表里按文件自己的 TMDB 单集 ID
+  /// 找到那一集，季号、集号都和文件一致时，文件覆盖的后几集也记到这个文件上，排在那几集自己的文件后面。对不上时不推算。
+  init(
+    serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String? = nil,
+    defaultSeasons: [Int: [TmdbEpisode]] = [:]
+  ) {
     self.serverName = serverName
     self.hasSeries = hasSeries
     self.incompleteReason = incompleteReason
@@ -185,9 +202,65 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         unidentified += 1
       }
     }
+    for file in episodes where file.hasFile {
+      guard let range = Self.coveredRange(of: file), let id = file.tmdbEpisodeID, let season = file.seasonNumber,
+        let list = defaultSeasons[season],
+        let own = list.first(where: { $0.id == id }), own.episodeNumber == range.lowerBound,
+        own.seasonNumber == nil || own.seasonNumber == season
+      else { continue }
+      for covered in list {
+        guard let number = covered.episodeNumber, number != range.lowerBound, range.contains(number),
+          let coveredID = covered.id, coveredID != id,
+          byID[coveredID]?.contains(where: { $0.id == file.id }) != true
+        else { continue }
+        byID[coveredID, default: []].append(file)
+      }
+    }
     episodesByTMDBID = byID
     identifiedFileCount = identified
     unidentifiedFileCount = unidentified
+  }
+
+  /// 一个文件包含的集号范围；只含一集、缺季号或编号时为 nil。
+  private static func coveredRange(of file: ServerMediaItem) -> ClosedRange<Int>? {
+    guard file.tmdbEpisodeID != nil, file.seasonNumber != nil, let first = file.episodeNumber,
+      let last = file.episodeNumberEnd, last > first
+    else { return nil }
+    return first...last
+  }
+
+  /// 起播前重新读到的条目还是集索引里记的那一集：TMDB 单集 ID 就是要播的这一集；或者它是包含多集的文件，
+  /// 文件自己的编号和集号范围都和集索引里记的一样（集索引按这些确认过它包含要播的这一集）。
+  static func isSameEpisode(_ fresh: ServerMediaItem, recorded: ServerMediaItem, tmdbEpisodeID: Int) -> Bool {
+    guard let freshID = fresh.tmdbEpisodeID else { return false }
+    if freshID == tmdbEpisodeID { return true }
+    guard let range = coveredRange(of: recorded), recorded.tmdbEpisodeID == freshID else { return false }
+    return fresh.seasonNumber == recorded.seasonNumber && coveredRange(of: fresh) == range
+  }
+
+  /// 有文件缺少 TMDB 单集 ID 时写进日志的说明：多少个文件没有、这些文件上带的是哪些外部编号、有没有季号集号。
+  /// 用来分清是服务器不存单集 TMDB 编号（比如只有 TVDB），还是刚入库没刮削。都有编号时为 nil。只写编号种类和数量，不写编号本身。
+  static func missingIDSummary(_ episodes: [ServerMediaItem]) -> String? {
+    let files = episodes.filter(\.hasFile)
+    let missing = files.filter { $0.tmdbEpisodeID == nil }
+    guard !missing.isEmpty else { return nil }
+    var sources: [String: Int] = [:]
+    for file in missing {
+      for source in file.externalIDs.keys { sources[source, default: 0] += 1 }
+    }
+    let numbered = missing.count { $0.seasonNumber != nil && $0.episodeNumber != nil }
+    let multi = missing.count { ($0.episodeNumberEnd ?? 0) > ($0.episodeNumber ?? Int.max) }
+    let sourceText =
+      sources.isEmpty
+      ? "这些文件上没有任何外部编号"
+      : "这些文件上的外部编号：" + sources.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: "、")
+    return "有 \(missing.count) 个文件没有 TMDB 单集编号（共 \(files.count) 个文件；其中带季号集号的 \(numbered) 个，"
+      + "包含多集的 \(multi) 个）；\(sourceText)"
+  }
+
+  /// 有一个文件包含多集的季（TMDB 季号）：建索引前要读这些季的默认顺序集列表，才知道文件覆盖了哪几集。
+  static func multiEpisodeSeasons(in episodes: [ServerMediaItem]) -> Set<Int> {
+    Set(episodes.filter { $0.hasFile && coveredRange(of: $0) != nil }.compactMap(\.seasonNumber))
   }
 
   /// 有文件的全部条目，服务器返回的顺序。起播时逐个试，第一条不能直连（比如 strm）时换下一条。

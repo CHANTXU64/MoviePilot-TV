@@ -123,8 +123,28 @@ nonisolated struct EpisodeTrialRequest: Sendable {
 
   var season: Int { episode.seasonNumber }
   var episodeGroup: String? { playbackContext.episodeGroup }
-  var seasonKey: String { "\(playbackContext.tmdbID)|\(season)|\(episodeGroup ?? "")" }
-  var key: String { "\(seasonKey)|\(episodeID)|\(episodeNumber)" }
+  var seasonKey: String { Self.seasonKey(tmdbID: playbackContext.tmdbID, season: season, episodeGroup: episodeGroup) }
+  var key: String { Self.key(seasonKey: seasonKey, episodeID: episodeID, episodeNumber: episodeNumber) }
+
+  static func seasonKey(tmdbID: Int, season: Int, episodeGroup: String?) -> String {
+    "\(tmdbID)|\(season)|\(trimmedNonEmpty([episodeGroup]) ?? "")"
+  }
+
+  static func key(seasonKey: String, episodeID: Int, episodeNumber: Int) -> String {
+    "\(seasonKey)|\(episodeID)|\(episodeNumber)"
+  }
+
+  /// 集列表里一集的试看键，与按它建的请求的 `key` 相同；建不出请求（缺 TMDB 单集 ID、集号）时为 nil。
+  /// 卡片只用它查进度，不必为每张卡建完整的请求。
+  static func key(tmdbID: Int, episode: MoviePilotEpisode, episodeGroup: String?) -> String? {
+    guard let episodeID = MediaIdentifier.validNumericIdentifier(episode.tmdbEpisodeID),
+      let episodeNumber = MediaIdentifier.validNumericIdentifier(episode.episodeNumber), episodeNumber < Int.max,
+      episode.seasonNumber >= 0
+    else { return nil }
+    return key(
+      seasonKey: seasonKey(tmdbID: tmdbID, season: episode.seasonNumber, episodeGroup: episodeGroup),
+      episodeID: episodeID, episodeNumber: episodeNumber)
+  }
 
   var target: EpisodeTrialTarget {
     EpisodeTrialTarget(
@@ -193,43 +213,131 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case seasonTrialInProgress
   case searching
   case cancelling
-  case noEligibleResource
-  /// 发出的请求没拿到回执，或下载暂时找不到，状态说不清。
+  /// 发出的请求没拿到回执，或有一处没查成，状态说不清。
   case submissionUnconfirmed
+  /// `progress` 是下载器报的百分比（0–100）。
   case downloading(progress: Double?)
+  /// 下载器、整理队列和整理记录都明确查不到这个下载：下载器只列出还在下载的任务，通常是已经下完、等 MoviePilot 整理。
+  /// 一直查不到时按 `EpisodeTrialService.missingDownloadLimit` 结束。
+  case waitingForOrganization
   case organizing
-  case organizationFailed
+  /// 整理完成，等媒体服务器把这一集入库。
   case waitingForLibrary
   case ready(server: String)
+  /// 试看结束了，没能看成（含用户取消）。
+  case concluded(EpisodeTrialEnding)
+  /// 现在不能试看，或这次没查成（不满足条件、已有相关订阅、请求失败、查询中断等）。不是结局，不保存。
   case unavailable(String)
 
   var isReady: Bool {
     if case .ready = self { return true }
     return false
   }
-}
 
-/// 能保存下来的试看结局，只覆盖试看结束时会出现的几种进度。
-nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
-  case noEligibleResource
-  case organizationFailed
-  case unavailable(String)
-
-  /// 不是结局的进度（还在进行、可以试看等）为 nil。
-  init?(_ progress: EpisodeTrialProgress) {
-    switch progress {
-    case .noEligibleResource: self = .noEligibleResource
-    case .organizationFailed: self = .organizationFailed
-    case .unavailable(let message): self = .unavailable(message)
-    default: return nil
+  /// 试看在进行中的哪一步。没在进行（可以试看、已结束、不能试看）或说不清是哪一步时为 nil。
+  var stage: EpisodeTrialStage? {
+    switch self {
+    case .searching: .search
+    case .downloading: .download
+    case .waitingForOrganization, .organizing: .organize
+    case .waitingForLibrary: .library
+    default: nil
     }
   }
 
-  var progress: EpisodeTrialProgress {
+  /// 本机的试看还在进行：搜索、下载、整理、入库、取消中，或请求还没确认。
+  var isInProgress: Bool {
     switch self {
-    case .noEligibleResource: .noEligibleResource
-    case .organizationFailed: .organizationFailed
-    case .unavailable(let message): .unavailable(message)
+    case .searching, .cancelling, .submissionUnconfirmed, .downloading, .waitingForOrganization, .organizing,
+      .waitingForLibrary:
+      true
+    default: false
+    }
+  }
+}
+
+/// 试看从发起到能播放要经过的几步。第一次用的人多半以为下载完就能播，页面上把后面的整理和入库也列出来。
+nonisolated enum EpisodeTrialStage: Int, CaseIterable, Comparable, Sendable {
+  case search, download, organize, library
+
+  static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+  var title: String {
+    switch self {
+    case .search: "搜索资源"
+    case .download: "下载"
+    case .organize: "整理"
+    case .library: "入库"
+    }
+  }
+
+  /// 这一步在做什么，单集面板里当前这一步下面显示。
+  var detail: String {
+    switch self {
+    case .search: "MoviePilot 按试看规则在站点里搜这一集"
+    case .download: "下载器正在下载这一集"
+    case .organize: "下载完后，MoviePilot 定时把文件整理进媒体库目录"
+    case .library: "媒体服务器扫描到新文件后就能播放"
+    }
+  }
+}
+
+/// 试看没能看成的结局，按原因分类：卡片上显示短字，单集面板里显示完整说明。随账号保存。
+nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
+  /// 用户取消了试看，或这次搜索在 MoviePilot 上被停掉了。
+  case cancelled
+  /// 搜索完成，没有符合条件的资源。
+  case noEligibleResource
+  /// MoviePilot 跳过或没做完这次搜索，说明写明是哪种。
+  case searchIncomplete(String)
+  case organizationFailed
+  /// 跟不下去了：找不到下载记录、搜索记录，或下载任务不见了。说明写明是哪种。
+  case lostTrack(String)
+  /// 试看订阅在别处被删掉了。
+  case removedElsewhere
+  /// 试看订阅在别处被改过，TV 不再自动处理。
+  case modifiedElsewhere
+  /// 试看订阅没按要求生效（洗版保护、集数、规则没保存上），已停止。说明写明原因。
+  case failed(String)
+
+  init?(_ progress: EpisodeTrialProgress) {
+    guard case .concluded(let ending) = progress else { return nil }
+    self = ending
+  }
+
+  var progress: EpisodeTrialProgress { .concluded(self) }
+
+  /// 单集面板里的完整说明。
+  var message: String {
+    switch self {
+    case .cancelled: "已取消试看，可以重新发起"
+    case .noEligibleResource: "没有找到符合试看规则的资源，可以调整试看规则后重新发起"
+    case .searchIncomplete(let message), .lostTrack(let message), .failed(let message): message
+    case .organizationFailed: "下载完成了，但 MoviePilot 整理失败，可以在整理记录里查看原因"
+    case .removedElsewhere: "试看订阅已被删除，可以重新发起"
+    case .modifiedElsewhere: "试看订阅已在别处修改，不再自动处理"
+    }
+  }
+
+  /// 卡片正中的短字。用户自己取消是预期的结果，卡片上不提示，为 nil。
+  var shortLabel: String? {
+    switch self {
+    case .cancelled: nil
+    case .noEligibleResource: "无资源"
+    case .searchIncomplete: "搜索失败"
+    case .organizationFailed: "整理失败"
+    case .lostTrack: "无法跟踪"
+    case .removedElsewhere: "订阅已删"
+    case .modifiedElsewhere: "订阅已改"
+    case .failed: "试看失败"
+    }
+  }
+
+  /// 不是这次试看出了问题，是别处处理了这条订阅：卡片上用提示图标，不用警告。
+  var isHandledElsewhere: Bool {
+    switch self {
+    case .removedElsewhere, .modifiedElsewhere: true
+    default: false
     }
   }
 }

@@ -1740,6 +1740,102 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  /// 默认顺序的第 2 季：554–557 依次是第 2–5 集。
+  private static let defaultSeason2 =
+    #"[{"id":554,"season_number":2,"episode_number":2},{"id":555,"season_number":2,"episode_number":3},{"id":556,"season_number":2,"episode_number":4},{"id":557,"season_number":2,"episode_number":5}]"#
+
+  /// 一个文件包含第 2 季第 3、4 集，服务器只给它记了第 3 集的 TMDB 单集 ID（555）。
+  private static let multiEpisodeFile =
+    #"{"Id":"e-s2e3-4","Type":"Episode","Name":"Emby 集名","SeriesName":"长风渡","ParentIndexNumber":2,"IndexNumber":3,"IndexNumberEnd":4,"ProviderIds":{"Tmdb":"555"}}"#
+
+  private func configureMultiEpisodeFile() {
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes = ["\(Self.lan)|s1": Self.embyEpisodes(Self.multiEpisodeFile)]
+      $0.items["\(Self.lan)|e-s2e3-4"] = Self.multiEpisodeFile
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.defaultSeason2
+    }
+  }
+
+  private func defaultSeason2Episodes() throws -> [MoviePilotEpisode] {
+    MoviePilotEpisode.list(
+      try JSONDecoder().decode([TmdbEpisode].self, from: Data(Self.defaultSeason2.utf8)), season: 2)
+  }
+
+  func testSecondEpisodeOfAMultiEpisodeFileIsPlayable() async throws {
+    configureMultiEpisodeFile()
+    let coordinator = makeCoordinator(makeService())
+    let season = try defaultSeason2Episodes()
+    let context = context(group: nil)
+    let availability = await coordinator.episodeAvailability(for: season, context: context)
+    XCTAssertEqual(
+      availability, [.notOnServer, .playable(server: "emby"), .playable(server: "emby"), .notOnServer],
+      "第 4 集在第 3 集的文件里，不能当成不在服务器上（否则会给它试看）")
+
+    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[2], seasonEpisodes: season)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-s2e3-4", "播第 4 集就是播这个文件")
+    coordinator.endCurrentSession()
+  }
+
+  func testGoingBackOntoTheSecondEpisodeOfAMultiEpisodeFilePlaysThatFile() async throws {
+    configureMultiEpisodeFile()
+    let e5 = Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes = ["\(Self.lan)|s1": Self.embyEpisodes(Self.multiEpisodeFile, e5)]
+      $0.items["\(Self.lan)|e-s2e5"] = e5
+    }
+    let coordinator = makeCoordinator(makeService())
+    let season = try defaultSeason2Episodes()
+    let context = context(group: nil)
+    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[3], seasonEpisodes: season)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    let previous = try await coordinator.adjacentEpisode(.previous, from: session.playback)
+    guard case .play(let entry, _) = previous else { return XCTFail("应能回到第 4 集，实际 \(previous)") }
+    XCTAssertEqual(entry.episode.tmdbEpisodeID, 556)
+    XCTAssertEqual(entry.item.id, "e-s2e3-4")
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(
+      to: entry.item.id,
+      episode: QueuedEpisode(context: context, episode: entry.episode, seasonEpisodes: entry.seasonEpisodes),
+      in: session
+    ) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到包含第 4 集的文件，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-s2e3-4")
+    coordinator.endCurrentSession()
+  }
+
+  func testMultiEpisodeFileThatCannotBeVerifiedIsNotTreatedAsMissing() async throws {
+    configureMultiEpisodeFile()
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = "[]" }
+    let coordinator = makeCoordinator(makeService())
+    let season = try defaultSeason2Episodes()
+    let availability = await coordinator.episodeAvailability(for: season, context: context(group: nil))
+    XCTAssertEqual(availability?[1], .playable(server: "emby"), "文件自己记着的那一集照常能播")
+    guard case .failed(let message) = availability?[2] else {
+      return XCTFail("读不到默认顺序列表时第 4 集无法确认：\(String(describing: availability))")
+    }
+    XCTAssertTrue(message.contains("无法确认多集文件包含哪几集"), message)
+  }
+
+  func testDetailPageOffersEpisodeEntriesForASeriesNotInTheLibrary() async throws {
+    // 整部剧还不在媒体库里：没有整剧播放入口，但集列表要能查每集（都不在库）并提供试看。
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    let service = makeService()
+    services.append(service)
+    let detail = MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧")
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.applyFullDetail(detail)
+    try await waitUntil { viewModel.episodePlayback != nil }
+    XCTAssertEqual(viewModel.episodePlayback, EpisodePlaybackSource(libraryItem: nil))
+    XCTAssertNil(viewModel.inAppPlaybackTarget)
+    viewModel.cancelForPop()
+  }
+
   func testEpisodePlaybackNeedsBackend326() async throws {
     configureDefaultOrderLibrary()
     backendVersion = "v3.2.5"
@@ -2602,15 +2698,15 @@ extension PlaybackCoordinatorTests {
     let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.applyFullDetail(detail)
     try await waitUntil { viewModel.inAppPlaybackTarget != nil }
-    XCTAssertEqual(viewModel.mediaServerItemRef, MediaServerItemRef(itemID: "s1", server: "emby"))
+    XCTAssertEqual(viewModel.episodePlayback, EpisodePlaybackSource(libraryItem: MediaServerItemRef(itemID: "s1", server: "emby")))
 
     PlaybackPreferences.setInAppPlaybackEnabled(false)
     try await waitUntil { viewModel.inAppPlaybackTarget == nil }
-    XCTAssertNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]))
+    XCTAssertNil(viewModel.episodePlayback)
 
     PlaybackPreferences.setInAppPlaybackEnabled(true)
     try await waitUntil { viewModel.inAppPlaybackTarget != nil }
-    XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]), "重新打开后补回入口")
+    XCTAssertNotNil(viewModel.episodePlayback, "重新打开后补回入口")
     viewModel.cancelForPop()
   }
 
@@ -2647,7 +2743,7 @@ extension PlaybackCoordinatorTests {
 
     service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
     try await waitUntil { viewModel.inAppPlaybackTarget != nil }
-    XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]))
+    XCTAssertNotNil(viewModel.episodePlayback)
     viewModel.cancelForPop()
   }
 

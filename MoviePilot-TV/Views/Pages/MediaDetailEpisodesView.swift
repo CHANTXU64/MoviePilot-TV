@@ -2,16 +2,18 @@ import Kingfisher
 import SwiftUI
 
 /// 详情页「剧集」行：行头选季（和剧集组），下面是这一季的单集卡片。
+/// 应用内播放可用时，能播的集按下即播，其余的打开单集面板（试看在面板里）；长按有播放、试看、取消试看和详情。
 struct MediaDetailEpisodesView: View {
   let media: MediaInfo
   let tmdbID: Int
   let subscriptionSeasons: SubscribeSeasonViewModel?
+  /// 按集播放和试看；没有应用内播放时为 nil，按下单集只看简介。
+  let playback: EpisodePlaybackSource?
   let allowsRequests: Bool
   let isContentVisible: Bool
   /// 第一页底部只露出卡片：本行是第二页首行时，行头在翻到第二页后才出现，与其他行一致。
   let showsHeader: Bool
   let onExpand: (MediaEpisodeGridRequest) -> Void
-  let onSelect: (MoviePilotEpisode) -> Void
 
   var body: some View {
     if let subscriptionSeasons {
@@ -31,8 +33,9 @@ struct MediaDetailEpisodesView: View {
   ) -> some View {
     EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
-      catalog: catalog, allowsRequests: allowsRequests,
-      layout: .shelf(showsHeader: showsHeader, onExpand: onExpand), onSelect: onSelect
+      catalog: catalog, allowsRequests: allowsRequests, playback: playback,
+      trial: APIService.shared.sessionScope.episodeTrial,
+      layout: .shelf(showsHeader: showsHeader, onExpand: onExpand)
     )
   }
 }
@@ -41,7 +44,6 @@ struct MediaEpisodeGridView: View {
   let request: MediaEpisodeGridRequest
   let imageLifecycle: PageImageLifecycle
   let allowsRequests: Bool
-  @State private var selectedEpisode: MoviePilotEpisode?
 
   var body: some View {
     LocalEpisodeGroupView(
@@ -50,18 +52,12 @@ struct MediaEpisodeGridView: View {
     ) { groupID, groupMenu, catalog in
       EpisodeBrowser(
         media: request.mediaInfo, tmdbID: request.tmdbID, groupID: groupID, groupMenu: groupMenu,
-        catalog: catalog, allowsRequests: allowsRequests,
+        catalog: catalog, allowsRequests: allowsRequests, playback: request.playback,
+        trial: APIService.shared.sessionScope.episodeTrial,
         layout: .grid(imageLifecycle),
         initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
-        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil,
-        onSelect: { selectedEpisode = $0 }
+        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil
       )
-    }
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
-      selectedEpisode = nil
-    }
-    .sheet(item: $selectedEpisode) { episode in
-      EpisodeDetailSheet(episode: episode)
     }
   }
 }
@@ -140,20 +136,32 @@ private enum EpisodeBrowserLayout {
 
 private struct EpisodeBrowser: View {
   @ObservedObject private var apiService = APIService.shared
+  @EnvironmentObject private var notificationManager: NotificationManager
   let media: MediaInfo
   let tmdbID: Int
   let groupID: String?
   let groupMenu: EpisodeGroupMenu?
   let catalog: EpisodeGroupCatalog
   let allowsRequests: Bool
+  /// 按集播放和试看；nil 时按下单集只看简介。
+  let playback: EpisodePlaybackSource?
+  /// 卡片和单集面板跟着试看进度变化。
+  @ObservedObject var trial: EpisodeTrialService
   let layout: EpisodeBrowserLayout
   var initialSeason: Int? = nil
   var initialEpisodeOffset: Int? = nil
-  let onSelect: (MoviePilotEpisode) -> Void
 
   @State private var storedGroup = GroupState(id: nil)
   @FocusState private var focus: EpisodeRowFocus?
   @FocusState private var focusedSeason: Int?
+  /// 打开着单集面板的那一集。面板由本行弹出，内容随本行的播放状态和试看进度实时变化。
+  @State private var panelEpisode: MoviePilotEpisode?
+  /// 面板关掉后要做的事：全屏播放器不能叠在面板上起播，先关面板再播。
+  @State private var afterPanelDismiss: (() -> Void)?
+  /// 按下「试看」到服务给出结果之间的集（试看键），期间再按不重复发起。
+  @State private var startingTrials: Set<String> = []
+  /// 按下「取消试看」到服务给出结果之间的试看订阅。
+  @State private var cancellingTrials: Set<Int> = []
 
   private struct GroupState {
     let id: String?
@@ -164,6 +172,21 @@ private struct EpisodeBrowser: View {
     var episodeStates: [Int: EpisodeLoadState<[MoviePilotEpisode]>] = [:]
     var episodeRetries: [Int: Int] = [:]
     var episodePageOffsets: [Int: Int] = [:]
+    var availability: [Int: SeasonAvailability] = [:]
+    var availabilityRetries: [Int: Int] = [:]
+  }
+
+  /// 一季每集能不能播。`source` 变了（入库条目、应用内播放开关）就作废重查。
+  private struct SeasonAvailability {
+    let source: EpisodePlaybackSource
+    /// nil 表示第一次查、还没有结果。
+    var results: [MoviePilotEpisode.ID: EpisodeAvailability]?
+    /// 应用内播放不可用（不是管理员、版本不支持、设置里关了、没有能播放的服务器）：不显示播放和试看。
+    var isOffered = true
+    /// 重查期间沿用上次的结果，按钮显示加载中，焦点不跳。
+    var isRefreshing = false
+    /// 上次查询用的重试次数：重试次数变大时强制重读服务器。
+    var retry = 0
   }
 
   // 切换剧集组时只更换数据，不重建剧集组按钮，保留遥控器焦点。
@@ -182,6 +205,16 @@ private struct EpisodeBrowser: View {
     let groupID: String?
     let season: Int?
     let retry: Int
+    let session: APIServiceSessionSnapshot
+  }
+
+  private struct AvailabilityRequest: Equatable {
+    let groupID: String?
+    let season: Int
+    let episodeCount: Int
+    let episodeRetry: Int
+    let retry: Int
+    let source: EpisodePlaybackSource
     let session: APIServiceSessionSnapshot
   }
 
@@ -306,6 +339,7 @@ private struct EpisodeBrowser: View {
   var body: some View {
     let session = apiService.sessionSnapshot()
     let requestedSeason = seasonNumber
+    let availabilityRequest = allowsRequests ? makeAvailabilityRequest(session: session) : nil
     Group {
       switch layout {
       case .grid(let imageLifecycle):
@@ -336,6 +370,16 @@ private struct EpisodeBrowser: View {
     ) {
       await loadEpisodesIfNeeded(season: requestedSeason, session: session)
     }
+    .task(id: availabilityRequest) {
+      await loadAvailability(availabilityRequest)
+    }
+    .sheet(item: $panelEpisode, onDismiss: runAfterPanelDismiss) { episode in
+      panel(for: episode)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      afterPanelDismiss = nil
+      panelEpisode = nil
+    }
     // 焦点停在状态卡上时集列表到了：交给第一集，状态卡被移除时焦点不会跳出本行。
     .onChange(of: firstEpisodeID) { _, firstID in
       guard let firstID, focus == .status else { return }
@@ -351,12 +395,13 @@ private struct EpisodeBrowser: View {
       Spacer(minLength: 0)
       episodePagePicker
       supplementalSeasonRetry
+      availabilityRetry
       groupMenu?.control(defaultSeasons: defaultMenuSeasons)
       if case .shelf(_, let onExpand) = layout, showsExpandButton {
         Button("展开") {
           onExpand(MediaEpisodeGridRequest(
             mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
-            initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset
+            initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
           ))
         }
         .accessibilityLabel("展开剧集")
@@ -374,6 +419,7 @@ private struct EpisodeBrowser: View {
           .frame(maxWidth: .infinity, alignment: .leading)
         episodePagePicker
         supplementalSeasonRetry
+        availabilityRetry
         if let groupMenu, groupMenu.isVisible {
           groupMenu.control(defaultSeasons: defaultMenuSeasons)
             .frame(maxWidth: 540, alignment: .trailing)
@@ -388,6 +434,20 @@ private struct EpisodeBrowser: View {
   private var supplementalSeasonRetry: some View {
     if showsSupplementalSeasonRetry {
       Button("重试分季", systemImage: AppSymbol.retry, action: retrySeasonList)
+    }
+  }
+
+  /// 媒体服务器读取失败通常整季每一集都一样（比如服务器连不上），在行头提示一次，不在每张卡上都盖警告。
+  /// 具体原因在单集面板里。
+  @ViewBuilder
+  private var availabilityRetry: some View {
+    if let seasonNumber, let state = currentAvailability(season: seasonNumber),
+      state.results?.values.contains(where: { if case .failed = $0 { true } else { false } }) == true
+    {
+      Button("重试播放状态", systemImage: AppSymbol.warning) {
+        retryAvailability(season: seasonNumber)
+      }
+      .accessibilityLabel("播放状态读取失败，重试")
     }
   }
 
@@ -547,15 +607,170 @@ private struct EpisodeBrowser: View {
     loadsImage: Bool = true,
     onFocus: ((Bool) -> Void)? = nil
   ) -> some View {
-    EpisodeCard(
+    let entry = entry(for: episode)
+    return EpisodeCard(
       episode: episode,
       stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
       stillSize: stillSize,
       loadsImage: loadsImage,
-      onSelect: { onSelect(episode) },
+      status: entry?.cardStatus,
+      accessibilityStatus: entry?.accessibilityStatus,
+      // 没有应用内播放时长按只有「详情」，和有播放时一样都有长按菜单。
+      menuActions: entry?.menuActions ?? [.details],
+      onSelect: { select(episode) },
+      onPlayPause: { playPause(episode) },
+      onMenuAction: { perform($0, on: episode) },
       onFocus: onFocus
     )
     .focused($focus, equals: .episode(episode.id))
+  }
+
+  // MARK: 播放与试看
+
+  private func currentAvailability(season: Int) -> SeasonAvailability? {
+    guard let playback, let state = group.availability[season], state.source == playback else { return nil }
+    return state
+  }
+
+  private func playbackContext(_ source: EpisodePlaybackSource) -> EpisodePlaybackContext? {
+    source.context(media: media, episodeGroup: groupID, seasons: seasons.compactMap(\.season_number))
+  }
+
+  private func trialRequest(for episode: MoviePilotEpisode) -> EpisodeTrialRequest? {
+    EpisodeTrialRequest(media: media, episode: episode, episodeGroup: groupID, libraryItem: playback?.libraryItem)
+  }
+
+  /// 一集的入口状态；没有应用内播放时为 nil（按下只看简介，长按只有详情）。
+  private func entry(for episode: MoviePilotEpisode) -> EpisodeEntry? {
+    guard playback != nil else { return nil }
+    let state = currentAvailability(season: episode.seasonNumber)
+    if state?.isOffered == false { return nil }
+    var snapshot = EpisodeTrialSnapshot()
+    var block: EpisodeTrialBlock? = .unsupported
+    if let key = EpisodeTrialRequest.key(tmdbID: tmdbID, episode: episode, episodeGroup: groupID) {
+      let seasonKey = EpisodeTrialRequest.seasonKey(
+        tmdbID: tmdbID, season: episode.seasonNumber, episodeGroup: groupID)
+      snapshot = EpisodeTrialSnapshot(
+        key: key, seasonKey: seasonKey, progress: trial.progress, endings: trial.endings,
+        credentials: trial.credentials)
+      snapshot.isStarting = startingTrials.contains(key)
+      if media.identity != nil,
+        EpisodeTrialAvailability.isAvailable(
+          canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+          backendVersion: apiService.settings?.BACKEND_VERSION)
+      {
+        block = EpisodeEntry.notAiredDate(episode.airDate).map(EpisodeTrialBlock.notAired)
+      }
+    }
+    return EpisodeEntry(
+      availability: state?.results?[episode.id], isCheckingAvailability: state?.results == nil,
+      trial: snapshot, trialBlock: block, canCancelTrial: trial.canCancelTrial)
+  }
+
+  private func select(_ episode: MoviePilotEpisode) {
+    if entry(for: episode)?.primaryAction == .play {
+      play(episode)
+    } else {
+      panelEpisode = episode
+    }
+  }
+
+  /// 遥控器播放键：能播就播；不能播时说明原因。没有应用内播放时不响应。
+  private func playPause(_ episode: MoviePilotEpisode) {
+    guard let entry = entry(for: episode) else { return }
+    if entry.isPlayable {
+      play(episode)
+    } else if let message = entry.notPlayableMessage {
+      notificationManager.show(message: message, type: .info)
+    }
+  }
+
+  private func perform(_ action: EpisodeEntry.MenuAction, on episode: MoviePilotEpisode) {
+    switch action {
+    case .play: play(episode)
+    case .startTrial: startTrial(episode)
+    case .cancelTrial(let id): cancelTrial(id)
+    case .details: panelEpisode = episode
+    }
+  }
+
+  private func performPanelAction(_ button: EpisodeEntry.PanelButton, on episode: MoviePilotEpisode) {
+    switch button {
+    case .play:
+      afterPanelDismiss = { play(episode) }
+      panelEpisode = nil
+    case .startTrial: startTrial(episode)
+    case .cancelTrial(let id): cancelTrial(id)
+    case .recheck: retryAvailability(season: episode.seasonNumber)
+    }
+  }
+
+  private func runAfterPanelDismiss() {
+    let action = afterPanelDismiss
+    afterPanelDismiss = nil
+    action?()
+  }
+
+  /// 按集起播：带上这一集所在那一季的集列表，播放器里能接着播上一集、下一集。
+  private func play(_ episode: MoviePilotEpisode) {
+    guard let playback, let context = playbackContext(playback),
+      case .loaded(let list) = group.episodeStates[episode.seasonNumber]
+    else { return }
+    apiService.sessionScope.playbackCoordinator.play(
+      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list)))
+  }
+
+  /// 发起试看。结果显示在卡片和面板上；从长按菜单发起、卡片上又看不出结果时（比如这一季已有订阅）另外提示。
+  private func startTrial(_ episode: MoviePilotEpisode) {
+    guard let request = trialRequest(for: episode), startingTrials.insert(request.key).inserted else { return }
+    let service = trial
+    let session = apiService.sessionSnapshot()
+    Task { @MainActor in
+      let result = await service.start(request)
+      startingTrials.remove(request.key)
+      guard apiService.isSessionUnchanged(from: session), panelEpisode?.id != episode.id,
+        let message = EpisodeEntry.startFeedback(result)
+      else { return }
+      notificationManager.show(message: message, type: .info)
+    }
+  }
+
+  private func cancelTrial(_ subscriptionID: Int) {
+    guard cancellingTrials.insert(subscriptionID).inserted else { return }
+    let service = trial
+    let session = apiService.sessionSnapshot()
+    Task { @MainActor in
+      let outcome = await service.cancelTrial(subscriptionID: subscriptionID)
+      cancellingTrials.remove(subscriptionID)
+      guard outcome == .failed, apiService.isSessionUnchanged(from: session) else { return }
+      notificationManager.show(message: EpisodeTrialHoldNotice.cancelFailure, type: .error)
+    }
+  }
+
+  private func retryAvailability(season: Int) {
+    guard currentAvailability(season: season)?.isRefreshing != true else { return }
+    group.availabilityRetries[season, default: 0] += 1
+  }
+
+  @ViewBuilder
+  private func panel(for episode: MoviePilotEpisode) -> some View {
+    let entry = entry(for: episode) ?? EpisodeEntry(availability: nil)
+    let request = trialRequest(for: episode)
+    // 只在可能有试看要跟的时候刷新进度：已经能播、或不能试看时不请求后端。
+    let pollsTrial = request != nil && !entry.isPlayable
+      && (entry.availability == .notOnServer || entry.trial.subscriptionID != nil || entry.trial.progress != nil)
+    EpisodeActionSheet(
+      episode: episode,
+      seriesTitle: media.cleanedTitle ?? media.title,
+      entry: entry,
+      isCancellingTrial: entry.trial.subscriptionID.map(cancellingTrials.contains) ?? false,
+      isRechecking: currentAvailability(season: episode.seasonNumber)?.isRefreshing == true,
+      onAction: { performPanelAction($0, on: episode) }
+    )
+    .task(id: pollsTrial ? request?.key : nil) {
+      guard pollsTrial, let request else { return }
+      await trial.poll(request)
+    }
   }
 
   // MARK: 加载
@@ -591,6 +806,41 @@ private struct EpisodeBrowser: View {
       guard canPublish(session) else { return }
       group.seasonLoad = .failed
     }
+  }
+
+  private func makeAvailabilityRequest(session: APIServiceSessionSnapshot) -> AvailabilityRequest? {
+    guard let playback, let seasonNumber, case .loaded(let episodes) = group.episodeStates[seasonNumber],
+      !episodes.isEmpty
+    else { return nil }
+    return AvailabilityRequest(
+      groupID: groupID, season: seasonNumber, episodeCount: episodes.count,
+      episodeRetry: group.episodeRetries[seasonNumber, default: 0],
+      retry: group.availabilityRetries[seasonNumber, default: 0], source: playback, session: session)
+  }
+
+  /// 查这一季每集能不能播：一季一次，在各台能播放的服务器上读这部剧的集（协调器缓存一分钟）。
+  /// 重试时强制重读，期间沿用上次的结果。
+  private func loadAvailability(_ request: AvailabilityRequest?) async {
+    guard let request, canPublish(request.session),
+      case .loaded(let episodes) = group.episodeStates[request.season],
+      let context = playbackContext(request.source)
+    else { return }
+    let previous = currentAvailability(season: request.season)
+    let forceRefresh = request.retry > (previous?.retry ?? 0)
+    var pending = previous ?? SeasonAvailability(source: request.source)
+    pending.isRefreshing = previous?.results != nil
+    group.availability[request.season] = pending
+    let results = await apiService.sessionScope.playbackCoordinator.episodeAvailability(
+      for: episodes, context: context, forceRefresh: forceRefresh)
+    guard canPublish(request.session) else { return }
+    var state = SeasonAvailability(source: request.source, retry: request.retry)
+    if let results {
+      state.results = Dictionary(zip(episodes.map(\.id), results), uniquingKeysWith: { first, _ in first })
+    } else {
+      state.results = [:]
+      state.isOffered = false
+    }
+    group.availability[request.season] = state
   }
 
   private func loadEpisodesIfNeeded(season: Int?, session: APIServiceSessionSnapshot) async {
@@ -754,7 +1004,13 @@ private struct EpisodeCard: View {
   let stillURL: URL?
   let stillSize: CGSize
   let loadsImage: Bool
+  let status: EpisodeEntry.CardStatus?
+  let accessibilityStatus: String?
+  /// 长按菜单，至少有「详情」。
+  let menuActions: [EpisodeEntry.MenuAction]
   let onSelect: () -> Void
+  let onPlayPause: () -> Void
+  let onMenuAction: (EpisodeEntry.MenuAction) -> Void
   let onFocus: ((Bool) -> Void)?
 
   @FocusState private var isFocused: Bool
@@ -763,7 +1019,7 @@ private struct EpisodeCard: View {
     Button(action: onSelect) {
       EpisodeCardContent(
         episode: episode, stillURL: stillURL, isFocused: isFocused,
-        stillSize: stillSize, loadsImage: loadsImage
+        stillSize: stillSize, loadsImage: loadsImage, status: status
       )
       .contentShape(.rect)
     }
@@ -771,8 +1027,51 @@ private struct EpisodeCard: View {
     .focusEffectDisabled()
     .focused($isFocused)
     .onChange(of: isFocused) { _, focused in onFocus?(focused) }
+    .onPlayPauseCommand(perform: onPlayPause)
+    // 菜单一直挂着，只换里面的项：状态到了时卡片不重建，焦点不丢。
+    .contextMenu {
+      ForEach(menuActions, id: \.menuID) { action in
+        Button { onMenuAction(action) } label: {
+          Label(action.title, systemImage: action.systemImage)
+        }
+      }
+    }
     .accessibilityLabel(episode.cardTitle)
-    .accessibilityValue(episode.metadata.joined(separator: "，"))
+    .accessibilityValue((episode.metadata + [accessibilityStatus].compactMap { $0 }).joined(separator: "，"))
+    .accessibilityActions {
+      ForEach(menuActions, id: \.menuID) { action in
+        Button(action.title) { onMenuAction(action) }
+      }
+    }
+  }
+}
+
+extension EpisodeEntry.MenuAction {
+  fileprivate var title: String {
+    switch self {
+    case .play: "播放"
+    case .startTrial: "试看这一集"
+    case .cancelTrial: EpisodeTrialHoldNotice.cancelTitle
+    case .details: "详情"
+    }
+  }
+
+  fileprivate var systemImage: String {
+    switch self {
+    case .play: AppSymbol.play
+    case .startTrial: AppSymbol.subscriptionTrial
+    case .cancelTrial: AppSymbol.unsubscribe
+    case .details: AppSymbol.details
+    }
+  }
+
+  fileprivate var menuID: String {
+    switch self {
+    case .play: "play"
+    case .startTrial: "startTrial"
+    case .cancelTrial(let id): "cancelTrial-\(id)"
+    case .details: "details"
+    }
   }
 }
 
@@ -793,6 +1092,8 @@ struct EpisodeCardContent: View {
   var isFocused = false
   var stillSize = EpisodeCardLayout.stillSize
   var loadsImage = true
+  /// 能不能播、试看到哪一步，画在剧照上（见 `EpisodeCardStatusOverlay`）。
+  var status: EpisodeEntry.CardStatus?
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -823,7 +1124,12 @@ struct EpisodeCardContent: View {
           skipsMemoryCache: true
         )
       }
+      if let status {
+        EpisodeCardStatusOverlay(status: status, stillSize: stillSize)
+          .transition(.opacity)
+      }
     }
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: status)
     .frame(width: stillSize.width, height: stillSize.height)
     .clipShape(.rect(cornerRadius: EpisodeCardLayout.stillCornerRadius))
     .accessibilityHidden(true)
@@ -942,21 +1248,6 @@ struct EpisodeShelfStatusCard: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(status.text)
     .accessibilityAddTraits(.isStaticText)
-  }
-}
-
-// MARK: - 单集详情
-
-struct EpisodeDetailSheet: View {
-  let episode: MoviePilotEpisode
-
-  var body: some View {
-    let overview = episode.displayOverview.map(ReadingSheetLayout.paragraphs) ?? []
-    let details = episode.metadata.isEmpty
-      ? [] : [ReadingBlock(episode.metadata.joined(separator: " · "), style: .secondary)]
-    let paragraphs = overview.isEmpty
-      ? [ReadingBlock("暂无简介", style: .secondary)] : overview.map { ReadingBlock($0) }
-    ReadingSheet(title: episode.cardTitle, blocks: details + paragraphs)
   }
 }
 

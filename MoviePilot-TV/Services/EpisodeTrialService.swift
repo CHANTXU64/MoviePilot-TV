@@ -15,13 +15,14 @@ final class EpisodeTrialService: ObservableObject {
   typealias Sleep = @Sendable (Duration) async throws -> Void
 
   static let interrupted = EpisodeTrialProgress.unavailable("本次试看查询已中断")
-  static let cancelled = EpisodeTrialProgress.unavailable("已取消试看，可以重新发起")
+  static let cancelled = EpisodeTrialProgress.concluded(.cancelled)
   static let unconfirmedQuery = EpisodeTrialProgress.unavailable("暂时无法确认试看进度")
-  static let released = EpisodeTrialProgress.unavailable("试看订阅已在别处修改，不再自动处理")
-  static let removedElsewhere = EpisodeTrialProgress.unavailable("试看订阅已被删除，可以重新发起")
-  static let untrackable = EpisodeTrialProgress.unavailable("提交过下载，但找不到下载记录，无法继续跟踪")
-  static let batchLost = EpisodeTrialProgress.unavailable("MoviePilot 找不到这次试看搜索的记录，可以重新发起")
-  static let downloadGone = EpisodeTrialProgress.unavailable("下载器、整理队列和整理记录里都找不到这次试看的下载，可以重新发起")
+  static let released = EpisodeTrialProgress.concluded(.modifiedElsewhere)
+  static let removedElsewhere = EpisodeTrialProgress.concluded(.removedElsewhere)
+  static let untrackable = EpisodeTrialProgress.concluded(.lostTrack("提交过下载，但找不到下载记录，无法继续跟踪"))
+  static let batchLost = EpisodeTrialProgress.concluded(.lostTrack("MoviePilot 找不到这次试看搜索的记录，可以重新发起"))
+  static let downloadGone = EpisodeTrialProgress.concluded(
+    .lostTrack("下载器、整理队列和整理记录里都找不到这次试看的下载，可以重新发起"))
   /// MoviePilot 每 5 分钟整理一次下载器里下完的任务；下载器、整理队列和整理记录连续这么久都明确查不到，
   /// 就当下载任务已经不在了（比如在下载器里删掉了）。留半小时，整理积压或下载器晚标记下完时不至于过早放弃。
   nonisolated static let missingDownloadLimit: TimeInterval = 30 * 60
@@ -51,7 +52,8 @@ final class EpisodeTrialService: ObservableObject {
   private var observations: [String: Observation] = [:]
   /// 已经结束的试看留下的结局：没有符合条件的资源、搜索失败或被跳过、在别处改过或删掉、已取消、整理失败等。
   /// 用户再次发起或这一集入库前一直显示，刷新不会把它改回「可以试看」。按账号保存，App 重启后仍在；从旧到新排列。
-  private var endings: [EpisodeTrialStoredEnding] = []
+  /// 卡片不刷新进度，没有进度时显示这里保存的结局。
+  @Published private(set) var endings: [EpisodeTrialStoredEnding] = []
   private var seasonRuns: [String: SeasonRun] = [:]
   private var driveLoop: Task<Void, Never>?
   private var isTornDown = false
@@ -314,7 +316,7 @@ final class EpisodeTrialService: ObservableObject {
       return current == .waitingForSubscription || current == .subscriptionPaused ? Self.slowPollInterval : nil
     }
     switch current {
-    case .waitingForLibrary, .submissionUnconfirmed: return Self.slowPollInterval
+    case .waitingForOrganization, .waitingForLibrary, .submissionUnconfirmed: return Self.slowPollInterval
     default: return Self.activePollInterval
     }
   }
@@ -485,7 +487,7 @@ final class EpisodeTrialService: ObservableObject {
     }
     if observations[key] != nil {
       let observed = try await observe(key, operation: operation)
-      if mayCreate, observed == .submissionUnconfirmed {
+      if mayCreate, observed == .submissionUnconfirmed || observed == .waitingForOrganization {
         // 用户重新发起：下载器、整理队列和整理记录都查不到的旧下载不再挡着，按服务器现状重新推导。
         observations[key] = nil
       } else if observations[key] != nil || !mayCreate {
@@ -684,7 +686,8 @@ final class EpisodeTrialService: ObservableObject {
         Logger.warning("[试看] \(failure.message)，收尾删除试看订阅 \(id)")
         credential.failure = failure.message
         try store(credential)
-        return try await finish(credential, batch: nil, outcome: .unavailable(failure.message), operation: operation)
+        return try await finish(
+          credential, batch: nil, outcome: .concluded(.failed(failure.message)), operation: operation)
       }
     }
 
@@ -703,7 +706,8 @@ final class EpisodeTrialService: ObservableObject {
         try store(credential)
       case .rejected:
         return try await finish(
-          credential, batch: nil, outcome: .unavailable("MoviePilot 拒绝试看补搜"), operation: operation)
+          credential, batch: nil, outcome: .concluded(.searchIncomplete("MoviePilot 拒绝试看补搜")),
+          operation: operation)
       case .unconfirmed:
         return .inProgress(.searching)
       }
@@ -798,7 +802,7 @@ final class EpisodeTrialService: ObservableObject {
   private func cancel(
     _ credential: EpisodeTrialCredential, row: Subscribe, operation: Operation
   ) async throws -> Driven {
-    let outcome = credential.failure.map(EpisodeTrialProgress.unavailable) ?? Self.cancelled
+    let outcome = credential.failure.map { EpisodeTrialProgress.concluded(.failed($0)) } ?? Self.cancelled
     // 回执和订阅行上都没有批次，就是补搜没被受理：MoviePilot 先把搜索任务入库才回执，订阅行显示最近一次任务。
     // 请求还在服务器上没处理完的话，删掉订阅后那次搜索在提交下载前查不到订阅，会自己放弃。
     guard let batchID = credential.batchID ?? Self.manualBatch(of: row) else {
@@ -850,10 +854,10 @@ final class EpisodeTrialService: ObservableObject {
 
   private static func outcome(of batch: EpisodeTrialBatch?) -> EpisodeTrialProgress {
     switch batch?.state {
-    case "completed": .noEligibleResource
+    case "completed": .concluded(.noEligibleResource)
     case "cancelled": EpisodeTrialService.cancelled
-    case "skipped": .unavailable("MoviePilot 跳过了本次试看搜索，可以重新发起")
-    default: .unavailable("MoviePilot 没有完成本次试看搜索，可以重新发起")
+    case "skipped": .concluded(.searchIncomplete("MoviePilot 跳过了本次试看搜索，可以重新发起"))
+    default: .concluded(.searchIncomplete("MoviePilot 没有完成本次试看搜索，可以重新发起"))
     }
   }
 
@@ -924,7 +928,8 @@ final class EpisodeTrialService: ObservableObject {
   }
 
   /// 按下载记录找到这次试看提交的下载，再看整理和下载器。找不到下载记录就结束观察；下载、整理队列和整理记录
-  /// 都暂时找不到时（下载器只列出还在下载的任务，下完到开始整理之间会这样）照常留着，放慢再看。
+  /// 都明确查不到时（下载器只列出还在下载的任务，下完到开始整理之间会这样）显示等待整理，照常留着，放慢再看；
+  /// 有一处没查成时说不清，显示没确认。
   private func observe(_ key: String, operation: Operation) async throws -> EpisodeTrialProgress {
     guard var observation = observations[key] else { return .notStarted }
     if observation.hash == nil {
@@ -942,7 +947,7 @@ final class EpisodeTrialService: ObservableObject {
 
     let transfer = try await transferRecord(hash: hash, observation: observation, operation: operation)
     if let transferred = transfer.record?.status {
-      guard transferred else { return conclude(key, .organizationFailed) }
+      guard transferred else { return conclude(key, .concluded(.organizationFailed)) }
       observations[key]?.missingSince = nil
       return .waitingForLibrary
     }
@@ -984,7 +989,7 @@ final class EpisodeTrialService: ObservableObject {
     guard now().timeIntervalSince(since) < Self.missingDownloadLimit else {
       return conclude(key, Self.downloadGone)
     }
-    return .submissionUnconfirmed
+    return .waitingForOrganization
   }
 
   /// 下载记录按时间倒序，最近几页。
@@ -1070,8 +1075,8 @@ final class EpisodeTrialService: ObservableObject {
   /// 媒体库里这一集可能刚有或刚没的时候才重读媒体服务器；搜索、下载中这一集进不了媒体库，按缓存查就够了。
   private static func libraryMayChange(_ progress: EpisodeTrialProgress?) -> Bool {
     switch progress {
-    case nil, .notStarted, .organizing, .organizationFailed, .waitingForLibrary, .ready,
-      .submissionUnconfirmed:
+    case nil, .notStarted, .waitingForOrganization, .organizing, .concluded(.organizationFailed), .waitingForLibrary,
+      .ready, .submissionUnconfirmed:
       true
     default: false
     }

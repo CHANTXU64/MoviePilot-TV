@@ -68,6 +68,8 @@ nonisolated enum AppSymbol {
   static let episodes = "list.number"
   /// 时间、日期（发布时间、首播日期、分享时间）。
   static let time = "clock"
+  /// 时长（单集时长）。
+  static let duration = "timer"
   static let size = "internaldrive"
   static let site = "globe"
   /// 搜索来源、媒体数据源。

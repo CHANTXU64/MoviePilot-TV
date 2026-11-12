@@ -487,7 +487,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       strict ? "strict" : "",
     ].joined(separator: "|")
     return try await episodeIndexes.value(for: key, forceRefresh: forceRefresh, validate: validateNotTornDown) {
-      try await Self.loadEpisodeIndex(context, on: connection, strict: strict)
+      [weak self] in
+      try await Self.loadEpisodeIndex(context, on: connection, strict: strict) { season in
+        guard let apiService = self?.apiService else { throw CancellationError() }
+        return try await apiService.fetchTmdbEpisodes(tmdbID: context.tmdbID, season: season, episodeGroup: nil)
+      }
     }
   }
 
@@ -504,8 +508,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 读一台服务器上这部剧的集。先找出对得上的整剧条目：按外部编号找到的（同一部剧可能在几个媒体库里各有一个）都留着，
   /// 再按入库记录里的 ID 补上那一份（见 `idFallbackStrictness`）；然后逐份读集。
   /// 某一步失败（按外部编号查找、按 ID 补查、某一份的集）时用读到的那些，并记下没读全；一份都没读到时抛出错误。
+  /// 有文件包含多集时，用 `defaultSeason` 读那几季的 MoviePilot 默认顺序集列表，确认文件覆盖了哪几集（见 `ServerEpisodeIndex`）；
+  /// 读不到时那几集无法确认，记为没读全，不当作服务器上没有。
   private static func loadEpisodeIndex(
-    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
+    defaultSeason: (Int) async throws -> [TmdbEpisode]
   ) async throws -> ServerEpisodeIndex {
     var failures: [Error] = []
     var series: [ServerMediaItem] = []
@@ -532,12 +539,31 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
     }
     if let failure = copyFailures.first, copyFailures.count == series.count { throw failure }
-    let incomplete = (failures + copyFailures).first.map { message(for: $0) }
+    var defaultSeasons: [Int: [TmdbEpisode]] = [:]
+    var numberingFailure: String?
+    for season in ServerEpisodeIndex.multiEpisodeSeasons(in: episodes).sorted() {
+      do {
+        let list = try await defaultSeason(season)
+        if list.isEmpty {
+          numberingFailure = numberingFailure ?? "MoviePilot 返回的第 \(season) 季集列表是空的，无法确认多集文件包含哪几集"
+        } else {
+          defaultSeasons[season] = list
+        }
+      } catch let error where !(error is CancellationError) {
+        numberingFailure =
+          numberingFailure ?? "没能从 MoviePilot 读取第 \(season) 季的集列表，无法确认多集文件包含哪几集：\(message(for: error))"
+      }
+    }
+    let incomplete = (failures + copyFailures).first.map { message(for: $0) } ?? numberingFailure
     if let incomplete {
       Logger.warning("[Playback] “\(connection.serverName)”上这部剧没有读全: \(incomplete)")
     }
+    if let summary = ServerEpisodeIndex.missingIDSummary(episodes) {
+      Logger.warning("[Playback] “\(connection.serverName)”上的《\(context.seriesName ?? "这部剧")》\(summary)")
+    }
     return ServerEpisodeIndex(
-      serverName: connection.serverName, hasSeries: !series.isEmpty, episodes: episodes, incompleteReason: incomplete)
+      serverName: connection.serverName, hasSeries: !series.isEmpty, episodes: episodes, incompleteReason: incomplete,
+      defaultSeasons: defaultSeasons)
   }
 
   /// 按集起播：先用缓存的集索引逐台试（入库查询给的所属服务器在前），第一台能播的为准。都不行时，重读缓存里有这部剧、
@@ -629,8 +655,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       let result = try await recovering { () -> EpisodeCandidate in
         guard let fresh = try await connection.item(id: candidate.id, timeout: nil), fresh.kind == .episode
         else { return .stale }
-        guard let freshID = fresh.tmdbEpisodeID else { return .missingEpisodeID }
-        guard freshID == tmdbEpisodeID else { return .stale }
+        guard fresh.tmdbEpisodeID != nil else { return .missingEpisodeID }
+        guard ServerEpisodeIndex.isSameEpisode(fresh, recorded: candidate, tmdbEpisodeID: tmdbEpisodeID) else {
+          return .stale
+        }
         return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
       }
       switch result {
@@ -672,7 +700,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     } catch let error where !(error is CancellationError) {
       throw requested.error ?? error
     }
-    let alternates = index.playableEpisodes(tmdbEpisodeID: tmdbEpisodeID).filter { $0.id != itemID }
+    // 要求的条目是包含多集的文件、记着的是第一集的编号时，上面按单集编号核对不过；按集索引记的样子再核对一次。
+    let alternates = index.playableEpisodes(tmdbEpisodeID: tmdbEpisodeID).filter {
+      $0.id != itemID || $0.tmdbEpisodeID != tmdbEpisodeID
+    }
     let alternate = try await Self.prepareFirstPlayable(
       alternates, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID)
     if let prepared = alternate.prepared { return prepared }

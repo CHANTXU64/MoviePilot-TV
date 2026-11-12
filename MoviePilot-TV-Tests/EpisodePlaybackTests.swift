@@ -147,6 +147,80 @@ final class EpisodePlaybackModelTests: XCTestCase {
     .loaded(ServerEpisodeIndex(serverName: server, hasSeries: hasSeries, episodes: episodes))
   }
 
+  private func multiFile(_ id: String, tmdb: Int, season: Int = 1, from first: Int, to last: Int) -> ServerMediaItem {
+    ServerMediaItem(
+      id: id, kind: .episode, seasonNumber: season, episodeNumber: first, episodeNumberEnd: last,
+      externalIDs: ["tmdb": String(tmdb)])
+  }
+
+  /// MoviePilot 默认顺序的一季：TMDB 单集 ID 从 `firstID` 起连续，集号从 1 起。
+  private func defaultSeason(_ season: Int = 1, count: Int, firstID: Int) -> [TmdbEpisode] {
+    (0..<count).map { TmdbEpisode(id: firstID + $0, episodeNumber: $0 + 1, seasonNumber: season) }
+  }
+
+  func testMultiEpisodeFileCoversTheLaterEpisodesWhenNumberingMatches() {
+    // S01E09-E10 只记了 E09 的 TMDB 单集 ID（109）；按默认顺序列表核对后，E10（110）也在这个文件里。
+    let file = multiFile("e9-10", tmdb: 109, from: 9, to: 10)
+    let index = ServerEpisodeIndex(
+      serverName: "emby", hasSeries: true, episodes: [serverEpisode("e8", tmdb: 108), file],
+      defaultSeasons: [1: defaultSeason(count: 12, firstID: 101)])
+    XCTAssertEqual(index.availability(of: 110), .playable(server: "emby"))
+    XCTAssertEqual(index.playableEpisode(tmdbEpisodeID: 110)?.id, "e9-10")
+    XCTAssertEqual(index.availability(of: 111), .notOnServer, "文件之外的集照常按没有")
+    XCTAssertEqual(index.identifiedFileCount, 2, "一个文件只算一次")
+    XCTAssertEqual(ServerEpisodeIndex.multiEpisodeSeasons(in: [serverEpisode("e8", tmdb: 108), file]), [1])
+  }
+
+  func testMultiEpisodeFileIsNotStretchedWhenNumberingDisagrees() {
+    // 文件的 TMDB 单集 ID 在默认顺序里是第 8 集，和文件名的 E09 对不上：不知道文件按哪套编号，不推算。
+    let file = multiFile("e9-10", tmdb: 108, from: 9, to: 10)
+    let index = ServerEpisodeIndex(
+      serverName: "emby", hasSeries: true, episodes: [file], defaultSeasons: [1: defaultSeason(count: 12, firstID: 101)])
+    XCTAssertEqual(index.availability(of: 110), .notOnServer)
+    XCTAssertEqual(index.availability(of: 109), .notOnServer)
+    let unread = ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: [multiFile("f", tmdb: 109, from: 9, to: 10)])
+    XCTAssertEqual(unread.availability(of: 110), .notOnServer, "没给默认顺序列表时不推算")
+  }
+
+  func testRereadMultiEpisodeFileIsAcceptedOnlyIfItIsUnchanged() {
+    let recorded = multiFile("e9-10", tmdb: 109, from: 9, to: 10)
+    XCTAssertTrue(ServerEpisodeIndex.isSameEpisode(recorded, recorded: recorded, tmdbEpisodeID: 110))
+    XCTAssertTrue(ServerEpisodeIndex.isSameEpisode(recorded, recorded: recorded, tmdbEpisodeID: 109))
+    XCTAssertFalse(
+      ServerEpisodeIndex.isSameEpisode(multiFile("e9-10", tmdb: 109, from: 9, to: 9), recorded: recorded, tmdbEpisodeID: 110),
+      "重新刮削后不再包含第 10 集")
+    XCTAssertFalse(
+      ServerEpisodeIndex.isSameEpisode(multiFile("e9-10", tmdb: 120, from: 9, to: 10), recorded: recorded, tmdbEpisodeID: 110),
+      "编号变了")
+    XCTAssertFalse(
+      ServerEpisodeIndex.isSameEpisode(recorded, recorded: serverEpisode("e9-10", tmdb: 109), tmdbEpisodeID: 110),
+      "集索引没记它包含多集（比如播放中换集时只知道条目 ID）")
+  }
+
+  func testMissingIDSummaryNamesTheIDKindsTheServerHas() {
+    let tvdbOnly = ServerMediaItem(
+      id: "e1", kind: .episode, seasonNumber: 1, episodeNumber: 1, externalIDs: ["tvdb": "9001", "imdb": "tt1"])
+    let tvdbMulti = ServerMediaItem(
+      id: "e2", kind: .episode, seasonNumber: 1, episodeNumber: 2, episodeNumberEnd: 3, externalIDs: ["tvdb": "9002"])
+    let bare = ServerMediaItem(id: "e4", kind: .episode)
+    let metadataOnly = ServerMediaItem(id: "e5", kind: .episode, seasonNumber: 1, episodeNumber: 5, hasFile: false)
+    XCTAssertEqual(
+      ServerEpisodeIndex.missingIDSummary([tvdbOnly, tvdbMulti, bare, metadataOnly, serverEpisode("e6", tmdb: 106)]),
+      "有 3 个文件没有 TMDB 单集编号（共 4 个文件；其中带季号集号的 2 个，包含多集的 1 个）；这些文件上的外部编号：imdb 1、tvdb 2")
+    XCTAssertEqual(
+      ServerEpisodeIndex.missingIDSummary([bare]),
+      "有 1 个文件没有 TMDB 单集编号（共 1 个文件；其中带季号集号的 0 个，包含多集的 0 个）；这些文件上没有任何外部编号")
+    XCTAssertNil(ServerEpisodeIndex.missingIDSummary([serverEpisode("e6", tmdb: 106), metadataOnly]), "都有编号时不写")
+  }
+
+  func testEpisodeWithItsOwnFileKeepsItBeforeTheMultiEpisodeFile() {
+    let index = ServerEpisodeIndex(
+      serverName: "emby", hasSeries: true,
+      episodes: [multiFile("e9-10", tmdb: 109, from: 9, to: 10), serverEpisode("e10", tmdb: 110)],
+      defaultSeasons: [1: defaultSeason(count: 12, firstID: 101)])
+    XCTAssertEqual(index.playableEpisodes(tmdbEpisodeID: 110).map(\.id), ["e10", "e9-10"], "先播这一集自己的文件")
+  }
+
   func testAvailabilityMatchesOnlyByTMDBEpisodeID() {
     let lookups = [
       index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("a3", tmdb: 3, hasFile: false)]),

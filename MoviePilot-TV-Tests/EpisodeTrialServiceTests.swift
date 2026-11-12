@@ -49,7 +49,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
       XCTAssertTrue(service.credentials.isEmpty)
 
@@ -61,8 +61,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
   func testUnfinishedSearchesExplainHowTheyEnded() async throws {
     for (state, expected) in [
-      ("failed", EpisodeTrialProgress.unavailable("MoviePilot 没有完成本次试看搜索，可以重新发起")),
-      ("skipped", .unavailable("MoviePilot 跳过了本次试看搜索，可以重新发起")),
+      ("failed", EpisodeTrialProgress.concluded(.searchIncomplete("MoviePilot 没有完成本次试看搜索，可以重新发起"))),
+      ("skipped", .concluded(.searchIncomplete("MoviePilot 跳过了本次试看搜索，可以重新发起"))),
     ] {
       backend.reset()
       try await withService { _, service, _, request in
@@ -106,7 +106,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.organize("target-hash", succeeded: false)
       let failed = await service.refresh(request)
-      XCTAssertEqual(failed, .organizationFailed)
+      XCTAssertEqual(failed, .concluded(.organizationFailed))
 
       let again = await service.start(request)
       XCTAssertEqual(again, .searching, "整理失败后可以重新发起")
@@ -139,7 +139,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.finishDownload("target-hash")
       let between = await service.refresh(request)
-      XCTAssertEqual(between, .submissionUnconfirmed, "下载器只列出还在下载的任务，暂时三处都找不到")
+      XCTAssertEqual(between, .waitingForOrganization, "下载器只列出还在下载的任务，三处都明确查不到时按等待整理显示")
       backend.moveToQueue("target-hash")
       let organizing = await service.refresh(request)
       XCTAssertEqual(organizing, .organizing)
@@ -270,7 +270,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
       // E03 的创建在服务器上排在后面才处理，E05 的创建按季去重拿回的是 E03 的占位。
       let mismatched = await service.start(e05)
-      XCTAssertEqual(mismatched, .unavailable("试看订阅的集数和要试看的这一集对不上，已停止试看"))
+      XCTAssertEqual(mismatched, .concluded(.failed("试看订阅的集数和要试看的这一集对不上，已停止试看")))
       XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker], "同季换集沿用标记")
       XCTAssertTrue(backend.mutations.contains("DELETE subscribe/81"), "E03 的占位核对后删掉")
       XCTAssertNil(backend.subscribe(81))
@@ -316,7 +316,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     backend.rejectSearch()
     try await withService { _, service, _, request in
       let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("MoviePilot 拒绝试看补搜"))
+      XCTAssertEqual(start, .concluded(.searchIncomplete("MoviePilot 拒绝试看补搜")))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
       XCTAssertTrue(service.credentials.isEmpty)
     }
@@ -363,7 +363,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       backend.edit(81, "year", "2024")
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
     }
   }
@@ -492,7 +492,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       defer { resumed.tearDown() }
       try await waitUntil { resumed.credentials.isEmpty }
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
-      XCTAssertEqual(resumed.progress[request.key], .noEligibleResource)
+      XCTAssertEqual(resumed.progress[request.key], .concluded(.noEligibleResource))
     }
   }
 
@@ -513,10 +513,10 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       let later = await service.refresh(request)
-      XCTAssertEqual(later, .noEligibleResource, "刷新不把结局改回可以试看")
-      XCTAssertEqual(service.progress[request.key], .noEligibleResource)
+      XCTAssertEqual(later, .concluded(.noEligibleResource), "刷新不把结局改回可以试看")
+      XCTAssertEqual(service.progress[request.key], .concluded(.noEligibleResource))
 
       let again = await service.start(request)
       XCTAssertEqual(again, .searching, "再次发起时才换掉结局")
@@ -529,12 +529,15 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       service.tearDown()
 
       let restarted = EpisodeTrialService(api: api, defaults: defaults) { _, _ in library.value }
+      XCTAssertTrue(restarted.progress.isEmpty)
+      XCTAssertEqual(
+        restarted.endings.map(\.key), [request.key], "卡片不刷新进度，重启后直接读保存的结局")
       let afterRestart = await restarted.refresh(request)
-      XCTAssertEqual(afterRestart, .noEligibleResource, "重启后结局还在")
+      XCTAssertEqual(afterRestart, .concluded(.noEligibleResource), "重启后结局还在")
 
       // 再次发起就清掉结局，即使这次因为媒体库读不出没有新建。
       library.value = .failed("媒体服务器读取失败")
@@ -635,7 +638,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.finishDownload("target-hash")
       let missing = await service.refresh(request)
-      XCTAssertEqual(missing, .submissionUnconfirmed, "整理前的空档照常等")
+      XCTAssertEqual(missing, .waitingForOrganization, "整理前的空档照常等")
 
       clock.advance(by: EpisodeTrialService.missingDownloadLimit)
       let gone = await service.refresh(request)
@@ -675,12 +678,12 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let sleeper = ScriptedSleeper(drive: [.proceed])
       try await withService(sleep: sleeper.sleep) { _, service, _, request in
         let start = await service.start(request)
-        XCTAssertEqual(start, .unavailable(message), name)
+        XCTAssertEqual(start, .concluded(.failed(message)), name)
         XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", name)
         XCTAssertFalse(backend.mutations.contains("POST subscribe/search/81"), name)
         XCTAssertTrue(service.credentials.isEmpty, "\(name)：不留下凭据定时重试")
         let later = await service.refresh(request)
-        XCTAssertEqual(later, .unavailable(message), name)
+        XCTAssertEqual(later, .concluded(.failed(message)), name)
       }
     }
   }
@@ -689,7 +692,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     backend.dropOnWrite("custom_words")
     try await withService { _, service, _, request in
       let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("MoviePilot 没有按试看规则保存这条订阅，已停止试看"))
+      XCTAssertEqual(start, .concluded(.failed("MoviePilot 没有按试看规则保存这条订阅，已停止试看")))
       XCTAssertFalse(backend.mutations.contains("POST subscribe/search/81"))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", "认得出是自己写过的订阅，删掉而不是留下带规则的暂停订阅")
       XCTAssertTrue(service.credentials.isEmpty)
