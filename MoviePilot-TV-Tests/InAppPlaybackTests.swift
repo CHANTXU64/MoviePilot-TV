@@ -16,6 +16,35 @@ final class InAppPlaybackModelTests: XCTestCase {
     try decode(EmbyItem.self, json).serverItem(defaultKind: defaultKind)
   }
 
+  func testLibraryScanFindsTheLibraryByWholeFoldersThenByCategory() {
+    let folders = [
+      MediaLibraryFolder(id: "tv2", paths: ["/media/电视剧2"]),
+      MediaLibraryFolder(id: "tv", paths: ["/mnt/old", "/media/电视剧/"]),
+      MediaLibraryFolder(id: "cn", paths: ["/data/国产剧"]),
+    ]
+    let file = "/media/电视剧/国产剧/试看 (2025)/Season 1/E01.mkv"
+    XCTAssertEqual(
+      MediaLibraryScan.library(for: TransferredFileLocation(path: file, category: "国产剧"), in: folders), "tv",
+      "路径落在哪个媒体库的文件夹里就是哪个；按整级目录比较，「电视剧2」不算")
+    XCTAssertEqual(
+      MediaLibraryScan.library(
+        for: TransferredFileLocation(path: "/downloads/国产剧/试看/E01.mkv", category: "国产剧"), in: folders),
+      "cn", "路径对不上时按二级分类目录找，和 MoviePilot 一样")
+    XCTAssertNil(
+      MediaLibraryScan.library(for: TransferredFileLocation(path: "/downloads/试看/E01.mkv", category: nil), in: folders),
+      "都对不上时交给调用方刷新整个库")
+    XCTAssertNil(MediaLibraryScan.library(for: TransferredFileLocation(path: nil, category: nil), in: folders))
+  }
+
+  func testEmbyMediaFoldersKeepTheReadableLibraries() throws {
+    let list = try decode(
+      EmbyMediaFolderList.self,
+      #"[{"Name":"坏的"},{"Id":"lib-tv","SubFolders":[{"Path":"/media/电视剧"},{"Name":"没路径"}]},{"Id":"lib-x"}]"#)
+    XCTAssertEqual(list.folders.map(\.id), ["lib-tv", "lib-x"], "个别媒体库读不出时只丢它")
+    XCTAssertEqual(list.folders.map(\.paths), [["/media/电视剧"], []], "没有文件夹的媒体库只是按路径找不到它")
+    XCTAssertThrowsError(try decode(EmbyMediaFolderList.self, #"[{"Name":"坏的"}]"#), "一个都读不出时无法识别")
+  }
+
   func testLibraryItemExpectationComparesTypeAndExternalID() throws {
     let movie = try embyItem(
       #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","IMDB":"tt0001","douban_id":" 35 "}}"#)
@@ -1845,6 +1874,101 @@ extension PlaybackCoordinatorTests {
   private static let multiEpisodeFile =
     #"{"Id":"e-s2e3-4","Type":"Episode","Name":"Emby 集名","SeriesName":"长风渡","ParentIndexNumber":2,"IndexNumber":3,"IndexNumberEnd":4,"ProviderIds":{"Tmdb":"555"}}"#
 
+  // MARK: 叫媒体服务器入库
+
+  private static let nas2 = "nas2.playback-tests.local"
+  private static let organizedFile = TransferredFileLocation(
+    path: "/media/电视剧/国产剧/长风渡 (2023)/Season 2/长风渡 - S02E05.mkv", category: "国产剧")
+
+  /// 两台 Emby：第一台有这部剧（s1），第二台没有。
+  private func configureTwoServersWithSeriesOnTheFirst() {
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "nas2", host: Self.nas2))]"
+    }
+  }
+
+  private func refreshRequests() -> [String] {
+    PlaybackURLProtocol.stub.requests().filter { $0.method == "POST" && $0.url.path.hasSuffix("Refresh") }.map {
+      "\($0.url.host ?? "")\($0.url.path)" + ($0.url.query.map { "?\($0)" } ?? "")
+    }
+  }
+
+  func testLibraryScanRefreshesOnlyTheSeriesWhereItIsAlreadyOnTheServer() async throws {
+    configureTwoServersWithSeriesOnTheFirst()
+    let coordinator = makeCoordinator(makeService())
+    await coordinator.requestLibraryScan(context: context(), scope: .located(Self.organizedFile))
+
+    XCTAssertEqual(refreshRequests(), ["\(Self.lan)/Items/s1/Refresh?Recursive=true"], "已有这部剧的服务器只刷新这部剧")
+    XCTAssertFalse(
+      PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/Library/SelectableMediaFolders") },
+      "有服务器已经有这部剧时，不去别的服务器找媒体库、也不刷新整个库")
+  }
+
+  func testLibraryScanWithoutTheSeriesRefreshesTheLibraryHoldingTheFile() async throws {
+    configureTwoServersWithSeriesOnTheFirst()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch = [:]
+      $0.mediaFolders = [
+        Self.lan: #"[{"Id":"lib-movie","SubFolders":[{"Path":"/media/电影"}]},{"Id":"lib-tv","SubFolders":[{"Path":"/media/电视剧"}]}]"#,
+        Self.nas2: #"[{"Id":"lib-other","SubFolders":[{"Path":"/volume1/影视"}]}]"#,
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await coordinator.requestLibraryScan(context: context(), scope: .located(Self.organizedFile))
+
+    XCTAssertEqual(
+      refreshRequests(), ["\(Self.lan)/Items/lib-tv/Refresh?Recursive=true"],
+      "哪台都没有这部剧时只刷新文件所在的媒体库，对不上的服务器不刷新")
+  }
+
+  func testLibraryScanRefreshesEveryWholeLibraryWhenThePathMatchesNowhere() async throws {
+    // Docker 里 MoviePilot 和 Emby 挂载的路径不同：照 MoviePilot 的做法刷新整个库。
+    configureTwoServersWithSeriesOnTheFirst()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch = [:]
+      $0.mediaFolders = [Self.lan: #"[{"Id":"lib-tv","SubFolders":[{"Path":"/data/tv"}]}]"#]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await coordinator.requestLibraryScan(
+      context: context(), scope: .located(TransferredFileLocation(path: Self.organizedFile.path, category: nil)))
+
+    XCTAssertEqual(refreshRequests(), ["\(Self.lan)/Library/Refresh", "\(Self.nas2)/Library/Refresh"])
+  }
+
+  func testLibraryScanSkipsAServerThatCannotBeReached() async throws {
+    configureTwoServersWithSeriesOnTheFirst()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch = [:]
+      $0.unreachableHosts = [Self.nas2]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await coordinator.requestLibraryScan(
+      context: context(), scope: .located(TransferredFileLocation(path: "/downloads/x.mkv", category: nil)))
+
+    XCTAssertEqual(refreshRequests(), ["\(Self.lan)/Library/Refresh"], "连不上的服务器查不到有没有这部剧，不刷新它")
+  }
+
+  func testLibraryScanNeedsInAppPlayback() async throws {
+    configureTwoServersWithSeriesOnTheFirst()
+    let coordinator = makeCoordinator(makeService(superUser: false))
+    await coordinator.requestLibraryScan(context: context(), scope: .located(Self.organizedFile))
+    await coordinator.requestLibraryScan(context: context(), scope: .everything)
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty)
+  }
+
+  func testWholeLibraryFallbackRefreshesEveryServerWithoutLookingForTheSeries() async throws {
+    // 试看服务的兜底：按位置刷新过还没入库，可能刷错了地方，有没有这部剧都每台刷新整个库。
+    configureTwoServersWithSeriesOnTheFirst()
+    let coordinator = makeCoordinator(makeService())
+    await coordinator.requestLibraryScan(context: context(), scope: .everything)
+
+    XCTAssertEqual(refreshRequests(), ["\(Self.lan)/Library/Refresh", "\(Self.nas2)/Library/Refresh"])
+    XCTAssertFalse(
+      PlaybackURLProtocol.stub.requests().contains { $0.method == "GET" && $0.url.path.hasSuffix("/Items") },
+      "兜底不再查这部剧在哪")
+  }
+
   private func configureMultiEpisodeFile() {
     configureDefaultOrderLibrary()
     PlaybackURLProtocol.stub.configure {
@@ -2934,6 +3058,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var transferHistory: String?
     /// MoviePilot `/mediaserver/exists` 的回包
     var mediaServerExists = #"{"success":true,"data":{"item":{}}}"#
+    /// host → Emby `Library/SelectableMediaFolders` 的回包（没有时是空数组）
+    var mediaFolders: [String: String] = [:]
     var usersGate: DispatchSemaphore?
     /// 卡住“开始播放”上报（模拟网络慢）
     var reportStartGate: DispatchSemaphore?
@@ -3061,6 +3187,8 @@ private final class PlaybackURLProtocol: URLProtocol {
     } else if path.hasSuffix("/Sessions/Playing/Stopped") {
       Self.pass(scenario.reportStoppedGate)
       respond(204, "")
+    } else if path.hasSuffix("/Library/SelectableMediaFolders") {
+      respond(200, scenario.mediaFolders[host] ?? "[]")
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
       if let status = scenario.searchStatus[host] {
         respond(status, "{}")

@@ -3,7 +3,7 @@ import SwiftUI
 /// 单集卡片剧照上的状态，画在剧照里面，随聚焦一起放大。
 ///
 /// - 能播放、个别集没法对应：左下角一个小图标。已入库的剧可能整季都能播，不能每张都大大地标。
-/// - 试看进行中：剧照压暗，正中一个圆环（拿得到下载进度时逐渐填满，否则转圈），下面是这一步的短字和几步的进度点。
+/// - 试看进行中：剧照压暗，正中是进度（拿得到下载进度时是逐渐填满的圆环，否则只转圈），下面是这一步的短字和几步的进度点。
 ///   同一季只能有一集在试看，一行里一般只有一张这样的卡。
 /// - 试看结局：剧照轻压暗，正中一个静止的图标和短字。不动表示已经停了，和进行中的圆环分开。
 struct EpisodeCardStatusOverlay: View {
@@ -24,6 +24,9 @@ struct EpisodeCardStatusOverlay: View {
           Text(indicator.label)
             .font(.caption.bold())
             .lineLimit(1)
+            // 下载剩余时间按小时写时字多，展开页的小卡片上缩一点也要放得下。
+            .minimumScaleFactor(0.75)
+            .padding(.horizontal, 12)
           if let stage = indicator.stage {
             EpisodeTrialStageDots(current: stage)
           }
@@ -64,7 +67,8 @@ struct EpisodeCardStatusOverlay: View {
   }
 }
 
-/// 试看进度的圆环：有下载进度时按进度填满、中间写百分比；没有时在同一个圆里转圈，不在圆环和进度条之间切换。
+/// 试看进度：有下载进度时是按进度填满的圆环、中间写百分比；没有时只转圈，不画空的底圈（空底圈像卡在 0%）。
+/// 两种都是圆形、占同样大小，从转圈换成圆环时不跳动。
 struct EpisodeTrialRing: View {
   let fraction: Double?
   let diameter: CGFloat
@@ -74,9 +78,9 @@ struct EpisodeTrialRing: View {
   var body: some View {
     let lineWidth = max(4, diameter * 0.08)
     ZStack {
-      Circle()
-        .stroke(Color.white.opacity(0.25), lineWidth: lineWidth)
       if let fraction {
+        Circle()
+          .stroke(Color.white.opacity(0.25), lineWidth: lineWidth)
         Circle()
           .trim(from: 0, to: max(0.02, fraction))
           .stroke(Color.white, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))

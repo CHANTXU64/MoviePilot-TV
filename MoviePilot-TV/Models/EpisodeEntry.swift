@@ -109,8 +109,10 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   var notPlayableMessage: String? {
     guard !offersPlayback else { return nil }
     if isCheckingAvailability { return "正在检查这一集能不能播放" }
-    if trial.isInProgress, let indicator = Self.trialIndicator(trial) {
-      return "这一集正在试看（\(indicator.label)），入库后才能播放"
+    if trial.isInProgress {
+      if trial.isStarting { return "正在发起试看，入库后才能播放" }
+      if trial.isCancelRequested || trial.progress == .cancelling { return "正在取消试看" }
+      return Self.inProgressMessage(trial)
     }
     return availability?.message ?? EpisodeAvailability.notOnServerMessage
   }
@@ -154,7 +156,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case attention
   }
 
-  /// 试看进行中显示的内容。`fraction` 是下载进度（0–1），拿不到时转圈。
+  /// 试看进行中卡片上显示的内容：`label` 是一行短字，`fraction` 是下载进度（0–1），拿不到时转圈。
   struct TrialIndicator: Equatable, Sendable {
     let label: String
     let fraction: Double?
@@ -172,18 +174,20 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   }
 
   static func trialIndicator(_ trial: EpisodeTrialSnapshot) -> TrialIndicator? {
-    if trial.isStarting { return TrialIndicator(label: "正在发起", fraction: nil, stage: nil) }
-    if trial.isCancelRequested { return TrialIndicator(label: "正在取消", fraction: nil, stage: nil) }
+    if trial.isStarting { return TrialIndicator(label: "正在发起试看", fraction: nil, stage: nil) }
+    if trial.isCancelRequested { return TrialIndicator(label: "正在取消试看", fraction: nil, stage: nil) }
     switch trial.progress {
-    case .searching: return TrialIndicator(label: "搜索资源", fraction: nil, stage: .search)
-    case .downloading(let progress):
+    case .searching: return TrialIndicator(label: "搜索资源中", fraction: nil, stage: .search)
+    case .downloading(let progress, let remaining):
       let fraction = progress.map { min(max($0 / 100, 0), 1) }
-      return TrialIndicator(label: "下载中", fraction: fraction, stage: .download)
+      // 写「下载还需」：剩余时间只算下载，下完还要整理和入库。
+      let label = remaining.map { "下载还需\(EpisodeTrialDownloadETA.text(seconds: $0))" } ?? "下载中"
+      return TrialIndicator(label: label, fraction: fraction, stage: .download)
     case .waitingForOrganization: return TrialIndicator(label: "等待整理", fraction: nil, stage: .organize)
     case .organizing: return TrialIndicator(label: "整理中", fraction: nil, stage: .organize)
     case .waitingForLibrary: return TrialIndicator(label: "等待入库", fraction: nil, stage: .library)
-    case .cancelling: return TrialIndicator(label: "正在取消", fraction: nil, stage: nil)
-    case .submissionUnconfirmed: return TrialIndicator(label: "确认中", fraction: nil, stage: nil)
+    case .cancelling: return TrialIndicator(label: "正在取消试看", fraction: nil, stage: nil)
+    case .submissionUnconfirmed: return TrialIndicator(label: "正在确认进度", fraction: nil, stage: nil)
     case nil, .notStarted, .unavailable:
       return trial.subscriptionID == nil ? nil : TrialIndicator(label: "试看中", fraction: nil, stage: nil)
     default: return nil
@@ -260,27 +264,15 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case recheck
   }
 
-  enum StepState: Equatable, Sendable {
-    case done, current, pending, failed
-  }
-
   struct Panel: Equatable, Sendable {
     /// 状态说明；nil 时面板只有简介（没有应用内播放）。
     let message: String?
-    let isWorking: Bool
-    /// 试看的几步；不涉及试看时为空。
-    let steps: [Step]
     let buttons: [PanelButton]
-
-    struct Step: Equatable, Sendable {
-      let stage: EpisodeTrialStage
-      let state: StepState
-    }
   }
 
   var panel: Panel {
     if let server = playableServer {
-      return Panel(message: "在“\(server)”上可以播放", isWorking: false, steps: [], buttons: [.play])
+      return Panel(message: "在“\(server)”上可以播放", buttons: [.play])
     }
     if let uncertain = uncertainMatch {
       var message = uncertain.match.message(server: uncertain.server)
@@ -289,80 +281,80 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       } else if trialBlock == nil {
         message += "。按季号集号算这一集已经在媒体服务器上，所以不提供试看"
       }
-      return Panel(message: message, isWorking: false, steps: [], buttons: [.play])
+      return Panel(message: message, buttons: [.play])
     }
     if trial.isStarting {
-      // 发起期间留着「试看」按钮（显示加载中），结果到了同一个位置换成「取消试看」，焦点不跳。
-      return Panel(
-        message: "正在发起试看", isWorking: true, steps: Self.steps(current: nil, failedAt: nil),
-        buttons: [.startTrial(isRetry: false)])
+      // 按「试看」后面板就关了，进度看卡片；发起期间再打开时留着「试看」按钮（显示加载中），
+      // 结果到了同一个位置换成「取消试看」，焦点不跳。
+      return Panel(message: "正在发起试看", buttons: [.startTrial(isRetry: false)])
     }
     if trial.isInProgress {
-      let indicator = Self.trialIndicator(trial)
-      let message: String
-      if trial.isCancelRequested || trial.progress == .cancelling {
-        message = EpisodeTrialHoldNotice.cancellingMessage
-      } else if trial.progress == .submissionUnconfirmed {
-        message = "暂时没确认试看到了哪一步，稍后会再查"
-      } else if trial.progress == .waitingForOrganization {
-        message = "下载器里已经看不到这个任务，多半已经下完，等 MoviePilot 整理"
-      } else if case .unavailable(let reason) = trial.progress {
-        message = reason
-      } else if let stage = indicator?.stage {
-        message = stage.detail
-      } else {
-        message = "这一集正在试看"
-      }
       let buttons: [PanelButton] = cancellableSubscriptionID.map { [.cancelTrial(subscriptionID: $0)] } ?? []
-      return Panel(
-        message: message, isWorking: true, steps: Self.steps(current: indicator?.stage, failedAt: nil),
-        buttons: buttons)
+      return Panel(message: Self.inProgressMessage(trial), buttons: buttons)
     }
     let retry: [PanelButton] = canStartTrial ? [.startTrial(isRetry: true)] : []
     if case .concluded(let ending) = trial.progress {
-      let failedAt = ending.stoppedStage
-      return Panel(
-        message: ending.message, isWorking: false,
-        steps: failedAt == nil ? [] : Self.steps(current: nil, failedAt: failedAt), buttons: retry)
+      return Panel(message: ending.message, buttons: retry)
     }
     if isCheckingAvailability {
-      return Panel(message: "正在检查这一集能不能播放", isWorking: true, steps: [], buttons: [])
+      return Panel(message: "正在检查这一集能不能播放", buttons: [])
     }
     guard let availability else {
       // 没有应用内播放：只看简介。
-      return Panel(message: nil, isWorking: false, steps: [], buttons: [])
+      return Panel(message: nil, buttons: [])
     }
     switch availability {
     case .playable, .uncertain:
-      return Panel(message: nil, isWorking: false, steps: [], buttons: [.play])
+      return Panel(message: nil, buttons: [.play])
     case .failed, .unmatched, .unidentifiable:
       // 读取失败、个别文件没编号、没法按编号对应：都不能确认服务器上没有，不提供试看。
-      return Panel(message: availability.message, isWorking: false, steps: [], buttons: [.recheck])
+      return Panel(message: availability.message, buttons: [.recheck])
     case .notOnServer:
       break
     }
     if let other = trial.otherEpisodeInSeason {
-      return Panel(
-        message: "这一季的第 \(other) 集正在试看，结束后才能试看这一集", isWorking: false, steps: [], buttons: [])
+      return Panel(message: "这一季的第 \(other) 集正在试看，结束后才能试看这一集", buttons: [])
     }
     switch trial.progress {
     case .seasonTrialInProgress, .waitingForSubscription, .subscriptionPaused:
-      return Panel(message: Self.startFeedback(trial.progress), isWorking: false, steps: [], buttons: [])
+      return Panel(message: Self.startFeedback(trial.progress), buttons: [])
     case .unavailable(let message):
-      return Panel(message: message, isWorking: false, steps: [], buttons: retry)
+      return Panel(message: message, buttons: retry)
     default:
       break
     }
     switch trialBlock {
     case .notAired(let date):
-      return Panel(
-        message: "媒体服务器上没有这一集。这一集 \(date) 播出，播出后才能试看", isWorking: false, steps: [], buttons: [])
+      return Panel(message: "媒体服务器上没有这一集。这一集 \(date) 播出，播出后才能试看", buttons: [])
     case .unsupported:
-      return Panel(message: EpisodeAvailability.notOnServerMessage, isWorking: false, steps: [], buttons: [])
+      return Panel(message: EpisodeAvailability.notOnServerMessage, buttons: [])
     case nil:
-      return Panel(
-        message: Self.trialIntroduction, isWorking: false, steps: Self.steps(current: nil, failedAt: nil),
-        buttons: [.startTrial(isRetry: false)])
+      return Panel(message: Self.trialIntroduction, buttons: [.startTrial(isRetry: false)])
+    }
+  }
+
+  /// 试看进行中面板里的一句话：现在到了哪一步，后面还要经过什么才能播。第一次用的人多半以为下完就能播。
+  static func inProgressMessage(_ trial: EpisodeTrialSnapshot) -> String {
+    if trial.isCancelRequested || trial.progress == .cancelling { return EpisodeTrialHoldNotice.cancellingMessage }
+    switch trial.progress {
+    case .searching:
+      return "正在搜索资源，找到后还要下载、整理和入库才能播放"
+    case .downloading(_, let remaining):
+      let percent = trialIndicator(trial)?.fraction.map { " \(Int(($0 * 100).rounded()))%" } ?? ""
+      let eta = remaining.map { "，还需\(EpisodeTrialDownloadETA.text(seconds: $0))" } ?? ""
+      return "正在下载\(percent)\(eta)，下完还要整理和入库才能播放"
+    case .waitingForOrganization:
+      return "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理"
+    case .organizing:
+      return "MoviePilot 正在整理，整理完还要入库才能播放"
+    case .waitingForLibrary:
+      return "已经整理好，在等媒体服务器入库"
+    case .submissionUnconfirmed:
+      return "暂时没确认试看到了哪一步，稍后会再查"
+    case .unavailable(let reason):
+      return reason
+    default:
+      return "这一集正在试看，入库后才能播放"
     }
   }
 
@@ -377,23 +369,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     }
   }
 
-  static let trialIntroduction =
-    "媒体服务器上没有这一集。试看会在 MoviePilot 建一条只针对这一集的临时订阅，搜索结束后自动删除订阅；下载的文件会留在媒体库里。"
-
-  /// 试看的几步：当前这一步之前的算完成；`failedAt` 那一步停下，之前的算完成。都没有时全部未开始。
-  static func steps(current: EpisodeTrialStage?, failedAt: EpisodeTrialStage?) -> [Panel.Step] {
-    EpisodeTrialStage.allCases.map { stage in
-      let state: StepState
-      if let failedAt {
-        state = stage < failedAt ? .done : stage == failedAt ? .failed : .pending
-      } else if let current {
-        state = stage < current ? .done : stage == current ? .current : .pending
-      } else {
-        state = .pending
-      }
-      return Panel.Step(stage: stage, state: state)
-    }
-  }
+  static let trialIntroduction = "媒体服务器上没有这一集。试看会下载这一集，下好的文件会留在媒体库里"
 
   // MARK: 播出日期
 
@@ -416,17 +392,6 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     guard bytes.count == 10, bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-") else { return false }
     return bytes.enumerated().allSatisfy { index, byte in
       index == 4 || index == 7 || (48...57).contains(byte)
-    }
-  }
-}
-
-extension EpisodeTrialEnding {
-  /// 试看停在了哪一步，面板据此标出失败的那一步；说不清时为 nil。
-  nonisolated var stoppedStage: EpisodeTrialStage? {
-    switch self {
-    case .noEligibleResource, .searchIncomplete, .failed: .search
-    case .organizationFailed: .organize
-    case .cancelled, .lostTrack, .removedElsewhere, .modifiedElsewhere: nil
     }
   }
 }

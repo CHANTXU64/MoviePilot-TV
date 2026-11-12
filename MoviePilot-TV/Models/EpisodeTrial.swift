@@ -215,8 +215,8 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case cancelling
   /// 发出的请求没拿到回执，或有一处没查成，状态说不清。
   case submissionUnconfirmed
-  /// `progress` 是下载器报的百分比（0–100）。
-  case downloading(progress: Double?)
+  /// `progress` 是下载器报的百分比（0–100），`remainingSeconds` 是 TV 按平均速度估的还要多久（见 `EpisodeTrialDownloadETA`）。
+  case downloading(progress: Double?, remainingSeconds: Int? = nil)
   /// 下载器、整理队列和整理记录都明确查不到这个下载：下载器只列出还在下载的任务，通常是已经下完、等 MoviePilot 整理。
   /// 一直查不到时按 `EpisodeTrialService.missingDownloadLimit` 结束。
   case waitingForOrganization
@@ -257,30 +257,41 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   }
 }
 
-/// 试看从发起到能播放要经过的几步。第一次用的人多半以为下载完就能播，页面上把后面的整理和入库也列出来。
+/// 试看的下载还要多久，按 TV 开始看到这个下载以来的平均速度估：已经下了多久 ÷ 这段时间下完的进度 × 还剩的进度。
+/// 不用 MoviePilot 下载器接口的 `left_time`：qBittorrent 那边拿种子全部文件的大小（含整季包里没选的集）减已下载量，
+/// 再除以这一刻的速度，快下完时反而越来越长。起点不用下载记录的时间：那是 MoviePilot 服务器的本地时间，不带时区。
+nonisolated struct EpisodeTrialDownloadETA: Equatable, Sendable {
+  /// 看了这么久才估：刚开始的样本太少，估出来跳得厉害。
+  static let minimumSampleSeconds: TimeInterval = 30
+
+  /// 开始看的时间和当时的进度（0–100）。
+  let since: Date
+  let startProgress: Double
+
+  /// 还要多少秒；看得还不够久、这段时间进度没动或已经下完时为 nil，不显示剩余时间。
+  func remainingSeconds(progress: Double, now: Date) -> Int? {
+    let elapsed = now.timeIntervalSince(since)
+    let done = progress - startProgress
+    guard elapsed >= Self.minimumSampleSeconds, done > 0, progress < 100 else { return nil }
+    return Int((elapsed * (100 - progress) / done).rounded(.up))
+  }
+
+  /// 按分钟向上取整：「不到 1 分钟」「约 13 分钟」「约 1 小时 5 分钟」。
+  static func text(seconds: Int) -> String {
+    guard seconds >= 60 else { return "不到 1 分钟" }
+    let minutes = (seconds + 59) / 60
+    guard minutes >= 60 else { return "约 \(minutes) 分钟" }
+    let hours = minutes / 60
+    let rest = minutes % 60
+    return rest == 0 ? "约 \(hours) 小时" : "约 \(hours) 小时 \(rest) 分钟"
+  }
+}
+
+/// 试看从发起到能播放要经过的几步，卡片上画成几个进度点。第一次用的人多半以为下载完就能播，后面的整理和入库也要算进去。
 nonisolated enum EpisodeTrialStage: Int, CaseIterable, Comparable, Sendable {
   case search, download, organize, library
 
   static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
-
-  var title: String {
-    switch self {
-    case .search: "搜索资源"
-    case .download: "下载"
-    case .organize: "整理"
-    case .library: "入库"
-    }
-  }
-
-  /// 这一步在做什么，单集面板里当前这一步下面显示。
-  var detail: String {
-    switch self {
-    case .search: "MoviePilot 按试看规则在站点里搜这一集"
-    case .download: "下载器正在下载这一集"
-    case .organize: "下载完后，MoviePilot 定时把文件整理进媒体库目录"
-    case .library: "媒体服务器扫描到新文件后就能播放"
-    }
-  }
 }
 
 /// 试看没能看成的结局，按原因分类：卡片上显示短字，单集面板里显示完整说明。随账号保存。
@@ -311,11 +322,11 @@ nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
   /// 单集面板里的完整说明。
   var message: String {
     switch self {
-    case .cancelled: "已取消试看，可以重新发起"
-    case .noEligibleResource: "没有找到符合试看规则的资源，可以调整试看规则后重新发起"
+    case .cancelled: "已取消试看，可以重新试看"
+    case .noEligibleResource: "没有找到符合试看规则的资源，可以在设置里调整试看订阅规则后重新试看"
     case .searchIncomplete(let message), .lostTrack(let message), .failed(let message): message
     case .organizationFailed: "下载完成了，但 MoviePilot 整理失败，可以在整理记录里查看原因"
-    case .removedElsewhere: "试看订阅已被删除，可以重新发起"
+    case .removedElsewhere: "试看订阅在别处被删除了，可以重新试看"
     case .modifiedElsewhere: "试看订阅已在别处修改，不再自动处理"
     }
   }
@@ -324,7 +335,7 @@ nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
   var shortLabel: String? {
     switch self {
     case .cancelled: nil
-    case .noEligibleResource: "无资源"
+    case .noEligibleResource: "没找到资源"
     case .searchIncomplete: "搜索失败"
     case .organizationFailed: "整理失败"
     case .lostTrack: "无法跟踪"
@@ -523,10 +534,12 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let downloader: String?
   let status: Bool?
   let note: Note?
+  /// 整理后的位置（只有整理记录有）：叫媒体服务器入库时按它找媒体库。
+  let location: TransferredFileLocation
 
   private enum CodingKeys: String, CodingKey {
     case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
-    case note
+    case note, dest, dest_fileitem, category
   }
 
   init(from decoder: Decoder) throws {
@@ -542,6 +555,11 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     downloader = try? values.decodeIfPresent(String.self, forKey: .downloader)
     status = try? values.decodeIfPresent(Bool.self, forKey: .status)
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
+    let fileItem = (try? values.decodeIfPresent(MoviePilotFileItem.self, forKey: .dest_fileitem)) ?? nil
+    let dest = (try? values.decodeIfPresent(String.self, forKey: .dest)) ?? nil
+    location = TransferredFileLocation(
+      path: trimmedNonEmpty([fileItem?.path, dest]),
+      category: trimmedNonEmpty([(try? values.decodeIfPresent(String.self, forKey: .category)) ?? nil]))
   }
 
   var subscriptionID: Int? { note?.subscription_download?.subscription_id }

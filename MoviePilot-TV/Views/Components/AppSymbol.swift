@@ -99,7 +99,7 @@ nonisolated enum AppSymbol {
   static let subscriptionPaused = pause
   static let subscriptionPending = "hourglass"
   /// 单集试看用的临时订阅。
-  static let subscriptionTrial = "eye"
+  static let subscriptionTrial = "ticket"
   /// 正在加载（如详情页按季订阅按钮在等季信息）。
   static let loading = "ellipsis.circle"
   /// 对勾表示「是 / 已完成」。

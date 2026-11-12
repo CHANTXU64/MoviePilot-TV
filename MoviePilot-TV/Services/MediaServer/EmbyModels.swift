@@ -308,6 +308,58 @@ nonisolated struct EmbyItemsPage: Decodable, Sendable {
   }
 }
 
+/// `Library/SelectableMediaFolders` 里的一个媒体库：`Id` 用来刷新这个媒体库，`SubFolders` 的 `Path` 是 Emby 看到的文件夹。
+/// MoviePilot 叫 Emby 刷新时按这个接口找媒体库。
+nonisolated struct EmbyMediaFolder: Decodable, Sendable {
+  let id: String
+  let paths: [String]
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case subFolders = "SubFolders"
+  }
+
+  private struct SubFolder: Decodable, Sendable {
+    let path: String?
+    private enum CodingKeys: String, CodingKey { case path = "Path" }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    guard let id = trimmedNonEmpty([try container.decode(String.self, forKey: .id)]) else {
+      throw DecodingError.dataCorruptedError(forKey: .id, in: container, debugDescription: "媒体库没有 ID")
+    }
+    self.id = id
+    // 文件夹读不出时这个媒体库还能整库刷新，只是按路径找不到它。
+    let subFolders = (try? container.decodeIfPresent([LossyDecodable<SubFolder>].self, forKey: .subFolders)) ?? nil
+    paths = (subFolders ?? []).compactMap { $0.value?.path.flatMap { trimmedNonEmpty([$0]) } }
+  }
+
+  /// 整份列表：个别媒体库读不出时丢掉它，其余照常用。
+  static func list(from decoder: Decoder) throws -> [EmbyMediaFolder] {
+    var container = try decoder.unkeyedContainer()
+    var folders: [EmbyMediaFolder] = []
+    var count = 0
+    while !container.isAtEnd {
+      count += 1
+      if let folder = try container.decode(LossyDecodable<EmbyMediaFolder>.self).value { folders.append(folder) }
+    }
+    guard count == 0 || !folders.isEmpty else {
+      throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "媒体库全部无法解码"))
+    }
+    return folders
+  }
+}
+
+/// `Library/SelectableMediaFolders` 的回包（顶层是数组）。
+nonisolated struct EmbyMediaFolderList: Decodable, Sendable {
+  let folders: [EmbyMediaFolder]
+
+  init(from decoder: Decoder) throws {
+    folders = try EmbyMediaFolder.list(from: decoder)
+  }
+}
+
 /// 数组里单个元素坏掉时只丢弃该元素。
 nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodable, Sendable {
   let value: Value?

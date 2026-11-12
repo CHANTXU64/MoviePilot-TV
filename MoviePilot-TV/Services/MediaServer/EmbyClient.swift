@@ -224,6 +224,22 @@ struct EmbyClient {
       url(["Users", userID, "Items", itemID, "UserData"]), method: "POST", body: .object(userData))
   }
 
+  /// 可选的媒体库和各自的文件夹（MoviePilot 叫 Emby 刷新时也按它找媒体库）。
+  func mediaFolders() async throws -> [EmbyMediaFolder] {
+    let data = try await send(url(["Library", "SelectableMediaFolders"]))
+    return try await Self.decode(EmbyMediaFolderList.self, from: data).folders
+  }
+
+  /// 重新扫描一个条目（一部剧或一个媒体库）下面的文件，参数同 MoviePilot。Emby 受理后在后台扫描。
+  func refreshItem(id: String) async throws {
+    _ = try await send(url(["Items", id, "Refresh"], query: ["Recursive": "true"]), method: "POST")
+  }
+
+  /// 扫描整个库（所有媒体库）。
+  func refreshAllLibraries() async throws {
+    _ = try await send(url(["Library", "Refresh"]), method: "POST")
+  }
+
   // MARK: - 传输
 
   private static let encoder = JSONEncoder()

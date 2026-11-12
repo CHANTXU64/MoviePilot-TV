@@ -107,17 +107,6 @@ nonisolated struct EpisodeTransferRecord: Decodable, Equatable, Sendable {
     case status, date
   }
 
-  private struct FileItem: Decodable {
-    let path: String?
-
-    init(from decoder: Decoder) throws {
-      let container = try decoder.container(keyedBy: CodingKeys.self)
-      path = try? container.decodeIfPresent(String.self, forKey: .path)
-    }
-
-    private enum CodingKeys: String, CodingKey { case path }
-  }
-
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     mediaSource = try? container.decodeIfPresent(String.self, forKey: .mediaSource)
@@ -127,7 +116,7 @@ nonisolated struct EpisodeTransferRecord: Decodable, Equatable, Sendable {
     seasons = try? container.decodeIfPresent(String.self, forKey: .seasons)
     episodes = try? container.decodeIfPresent(String.self, forKey: .episodes)
     episodeGroup = try? container.decodeIfPresent(String.self, forKey: .episodeGroup)
-    let fileItem = try? container.decodeIfPresent(FileItem.self, forKey: .destFileItem)
+    let fileItem = try? container.decodeIfPresent(MoviePilotFileItem.self, forKey: .destFileItem)
     let dest = try? container.decodeIfPresent(String.self, forKey: .dest)
     path = trimmedNonEmpty([fileItem?.path, dest])
     let status = try? container.decodeIfPresent(FlexibleBool.self, forKey: .status)
@@ -577,4 +566,16 @@ enum EpisodeMatchLoader {
     }
     return index
   }
+}
+
+/// MoviePilot 记录里的文件（`dest_fileitem` 等），只取路径。路径读不出时为 nil，不影响记录的其他字段。
+nonisolated struct MoviePilotFileItem: Decodable, Sendable {
+  let path: String?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    path = try? container.decodeIfPresent(String.self, forKey: .path)
+  }
+
+  private enum CodingKeys: String, CodingKey { case path }
 }

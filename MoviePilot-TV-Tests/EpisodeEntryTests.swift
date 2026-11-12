@@ -40,8 +40,7 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(missing.menuActions, [.startTrial, .details])
     XCTAssertNil(missing.cardStatus, "不在库是常态，卡片上不标")
     XCTAssertEqual(missing.panel.buttons, [.startTrial(isRetry: false)])
-    XCTAssertEqual(missing.panel.message, EpisodeEntry.trialIntroduction)
-    XCTAssertEqual(missing.panel.steps.map(\.state), [.pending, .pending, .pending, .pending], "发起前先列出要经过的几步")
+    XCTAssertEqual(missing.panel.message, "媒体服务器上没有这一集。试看会下载这一集，下好的文件会留在媒体库里")
     XCTAssertEqual(missing.notPlayableMessage, EpisodeAvailability.notOnServerMessage)
   }
 
@@ -96,23 +95,67 @@ final class EpisodeEntryTests: XCTestCase {
       .trialInProgress(EpisodeEntry.TrialIndicator(label: "下载中", fraction: 0.42, stage: .download)))
     XCTAssertEqual(downloading.menuActions, [.cancelTrial(subscriptionID: 81), .details])
     XCTAssertEqual(downloading.panel.buttons, [.cancelTrial(subscriptionID: 81)])
-    XCTAssertEqual(downloading.panel.steps.map(\.state), [.done, .current, .pending, .pending])
+    XCTAssertEqual(downloading.panel.message, "正在下载 42%，下完还要整理和入库才能播放")
     XCTAssertFalse(downloading.canStartTrial)
     XCTAssertEqual(downloading.accessibilityStatus, "试看中，下载中，42%")
-    XCTAssertEqual(downloading.notPlayableMessage, "这一集正在试看（下载中），入库后才能播放")
+    XCTAssertEqual(downloading.notPlayableMessage, "正在下载 42%，下完还要整理和入库才能播放", "按播放键时说明还要多久、还差哪几步")
   }
 
-  func testTheStepsAfterDownloadAreShownSoDownloadedIsNotMistakenForPlayable() {
+  func testThePanelSaysWhatIsLeftSoDownloadedIsNotMistakenForPlayable() {
+    // 面板不列整个流程，只写现在这一步，和后面还要经过什么才能播。
+    let searching = entry(.notOnServer, trial: trial(.searching, subscriptionID: 81))
+    XCTAssertEqual(searching.panel.message, "正在搜索资源，找到后还要下载、整理和入库才能播放")
+
+    let unknownProgress = entry(.notOnServer, trial: trial(.downloading(progress: nil)))
+    XCTAssertEqual(unknownProgress.panel.message, "正在下载，下完还要整理和入库才能播放")
+
     let waiting = entry(.notOnServer, trial: trial(.waitingForOrganization, subscriptionID: 81))
     XCTAssertEqual(
       waiting.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "等待整理", fraction: nil, stage: .organize)))
-    XCTAssertEqual(waiting.panel.steps.map(\.state), [.done, .done, .current, .pending])
-    XCTAssertEqual(waiting.panel.message, "下载器里已经看不到这个任务，多半已经下完，等 MoviePilot 整理")
+    XCTAssertEqual(waiting.panel.message, "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理")
+
+    let organizing = entry(.notOnServer, trial: trial(.organizing))
+    XCTAssertEqual(organizing.panel.message, "MoviePilot 正在整理，整理完还要入库才能播放")
 
     let library = entry(.notOnServer, trial: trial(.waitingForLibrary))
-    XCTAssertEqual(library.panel.steps.map(\.state), [.done, .done, .done, .current])
-    XCTAssertEqual(library.panel.message, EpisodeTrialStage.library.detail)
+    XCTAssertEqual(library.panel.message, "已经整理好，在等媒体服务器入库")
     XCTAssertEqual(library.panel.buttons, [], "订阅已删、只在跟下载时没有可取消的")
+  }
+
+  func testCardLabelsSayWhichStepTheTrialIsAt() {
+    XCTAssertEqual(EpisodeEntry.trialIndicator(trial(.searching))?.label, "搜索资源中")
+    XCTAssertEqual(EpisodeEntry.trialIndicator(trial(.submissionUnconfirmed))?.label, "正在确认进度")
+    XCTAssertEqual(EpisodeEntry.trialIndicator(trial(.cancelling))?.label, "正在取消试看")
+    XCTAssertEqual(EpisodeEntry.trialIndicator(trial(.downloading(progress: 42)))?.label, "下载中", "没有速度时不估时间")
+  }
+
+  func testDownloadShowsHowLongTheDownloadStillTakes() {
+    let downloading = entry(.notOnServer, trial: trial(.downloading(progress: 42, remainingSeconds: 725), subscriptionID: 81))
+    XCTAssertEqual(
+      downloading.cardStatus,
+      .trialInProgress(EpisodeEntry.TrialIndicator(label: "下载还需约 13 分钟", fraction: 0.42, stage: .download)),
+      "写明是下载还要多久，不是还要多久能播")
+    XCTAssertEqual(downloading.panel.message, "正在下载 42%，还需约 13 分钟，下完还要整理和入库才能播放")
+    XCTAssertEqual(downloading.accessibilityStatus, "试看中，下载还需约 13 分钟，42%")
+  }
+
+  func testRemainingTimeComesFromTheAverageSpeedSinceTheDownloadWasFirstSeen() {
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    let eta = EpisodeTrialDownloadETA(since: start, startProgress: 40)
+    // 60 秒下了 10%，还剩 50%：约 300 秒。
+    XCTAssertEqual(eta.remainingSeconds(progress: 50, now: start.addingTimeInterval(60)), 300)
+    XCTAssertNil(eta.remainingSeconds(progress: 45, now: start.addingTimeInterval(20)), "刚开始样本太少，先不估")
+    XCTAssertNil(eta.remainingSeconds(progress: 40, now: start.addingTimeInterval(120)), "这段时间进度没动，估不出来")
+    XCTAssertNil(eta.remainingSeconds(progress: 100, now: start.addingTimeInterval(120)), "已经下完")
+  }
+
+  func testRemainingTimeIsRoundedUpToMinutes() {
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 0), "不到 1 分钟")
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 59), "不到 1 分钟")
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 60), "约 1 分钟")
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 725), "约 13 分钟", "按分钟向上取整")
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 3600), "约 1 小时")
+    XCTAssertEqual(EpisodeTrialDownloadETA.text(seconds: 3723), "约 1 小时 3 分钟")
   }
 
   func testDownloadProgressIsClampedToTheRing() {
@@ -152,13 +195,17 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(starting.panel.buttons, [.startTrial(isRetry: false)], "按钮留在原位显示加载中")
     XCTAssertEqual(starting.menuActions, [.details], "发起中不能再发起")
     XCTAssertEqual(
-      starting.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "正在发起", fraction: nil, stage: nil)))
+      starting.cardStatus,
+      .trialInProgress(EpisodeEntry.TrialIndicator(label: "正在发起试看", fraction: nil, stage: nil)))
+    XCTAssertEqual(starting.notPlayableMessage, "正在发起试看，入库后才能播放")
   }
 
   func testCancellingIsShownAndCannotBeCancelledAgain() {
     let cancelling = entry(.notOnServer, trial: trial(.searching, subscriptionID: 81, cancelRequested: true))
     XCTAssertEqual(
-      cancelling.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "正在取消", fraction: nil, stage: nil)))
+      cancelling.cardStatus,
+      .trialInProgress(EpisodeEntry.TrialIndicator(label: "正在取消试看", fraction: nil, stage: nil)))
+    XCTAssertEqual(cancelling.notPlayableMessage, "正在取消试看")
     XCTAssertEqual(cancelling.menuActions, [.details])
     XCTAssertEqual(cancelling.panel.message, EpisodeTrialHoldNotice.cancellingMessage)
     XCTAssertEqual(cancelling.panel.buttons, [])
@@ -216,23 +263,22 @@ final class EpisodeEntryTests: XCTestCase {
   func testEndingsAreShownInTheMiddleOfTheCardExceptTheUsersOwnCancel() {
     let noResource = entry(.notOnServer, trial: trial(.concluded(.noEligibleResource)))
     XCTAssertEqual(noResource.cardStatus, .trialStopped(.noEligibleResource))
-    XCTAssertEqual(noResource.menuActions, [.startTrial, .details], "结束后可以重新发起")
+    XCTAssertEqual(noResource.menuActions, [.startTrial, .details], "结束后可以重新试看")
     XCTAssertEqual(noResource.panel.buttons, [.startTrial(isRetry: true)])
-    XCTAssertEqual(noResource.panel.steps.map(\.state), [.failed, .pending, .pending, .pending])
     XCTAssertEqual(noResource.panel.message, EpisodeTrialEnding.noEligibleResource.message)
 
     let organize = entry(.notOnServer, trial: trial(.concluded(.organizationFailed)))
-    XCTAssertEqual(organize.panel.steps.map(\.state), [.done, .done, .failed, .pending])
+    XCTAssertEqual(organize.panel.message, EpisodeTrialEnding.organizationFailed.message)
 
     let cancelled = entry(.notOnServer, trial: trial(.concluded(.cancelled)))
     XCTAssertNil(cancelled.cardStatus, "用户自己取消是预期的结果，卡片上不提示")
-    XCTAssertEqual(cancelled.panel.message, "已取消试看，可以重新发起")
+    XCTAssertEqual(cancelled.panel.message, "已取消试看，可以重新试看")
     XCTAssertEqual(cancelled.panel.buttons, [.startTrial(isRetry: true)])
   }
 
   func testEachEndingHasItsOwnShortLabel() {
     let labels: [(EpisodeTrialEnding, String?)] = [
-      (.cancelled, nil), (.noEligibleResource, "无资源"), (.searchIncomplete("跳过"), "搜索失败"),
+      (.cancelled, nil), (.noEligibleResource, "没找到资源"), (.searchIncomplete("跳过"), "搜索失败"),
       (.organizationFailed, "整理失败"), (.lostTrack("找不到"), "无法跟踪"), (.removedElsewhere, "订阅已删"),
       (.modifiedElsewhere, "订阅已改"), (.failed("集数对不上"), "试看失败"),
     ]

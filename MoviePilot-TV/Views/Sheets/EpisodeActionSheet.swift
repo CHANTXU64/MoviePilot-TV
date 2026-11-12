@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 单集面板：统一阅读 Sheet 的两栏形式。左栏是剧名、时长和播出日期，下面是这一集能不能播、试看到了哪一步，
+/// 单集面板：统一阅读 Sheet 的两栏形式。左栏是剧名、时长和播出日期，下面一句话说明这一集能不能播、试看到了哪一步，
 /// 以及能做的操作；右栏是简介。没有应用内播放时左栏只有信息，和原来的单集详情一样。
 ///
-/// 内容随集列表的状态实时变化（打开期间刷新试看进度），操作交给集列表执行：播放要先关掉面板再起播。
+/// 内容随集列表的状态实时变化（打开期间刷新试看进度），操作交给集列表执行：播放要先关掉面板再起播，
+/// 按「试看」后面板也关掉，进度看卡片正中。
 struct EpisodeActionSheet: View {
   let episode: MoviePilotEpisode
   let seriesTitle: String?
@@ -47,10 +48,6 @@ struct EpisodeActionSheet: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 32)
         }
-        if !panel.steps.isEmpty {
-          EpisodeTrialStepList(steps: panel.steps, currentNote: currentStepNote)
-            .padding(.top, 28)
-        }
       }
       .accessibilityElement(children: .combine)
 
@@ -79,13 +76,6 @@ struct EpisodeActionSheet: View {
       .foregroundStyle(.secondary)
       .monospacedDigit()
     }
-  }
-
-  /// 当前这一步旁边的小字：下载进度，或「等待整理」这类比步骤名更具体的说法。
-  private var currentStepNote: String? {
-    guard entry.trial.isInProgress, let indicator = EpisodeEntry.trialIndicator(entry.trial) else { return nil }
-    if let fraction = indicator.fraction { return "\(Int((fraction * 100).rounded()))%" }
-    return indicator.label == indicator.stage?.title ? nil : indicator.label
   }
 
   private func actionButton(_ button: EpisodeEntry.PanelButton, index: Int) -> some View {
@@ -119,60 +109,5 @@ struct EpisodeActionSheet: View {
       onAction(button)
     }
     .focused($focusedButton, equals: index)
-  }
-}
-
-/// 试看要经过的几步，最后一行提醒入库后才能播放：第一次用的人多半以为下载完就能播。
-struct EpisodeTrialStepList: View {
-  let steps: [EpisodeEntry.Panel.Step]
-  var currentNote: String?
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      ForEach(steps, id: \.stage) { step in
-        HStack(spacing: 14) {
-          marker(step.state)
-          Text(step.stage.title)
-            .fontWeight(step.state == .current ? .bold : .regular)
-            .foregroundStyle(step.state == .pending ? .secondary : .primary)
-          if step.state == .current, let currentNote {
-            Text(currentNote)
-              .foregroundStyle(.secondary)
-              .monospacedDigit()
-          }
-        }
-      }
-      HStack(spacing: 14) {
-        Image(systemName: AppSymbol.play)
-          .frame(width: Self.markerWidth)
-          .foregroundStyle(.secondary)
-        Text("入库后可以播放")
-          .foregroundStyle(.secondary)
-      }
-    }
-    .font(.caption)
-  }
-
-  private static let markerWidth: CGFloat = 34
-
-  @ViewBuilder
-  private func marker(_ state: EpisodeEntry.StepState) -> some View {
-    Group {
-      switch state {
-      case .done:
-        Image(systemName: AppSymbol.success)
-          .foregroundStyle(.green)
-      case .current:
-        ProgressView()
-          .scaleEffect(SheetActionButton.spinnerScale * 0.8)
-      case .pending:
-        Image(systemName: AppSymbol.unselected)
-          .foregroundStyle(.secondary)
-      case .failed:
-        Image(systemName: AppSymbol.failure)
-          .foregroundStyle(.red)
-      }
-    }
-    .frame(width: Self.markerWidth, height: Self.markerWidth)
   }
 }

@@ -62,8 +62,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
   func testUnfinishedSearchesExplainHowTheyEnded() async throws {
     for (state, expected) in [
-      ("failed", EpisodeTrialProgress.concluded(.searchIncomplete("MoviePilot 没有完成本次试看搜索，可以重新发起"))),
-      ("skipped", .concluded(.searchIncomplete("MoviePilot 跳过了本次试看搜索，可以重新发起"))),
+      ("failed", EpisodeTrialProgress.concluded(.searchIncomplete("MoviePilot 没有完成本次试看搜索，可以重新试看"))),
+      ("skipped", .concluded(.searchIncomplete("MoviePilot 跳过了本次试看搜索，可以重新试看"))),
     ] {
       backend.reset()
       try await withService { _, service, _, request in
@@ -130,7 +130,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(failed, .concluded(.organizationFailed))
 
       let again = await service.start(request)
-      XCTAssertEqual(again, .searching, "整理失败后可以重新发起")
+      XCTAssertEqual(again, .searching, "整理失败后可以重新试看")
     }
   }
 
@@ -167,6 +167,149 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testWhileDownloadingOnlyTheDownloaderIsAsked() async throws {
+    // 下载中页面 3 秒刷新一次：知道是哪个下载器以后，还在下载时只查它，不查整理记录和整理队列。
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      let before = backend.requestLog.count
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertEqual(Array(backend.requestLog.dropFirst(before)), ["GET download"])
+
+      backend.finishDownload("target-hash")
+      let after = backend.requestLog.count
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      XCTAssertTrue(
+        backend.requestLog.dropFirst(after).contains("GET history/transfer"), "下载器里没有了才查整理记录")
+    }
+  }
+
+  func testFinishedDownloadAsksMoviePilotToOrganizeRightAwayOnce() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      XCTAssertEqual(backend.scheduledJobs, [], "还在下载时不催整理")
+
+      backend.finishDownload("target-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      try await waitUntil { backend.scheduledJobs == ["transfer"] }
+
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(backend.scheduledJobs, ["transfer"], "每次试看只催一次，之后等定时整理")
+    }
+  }
+
+  func testRemainingDownloadTimeIsEstimatedFromTheAverageSpeedNotMoviePilotsLeftTime() async throws {
+    // MoviePilot 的 left_time 把整季包里没选的集也算进去、按这一刻的速度算，快下完时反而变长：不用它。
+    let clock = ClockBox()
+    try await withService(now: { clock.now }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.setLeftTime("target-hash", "3时0分0秒")
+      let first = await service.refresh(request)
+      XCTAssertEqual(first, .downloading(progress: 42), "第一次看到时只记下起点")
+
+      clock.advance(by: 20)
+      backend.setProgress("target-hash", 45)
+      let early = await service.refresh(request)
+      XCTAssertEqual(early, .downloading(progress: 45), "看了不到半分钟，先不估")
+
+      clock.advance(by: 40)
+      backend.setProgress("target-hash", 52)
+      let estimated = await service.refresh(request)
+      // 60 秒下了 10%，还剩 48%：288 秒。
+      XCTAssertEqual(estimated, .downloading(progress: 52, remainingSeconds: 288))
+
+      clock.advance(by: 60)
+      backend.setProgress("target-hash", 30)
+      let rechecked = await service.refresh(request)
+      XCTAssertEqual(rechecked, .downloading(progress: 30), "进度倒退（下载器重新校验）时从这里重新算起")
+
+      clock.advance(by: 60)
+      backend.setProgress("target-hash", 40)
+      let resumed = await service.refresh(request)
+      // 从倒退那一刻算：60 秒下了 10%，还剩 60%：360 秒。
+      XCTAssertEqual(resumed, .downloading(progress: 40, remainingSeconds: 360))
+    }
+  }
+
+  func testOrganizedEpisodeAsksTheMediaServerToScanAndFallsBackToTheWholeLibrary() async throws {
+    let scans = LibraryScanRecorder()
+    let clock = ClockBox()
+    let library = LibraryBox()
+    try await withService(
+      libraryScan: { context, scope in scans.record(context, scope) }, availability: { _, _ in library.value },
+      now: { clock.now }
+    ) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.moveToQueue("target-hash")
+      _ = await service.refresh(request)
+      XCTAssertTrue(scans.scopes.isEmpty, "整理好之前不叫媒体服务器")
+
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      let located = LibraryScanRequest.located(
+        TransferredFileLocation(path: FakeMoviePilot.organizedPath, category: "国产剧"))
+      try await waitUntil { scans.scopes.count == 1 }
+      XCTAssertEqual(scans.scopes, [located], "按整理记录里整理后的路径找媒体库，`dest_fileitem` 优先")
+      XCTAssertEqual(scans.tmdbIDs, [91])
+
+      clock.advance(by: EpisodeTrialService.libraryScanFallbackDelay - 1)
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes, [located], "还没到兜底的时候不再叫")
+
+      clock.advance(by: 2)
+      _ = await service.refresh(request)
+      try await waitUntil { scans.scopes.count == 2 }
+      XCTAssertEqual(scans.scopes, [located, .everything], "叫过还没入库，可能刷错了地方：每台刷新整个库")
+
+      clock.advance(by: 600)
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes.count, 2, "整个库也只刷一次，之后等媒体服务器自己入库")
+      XCTAssertEqual(backend.scheduledJobs, [], "直接进了整理队列，没有等整理这一步，不用催 MoviePilot")
+
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+    }
+  }
+
+  func testEpisodeThatLandsSoonNeedsNoWholeLibraryScan() async throws {
+    let scans = LibraryScanRecorder()
+    let clock = ClockBox()
+    let library = LibraryBox()
+    try await withService(
+      libraryScan: { context, scope in scans.record(context, scope) }, availability: { _, _ in library.value },
+      now: { clock.now }
+    ) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: true)
+      _ = await service.refresh(request)
+      try await waitUntil { scans.scopes.count == 1 }
+
+      library.value = .playable(server: "测试媒体库")
+      clock.advance(by: EpisodeTrialService.libraryScanFallbackDelay + 1)
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes.count, 1, "按位置刷新就入库了，不刷整个库")
+    }
+  }
+
+  // MARK: - 别处已有的东西
   // MARK: - 别处已有的东西
 
   func testExistingSubscriptionIsShownAndNeverTouched() async throws {
@@ -1017,6 +1160,31 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testVisiblePageFollowsTheDownloadEveryFewSecondsAndTheBackgroundSlower() async throws {
+    // 页面在看：搜索 10 秒、下载中 3 秒、等整理 10 秒；离开页面后后台跟踪等整理 60 秒。
+    let sleeper = ScriptedSleeper(polls: [
+      .run { FakeMoviePilot.shared.finishSearch(submitted: true) },
+      .run { FakeMoviePilot.shared.finishDownload("target-hash") },
+      .suspend, .suspend,
+    ])
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let page = try await openPage(service, request)
+      _ = await service.start(request)
+      try await waitUntil { sleeper.delays.count == 3 }
+      XCTAssertEqual(service.progress[request.key], .waitingForOrganization)
+      XCTAssertEqual(
+        sleeper.delays,
+        [
+          EpisodeTrialService.activePollInterval, EpisodeTrialService.downloadPollInterval,
+          EpisodeTrialService.activePollInterval,
+        ])
+      page.cancel()
+      await page.value
+      try await waitUntil { sleeper.delays.count == 4 }
+      XCTAssertEqual(sleeper.delays.last, EpisodeTrialService.slowPollInterval, "后台跟踪只为入库后发通知，放慢")
+    }
+  }
+
   func testLeavingThePageHandsOverAndAnnouncesWhenReady() async throws {
     let library = LibraryBox()
     // 第 1 次等待属于页面；页面离开后第 2 次属于后台跟踪，这时这一集已经入库。
@@ -1132,6 +1300,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     rule: EpisodeTrialRule? = EpisodeTrialRule(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"),
     superUser: Bool = true,
     sleep: EpisodeTrialService.Sleep? = nil,
+    libraryScan: EpisodeTrialService.LibraryScan? = nil,
     availability: EpisodeTrialService.Availability? = nil,
     now: @escaping @MainActor () -> Date = { Date() },
     media: MediaInfo = MediaInfo(tmdb_id: 91, title: "试看测试", type: "电视剧"),
@@ -1151,7 +1320,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
     api.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
     let availability = availability ?? { _, _ in library }
     let service = EpisodeTrialService(
-      api: api, defaults: defaults, now: now, sleep: sleep ?? ScriptedSleeper().sleep, availability: availability)
+      api: api, defaults: defaults, now: now, sleep: sleep ?? ScriptedSleeper().sleep,
+      libraryScan: libraryScan ?? { _, _ in }, availability: availability)
     defer { service.tearDown() }
     if let rule { try service.saveRule(rule) }
     let request = try XCTUnwrap(EpisodeTrialRequest(
@@ -1224,6 +1394,18 @@ nonisolated private final class ClockBox: @unchecked Sendable {
 
   var now: Date { lock.withLock { stored } }
   func advance(by interval: TimeInterval) { lock.withLock { stored.addTimeInterval(interval) } }
+}
+
+/// 记下试看服务叫媒体服务器入库的次数和范围。
+@MainActor
+private final class LibraryScanRecorder {
+  private(set) var scopes: [LibraryScanRequest] = []
+  private(set) var tmdbIDs: [Int] = []
+
+  func record(_ context: EpisodePlaybackContext, _ scope: LibraryScanRequest) {
+    scopes.append(scope)
+    tmdbIDs.append(context.tmdbID)
+  }
 }
 
 private final class FreshReads {
@@ -1301,6 +1483,8 @@ nonisolated private struct FakeHTTPStatus: Error {
 nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   static let shared = FakeMoviePilot()
   static let batchID = "0123456789abcdef0123456789abcdef"
+  /// 整理记录里整理后的文件路径。
+  static let organizedPath = "/media/电视剧/国产剧/试看测试 (2025)/Season 2/试看测试 - S02E05.mkv"
   private static let finishedStates: Set<String> = ["completed", "failed", "cancelled", "skipped"]
 
   private let lock = NSLock()
@@ -1311,10 +1495,14 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private var history: [[String: Any]] = []
   private var historyOnSecondPage = false
   private var downloading: [String: Double?] = [:]
+  /// 下载器按当前速度估的剩余时间（MoviePilot 的 `left_time`）。
+  private var leftTimes: [String: String] = [:]
   private var offlineClient = false
   private var queue: Set<String> = []
   private var transfers: [String: Bool] = [:]
   private var requests: [String] = []
+  private var allRequests: [String] = []
+  private var scheduled: [String] = []
   private var totalRequests = 0
   private var listReads = 0
   private var createdBodies: [[String: Any]] = []
@@ -1348,6 +1536,10 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private let holdRelease = DispatchSemaphore(value: 0)
 
   var mutations: [String] { lock.withLock { requests } }
+  /// 收到的全部请求（含读），按先后排列。
+  var requestLog: [String] { lock.withLock { allRequests } }
+  /// 叫 MoviePilot 马上运行过的服务（`system/runscheduler` 的 `jobid`）。
+  var scheduledJobs: [String] { lock.withLock { scheduled } }
   /// 读和写都算，用来证明某条路径完全没有访问服务器。
   var requestCount: Int { lock.withLock { totalRequests } }
   /// 读整份订阅列表的次数。
@@ -1365,10 +1557,13 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       history = []
       historyOnSecondPage = false
       downloading = [:]
+      leftTimes = [:]
       offlineClient = false
       queue = []
       transfers = [:]
       requests = []
+      allRequests = []
+      scheduled = []
       totalRequests = 0
       listReads = 0
       createdBodies = []
@@ -1480,6 +1675,8 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
 
   func pushHistoryToSecondPage() { lock.withLock { historyOnSecondPage = true } }
   func finishDownload(_ hash: String) { lock.withLock { _ = downloading.removeValue(forKey: hash) } }
+  func setLeftTime(_ hash: String, _ text: String) { lock.withLock { leftTimes[hash] = text } }
+  func setProgress(_ hash: String, _ progress: Double) { lock.withLock { downloading[hash] = progress } }
 
   func moveToQueue(_ hash: String) {
     lock.withLock {
@@ -1515,6 +1712,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       let items = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
       let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
       totalRequests += 1
+      allRequests.append("\(method) \(path)")
       if method != "GET" { requests.append("\(method) \(path)") }
       let value = try respond(method: method, path: path, query: query, request: request)
       return try JSONSerialization.data(withJSONObject: value)
@@ -1587,15 +1785,20 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       return downloading.map { hash, progress -> [String: Any] in
         var task: [String: Any] = ["hash": hash]
         if let progress { task["progress"] = progress }
+        if let left = leftTimes[hash] { task["left_time"] = left }
         return task
       }
+    case ("GET", "system/runscheduler"):
+      scheduled.append(query["jobid"] ?? "")
+      return accepted
     case ("GET", "transfer/queue"):
       return queue.isEmpty ? [] : [["tasks": queue.map { ["downloader": "fixture-client", "download_hash": $0] }]]
     case ("GET", "history/transfer"):
       let list = transfers.map { hash, status -> [String: Any] in
         [
           "id": 9, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02",
-          "episodes": "E05", "download_hash": hash, "status": status,
+          "episodes": "E05", "download_hash": hash, "status": status, "category": "国产剧",
+          "dest": "/media/旧字段/E05.mkv", "dest_fileitem": ["path": Self.organizedPath],
         ]
       }
       return ["success": true, "data": ["list": list]] as [String: Any]

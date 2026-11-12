@@ -373,6 +373,10 @@ private struct EpisodeBrowser: View {
     .task(id: availabilityRequest) {
       await loadAvailability(availabilityRequest)
     }
+    .task(id: allowsRequests ? polledTrialRequest?.key : nil) {
+      guard allowsRequests, let request = polledTrialRequest else { return }
+      await trial.poll(request)
+    }
     .sheet(item: $panelEpisode, onDismiss: runAfterPanelDismiss) { episode in
       panel(for: episode)
     }
@@ -636,6 +640,17 @@ private struct EpisodeBrowser: View {
     source.context(media: media, episodeGroup: groupID, seasons: seasons.compactMap(\.season_number))
   }
 
+  /// 这一季里正在试看的那一集。本行显示着时由本行按页面的间隔刷新它的进度（见 `EpisodeTrialService.poll`），
+  /// 卡片正中的进度跟得上；单集面板开着这一集时由面板刷新，不重复请求。
+  private var polledTrialRequest: EpisodeTrialRequest? {
+    guard let seasonNumber, case .loaded(let episodes) = group.episodeStates[seasonNumber],
+      let episode = episodes.first(where: {
+        $0.id != panelEpisode?.id && entry(for: $0)?.trial.isInProgress == true
+      })
+    else { return nil }
+    return trialRequest(for: episode)
+  }
+
   private func trialRequest(for episode: MoviePilotEpisode) -> EpisodeTrialRequest? {
     EpisodeTrialRequest(media: media, episode: episode, episodeGroup: groupID, libraryItem: playback?.libraryItem)
   }
@@ -699,7 +714,10 @@ private struct EpisodeBrowser: View {
     case .play:
       afterPanelDismiss = { play(episode) }
       panelEpisode = nil
-    case .startTrial: startTrial(episode)
+    case .startTrial:
+      // 进度显示在卡片正中，不用开着面板等：关掉面板，焦点回到这张卡。
+      panelEpisode = nil
+      startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .recheck: retryAvailability(season: episode.seasonNumber)
     }
@@ -720,7 +738,8 @@ private struct EpisodeBrowser: View {
       .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list)))
   }
 
-  /// 发起试看。结果显示在卡片和面板上；从长按菜单发起、卡片上又看不出结果时（比如这一季已有订阅）另外提示。
+  /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）
+  /// 另外提示，这时又打开了这一集的面板就由面板说明。
   private func startTrial(_ episode: MoviePilotEpisode) {
     guard let request = trialRequest(for: episode), startingTrials.insert(request.key).inserted else { return }
     let service = trial

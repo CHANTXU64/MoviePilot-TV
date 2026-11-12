@@ -469,6 +469,84 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     return lookups.compactMap { $0 }
   }
 
+  /// 试看的这一集整理好了：叫媒体服务器马上入库，不等它自己发现新文件。按位置刷新时照 MoviePilot 的媒体库刷新：
+  /// 已有这部剧的服务器只刷新这部剧；哪台都还没有时，刷新整理后的文件所在的媒体库（见 `MediaLibraryScan`）；
+  /// 也对不上（比如 Docker 里两边挂载的路径不同）时，每台都刷新整个库。`.everything` 是试看服务的兜底，直接每台刷新整个库。
+  /// 只等服务器受理，不等扫描完成；哪台连不上或报错只记日志，不影响别的服务器。
+  func requestLibraryScan(context: EpisodePlaybackContext, scope: LibraryScanRequest) async {
+    guard !isTornDown, allowsPlayback, let apiService else { return }
+    let servers: [MediaServerConf]
+    do {
+      servers = try await apiService.fetchCachedMediaServers()
+    } catch {
+      if !(error is CancellationError) {
+        Logger.warning("[Playback] 叫媒体服务器入库前读取服务器配置失败: \(Self.message(for: error))")
+      }
+      return
+    }
+    let strict = Self.requiresStrictMatch(servers)
+    let userName = apiService.currentOrStoredUserName
+    func refresh(_ scope: MediaLibraryRefreshScope, on server: MediaServerConf) async {
+      do {
+        try await withConnection(to: server, preferredUserName: userName) { try await $0.refreshLibrary(scope) }
+        Logger.info("[Playback] 已叫“\(server.name)”入库（\(Self.describe(scope))）")
+      } catch {
+        guard !(error is CancellationError) else { return }
+        Logger.warning("[Playback] 叫“\(server.name)”入库失败: \(Self.message(for: error))")
+      }
+    }
+
+    let targets = Self.playableServers(in: servers, preferring: context.libraryItem?.server)
+    guard case .located(let file) = scope else {
+      for server in targets { await refresh(.all, on: server) }
+      return
+    }
+    // 查得到这部剧在不在的服务器才往下判断；查不成的不刷新。
+    var reached: [MediaServerConf] = []
+    var seriesFound: [(server: MediaServerConf, ids: [String])] = []
+    for server in targets {
+      do {
+        let copies = try await withConnection(to: server, preferredUserName: userName) {
+          try await Self.seriesCopies(context, on: $0, strict: strict).items
+        }
+        reached.append(server)
+        if !copies.isEmpty { seriesFound.append((server, copies.map(\.id))) }
+      } catch {
+        guard !(error is CancellationError), !Task.isCancelled else { return }
+        Logger.warning("[Playback] 叫“\(server.name)”入库前查找这部剧失败: \(Self.message(for: error))")
+      }
+    }
+    if !seriesFound.isEmpty {
+      for (server, ids) in seriesFound {
+        for id in ids { await refresh(.series(id: id), on: server) }
+      }
+      return
+    }
+    var libraries: [(server: MediaServerConf, id: String)] = []
+    for server in reached {
+      do {
+        let folders = try await withConnection(to: server, preferredUserName: userName) { try await $0.libraryFolders() }
+        if let id = MediaLibraryScan.library(for: file, in: folders) { libraries.append((server, id)) }
+      } catch {
+        guard !(error is CancellationError), !Task.isCancelled else { return }
+        Logger.warning("[Playback] 叫“\(server.name)”入库前读取媒体库失败: \(Self.message(for: error))")
+      }
+    }
+    if libraries.isEmpty {
+      for server in reached { await refresh(.all, on: server) }
+    } else {
+      for (server, id) in libraries { await refresh(.library(id: id), on: server) }
+    }
+  }
+
+  private static func describe(_ scope: MediaLibraryRefreshScope) -> String {
+    switch scope {
+    case .series: "这部剧"
+    case .library: "所在的媒体库"
+    case .all: "整个库"
+    }
+  }
+
   /// 一台服务器上这部剧的集索引；取消时为 nil。失败的说明已写明服务器和那一步（见 `MediaServerError`）。
   private func episodeLookup(
     _ context: EpisodePlaybackContext, on server: MediaServerConf, strict: Bool, preferredUserName: String?,
@@ -544,14 +622,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       context, on: connection, strict: Self.requiresStrictMatch(servers), forceRefresh: forceRefresh)
   }
 
-  /// 读一台服务器上这部剧的集。先找出对得上的整剧条目：按外部编号找到的（同一部剧可能在几个媒体库里各有一个）都留着，
-  /// 再按入库记录里的 ID 补上那一份（见 `idFallbackStrictness`）；然后逐份读集。
-  /// 某一步失败（按外部编号查找、按 ID 补查、某一份的集）时用读到的那些，并记下没读全；一份都没读到时抛出错误。
-  /// 读到的集交给 `EpisodeMatchLoader` 和 MoviePilot 的集对应（要用的集列表、整理记录由 `sources` 按需读取）。
-  private static func loadEpisodeIndex(
-    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
-    sources: EpisodeMatchingSources
-  ) async throws -> ServerEpisodeIndex {
+  /// 一台服务器上对得上这部剧的整剧条目：按外部编号找到的（同一部剧可能在几个媒体库里各有一个）都留着，
+  /// 再按入库记录里的 ID 补上那一份（见 `idFallbackStrictness`）。某一步失败时返回读到的那些和失败的原因；
+  /// 一份都没找到又有失败时抛出那个错误：无法确认这台上没有。
+  private static func seriesCopies(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool
+  ) async throws -> (items: [ServerMediaItem], failures: [Error]) {
     var failures: [Error] = []
     var series: [ServerMediaItem] = []
     switch try await recovering({ try await connection.items(matching: context.expected) }) {
@@ -568,6 +644,17 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
     }
     if series.isEmpty, let failure = failures.first { throw failure }
+    return (series, failures)
+  }
+
+  /// 读一台服务器上这部剧的集：先找出对得上的整剧条目（见 `seriesCopies`），再逐份读集。
+  /// 某一步失败（按外部编号查找、按 ID 补查、某一份的集）时用读到的那些，并记下没读全；一份都没读到时抛出错误。
+  /// 读到的集交给 `EpisodeMatchLoader` 和 MoviePilot 的集对应（要用的集列表、整理记录由 `sources` 按需读取）。
+  private static func loadEpisodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
+    sources: EpisodeMatchingSources
+  ) async throws -> ServerEpisodeIndex {
+    let (series, failures) = try await seriesCopies(context, on: connection, strict: strict)
     var episodes: [ServerMediaItem] = []
     var copyFailures: [Error] = []
     for copy in series {

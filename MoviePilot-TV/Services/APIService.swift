@@ -2335,6 +2335,16 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([EpisodeTrialTransferJob].self, from: data)
   }
 
+  /// 马上运行 MoviePilot 的「下载文件整理」服务（平时每 5 分钟一次），仅管理员。
+  /// - 对应前端: MoviePilot-Frontend/src/views/system/ServiceView.vue（服务列表里的执行按钮）
+  /// - MoviePilot 扫一遍下载器、把下完还没整理的任务放进整理队列才回复，整理在后台进行；
+  ///   这个服务正在运行时这次跳过，照样回复成功。
+  func runDownloadTransfer() async throws -> (success: Bool, message: String?) {
+    let endpoint = try buildEndpoint(path: "/system/runscheduler", params: ["jobid": "transfer"])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeActionResponseSync(from: data)
+  }
+
   /// 暂停下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/DownloadingCard.vue (toggleDownload)
   /// - 应用场景: 在下载任务列表页暂停指定的下载任务。
