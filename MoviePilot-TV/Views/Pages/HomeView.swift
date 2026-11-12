@@ -466,6 +466,7 @@ private struct SubscribeSectionView: View {
                   usesFocusWindow: memoryOptimization.isEnabled
                 ),
               viewModel: viewModel,
+              trials: viewModel.episodeTrials,
               onEdit: { onEdit(item) },
               onViewDetail: { onViewDetail(item) }
             )
@@ -508,6 +509,7 @@ private struct SubscribeItemView: View {
   let item: Subscribe
   let loadsImage: Bool
   @ObservedObject var viewModel: HomeViewModel
+  @ObservedObject var trials: EpisodeTrialService
   let onEdit: () -> Void
   let onViewDetail: () -> Void
   @EnvironmentObject private var notificationManager: NotificationManager
@@ -515,14 +517,18 @@ private struct SubscribeItemView: View {
   @State private var showsEpisodeTrialNotice = false
 
   var body: some View {
-    let isEpisodeTrial = item.isEpisodeTrial
+    let trialState = trials.trialState(of: item)
+    let isEpisodeTrial = trialState != nil
+    let isCancellingTrial = trialState == .cancelling
     MediaCard(
       title: item.name,
       posterUrl: item.imageURLs.poster,
       typeText: isEpisodeTrial ? "试看" : formatState(item.state),
       ratingText: nil,
-      bottomLeftText: isEpisodeTrial
-        ? item.episodeTrialTargetText : formatProgress(total: item.total_episode, lack: item.lack_episode),
+      bottomLeftText: isCancellingTrial
+        ? "取消试看中"
+        : isEpisodeTrial
+          ? item.episodeTrialTargetText : formatProgress(total: item.total_episode, lack: item.lack_episode),
       bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
       source: nil,
       loadsImage: loadsImage,
@@ -542,7 +548,7 @@ private struct SubscribeItemView: View {
         } label: {
           Label("详情", systemImage: AppSymbol.details)
         }
-        if viewModel.canCancelEpisodeTrial {
+        if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
           Button(role: .destructive) {
             showsEpisodeTrialNotice = true
           } label: {
@@ -565,23 +571,30 @@ private struct SubscribeItemView: View {
     } message: {
       Text(SubscriptionCancelConfirmation.message(for: item))
     }
-    .alert(EpisodeTrialHoldNotice.title, isPresented: $showsEpisodeTrialNotice) {
-      if viewModel.canCancelEpisodeTrial {
+    .alert(
+      isCancellingTrial ? EpisodeTrialHoldNotice.cancellingTitle : EpisodeTrialHoldNotice.title,
+      isPresented: $showsEpisodeTrialNotice
+    ) {
+      if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
         Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
           cancelEpisodeTrial()
         }
       }
       Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
     } message: {
-      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
+      Text(
+        isCancellingTrial
+          ? EpisodeTrialHoldNotice.cancellingMessage
+          : viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
     }
   }
 
   private func cancelEpisodeTrial() {
     Task {
-      guard await viewModel.cancelEpisodeTrial(subscribe: item) else {
-        notificationManager.show(message: EpisodeTrialHoldNotice.cancelFailure, type: .error)
-        return
+      switch await viewModel.cancelEpisodeTrial(subscribe: item) {
+      case .done: break
+      case .pending: notificationManager.show(message: EpisodeTrialHoldNotice.cancelPending, type: .info)
+      case .failed: notificationManager.show(message: EpisodeTrialHoldNotice.cancelFailure, type: .error)
       }
     }
   }

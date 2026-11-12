@@ -33,7 +33,7 @@ class SubscribeSheetViewModel: ObservableObject {
     let id: Int
     let profileKey: String
     let session: APIServiceSessionSnapshot
-    /// 读过这条订阅、确认不是试看订阅。后端按季去重，“新增”可能拿回同季的试看订阅，认清之前不能暂停或回滚它。
+    /// 读过这条订阅、确认不带试看标记。后端按季去重，“新增”可能拿回同季的试看订阅，认清之前不能暂停或回滚它。
     var isClaimed = false
   }
   // 仅在最后一次查询明确不存在后，绑定本次 POST 返回的 ID、账号与会话。
@@ -215,12 +215,6 @@ class SubscribeSheetViewModel: ObservableObject {
       clearLoadedOptions()
       return false
     }
-    // 试看订阅由试看服务管着，哪个入口（订阅卡、复用分享拿回的同季订阅）都不能打开来编辑。
-    if !isNewSubscription, subscribe.isEpisodeTrial {
-      showEpisodeTrialInProgress(id: subscribe.id)
-      return false
-    }
-
     loadErrorMessage = nil
     canRetryLoad = false
     let sessionSnapshot = apiService.sessionSnapshot()
@@ -268,7 +262,7 @@ class SubscribeSheetViewModel: ObservableObject {
               clearLoadedOptions()
               return false
             }
-            guard !fullSubscribe.isEpisodeTrial else {
+            guard episodeTrials.trialState(of: fullSubscribe) == nil else {
               showEpisodeTrialInProgress(id: fullSubscribe.id)
               return false
             }
@@ -404,7 +398,11 @@ class SubscribeSheetViewModel: ObservableObject {
     from snapshot: APIServiceSessionSnapshot
   ) async throws -> Bool {
     if createdSubscriptionReceipt?.isClaimed != true {
-      guard try await claimCreatedSubscription(id: id, from: snapshot) else { return false }
+      switch try await claimCreatedSubscription(id: id, from: snapshot) {
+      case .stop: return false
+      case .existing: return true
+      case .created: break
+      }
       if shouldRollbackCreatedSubscription {
         await rollbackCreatedSubscriptionIfNeeded()
         clearLoadedOptions()
@@ -445,23 +443,44 @@ class SubscribeSheetViewModel: ObservableObject {
     return true
   }
 
-  /// 先读一遍“新增”拿回的订阅。后端按季去重，同季试看订阅还在时拿回的是它：它不是本次创建的，
-  /// 放下回执，不暂停、不回滚也不编辑，改为提示这一季正在试看。
-  private func claimCreatedSubscription(id: Int, from snapshot: APIServiceSessionSnapshot) async throws -> Bool {
+  private enum CreatedSubscriptionClaim {
+    /// 本次新建的，接着暂停、读回。
+    case created
+    /// 后端按季去重拿回的已有订阅，已改为编辑它。
+    case existing
+    /// 不能继续（会话变了、面板要关、或这一季正在试看）。
+    case stop
+  }
+
+  /// 先读一遍“新增”拿回的订阅。后端按季去重，同季已有试看订阅时拿回的是它：它不是本次创建的，放下回执，
+  /// 不暂停也不回滚。本机正在试看的提示这一季正在试看；别的设备留下的按已有订阅打开编辑。
+  private func claimCreatedSubscription(
+    id: Int, from snapshot: APIServiceSessionSnapshot
+  ) async throws -> CreatedSubscriptionClaim {
     let row = try await apiService.fetchSubscription(id: id)
     guard canPublishLoadResult(from: snapshot), currentCreatedSubscriptionReceipt()?.id == id else {
       clearLoadedOptions()
-      return false
+      return .stop
     }
-    guard !row.isEpisodeTrial else {
+    if episodeTrials.trialState(of: row) != nil {
       createdSubscriptionReceipt = nil
       subscribe.id = nil
       showEpisodeTrialInProgress(id: id)
-      return false
+      return .stop
+    }
+    if row.hasEpisodeTrialMarker {
+      createdSubscriptionReceipt = nil
+      subscribe = row
+      original = row
+      isNewSubscription = false
+      isCreatedAndPaused = true
+      return .existing
     }
     createdSubscriptionReceipt?.isClaimed = true
-    return true
+    return .created
   }
+
+  private var episodeTrials: EpisodeTrialService { apiService.sessionScope.episodeTrial }
 
   /// 后端按季去重，试看订阅还在时这一季没法另建订阅。
   private func showEpisodeTrialInProgress(id: Int?) {
@@ -476,7 +495,7 @@ class SubscribeSheetViewModel: ObservableObject {
   /// 当前账号能否取消试看订阅（管理员）。只在新增订阅时提供：取消后接着准备的是这次新增；
   /// 编辑的就是那条试看订阅时，取消后没有可编辑的了，只提示等试看结束。
   var canCancelEpisodeTrial: Bool {
-    isNewSubscription && heldTrialSubscriptionID != nil && apiService.sessionScope.episodeTrial.canCancelTrial
+    isNewSubscription && heldTrialSubscriptionID != nil && episodeTrials.canCancelTrial
   }
 
   /// 「取消试看，继续订阅」：先取消占着这一季的试看订阅，再重新准备这次订阅；失败时可以重试。
@@ -490,17 +509,22 @@ class SubscribeSheetViewModel: ObservableObject {
     return Task { await releaseEpisodeTrial(id: id) }
   }
 
+  /// 等试看订阅真正删掉了才接着准备这次订阅；搜索还没停下来时提示稍后重试，试看服务在后台接着收尾。
   private func releaseEpisodeTrial(id: Int) async {
     let snapshot = apiService.sessionSnapshot()
-    let cancelled = await apiService.sessionScope.episodeTrial.cancelTrial(subscriptionID: id)
+    let outcome = await episodeTrials.cancelTrial(subscriptionID: id)
     isReleasingEpisodeTrial = false
     guard canPublishLoadResult(from: snapshot), !shouldRollbackCreatedSubscription else { return }
-    guard cancelled else {
+    switch outcome {
+    case .done:
+      await loadData()
+    case .pending:
+      canRetryLoad = true
+      loadErrorMessage = EpisodeTrialHoldNotice.cancelPending
+    case .failed:
       canRetryLoad = true
       loadErrorMessage = EpisodeTrialHoldNotice.cancelFailure
-      return
     }
-    await loadData()
   }
 
   private func clearLoadedOptions() {
@@ -525,10 +549,6 @@ class SubscribeSheetViewModel: ObservableObject {
     guard !isSaving else { return false }
     guard (subscribe.id ?? 0) > 0 else {
       errorMessage = "订阅信息不完整，无法保存。"
-      return false
-    }
-    guard !original.isEpisodeTrial else {
-      showEpisodeTrialInProgress(id: original.id)
       return false
     }
     isSaving = true
@@ -643,11 +663,11 @@ class SubscribeSheetViewModel: ObservableObject {
     defer { isRollingBackCreatedSubscription = false }
 
     do {
-      // 还没认清的回执先读一遍，拿回的是试看订阅就不删。
+      // 还没认清的回执先读一遍，拿回的是带试看标记的订阅（不论哪台设备建的）就不是本次新建的，不删。
       if !receipt.isClaimed {
         let row = try await apiService.fetchSubscription(id: receipt.id)
         guard currentCreatedSubscriptionReceipt()?.id == receipt.id else { return }
-        guard !row.isEpisodeTrial else {
+        guard !row.hasEpisodeTrialMarker else {
           createdSubscriptionReceipt = nil
           return
         }

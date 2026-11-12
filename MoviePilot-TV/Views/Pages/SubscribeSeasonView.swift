@@ -118,6 +118,11 @@ struct SubscribeSeasonContentView: View {
     }
   }
 
+  /// 提示框对应的那一季已经在取消试看：只说明，不再提供取消。
+  private var noticeIsCancelling: Bool {
+    viewModel.episodeTrialNoticeSeason.map(viewModel.isSeasonCancellingTrial) == true
+  }
+
   var body: some View {
     let session = apiService.sessionSnapshot()
     Group {
@@ -175,13 +180,13 @@ struct SubscribeSeasonContentView: View {
       }
     }
     .alert(
-      EpisodeTrialHoldNotice.title,
+      noticeIsCancelling ? EpisodeTrialHoldNotice.cancellingTitle : EpisodeTrialHoldNotice.title,
       isPresented: Binding(
         get: { viewModel.episodeTrialNoticeSeason != nil },
         set: { if !$0 { viewModel.episodeTrialNoticeSeason = nil } }
       )
     ) {
-      if viewModel.canCancelEpisodeTrial {
+      if viewModel.canCancelEpisodeTrial, !noticeIsCancelling {
         Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
           guard let season = viewModel.episodeTrialNoticeSeason else { return }
           Task { await viewModel.cancelEpisodeTrial(season: season) }
@@ -189,7 +194,10 @@ struct SubscribeSeasonContentView: View {
       }
       Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
     } message: {
-      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
+      Text(
+        noticeIsCancelling
+          ? EpisodeTrialHoldNotice.cancellingMessage
+          : viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
     }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
@@ -370,6 +378,7 @@ struct SubscribeSeasonContentView: View {
     let seasonNumber = season.season_number ?? 0
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
     let isHeldByTrial = viewModel.isSeasonHeldByEpisodeTrial(seasonNumber)
+    let isCancellingTrial = viewModel.isSeasonCancellingTrial(seasonNumber)
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
     let title = SeasonDisplayFormatter.cardTitle(
@@ -381,7 +390,7 @@ struct SubscribeSeasonContentView: View {
     let episodeCount = season.episode_count ?? 0
     let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
     let footerText =
-      isProcessing
+      isProcessing || isCancellingTrial
         ? (isHeldByTrial ? "取消试看中" : "取消订阅中")
         : (isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅")
 
@@ -412,7 +421,7 @@ struct SubscribeSeasonContentView: View {
     .compositingGroup()
     .contextMenu {
       if isHeldByTrial {
-        if viewModel.canCancelEpisodeTrial {
+        if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
           Button(role: .destructive) {
             guard !isProcessing else { return }
             viewModel.episodeTrialNoticeSeason = seasonNumber

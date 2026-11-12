@@ -1731,6 +1731,9 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
+    try recordLocalTrial(
+      service,
+      #"{"id":814,"name":"试看中","type":"电视剧","tmdbid":123480,"season":2,"state":"S","filter":"tv-episode-trial-1800000000-a"}"#)
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(name: "试看中", type: "电视剧", season: 2, tmdbid: 123480),
@@ -1750,6 +1753,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "DELETE", path: "/api/v1/subscribe/814")
     XCTAssertFalse(loaded)
     XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
+    XCTAssertFalse(viewModel.canCancelEpisodeTrial, "不是管理员不提供取消")
     XCTAssertNil(viewModel.loadErrorMessage)
     XCTAssertTrue(viewModel.isNewSubscription)
     XCTAssertNil(viewModel.subscribe.id)
@@ -1764,7 +1768,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let trial = #"{"id":816,"name":"试看中","type":"电视剧","tmdbid":123482,"season":2,"state":"S","filter":"tv-episode-trial-1800000000-c"}"#
+    let trial = #"{"id":816,"name":"试看中","type":"电视剧","tmdbid":123482,"season":2,"state":"S","filter":"tv-episode-trial-1800000000-c","include":"WEB","username":"subscribe-sheet-admin"}"#
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET", path: "/api/v1/subscribe/media/123482", json: #"{"id":816,"tmdbid":123482,"season":2}"#)
@@ -1773,7 +1777,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/subscribe", json: "[\(trial)]")
     await SubscribeSheetURLProtocol.stub.respond(method: "DELETE", path: "/api/v1/subscribe/816", json: #"{"success":true}"#)
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
-    configureSuperSubscriber(service)
+    configureTrialAdmin(service)
+    try recordLocalTrial(service, trial)
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(name: "试看中", type: "电视剧", season: 2, tmdbid: 123482),
@@ -1800,7 +1805,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await viewModel.cancel()
   }
 
-  func testSubscriberCannotCancelSomeoneElsesEpisodeTrial() async throws {
+  /// 别的设备留下的试看订阅没有本机凭据，按普通订阅处理：打开来编辑，不拦着，也不取消。
+  func testOtherDevicesTrialOpensAsAnOrdinarySubscription() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
@@ -1813,26 +1819,27 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "GET", path: "/api/v1/subscribe/media/123483", json: #"{"id":817,"tmdbid":123483,"season":1}"#)
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET", path: "/api/v1/subscribe/817",
-      json: #"{"id":817,"name":"别人的试看","type":"电视剧","tmdbid":123483,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-d"}"#)
+      json: #"{"id":817,"name":"别处的试看","type":"电视剧","tmdbid":123483,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-d"}"#)
+    await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/media/groups/123483", json: "[]")
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
-    configureSubscriber(service)
+    configureTrialAdmin(service)
 
     let viewModel = SubscribeSheetViewModel(
-      subscribe: Subscribe(name: "别人的试看", type: "电视剧", season: 1, tmdbid: 123483),
+      subscribe: Subscribe(name: "别处的试看", type: "电视剧", season: 1, tmdbid: 123483),
       isNewSubscription: true,
       apiService: service
     )
-    _ = await viewModel.loadData()
-    XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
-    XCTAssertFalse(viewModel.canCancelEpisodeTrial)
-    XCTAssertNil(viewModel.cancelEpisodeTrialAndContinue(), "普通用户不会发起取消")
+    let loaded = await viewModel.loadData()
+    XCTAssertTrue(loaded)
+    XCTAssertFalse(viewModel.isHeldByEpisodeTrial)
+    XCTAssertFalse(viewModel.isNewSubscription, "按已有订阅打开编辑")
+    XCTAssertEqual(viewModel.subscribe.id, 817)
     let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(method: "DELETE")
     XCTAssertEqual(deleteCount, 0)
-    await viewModel.cancel()
   }
 
-  /// 复用分享时后端可能拿回同季的试看订阅，按编辑打开它也不能改：不加载设置，只提示等试看结束。
-  func testEpisodeTrialRowIsNeverOpenedForEditing() async throws {
+  /// 新增时后端按季去重拿回了别的设备的试看订阅：不是本次新建的，按已有订阅编辑，不暂停也不回滚。
+  func testCreatedReceiptForOtherDevicesTrialIsEditedNotRolledBack() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
@@ -1841,23 +1848,35 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/media/123485", json: "{}")
+    let createResponse = #"{"success":true,"message":"订阅已存在","data":{"id":819}}"#
+    await SubscribeSheetURLProtocol.stub.respond(method: "POST", path: "/api/v1/subscribe", json: createResponse)
+    await SubscribeSheetURLProtocol.stub.respond(method: "POST", path: "/api/v1/subscribe/", json: createResponse)
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/819",
+      json: #"{"id":819,"name":"别处的试看","type":"电视剧","tmdbid":123485,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-f"}"#)
+    await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/media/groups/123485", json: "[]")
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
-    configureSuperSubscriber(service)
+    configureTrialAdmin(service)
 
-    let trial = Subscribe(
-      id: 818, name: "试看中", type: "电视剧", season: 1, state: "S", tmdbid: 123484,
-      filter: "tv-episode-trial-1800000000-e")
-    let viewModel = SubscribeSheetViewModel(subscribe: trial, isNewSubscription: false, apiService: service)
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(name: "别处的试看", type: "电视剧", season: 1, tmdbid: 123485),
+      isNewSubscription: true,
+      apiService: service
+    )
     let loaded = await viewModel.loadData()
-    XCTAssertFalse(loaded)
-    XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
-    XCTAssertFalse(viewModel.canCancelEpisodeTrial, "编辑的就是试看订阅，不提供取消后继续")
-    let siteRequests = await SubscribeSheetURLProtocol.stub.requestCount(method: "GET", path: "/api/v1/site/rss")
-    XCTAssertEqual(siteRequests, 0)
-    let saved = await viewModel.save()
-    XCTAssertFalse(saved)
-    let writes = await SubscribeSheetURLProtocol.stub.requestCount(method: "PUT")
-    XCTAssertEqual(writes, 0, "不写入试看订阅")
+    await viewModel.cancel()
+
+    let pauseCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe/status/819")
+    let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/819")
+    XCTAssertTrue(loaded)
+    XCTAssertFalse(viewModel.isNewSubscription)
+    XCTAssertFalse(viewModel.isHeldByEpisodeTrial)
+    XCTAssertEqual(pauseCount, 0)
+    XCTAssertEqual(deleteCount, 0)
   }
 
   func testCreatedReceiptForEpisodeTrialRowIsNeitherEditedNorRolledBack() async throws {
@@ -1882,6 +1901,9 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
+    try recordLocalTrial(
+      service,
+      #"{"id":815,"name":"刚开始试看","type":"电视剧","tmdbid":123481,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-b"}"#)
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(name: "刚开始试看", type: "电视剧", season: 1, tmdbid: 123481),
@@ -2696,6 +2718,34 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       user_name: "subscribe-sheet",
       avatar: nil
     )
+  }
+
+  /// 能发起试看的管理员：有用户 ID，试看服务才有本机存储。
+  private func configureTrialAdmin(_ service: APIService) {
+    service.tokenForTesting = "subscribe-sheet-trial-admin"
+    service.currentUserForTesting = Token(
+      access_token: "subscribe-sheet-trial-admin",
+      token_type: "Bearer",
+      super_user: FlexibleBool(true),
+      permissions: nil,
+      user_id: 7,
+      user_name: "subscribe-sheet-admin",
+      avatar: nil
+    )
+  }
+
+  /// 把这条订阅记成本机正在试看的订阅。
+  private func recordLocalTrial(_ service: APIService, _ json: String) throws {
+    let row = try JSONDecoder().decode(Subscribe.self, from: Data(json.utf8))
+    let id = try XCTUnwrap(row.id)
+    let target = EpisodeTrialTarget(
+      identity: try XCTUnwrap(row.identity), season: row.season ?? 0, episodeGroup: nil,
+      seasonKey: "sheet-test|\(id)", episodeKey: "sheet-test|\(id)|1", episodeNumber: 1, title: row.name)
+    var credential = EpisodeTrialCredential(
+      marker: try XCTUnwrap(row.filter), target: target, owner: row.username ?? "subscribe-sheet")
+    credential.subscriptionID = id
+    credential.fingerprints = [try EpisodeTrialTemporarySubscription.fingerprint(row)]
+    try service.sessionScope.episodeTrial.recordCredentialForTesting(credential)
   }
 
   private func configureSuperSubscriber(_ service: APIService) {

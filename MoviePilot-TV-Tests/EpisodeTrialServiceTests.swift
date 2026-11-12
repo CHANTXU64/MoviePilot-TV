@@ -3,10 +3,12 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+/// 试看服务按约定的端到端行为：只管本机凭据对应的订阅；取消以批次结束为准；查不到、查失败和远端结束分开处理。
+/// 测试替身按 MoviePilot 的接口合同模拟：取消请求只让运行中的批次进入“停止中”，结束要由测试显式结算。
 @MainActor
 final class EpisodeTrialServiceTests: XCTestCase {
   override func setUp() async throws {
-    EpisodeTrialURLProtocol.fixture.reset()
+    FakeMoviePilot.shared.reset()
     XCTAssertTrue(APIService.installURLProtocolForTesting(EpisodeTrialURLProtocol.self))
   }
 
@@ -14,531 +16,508 @@ final class EpisodeTrialServiceTests: XCTestCase {
     APIService.removeURLProtocolForTesting(EpisodeTrialURLProtocol.self)
   }
 
-  func testPausedFormalSubscriptionRemainsReadOnlyEvenAfterItDisappears() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .subscriptionPaused)
+  private var backend: FakeMoviePilot { FakeMoviePilot.shared }
 
-      fixture.setMode(.missingFormal)
-      let refresh = await service.refresh(request)
-      XCTAssertEqual(refresh, .unavailable("原订阅已结束，可以发起试看"))
-      XCTAssertEqual(fixture.mutations, [])
-    }
-  }
+  // MARK: - 发起
 
-  func testCreateReturningExistingIDDoesNotPauseEditSearchOrDeleteIt() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.reuse)
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .waitingForSubscription)
-      let refresh = await service.refresh(request)
-      XCTAssertEqual(refresh, .waitingForSubscription)
-      XCTAssertEqual(fixture.mutations, ["POST subscribe"])
-    }
-  }
-
-  /// 新建还是拿回同季已有的订阅，按读回的这条订阅带不带这次的标记认，不看提示语：上游改了措辞也照常。
-  func testCreateOutcomeDoesNotDependOnMessageWording() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setCreateMessage("已添加订阅")
+  func testTrialCreatesPausesWritesRuleAndSearchesOnlyThisEpisode() async throws {
     try await withService { _, service, _, request in
       let start = await service.start(request)
       XCTAssertEqual(start, .searching)
-    }
-
-    fixture.reset()
-    fixture.setMode(.reuse)
-    fixture.setCreateMessage("已添加订阅")
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .waitingForSubscription)
-      XCTAssertEqual(fixture.mutations, ["POST subscribe"], "拿回的已有订阅不暂停、不改、不补搜")
-    }
-  }
-
-  func testNativeSearchKeepsExactEpisodeAndTracksAfterSubscriptionDisappears() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    try await withService { api, service, defaults, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      XCTAssertEqual(fixture.mutations, [
-        "POST subscribe", "PUT subscribe/status/81", "PUT subscribe", "POST subscribe/search/81"
+      XCTAssertEqual(backend.mutations, [
+        "POST subscribe", "PUT subscribe/status/81", "PUT subscribe", "POST subscribe/search/81",
       ])
-      XCTAssertEqual(fixture.createdValues, .init(
-        season: 2, start: 5, total: 6, include: "(?!)", bestVersion: 1, fullPack: 0, quality: nil))
-      XCTAssertEqual(fixture.searchValues, .init(
-        season: 2, start: 5, total: 5, include: "WEB", bestVersion: 1, fullPack: 0, quality: "WEB-DL"))
-
-      // 模拟 TV 重建任务作用域，以及 MoviePilot 在接收下载后直接移除临时订阅。
-      service.tearDown()
-      fixture.setMode(.downloading)
-      let library = LibraryBox()
-      let resumed = EpisodeTrialService(api: api, defaults: defaults) { _, _ in library.value }
-      defer { resumed.tearDown() }
-      let downloading = await resumed.refresh(request)
-      XCTAssertEqual(downloading, .downloading(progress: 42))
-
-      fixture.setMode(.organizing)
-      let organizing = await resumed.refresh(request)
-      XCTAssertEqual(organizing, .organizing)
-
-      fixture.setMode(.transferred)
-      let transferred = await resumed.refresh(request)
-      XCTAssertEqual(transferred, .waitingForLibrary)
-
-      library.value = .playable(server: "测试媒体库")
-      let ready = await resumed.refresh(request)
-      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
-      XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))
+      let created = try XCTUnwrap(backend.created.first)
+      XCTAssertEqual(created["include"] as? String, "(?!)", "创建时拒绝所有资源")
+      XCTAssertEqual(created["start_episode"] as? Int, 5)
+      XCTAssertEqual(created["total_episode"] as? Int, 6)
+      let searched = try XCTUnwrap(backend.searched.first)
+      XCTAssertEqual(searched["start_episode"] as? Int, 5)
+      XCTAssertEqual(searched["total_episode"] as? Int, 5, "补搜前总集数锁到目标集")
+      XCTAssertEqual(searched["state"] as? String, "S")
+      XCTAssertEqual(searched["include"] as? String, "WEB")
+      XCTAssertEqual(searched["quality"] as? String, "WEB-DL")
+      XCTAssertEqual(searched["best_version"] as? Int, 1)
+      XCTAssertEqual(searched["best_version_full"] as? Int, 0)
+      XCTAssertEqual(service.credentials.count, 1)
+      XCTAssertEqual(service.trialState(of: try XCTUnwrap(backend.subscribe(81))), .active)
     }
   }
 
-  func testFinishedWithoutResourceCleansOnlyUnchangedTemporaryRow() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
+  func testSearchWithoutDownloadDeletesTrialAndAllowsStartingAgain() async throws {
     try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.noResource)
-      let refresh = await service.refresh(request)
-      XCTAssertEqual(refresh, .noEligibleResource)
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
+      _ = await service.start(request)
+      backend.finishSearch(submitted: false)
+      let finished = await service.refresh(request)
+      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+      XCTAssertTrue(service.credentials.isEmpty)
+
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching)
+      XCTAssertEqual(backend.mutations.filter { $0 == "POST subscribe" }.count, 2)
     }
   }
 
-  func testExternalEditPreventsAutomaticDeletion() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.externallyEdited)
-      let refresh = await service.refresh(request)
-      XCTAssertEqual(refresh, .unavailable("试看订阅已由其他入口修改"))
-      XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))
+  func testUnfinishedSearchesExplainHowTheyEnded() async throws {
+    for (state, expected) in [
+      ("failed", EpisodeTrialProgress.unavailable("MoviePilot 没有完成本次试看搜索，可以重新发起")),
+      ("skipped", .unavailable("MoviePilot 跳过了本次试看搜索，可以重新发起")),
+    ] {
+      backend.reset()
+      try await withService { _, service, _, request in
+        _ = await service.start(request)
+        backend.settleBatch(state)
+        let ended = await service.refresh(request)
+        XCTAssertEqual(ended, expected, state)
+        XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", state)
+      }
     }
   }
 
-  func testLostSearchReceiptRecoversTheBatchWithoutPostingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.lostSearchReceipt)
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .submissionUnconfirmed)
-      fixture.setMode(.noResource)
-      let refresh = await service.refresh(request)
-      XCTAssertEqual(refresh, .noEligibleResource)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe/search/81" }.count, 1)
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-    }
-  }
-
-  func testVersionAndUnconfirmedLibraryBlockNewSubscription() async throws {
-    try await withService(library: .failed("媒体服务器暂不可用")) { api, service, _, request in
-      api.settings?.BACKEND_VERSION = "v3.2.5"
-      let unsupported = await service.start(request)
-      XCTAssertEqual(unsupported, .unavailable("试看需要 MoviePilot v3.2.6 或更高版本和管理员账号"))
-      api.settings?.BACKEND_VERSION = "v3.2.6"
-      let unknown = await service.start(request)
-      XCTAssertEqual(unknown, .unavailable("媒体服务器暂不可用"))
-      XCTAssertEqual(EpisodeTrialURLProtocol.fixture.mutations, [])
-    }
-  }
-
-  func testLostCreateRequestWaitsThenAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    fixture.setMode(.lostCreate)
-    try await withService(clock: clock) { _, service, _, request in
-      let lost = await service.start(request)
-      XCTAssertEqual(lost, .submissionUnconfirmed)
-
-      // 确认期内不能重复创建，避免第一次请求晚到后留下两条试看订阅。
-      fixture.setMode(.initial)
-      let waiting = await service.start(request)
-      XCTAssertEqual(waiting, .submissionUnconfirmed)
-      XCTAssertEqual(fixture.mutations, ["POST subscribe"])
-
-      clock.advance(EpisodeTrialTemporarySubscription.confirmationWindow + 1)
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
-    }
-  }
-
-  func testUndeliveredSearchRemovesTemporaryRowThenAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    fixture.setMode(.searchNotReceived)
-    try await withService(clock: clock) { _, service, _, request in
-      let lost = await service.start(request)
-      XCTAssertEqual(lost, .submissionUnconfirmed)
-
-      let waiting = await service.refresh(request)
-      XCTAssertEqual(waiting, .submissionUnconfirmed)
-      XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))
-
-      clock.advance(EpisodeTrialTemporarySubscription.confirmationWindow + 1)
-      let expired = await service.refresh(request)
-      XCTAssertEqual(expired, .unavailable("上次试看准备未完成，可以重新发起"))
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-
-      fixture.setMode(.initial)
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe/search/81" }.count, 2)
-    }
-  }
-
-  /// 补搜回执丢了，订阅随后也没了：搜索可能已经提交过下载，先按下载历史跟踪；
-  /// 过了 MoviePilot 搜索最长运行时间仍没有下载记录，才允许重新发起，不会一直卡着。
-  func testLostSearchWithVanishedRowEventuallyAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    fixture.setMode(.searchNotReceived)
-    try await withService(clock: clock) { _, service, _, request in
-      let lost = await service.start(request)
-      XCTAssertEqual(lost, .submissionUnconfirmed)
-      fixture.removeTemporary()
-
-      let tracking = await service.refresh(request)
-      XCTAssertEqual(tracking, .submissionUnconfirmed)
-      clock.advance(60 * 60)
-      let stillTracking = await service.refresh(request)
-      XCTAssertEqual(stillTracking, .submissionUnconfirmed, "那次搜索可能还在运行")
-
-      clock.advance(71 * 60)
-      let released = await service.refresh(request)
-      XCTAssertEqual(released, .unavailable("上次试看准备未完成，可以重新发起"))
-      fixture.setMode(.initial)
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
-    }
-  }
-
-  /// 下载任务从下载器里删掉、也没有整理记录：持续一段时间都确认找不到，就算结束，可以重新发起。
-  func testRemovedDownloadEventuallyAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    try await withService(clock: clock) { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.downloading)
-      let downloading = await service.refresh(request)
-      XCTAssertEqual(downloading, .downloading(progress: 42))
-
-      fixture.setMode(.downloadRemoved)
-      let missing = await service.refresh(request)
-      XCTAssertEqual(missing, .downloading(progress: nil), "刚下完到开始整理之间也会暂时找不到")
-      clock.advance(30 * 60)
-      let stillMissing = await service.refresh(request)
-      XCTAssertEqual(stillMissing, .downloading(progress: nil))
-
-      clock.advance(31 * 60)
-      let gone = await service.refresh(request)
-      XCTAssertEqual(gone, .unavailable("试看的下载已不在下载器里，可以重新发起"))
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
-    }
-  }
-
-  /// 试看的这一集入库后又从媒体库删掉：不再显示可以播放，可以重新试看。
-  func testEpisodeRemovedFromLibraryCanBeTrialledAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
+  func testSubmittedDownloadIsFollowedAfterTrialIsDeleted() async throws {
     let library = LibraryBox()
     try await withService(availability: { _, _ in library.value }) { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.transferred)
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", "搜索结束就删订阅，不等入库")
+      XCTAssertTrue(service.credentials.isEmpty)
+
+      backend.moveToQueue("target-hash")
+      let organizing = await service.refresh(request)
+      XCTAssertEqual(organizing, .organizing)
+
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+
       library.value = .playable(server: "测试媒体库")
       let ready = await service.refresh(request)
       XCTAssertEqual(ready, .ready(server: "测试媒体库"))
-
-      library.value = .notOnServer
-      let removed = await service.refresh(request)
-      XCTAssertEqual(removed, .unavailable("这一集已不在媒体库里，可以重新发起"))
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
     }
   }
 
-  /// 这期间又有一整页别的下载，试看的下载记录落到第二页，也要找到。
-  func testTrialDownloadIsFoundBeyondTheFirstHistoryPage() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
+  func testOrganizationFailureEndsTheTrial() async throws {
     try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.downloading)
-      fixture.overflowHistory()
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: false)
+      let failed = await service.refresh(request)
+      XCTAssertEqual(failed, .organizationFailed)
+
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching, "整理失败后可以重新发起")
+    }
+  }
+
+  func testSubmittedDownloadWithoutRecordStopsTracking() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true, recordsHistory: false)
+      let ended = await service.refresh(request)
+      XCTAssertEqual(ended, EpisodeTrialService.untrackable)
+    }
+  }
+
+  func testDownloadRecordBeyondTheFirstHistoryPageIsFound() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.pushHistoryToSecondPage()
       let downloading = await service.refresh(request)
       XCTAssertEqual(downloading, .downloading(progress: 42))
     }
   }
 
-  func testFailedSearchBatchAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
+  func testDownloadBetweenDownloaderAndQueueKeepsBeingWatched() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.finishDownload("target-hash")
+      let between = await service.refresh(request)
+      XCTAssertEqual(between, .submissionUnconfirmed, "下载器只列出还在下载的任务，暂时三处都找不到")
+      backend.moveToQueue("target-hash")
+      let organizing = await service.refresh(request)
+      XCTAssertEqual(organizing, .organizing)
+    }
+  }
+
+  // MARK: - 别处已有的东西
+
+  func testExistingSubscriptionIsShownAndNeverTouched() async throws {
+    backend.addFormal(state: "S")
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .subscriptionPaused)
+      XCTAssertEqual(backend.mutations, [])
+    }
+  }
+
+  func testOtherDevicesTrialIsTreatedAsAnOrdinarySubscription() async throws {
+    let other = backend.addFormal(state: "S", marker: EpisodeTrialTemporarySubscription.makeMarker(at: Date()))
+    try await withService { _, service, _, request in
+      XCTAssertNil(service.trialState(of: other), "没有本机凭据，不算试看中")
+      let start = await service.start(request)
+      XCTAssertEqual(start, .subscriptionPaused)
+      XCTAssertEqual(backend.mutations, [], "别的设备的试看订阅不暂停、不删")
+      let cancelled = await service.cancelTrial(subscriptionID: 70)
+      XCTAssertEqual(cancelled, .failed)
+    }
+  }
+
+  func testCreateReturningExistingSubscriptionLeavesItAlone() async throws {
+    backend.returnExistingOnCreate(state: "R")
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .waitingForSubscription)
+      XCTAssertEqual(backend.mutations, ["POST subscribe"], "拿回的已有订阅不暂停、不改、不补搜、不删")
+      XCTAssertTrue(service.credentials.isEmpty)
+    }
+  }
+
+  func testCreateOutcomeDoesNotDependOnMessageWording() async throws {
+    backend.setCreateMessage("已添加订阅")
     try await withService { _, service, _, request in
       let start = await service.start(request)
       XCTAssertEqual(start, .searching)
-
-      fixture.setMode(.batchFailed)
-      let failed = await service.refresh(request)
-      XCTAssertEqual(failed, .unavailable("MoviePilot 没有完成本次试看搜索，可以重新发起"))
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-
-      fixture.setMode(.initial)
-      let restarted = await service.start(request)
-      XCTAssertEqual(restarted, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
     }
   }
 
-  func testOnlyExpiredPlaceholderIsRemovedBeforeStarting() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    try await withService(clock: clock) { _, service, _, request in
-      fixture.setPlaceholder(marker: EpisodeTrialTemporarySubscription.makeMarker(at: clock.now))
-      let blocked = await service.start(request)
-      XCTAssertEqual(blocked, .seasonTrialInProgress)
-      XCTAssertEqual(fixture.mutations, [])
-
-      clock.advance(EpisodeTrialTemporarySubscription.confirmationWindow)
-      let started = await service.start(request)
-      XCTAssertEqual(started, .searching)
-      XCTAssertEqual(fixture.mutations.first, "DELETE subscribe/90")
-    }
-  }
-
-  func testUnreachableDownloaderDoesNotHideDownloadOnAnotherClient() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.existingDownload)
+  func testEpisodeAlreadyDownloadingIsShownInsteadOfCreating() async throws {
+    backend.addDownload(hash: "earlier-hash", progress: 30)
     try await withService { _, service, _, request in
       let start = await service.start(request)
       XCTAssertEqual(start, .downloading(progress: 30))
-      XCTAssertEqual(fixture.mutations, [])
+      XCTAssertFalse(backend.mutations.contains("POST subscribe"))
     }
   }
 
-  func testUnreachableDownloaderBlocksNewSubscriptionWhenDownloadIsNotFound() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.existingDownloadUnconfirmed)
+  func testUnreachableDownloaderBlocksNewTrialWhenDownloadIsNotFound() async throws {
+    backend.addDownload(hash: "earlier-hash", progress: nil, offline: true)
     try await withService { _, service, _, request in
       let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("暂时无法确认试看进度"))
-      XCTAssertEqual(fixture.mutations, [])
+      XCTAssertEqual(start, EpisodeTrialService.unconfirmedQuery)
+      XCTAssertFalse(backend.mutations.contains("POST subscribe"))
+    }
+  }
+
+  func testUnconfirmedLibraryBlocksNewTrial() async throws {
+    try await withService(library: .failed("媒体服务器读取失败")) { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .unavailable("媒体服务器读取失败"))
+      XCTAssertEqual(backend.mutations, [])
+    }
+  }
+
+  // MARK: - 回执丢失与恢复
+
+  func testLostCreateReceiptIsRecognizedByMarker() async throws {
+    backend.loseCreateReceipt(afterStoring: true)
+    try await withService { _, service, _, request in
+      let lost = await service.start(request)
+      XCTAssertEqual(lost, .submissionUnconfirmed)
+      XCTAssertNil(service.credentials.first?.subscriptionID)
+
+      let recovered = await service.start(request)
+      XCTAssertEqual(recovered, .searching)
+      XCTAssertEqual(backend.mutations.filter { $0 == "POST subscribe" }.count, 1, "按标记认出来，不再新建")
+      XCTAssertEqual(service.credentials.first?.subscriptionID, 81)
+    }
+  }
+
+  func testUndeliveredCreateIsSentAgainWithTheSameMarker() async throws {
+    backend.loseCreateReceipt(afterStoring: false)
+    try await withService { _, service, _, request in
+      let lost = await service.start(request)
+      XCTAssertEqual(lost, .submissionUnconfirmed)
+      let marker = try XCTUnwrap(service.credentials.first?.marker)
+
+      backend.loseCreateReceipt(afterStoring: nil)
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching)
+      XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker])
+    }
+  }
+
+  func testUnconfirmedCreateIsNotPolled() async throws {
+    backend.loseCreateReceipt(afterStoring: false)
+    let sleeper = ScriptedSleeper()
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      _ = await service.start(request)
+      let page = try await openPage(service, request)
+      try await Task.sleep(for: .milliseconds(100))
+      page.cancel()
+      await page.value
+      XCTAssertEqual(sleeper.delays, [], "创建没确认时不轮询")
+      XCTAssertEqual(sleeper.driveCount, 0, "也不定时对账")
+    }
+  }
+
+  func testDuplicatePlaceholderWithTheSameMarkerIsRemoved() async throws {
+    backend.landCreateTwice()
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      XCTAssertTrue(backend.mutations.contains("DELETE subscribe/82"), "同标记的第二条占位删掉")
+      XCTAssertNotNil(backend.subscribe(81))
+    }
+  }
+
+  func testLostSearchReceiptIsRecoveredFromTheSubscription() async throws {
+    backend.loseSearchReceipt(afterQueueing: true)
+    try await withService { _, service, _, request in
+      let lost = await service.start(request)
+      XCTAssertEqual(lost, .searching)
+      XCTAssertNil(service.credentials.first?.batchID)
+
+      _ = await service.refresh(request)
+      XCTAssertEqual(service.credentials.first?.batchID, FakeMoviePilot.batchID)
+      XCTAssertEqual(backend.mutations.filter { $0 == "POST subscribe/search/81" }.count, 1, "不重复补搜")
+    }
+  }
+
+  func testUndeliveredSearchIsSentAgain() async throws {
+    backend.loseSearchReceipt(afterQueueing: false)
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.loseSearchReceipt(afterQueueing: nil)
+      _ = await service.refresh(request)
+      XCTAssertEqual(backend.mutations.filter { $0 == "POST subscribe/search/81" }.count, 2)
+      XCTAssertEqual(service.credentials.first?.batchID, FakeMoviePilot.batchID)
+    }
+  }
+
+  func testRejectedSearchDeletesTheTrial() async throws {
+    backend.rejectSearch()
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .unavailable("MoviePilot 拒绝试看补搜"))
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+      XCTAssertTrue(service.credentials.isEmpty)
+    }
+  }
+
+  func testUnreadWriteIsStillRecognizedAndContinues() async throws {
+    backend.failReadBackAfterWrite()
+    backend.normalizeWrites()
+    try await withService(rule: EpisodeTrialRule(sites: [3, 7], include: "WEB")) { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, EpisodeTrialService.unconfirmedQuery)
+      XCTAssertFalse(backend.mutations.contains("POST subscribe/search/81"), "没读回来就先不补搜")
+
+      let resumed = await service.refresh(request)
+      XCTAssertEqual(resumed, .searching, "后端整理过站点顺序，仍认得是自己写的")
+      XCTAssertTrue(backend.mutations.contains("POST subscribe/search/81"))
+    }
+  }
+
+  // MARK: - 别处改过、删过
+
+  func testEditElsewhereReleasesTheTrialWithoutDeletingIt() async throws {
+    for (key, value) in [
+      ("keyword", "用户改的" as Any), ("search_interval", 6 as Any), ("state", "R" as Any),
+    ] {
+      backend.reset()
+      try await withService { _, service, _, request in
+        _ = await service.start(request)
+        backend.edit(81, key, value)
+        backend.finishSearch(submitted: false)
+        let released = await service.refresh(request)
+        XCTAssertEqual(released, EpisodeTrialService.released, key)
+        XCTAssertFalse(backend.mutations.contains("DELETE subscribe/81"), key)
+        XCTAssertTrue(service.credentials.isEmpty, key)
+        XCTAssertNil(service.trialState(of: try XCTUnwrap(backend.subscribe(81))), "之后按普通订阅处理")
+      }
+    }
+  }
+
+  func testMoviePilotMetadataRefreshIsNotAnEdit() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.edit(81, "name", "MoviePilot 刷新的剧名")
+      backend.edit(81, "year", "2024")
+      backend.finishSearch(submitted: false)
+      let finished = await service.refresh(request)
+      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+    }
+  }
+
+  func testEditBetweenListAndDeleteIsCaughtByRereading() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: false)
+      backend.editOnNextBatchQuery(81, "keyword", "用户改的")
+      let released = await service.refresh(request)
+      XCTAssertEqual(released, EpisodeTrialService.released)
+      XCTAssertFalse(backend.mutations.contains("DELETE subscribe/81"), "删除前按 ID 重读核对")
+    }
+  }
+
+  func testTrialDeletedElsewhereEnds() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.deleteElsewhere(81)
+      let ended = await service.refresh(request)
+      XCTAssertEqual(ended, EpisodeTrialService.removedElsewhere)
+      XCTAssertTrue(service.credentials.isEmpty)
+    }
+  }
+
+  func testTrialDeletedElsewhereAfterSubmittingIsStillFollowed() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.deleteElsewhere(81)
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+    }
+  }
+
+  // MARK: - 取消
+
+  func testCancelWaitsForTheSearchToStopBeforeDeleting() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      let row = try XCTUnwrap(backend.subscribe(81))
+      let pending = await service.cancelTrial(subscriptionID: 81)
+      XCTAssertEqual(pending, .pending)
+      XCTAssertTrue(backend.mutations.contains("PUT subscribe/execution/batches/\(FakeMoviePilot.batchID)/cancel"))
+      XCTAssertFalse(backend.mutations.contains("DELETE subscribe/81"), "取消受理只是停止中，批次还没结束")
+      XCTAssertEqual(service.trialState(of: row), .cancelling)
+      XCTAssertEqual(service.progress[request.key], .cancelling)
+
+      let stillCancelling = await service.refresh(request)
+      XCTAssertEqual(stillCancelling, .cancelling)
+
+      backend.settleBatch("cancelled")
+      let cancelled = await service.refresh(request)
+      XCTAssertEqual(cancelled, EpisodeTrialService.cancelled)
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+      XCTAssertTrue(service.credentials.isEmpty)
+    }
+  }
+
+  func testCancelAfterTheSearchEndedDeletesRightAway() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.settleBatch("completed")
+      let done = await service.cancelTrial(subscriptionID: 81)
+      XCTAssertEqual(done, .done)
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+      XCTAssertFalse(backend.mutations.contains { $0.hasSuffix("/cancel") }, "已结束就不用再请求停止")
+    }
+  }
+
+  func testCancelThatStillSubmittedADownloadKeepsFollowingIt() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      _ = await service.cancelTrial(subscriptionID: 81)
+      backend.finishSearch(submitted: true, state: "cancelled")
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42), "停止前已提交的下载不动，接着看")
+    }
+  }
+
+  func testCancelIntentSurvivesRestart() async throws {
+    try await withService { api, service, defaults, request in
+      _ = await service.start(request)
+      _ = await service.cancelTrial(subscriptionID: 81)
+      service.tearDown()
+
+      backend.settleBatch("cancelled")
+      let sleeper = ScriptedSleeper(drive: [.proceed])
+      let resumed = EpisodeTrialService(api: api, defaults: defaults, sleep: sleeper.sleep) { _, _ in .notOnServer }
+      defer { resumed.tearDown() }
+      XCTAssertEqual(resumed.credentials.first?.cancelRequested, true)
+      try await waitUntil { resumed.credentials.isEmpty }
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", "重启后不用打开这一集也会收尾")
+    }
+  }
+
+  func testCancelWithoutAnySearchDeletesThePlaceholder() async throws {
+    backend.loseSearchReceipt(afterQueueing: false)
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      let done = await service.cancelTrial(subscriptionID: 81)
+      XCTAssertEqual(done, .done)
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+    }
+  }
+
+  func testOnlyAdministratorsCanCancel() async throws {
+    try await withService(superUser: false) { _, service, _, _ in
+      XCTAssertFalse(service.canCancelTrial)
+      let failed = await service.cancelTrial(subscriptionID: 81)
+      XCTAssertEqual(failed, .failed)
+    }
+  }
+
+  // MARK: - 后台对账
+
+  func testBackgroundDriveFinishesTheTrialWithoutReopeningTheEpisode() async throws {
+    try await withService { api, service, defaults, request in
+      _ = await service.start(request)
+      service.tearDown()
+
+      backend.finishSearch(submitted: false)
+      let resumed = EpisodeTrialService(
+        api: api, defaults: defaults, sleep: ScriptedSleeper(drive: [.proceed]).sleep
+      ) { _, _ in .notOnServer }
+      defer { resumed.tearDown() }
+      try await waitUntil { resumed.credentials.isEmpty }
+      XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
+      XCTAssertEqual(resumed.progress[request.key], .noEligibleResource)
     }
   }
 
   func testConcurrentStartsShareOneSubmission() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
     try await withService { _, service, _, request in
       async let first = service.start(request)
       async let second = service.start(request)
       let results = await [first, second]
       XCTAssertEqual(results, [.searching, .searching])
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 1)
+      XCTAssertEqual(backend.mutations.filter { $0 == "POST subscribe" }.count, 1)
     }
   }
 
-  func testTimedCleanupRemovesTemporaryRowWithoutReopeningTheEpisode() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let clock = TrialClock()
-    try await withService(clock: clock) { api, service, defaults, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
-      // 模拟 App 被关掉后很久才重新打开，用户也没有再进这一集。
-      service.tearDown()
-      fixture.setMode(.noResource)
-      clock.advance(30 * 60)
-      let sleeper = CleanupSleeper()
-      let resumed = EpisodeTrialService(
-        api: api, defaults: defaults, now: { clock.now }, sleep: sleeper.sleep
-      ) { _, _ in .notOnServer }
-      defer { resumed.tearDown() }
-
-      for _ in 0..<300 where !fixture.mutations.contains("DELETE subscribe/81") {
-        try await Task.sleep(for: .milliseconds(10))
-      }
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-      XCTAssertEqual(resumed.progress[request.key], .noEligibleResource)
-      XCTAssertEqual(sleeper.delays.first, .seconds(600))
-    }
-  }
-
-  /// 只剩早先的临时订阅时，清理按空闲间隔等；这期间新发起的试看要提前醒来，改按密的间隔对账。
-  func testNewTrialWakesIdleCleanup() async throws {
-    let clock = TrialClock()
-    try await withService(clock: clock) { api, service, defaults, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      service.tearDown()
-
-      clock.advance(21 * 60)
-      let recorder = SleepRecorder()
-      let resumed = EpisodeTrialService(
-        api: api, defaults: defaults, now: { clock.now }, sleep: recorder.sleep) { _, _ in .notOnServer }
-      defer { resumed.tearDown() }
-      let polls = [EpisodeTrialService.activePollInterval, EpisodeTrialService.formalPollInterval]
-      try await waitUntil { !recorder.delays.isEmpty }
-      XCTAssertEqual(recorder.delays.filter { !polls.contains($0) }, [.seconds(600)])
-
-      let cancelled = await resumed.cancelTrial(subscriptionID: 81)
-      XCTAssertTrue(cancelled)
-      let again = await resumed.start(request)
-      XCTAssertEqual(again, .searching)
-      try await waitUntil { recorder.delays.filter { !polls.contains($0) }.count == 2 }
-      XCTAssertEqual(recorder.delays.filter { !polls.contains($0) }, [.seconds(600), .seconds(20)])
-    }
-  }
-
-  /// 搜索、下载期间这一集进不了媒体库，轮询按缓存查；要发起前和整理完等入库时才重读媒体服务器。
-  func testLibraryIsReadFreshOnlyWhenItMayHaveChanged() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let reads = FreshReads()
-    try await withService(availability: { _, fresh in
-      reads.values.append(fresh)
-      return .notOnServer
-    }) { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      _ = await service.refresh(request)
-      fixture.setMode(.transferred)
-      let organized = await service.refresh(request)
-      XCTAssertEqual(organized, .waitingForLibrary)
-      _ = await service.refresh(request)
-      XCTAssertEqual(reads.values, [true, false, false, true])
-    }
-  }
-
-  func testEndedFormalSubscriptionWithoutNewDownloadAllowsTrial() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    try await withService { _, service, _, request in
-      let paused = await service.start(request)
-      XCTAssertEqual(paused, .subscriptionPaused)
-
-      fixture.setMode(.missingFormal)
-      let started = await service.start(request)
-      XCTAssertEqual(started, .searching)
-      XCTAssertEqual(fixture.mutations.first, "POST subscribe")
-    }
-  }
-
-  func testEndedFormalSubscriptionWaitsForLibraryAfterItsDownloadWasOrganized() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    try await withService { _, service, _, request in
-      let paused = await service.start(request)
-      XCTAssertEqual(paused, .subscriptionPaused)
-
-      // 正式订阅下完、整理成功后结束了，媒体库还没扫到这一集。
-      fixture.setMode(.formalEndedOrganized)
-      let waiting = await service.start(request)
-      XCTAssertEqual(waiting, .waitingForLibrary)
-      XCTAssertEqual(fixture.mutations, [])
-    }
-  }
-
-  func testBackendNormalizedWriteStillSearchesAndCleansUp() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.normalizesWrites)
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
-      fixture.setMode(.noResource)
-      let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-    }
-  }
-
-  /// 写入规则后没读回来，后端又整理过站点顺序：仍认得是自己写的，照常清理，不当成被别处改过而留在服务器上。
-  func testUnreadWriteIsStillCleanedUp() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.normalizesWrites)
-    fixture.failReadBackAfterWrite()
-    try await withService(rule: EpisodeTrialRule(sites: [3, 7], include: "WEB")) { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("暂时无法确认试看进度"))
-      XCTAssertFalse(fixture.mutations.contains("POST subscribe/search/81"), "没读回来就不补搜")
-
-      let cleaned = await service.refresh(request)
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-      XCTAssertEqual(cleaned, .unavailable("上次试看准备未完成，可以重新发起"))
-    }
-  }
-
-  /// 别处只改了名称、搜索间隔这类不属于试看规则的项，订阅也还暂停着，照样算被改过，不自动删。
-  func testEditOutsideTrialRuleStillPreventsDeletion() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    for (key, value) in [("name", "用户改的名字" as Any), ("search_interval", 6 as Any)] {
-      fixture.reset()
-      try await withService { _, service, _, request in
-        let start = await service.start(request)
-        XCTAssertEqual(start, .searching)
-        fixture.editTemporary(key, value)
-        fixture.setMode(.noResource)
-        let finished = await service.refresh(request)
-        XCTAssertEqual(finished, .unavailable("试看订阅已由其他入口修改"), key)
-        XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"), key)
-      }
-    }
-  }
-
-  func testTransferResultIsFoundByTitleMoviePilotRecognized() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
-      fixture.setMode(.transferredUnderRecognizedTitle)
-      let transferred = await service.refresh(request)
-      XCTAssertEqual(transferred, .waitingForLibrary)
-    }
-  }
+  // MARK: - 版本门槛
 
   func testVersionGateFollowsNewBehaviorPolarity() {
-    XCTAssertEqual(EpisodeTrialAvailability.minimumBackendVersion, "v3.2.6")
+    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: nil))
     XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: "v3.2.5"))
+    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: "unknown"))
     XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.2.6"))
-    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.2.6-1"), "热修复版本照常提供")
-    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.3.0"), "未登记的更新版本照常提供")
-    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: nil), "读不出版本时不提供")
-    XCTAssertFalse(EpisodeTrialAvailability.supports(backendVersion: "dev"), "无法解析的版本不提供")
-    XCTAssertFalse(
-      EpisodeTrialAvailability.isAvailable(canRequestSuperUserEndpoints: false, backendVersion: "v3.2.6"),
-      "普通用户不提供")
+    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.2.6-1"))
+    XCTAssertTrue(EpisodeTrialAvailability.supports(backendVersion: "v3.3.0"))
+    XCTAssertFalse(EpisodeTrialAvailability.isAvailable(canRequestSuperUserEndpoints: false, backendVersion: "v3.3.0"))
   }
 
   func testUnsupportedBackendNeverTouchesServer() async throws {
-    try await withService { api, service, _, request in
-      for version in ["v3.2.5", "dev"] {
+    for version in ["v3.2.5", nil] as [String?] {
+      backend.reset()
+      try await withService { api, service, _, request in
         api.settings?.BACKEND_VERSION = version
-        let progress = await service.start(request)
-        XCTAssertEqual(progress, .unavailable(EpisodeTrialAvailability.requirementMessage))
+        let result = await service.start(request)
+        XCTAssertEqual(result, .unavailable(EpisodeTrialAvailability.requirementMessage))
+        XCTAssertEqual(backend.requestCount, 0)
       }
-      api.settings?.BACKEND_VERSION = nil
-      let missing = await service.start(request)
-      XCTAssertEqual(missing, .unavailable(EpisodeTrialAvailability.requirementMessage))
-      XCTAssertEqual(EpisodeTrialURLProtocol.fixture.requestCount, 0)
     }
   }
 
-  func testWithoutSavedRuleTrialUsesMoviePilotDefaults() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
+  // MARK: - 规则
+
+  func testWithoutSavedRuleTrialKeepsMoviePilotDefaults() async throws {
     try await withService(rule: nil) { _, service, _, request in
       XCTAssertTrue(service.rule.isDefault)
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      // 没指定的项保留 MoviePilot 默认订阅配置的值；包含规则从拒绝所有资源换回默认配置里的。
-      XCTAssertEqual(fixture.searchValues, .init(
-        season: 2, start: 5, total: 5, include: "MP 默认包含", bestVersion: 1, fullPack: 0, quality: "MP 默认质量"))
+      _ = await service.start(request)
+      let searched = try XCTUnwrap(backend.searched.first)
+      XCTAssertEqual(searched["quality"] as? String, "MP 默认质量", "没指定的项保留 MoviePilot 默认值")
+      XCTAssertEqual(searched["include"] as? String, "MP 默认包含", "包含规则从拒绝所有资源换回默认配置")
     }
   }
 
@@ -603,118 +582,98 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
-  func testPollKeepsRefreshingUntilTrialFinishes() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let sleeper = PollSleeper { fixture.setMode(.noResource) }
-    try await withService(sleep: sleeper.sleep) { _, service, _, request in
-      let page = try await openPage(service, request)
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
-      // 进度先变成没有资源，随后才删除临时订阅，两件事都等到。
-      try await waitUntil {
-        service.progress[request.key] == .noEligibleResource && fixture.mutations.last == "DELETE subscribe/81"
-      }
-      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
-      page.cancel()
-      await page.value
-    }
-  }
+  // MARK: - 页面轮询和入库提示
 
   func testPollNeverStartsATrial() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let sleeper = PollSleeper {}
+    let sleeper = ScriptedSleeper()
     try await withService(sleep: sleeper.sleep) { _, service, _, request in
       let page = try await openPage(service, request)
-      let requests = fixture.requestCount
       try await Task.sleep(for: .milliseconds(100))
-      XCTAssertEqual(fixture.requestCount, requests, "没有可跟踪的事时页面不请求后端")
-      XCTAssertEqual(sleeper.pollDelays, [])
-      XCTAssertEqual(fixture.mutations, [])
       page.cancel()
       await page.value
+      XCTAssertEqual(service.progress[request.key], .notStarted)
+      XCTAssertEqual(backend.mutations, [])
+      XCTAssertEqual(sleeper.delays, [], "没有要跟的事时不轮询")
     }
   }
 
-  func testPollFollowsFormalSubscriptionSlowly() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    let sleeper = PollSleeper { fixture.setMode(.missingFormal) }
+  func testPollKeepsRefreshingWhileTheTrialRuns() async throws {
+    let sleeper = ScriptedSleeper(polls: [.proceed, .suspend])
     try await withService(sleep: sleeper.sleep) { _, service, _, request in
       let page = try await openPage(service, request)
-      let paused = await service.start(request)
-      XCTAssertEqual(paused, .subscriptionPaused)
-
-      try await waitUntil { service.progress[request.key] == .unavailable("原订阅已结束，可以发起试看") }
-      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.formalPollInterval])
-      XCTAssertEqual(fixture.mutations, [])
+      _ = await service.start(request)
+      try await waitUntil { sleeper.delays.count == 2 }
+      let whileVisible = sleeper.delays
       page.cancel()
       await page.value
+      XCTAssertEqual(whileVisible, [EpisodeTrialService.activePollInterval, EpisodeTrialService.activePollInterval])
+    }
+  }
+
+  func testPollFollowsAnExistingSubscriptionSlowlyAndNotInBackground() async throws {
+    backend.addFormal(state: "R")
+    let sleeper = ScriptedSleeper(polls: [.suspend])
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let page = try await openPage(service, request)
+      try await waitUntil { sleeper.delays.count == 1 }
+      XCTAssertEqual(sleeper.delays, [EpisodeTrialService.slowPollInterval])
+      page.cancel()
+      await page.value
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertEqual(sleeper.delays.count, 1, "离开页面后不在后台等正式订阅")
     }
   }
 
   func testLeavingThePageHandsOverAndAnnouncesWhenReady() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
     let library = LibraryBox()
-    // 第 1 次等待属于页面；页面离开后第 2 次属于后台跟踪，这时这一集整理完并入库。
-    let sleeper = PollSleeper([.suspend, .proceed {
-      fixture.setMode(.transferred)
+    // 第 1 次等待属于页面；页面离开后第 2 次属于后台跟踪，这时这一集已经入库。
+    let sleeper = ScriptedSleeper(polls: [.suspend, .run {
+      FakeMoviePilot.shared.finishSearch(submitted: true)
       library.value = .playable(server: "测试媒体库")
     }])
     try await withService(sleep: sleeper.sleep, availability: { _, _ in library.value }) { api, service, _, request in
       let notices = ReadyNoticeRecorder(api: api)
       let page = try await openPage(service, request)
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      try await waitUntil { sleeper.pollDelays.count == 1 }
+      _ = await service.start(request)
+      try await waitUntil { sleeper.delays.count == 1 }
       page.cancel()
       await page.value
 
       try await waitUntil { notices.messages.count == 1 }
-      XCTAssertEqual(service.progress[request.key], .ready(server: "测试媒体库"))
-      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval, EpisodeTrialService.activePollInterval])
       XCTAssertEqual(notices.messages, ["《试看测试》第 2 季第 5 集已入库，可以播放了。"])
     }
   }
 
   func testStartWithoutPageIsFollowedAndAnnounced() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
     let library = LibraryBox()
-    let sleeper = PollSleeper([.proceed {
-      fixture.setMode(.transferred)
+    let sleeper = ScriptedSleeper(polls: [.run {
+      FakeMoviePilot.shared.finishSearch(submitted: true)
       library.value = .playable(server: "测试媒体库")
     }])
     try await withService(sleep: sleeper.sleep, availability: { _, _ in library.value }) { api, service, _, request in
       let notices = ReadyNoticeRecorder(api: api)
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
+      _ = await service.start(request)
       try await waitUntil { notices.messages.count == 1 }
       XCTAssertEqual(service.progress[request.key], .ready(server: "测试媒体库"))
     }
   }
 
   func testVisiblePageShowsReadyWithoutNotice() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
     let library = LibraryBox()
-    let sleeper = PollSleeper([.proceed {
-      fixture.setMode(.transferred)
+    let sleeper = ScriptedSleeper(polls: [.run {
+      FakeMoviePilot.shared.finishSearch(submitted: true)
       library.value = .playable(server: "测试媒体库")
     }])
     try await withService(sleep: sleeper.sleep, availability: { _, _ in library.value }) { api, service, _, request in
       let notices = ReadyNoticeRecorder(api: api)
       let page = try await openPage(service, request)
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
+      _ = await service.start(request)
       try await waitUntil { service.progress[request.key]?.isReady == true }
-      // 可以播放是在这次刷新中途发布的；排一次刷新，等这次推进完整结束再离开页面。
       _ = await service.refresh(request)
       page.cancel()
       await page.value
-      // 已经可以播放、没有可跟踪的事，页面离开后也不转给后台。
       try await Task.sleep(for: .milliseconds(100))
       XCTAssertEqual(notices.messages, [])
-      XCTAssertEqual(sleeper.pollDelays.count, 1)
     }
   }
 
@@ -738,132 +697,25 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
-  func testWaitingForFormalSubscriptionIsNotFollowedInBackground() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    let sleeper = PollSleeper([], then: .suspend)
-    try await withService(sleep: sleeper.sleep) { _, service, _, request in
-      let paused = await service.start(request)
-      XCTAssertEqual(paused, .subscriptionPaused)
-      try await Task.sleep(for: .milliseconds(100))
-      XCTAssertEqual(sleeper.pollDelays, [])
+  /// 搜索、下载期间这一集进不了媒体库，按缓存查；要发起前和整理完等入库时才重读媒体服务器。
+  func testLibraryIsReadFreshOnlyWhenItMayHaveChanged() async throws {
+    let reads = FreshReads()
+    try await withService(availability: { _, fresh in
+      reads.values.append(fresh)
+      return .notOnServer
+    }) { _, service, _, request in
+      _ = await service.start(request)
+      _ = await service.refresh(request)
+      backend.finishSearch(submitted: true)
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      _ = await service.refresh(request)
+      XCTAssertEqual(reads.values, [true, false, false, true])
     }
   }
 
-  func testCancelStopsSearchDeletesRowAndAllowsStartingAgain() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-
-      let cancelled = await service.cancelTrial(subscriptionID: 81)
-      XCTAssertTrue(cancelled)
-      let cancel = "PUT subscribe/execution/batches/0123456789abcdef0123456789abcdef/cancel"
-      XCTAssertEqual(Array(fixture.mutations.suffix(2)), [cancel, "DELETE subscribe/81"], "先停搜索再删订阅")
-      XCTAssertEqual(service.progress[request.key], EpisodeTrialService.cancelled)
-
-      // 取消后这一集不再跟踪，可以重新发起。
-      let again = await service.start(request)
-      XCTAssertEqual(again, .searching)
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
-    }
-  }
-
-  /// 停止搜索的请求没送到或答复对不上时，搜索可能还在跑，删掉订阅后它仍会把资源交给下载器，所以不删。
-  func testCancelKeepsTrialWhenSearchStopIsUnconfirmed() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    for outcome in [EpisodeTrialFixture.CancelOutcome.failed, .refusedWhileRunning] {
-      fixture.reset()
-      fixture.setCancelOutcome(outcome)
-      try await withService { _, service, _, request in
-        let start = await service.start(request)
-        XCTAssertEqual(start, .searching)
-
-        let cancelled = await service.cancelTrial(subscriptionID: 81)
-        XCTAssertFalse(cancelled, "\(outcome)")
-        XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"), "\(outcome)")
-        XCTAssertEqual(service.progress[request.key], .searching, "试看照常跟踪：\(outcome)")
-
-        fixture.setCancelOutcome(.stopped)
-        let retried = await service.cancelTrial(subscriptionID: 81)
-        XCTAssertTrue(retried, "稍后重试可以取消：\(outcome)")
-        XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-      }
-    }
-  }
-
-  func testCancelDeletesWhenSearchHasAlreadyFinished() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setCancelOutcome(.finished)
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      let cancelled = await service.cancelTrial(subscriptionID: 81)
-      XCTAssertTrue(cancelled)
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
-      XCTAssertEqual(service.progress[request.key], EpisodeTrialService.cancelled)
-    }
-  }
-
-  func testCancelOnlyDeletesARowThatIsStillATrial() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setMode(.pausedFormal)
-    try await withService { _, service, _, _ in
-      let cancelled = await service.cancelTrial(subscriptionID: 81)
-      XCTAssertFalse(cancelled)
-      XCTAssertEqual(fixture.mutations, [])
-    }
-  }
-
-  /// 在别处被重新启用的试看订阅已经是正式订阅，不能再当试看删掉。
-  func testReenabledTrialRowIsNotCancelledAsATrial() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.editTemporary("state", "R")
-      let cancelled = await service.cancelTrial(subscriptionID: 81)
-      XCTAssertFalse(cancelled)
-      XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))
-    }
-  }
-
-  func testTrialStartedElsewhereCanBeCancelled() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    fixture.setPlaceholder(marker: EpisodeTrialTemporarySubscription.makeMarker(at: Date()))
-    try await withService { api, service, _, _ in
-      // 取消只是删订阅，不受试看的版本门禁限制。
-      api.settings?.BACKEND_VERSION = "v3.2.5"
-      XCTAssertTrue(service.canCancelTrial)
-      let cancelled = await service.cancelTrial(subscriptionID: 90)
-      XCTAssertTrue(cancelled)
-      XCTAssertEqual(fixture.mutations, ["DELETE subscribe/90"])
-    }
-  }
-
-  func testOrganizationFailureEndsTheTrial() async throws {
-    let fixture = EpisodeTrialURLProtocol.fixture
-    let sleeper = PollSleeper([], then: .suspend)
-    try await withService(sleep: sleeper.sleep) { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      fixture.setMode(.transferFailed)
-      let failed = await service.refresh(request)
-      XCTAssertEqual(failed, .organizationFailed)
-
-      // 不再轮询，也不在后台跟踪。
-      let page = try await openPage(service, request)
-      try await Task.sleep(for: .milliseconds(100))
-      page.cancel()
-      await page.value
-      XCTAssertEqual(sleeper.pollDelays.filter { $0 == EpisodeTrialService.activePollInterval }.count, 1,
-        "只剩发起时后台跟踪的那一次等待")
-
-      let again = await service.start(request)
-      XCTAssertEqual(again, .searching, "整理失败后可以重新发起")
-      XCTAssertEqual(fixture.mutations.filter { $0 == "POST subscribe" }.count, 2)
-    }
-  }
+  // MARK: - 辅助
 
   /// 打开显示这一集的页面，等它第一次刷新完、进入等待。
   private func openPage(
@@ -871,6 +723,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
   ) async throws -> Task<Void, Never> {
     let page = Task { await service.poll(request) }
     try await waitUntil { service.progress[request.key] != nil }
+    try await Task.sleep(for: .milliseconds(20))
     return page
   }
 
@@ -882,8 +735,9 @@ final class EpisodeTrialServiceTests: XCTestCase {
   }
 
   private func withService(
-    library: EpisodeAvailability = .notOnServer, clock: TrialClock = TrialClock(),
+    library: EpisodeAvailability = .notOnServer,
     rule: EpisodeTrialRule? = EpisodeTrialRule(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"),
+    superUser: Bool = true,
     sleep: EpisodeTrialService.Sleep? = nil,
     availability: EpisodeTrialService.Availability? = nil,
     _ body: (APIService, EpisodeTrialService, UserDefaults, EpisodeTrialRequest) async throws -> Void
@@ -896,14 +750,13 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
     let api = APIService.isolatedTestingInstance()
     let token = Token(
-      access_token: "trial-fixture", token_type: "bearer", super_user: FlexibleBool(true),
+      access_token: "trial-fixture", token_type: "bearer", super_user: FlexibleBool(superUser),
       permissions: nil, user_id: 81, user_name: "fixture", avatar: nil)
     api.replaceSessionForTesting(baseURL: "https://episode-trial.local", token: token.access_token, currentUser: token)
     api.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
     let availability = availability ?? { _, _ in library }
-    let service = sleep.map { sleep in
-      EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, sleep: sleep, availability: availability)
-    } ?? EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, availability: availability)
+    let service = EpisodeTrialService(
+      api: api, defaults: defaults, sleep: sleep ?? ScriptedSleeper().sleep, availability: availability)
     defer { service.tearDown() }
     if let rule { try service.saveRule(rule) }
     let request = try XCTUnwrap(EpisodeTrialRequest(
@@ -914,45 +767,46 @@ final class EpisodeTrialServiceTests: XCTestCase {
   }
 }
 
-/// 轮询（页面和后台跟踪）的等待按步骤编排：挂起到被取消，或执行一次服务器变化后立即返回；
-/// 步骤用完后按 `then` 处理。定时清理的等待一直挂起，不干扰轮询的断言。被取消的等待不计入。
-nonisolated private final class PollSleeper: @unchecked Sendable {
+/// 服务里的等待按步骤编排。页面和后台跟踪的轮询（`polls`）、后台对账（`drive`）各有一串步骤，
+/// 用完后挂起到被取消。`.proceed` 立即返回；`.run` 先改一下服务器再返回。
+nonisolated private final class ScriptedSleeper: @unchecked Sendable {
   enum Step {
     case suspend
-    case proceed(@Sendable () -> Void)
+    case proceed
+    case run(@Sendable () -> Void)
   }
 
   private let lock = NSLock()
   private var requested: [Duration] = []
-  private var steps: [Step]
-  private let rest: Step
+  private var drives = 0
+  private var polls: [Step]
+  private var drive: [Step]
 
-  init(_ steps: [Step], then rest: Step = .suspend) {
-    self.steps = steps
-    self.rest = rest
+  init(polls: [Step] = [], drive: [Step] = []) {
+    self.polls = polls
+    self.drive = drive
   }
 
-  convenience init(onPoll: @escaping @Sendable () -> Void) {
-    self.init([], then: .proceed(onPoll))
-  }
-
-  var pollDelays: [Duration] { lock.withLock { requested } }
+  /// 轮询请求过的间隔（不含后台对账）。
+  var delays: [Duration] { lock.withLock { requested } }
+  var driveCount: Int { lock.withLock { drives } }
 
   var sleep: EpisodeTrialService.Sleep {
     { [self] delay in
       try Task.checkCancellation()
-      let polls = [EpisodeTrialService.activePollInterval, EpisodeTrialService.formalPollInterval]
-      guard polls.contains(delay) else {
-        try await Task.sleep(for: .seconds(3600))
-        return
-      }
+      let isDrive = delay == EpisodeTrialService.driveInterval
       let step = lock.withLock { () -> Step in
+        if isDrive {
+          drives += 1
+          return drive.isEmpty ? .suspend : drive.removeFirst()
+        }
         requested.append(delay)
-        return steps.isEmpty ? rest : steps.removeFirst()
+        return polls.isEmpty ? .suspend : polls.removeFirst()
       }
       switch step {
       case .suspend: try await Task.sleep(for: .seconds(3600))
-      case .proceed(let change): change()
+      case .proceed: return
+      case .run(let change): change()
       }
     }
   }
@@ -970,21 +824,6 @@ nonisolated private final class Flag: @unchecked Sendable {
 
 private final class FreshReads {
   var values: [Bool] = []
-}
-
-/// 只记下每次等待的间隔，等待一直挂起到被取消。
-nonisolated private final class SleepRecorder: @unchecked Sendable {
-  private let lock = NSLock()
-  private var requested: [Duration] = []
-
-  var delays: [Duration] { lock.withLock { requested } }
-
-  var sleep: EpisodeTrialService.Sleep {
-    { [self] delay in
-      lock.withLock { requested.append(delay) }
-      try await Task.sleep(for: .seconds(3600))
-    }
-  }
 }
 
 /// 测试改变的媒体库结果，后台跟踪的等待里会改它。
@@ -1018,34 +857,7 @@ private final class ReadyNoticeRecorder {
   }
 }
 
-/// 第一次等待立即返回，之后挂起到被取消，测试可以确定地触发一轮定时清理。
-nonisolated private final class CleanupSleeper: @unchecked Sendable {
-  private let lock = NSLock()
-  private var requested: [Duration] = []
-
-  var delays: [Duration] { lock.withLock { requested } }
-
-  var sleep: EpisodeTrialService.Sleep {
-    { [self] delay in
-      let first = lock.withLock { () -> Bool in
-        requested.append(delay)
-        return requested.count == 1
-      }
-      if !first { try await Task.sleep(for: .seconds(3600)) }
-    }
-  }
-}
-
-@MainActor
-private final class TrialClock {
-  private(set) var now = Date(timeIntervalSince1970: 1_800_000_000)
-
-  func advance(_ seconds: TimeInterval) { now += seconds }
-}
-
 nonisolated private final class EpisodeTrialURLProtocol: URLProtocol, @unchecked Sendable {
-  static let fixture = EpisodeTrialFixture()
-
   override class func canInit(with request: URLRequest) -> Bool {
     request.url?.host == "episode-trial.local"
   }
@@ -1055,7 +867,7 @@ nonisolated private final class EpisodeTrialURLProtocol: URLProtocol, @unchecked
   override func startLoading() {
     guard let url = request.url else { return }
     do {
-      let body = try Self.fixture.respond(to: request)
+      let body = try FakeMoviePilot.shared.respond(to: request)
       let response = HTTPURLResponse(
         url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -1069,106 +881,169 @@ nonisolated private final class EpisodeTrialURLProtocol: URLProtocol, @unchecked
   override func stopLoading() {}
 }
 
-nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
-  enum Mode {
-    case initial, pausedFormal, missingFormal, reuse, downloading, organizing, transferred
-    case noResource, externallyEdited, lostSearchReceipt
-    case lostCreate, searchNotReceived, batchFailed, existingDownload, existingDownloadUnconfirmed
-    case normalizesWrites, transferredUnderRecognizedTitle, formalEndedOrganized, transferFailed
-    /// 已提交下载，但任务已从下载器删掉，整理队列和整理历史里都没有。
-    case downloadRemoved
-  }
-
-  struct Values: Equatable {
-    var season: Int?
-    var start: Int?
-    var total: Int?
-    var include: String?
-    var bestVersion: Int?
-    var fullPack: Int?
-    var quality: String?
-
-    init(season: Int?, start: Int?, total: Int?, include: String?, bestVersion: Int?, fullPack: Int?, quality: String?) {
-      self.season = season
-      self.start = start
-      self.total = total
-      self.include = include
-      self.bestVersion = bestVersion
-      self.fullPack = fullPack
-      self.quality = quality
-    }
-
-    init(_ row: [String: Any]) {
-      self.init(
-        season: row["season"] as? Int, start: row["start_episode"] as? Int, total: row["total_episode"] as? Int,
-        include: row["include"] as? String, bestVersion: row["best_version"] as? Int,
-        fullPack: row["best_version_full"] as? Int, quality: row["quality"] as? String)
-    }
-  }
+/// 按 MoviePilot 接口合同模拟的后端：订阅、搜索批次、下载历史、下载器、整理队列和整理历史。
+/// 媒体都是 tmdb:91 第 2 季，试看的是第 5 集。
+nonisolated private final class FakeMoviePilot: @unchecked Sendable {
+  static let shared = FakeMoviePilot()
+  static let batchID = "0123456789abcdef0123456789abcdef"
+  private static let finishedStates: Set<String> = ["completed", "failed", "cancelled", "skipped"]
 
   private let lock = NSLock()
-  private let batchID = "0123456789abcdef0123456789abcdef"
-  private let newSubscriptionBatchID = "fedcba9876543210fedcba9876543210"
-  private var mode = Mode.initial
-  /// 停止搜索的答复：确认停止；答复“已经结束”且批次确实结束；答复“已经结束”但批次仍在跑；请求失败。
-  enum CancelOutcome { case stopped, finished, refusedWhileRunning, failed }
-  private var cancelOutcome = CancelOutcome.stopped
-  /// 写入试看规则后的第一次回读失败。
-  private var failsReadBackAfterWrite = false
-  /// 换掉新增订阅接口的提示语，模拟上游改了措辞。
-  private var createMessage: String?
-  /// 试看开始后又有一整页别的下载，试看的那条落到第二页。
-  private var historyOverflows = false
-  private var readBackFails = false
-  private var temporary: [String: Any]?
-  private var placeholder: [String: Any]?
+  private var rows: [Int: [String: Any]] = [:]
+  private var nextID = 81
+  private var batchState: String?
+  private var batchSubmitted = 0
+  private var history: [[String: Any]] = []
+  private var historyOnSecondPage = false
+  private var downloading: [String: Double?] = [:]
+  private var offlineClient = false
+  private var queue: Set<String> = []
+  private var transfers: [String: Bool] = [:]
   private var requests: [String] = []
   private var totalRequests = 0
-  private var created: Values?
-  private var searched: Values?
+  private var createdBodies: [[String: Any]] = []
+  private var searchedRows: [[String: Any]] = []
+  /// 创建回执：nil 正常；true 落库后回执丢失；false 请求没送到。
+  private var createLoss: Bool?
+  private var createMessage = "新增订阅成功"
+  /// 查询之后、新增之前，别处正好建了同季订阅，新增时按季去重返回它。
+  private var existingOnCreate: String?
+  private var createLandsTwice = false
+  /// 补搜回执：nil 正常；true 排上队后回执丢失；false 请求没送到。
+  private var searchLoss: Bool?
+  private var searchRejected = false
+  private var normalizesWrites = false
+  private var failsReadBackAfterWrite = false
+  private var readBackFails = false
+  private var pendingEdit: (id: Int, key: String, value: Any)?
 
   var mutations: [String] { lock.withLock { requests } }
   /// 读和写都算，用来证明某条路径完全没有访问服务器。
   var requestCount: Int { lock.withLock { totalRequests } }
-  var createdValues: Values? { lock.withLock { created } }
-  var searchValues: Values? { lock.withLock { searched } }
+  var created: [[String: Any]] { lock.withLock { createdBodies } }
+  /// 每次补搜时订阅的样子。
+  var searched: [[String: Any]] { lock.withLock { searchedRows } }
 
   func reset() {
     lock.withLock {
-      mode = .initial
-      cancelOutcome = .stopped
-      failsReadBackAfterWrite = false
-      readBackFails = false
-      createMessage = nil
-      historyOverflows = false
-      temporary = nil
-      placeholder = nil
+      rows = [:]
+      nextID = 81
+      batchState = nil
+      batchSubmitted = 0
+      history = []
+      historyOnSecondPage = false
+      downloading = [:]
+      offlineClient = false
+      queue = []
+      transfers = [:]
       requests = []
       totalRequests = 0
-      created = nil
-      searched = nil
+      createdBodies = []
+      searchedRows = []
+      createLoss = nil
+      createMessage = "新增订阅成功"
+      existingOnCreate = nil
+      createLandsTwice = false
+      searchLoss = nil
+      searchRejected = false
+      normalizesWrites = false
+      failsReadBackAfterWrite = false
+      readBackFails = false
+      pendingEdit = nil
     }
   }
 
-  func setMode(_ mode: Mode) { lock.withLock { self.mode = mode } }
-  func setCancelOutcome(_ outcome: CancelOutcome) { lock.withLock { cancelOutcome = outcome } }
-  func failReadBackAfterWrite() { lock.withLock { failsReadBackAfterWrite = true } }
+  func subscribe(_ id: Int) -> Subscribe? {
+    guard let row = lock.withLock({ rows[id] }), let data = try? JSONSerialization.data(withJSONObject: row) else {
+      return nil
+    }
+    return try? JSONDecoder().decode(Subscribe.self, from: data)
+  }
+
+  // MARK: 场景
+
+  /// 同季已有的订阅（ID 70）。带标记时就是别的设备留下的试看订阅。
+  @discardableResult
+  func addFormal(state: String, marker: String? = nil) -> Subscribe {
+    lock.withLock { rows[70] = Self.formalRow(state: state, marker: marker) }
+    return subscribe(70)!
+  }
+
+  private static func formalRow(state: String, marker: String?) -> [String: Any] {
+    var row: [String: Any] = [
+      "id": 70, "name": "试看测试", "type": "电视剧", "season": 2, "media_source": "tmdb", "media_id": "91",
+      "username": "other", "state": state,
+    ]
+    if let marker {
+      row["filter"] = marker
+      row["include"] = "WEB"
+    }
+    return row
+  }
+
+  func returnExistingOnCreate(state: String) { lock.withLock { existingOnCreate = state } }
   func setCreateMessage(_ message: String) { lock.withLock { createMessage = message } }
-  func overflowHistory() { lock.withLock { historyOverflows = true } }
-  /// 临时订阅被别处删掉。
-  func removeTemporary() { lock.withLock { temporary = nil } }
-  /// 别处改了临时订阅的某一项。
-  func editTemporary(_ key: String, _ value: Any) { lock.withLock { temporary?[key] = value } }
+  func loseCreateReceipt(afterStoring: Bool?) { lock.withLock { createLoss = afterStoring } }
+  func landCreateTwice() { lock.withLock { createLandsTwice = true } }
+  func loseSearchReceipt(afterQueueing: Bool?) { lock.withLock { searchLoss = afterQueueing } }
+  func rejectSearch() { lock.withLock { searchRejected = true } }
+  func normalizeWrites() { lock.withLock { normalizesWrites = true } }
+  func failReadBackAfterWrite() { lock.withLock { failsReadBackAfterWrite = true } }
+  func edit(_ id: Int, _ key: String, _ value: Any) { lock.withLock { rows[id]?[key] = value } }
+  func deleteElsewhere(_ id: Int) { lock.withLock { _ = rows.removeValue(forKey: id) } }
+  /// 下一次查批次时，别处正好改了这条订阅（发生在读列表之后、删除之前）。
+  func editOnNextBatchQuery(_ id: Int, _ key: String, _ value: Any) {
+    lock.withLock { pendingEdit = (id, key, value) }
+  }
 
-  /// 发起方中断后留下的占位订阅：拒绝所有资源，与目标同季。
-  func setPlaceholder(marker: String) {
+  func settleBatch(_ state: String) { lock.withLock { batchState = state } }
+
+  /// 搜索结束；提交下载时按 MoviePilot 的做法写下载记录（带订阅 ID），下载器里出现任务。
+  func finishSearch(submitted: Bool, state: String = "completed", recordsHistory: Bool = true) {
     lock.withLock {
-      placeholder = [
-        "id": 90, "name": "试看测试", "type": "电视剧", "season": 2, "media_source": "tmdb", "media_id": "91",
-        "username": "fixture", "state": "R", "include": "(?!)", "filter": marker,
-      ]
+      batchState = state
+      batchSubmitted = submitted ? 1 : 0
+      guard submitted else { return }
+      downloading["target-hash"] = 42
+      guard recordsHistory else { return }
+      history.insert([
+        "id": 2, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02",
+        "episodes": "E05", "download_hash": "target-hash", "downloader": "fixture-client",
+        "note": ["subscription_download": ["subscription_id": 81]],
+      ], at: 0)
     }
   }
+
+  /// 别的入口已经在下这一集。
+  func addDownload(hash: String, progress: Double?, offline: Bool = false) {
+    lock.withLock {
+      history.append([
+        "id": 5, "media_source": "tmdb", "media_id": "91", "seasons": "S02", "episodes": "E05", "download_hash": hash,
+      ])
+      downloading[hash] = progress
+      offlineClient = offline
+    }
+  }
+
+  func pushHistoryToSecondPage() { lock.withLock { historyOnSecondPage = true } }
+  func finishDownload(_ hash: String) { lock.withLock { _ = downloading.removeValue(forKey: hash) } }
+
+  func moveToQueue(_ hash: String) {
+    lock.withLock {
+      _ = downloading.removeValue(forKey: hash)
+      queue.insert(hash)
+    }
+  }
+
+  func organize(_ hash: String, succeeded: Bool) {
+    lock.withLock {
+      _ = downloading.removeValue(forKey: hash)
+      queue.remove(hash)
+      transfers[hash] = succeeded
+    }
+  }
+
+  // MARK: 接口
 
   func respond(to request: URLRequest) throws -> Data {
     try lock.withLock {
@@ -1178,167 +1053,148 @@ nonisolated private final class EpisodeTrialFixture: @unchecked Sendable {
       let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
       totalRequests += 1
       if method != "GET" { requests.append("\(method) \(path)") }
-      let response = try responseValue(method: method, path: path, query: query, request: request)
-      return try JSONSerialization.data(withJSONObject: response)
+      let value = try respond(method: method, path: path, query: query, request: request)
+      return try JSONSerialization.data(withJSONObject: value)
     }
   }
 
-  private func responseValue(
-    method: String, path: String, query: [String: String], request: URLRequest
-  ) throws -> Any {
-    let formal: [String: Any] = [
-      "id": 81, "name": "试看测试", "type": "电视剧", "season": 2,
-      "media_source": "tmdb", "media_id": "91", "state": mode == .pausedFormal ? "S" : "R"
-    ]
+  private func respond(method: String, path: String, query: [String: String], request: URLRequest) throws -> Any {
     let accepted = ["success": true]
-    let terminal = [
-      .downloading, .organizing, .transferred, .noResource, .externallyEdited, .batchFailed,
-      .transferredUnderRecognizedTitle, .transferFailed, .downloadRemoved,
-    ].contains(mode)
-    let earlierDownload = [.existingDownload, .existingDownloadUnconfirmed].contains(mode)
-    let submitted = [
-      .downloading, .organizing, .transferred, .transferredUnderRecognizedTitle, .transferFailed, .downloadRemoved,
-    ].contains(mode)
-    let history: [String: Any] = [
-      "id": 2, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02", "episodes": "E05",
-      "download_hash": "target-hash", "note": ["subscription_download": ["subscription_id": 81]]
-    ]
-
-    let formalDownload: [String: Any] = [
-      "id": 6, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02",
-      "episodes": "E05", "download_hash": "formal-hash",
-    ]
-
+    let parts = path.split(separator: "/").map(String.init)
+    let trailingID = parts.last.flatMap { Int($0) }
+    let batchPath = "subscribe/execution/batches/\(Self.batchID)"
     switch (method, path) {
     case ("GET", "subscribe"):
-      if mode == .pausedFormal || (mode == .reuse && !requests.isEmpty) { return [formal] }
-      if submitted || [.missingFormal, .formalEndedOrganized].contains(mode) { return [] as [[String: Any]] }
-      var rows = [placeholder].compactMap { $0 }
-      if var temporary {
-        if mode == .externallyEdited { temporary["quality"] = "BluRay" }
-        rows.append(temporary)
-      }
-      return rows
+      return rows.keys.sorted().compactMap { rows[$0] }
     case ("POST", "subscribe"):
-      if mode == .reuse {
-        return ["success": true, "message": createMessage ?? "订阅已存在", "data": ["id": 81]] as [String: Any]
-      }
-      if mode == .lostCreate { throw URLError(.timedOut) }
-      var fields = try body(request)
-      created = Values(fields)
-      fields["id"] = 81
-      fields["username"] = "fixture"
-      fields["state"] = "N"
-      // MoviePilot 按电视剧默认订阅配置填上请求没给的项。
-      if fields["quality"] == nil { fields["quality"] = "MP 默认质量" }
-      // MoviePilot 为新订阅安排一分钟后的自动搜索；暂停后这条任务会被跳过。
-      fields["execution_status"] = ["source": "new", "batch_id": newSubscriptionBatchID]
-      // 后端把未提交的列表字段存成空列表。
-      if mode == .normalizesWrites { fields["filter_groups"] = [] as [String] }
-      temporary = fields
-      return ["success": true, "message": createMessage ?? "新增订阅成功", "data": ["id": 81]] as [String: Any]
-    case ("GET", "subscribe/81"):
+      return try create(try body(request))
+    case ("PUT", "subscribe"):
+      return try save(try body(request))
+    case ("GET", _) where parts.count == 2 && parts[0] == "subscribe" && trailingID != nil:
       if readBackFails {
         readBackFails = false
         throw URLError(.networkConnectionLost)
       }
-      return mode == .reuse ? formal : temporary ?? [:]
-    case ("PUT", "subscribe/status/81"):
-      temporary?["state"] = "S"
+      guard let row = rows[trailingID!] else { throw URLError(.fileDoesNotExist) }
+      return row
+    case ("DELETE", _) where parts.count == 2 && parts[0] == "subscribe" && trailingID != nil:
+      return rows.removeValue(forKey: trailingID!) != nil ? accepted : ["success": false]
+    case ("PUT", _) where path.hasPrefix("subscribe/status/") && trailingID != nil:
+      guard rows[trailingID!] != nil else { return ["success": false] }
+      rows[trailingID!]?["state"] = query["state"]
       return accepted
-    case ("PUT", "subscribe"):
-      for (key, value) in try body(request) {
-        let normalized = mode == .normalizesWrites && value is NSNull && ["sites", "filter_groups"].contains(key)
-        // 后端也可能换掉站点的顺序。
-        let reordered = mode == .normalizesWrites && key == "sites" ? (value as? [Int])?.reversed() : nil
-        temporary?[key] = normalized ? [] as [Any] : reordered.map(Array.init) ?? value
+    case ("POST", _) where path.hasPrefix("subscribe/search/") && trailingID != nil:
+      return try search(trailingID!)
+    case ("GET", batchPath):
+      if let edit = pendingEdit {
+        pendingEdit = nil
+        rows[edit.id]?[edit.key] = edit.value
       }
-      if failsReadBackAfterWrite {
-        failsReadBackAfterWrite = false
-        readBackFails = true
-      }
-      return accepted
-    case ("POST", "subscribe/search/81"):
-      if mode == .searchNotReceived { throw URLError(.timedOut) }
-      searched = temporary.map(Values.init)
-      temporary?["execution_status"] = ["source": "manual", "batch_id": batchID]
-      if mode == .lostSearchReceipt { throw URLError(.networkConnectionLost) }
+      guard let state = batchState else { throw URLError(.fileDoesNotExist) }
       return [
-        "success": true,
-        "data": ["batch_id": batchID, "batch_ids": [batchID], "single": true, "target_count": 1] as [String: Any]
+        "batch_id": Self.batchID, "state": state, "total_count": 1,
+        "finished_count": Self.finishedStates.contains(state) ? 1 : 0, "download_counts": ["submitted": batchSubmitted],
       ] as [String: Any]
-    case ("GET", "subscribe/execution/batches/\(batchID)"):
-      let finished = terminal || cancelOutcome == .finished
-      return [
-        "batch_id": batchID, "state": mode == .batchFailed ? "failed" : finished ? "completed" : "running",
-        "total_count": 1, "finished_count": finished && mode != .batchFailed ? 1 : 0,
-        "download_counts": ["submitted": submitted ? 1 : 0]
-      ] as [String: Any]
-    case ("PUT", let path) where path.hasPrefix("subscribe/execution/batches/") && path.hasSuffix("/cancel"):
-      switch cancelOutcome {
-      case .stopped: return accepted
-      case .finished, .refusedWhileRunning:
-        return ["success": false, "message": "这次搜索已经结束，暂时无法停止"] as [String: Any]
-      case .failed: throw URLError(.networkConnectionLost)
+    case ("PUT", batchPath + "/cancel"):
+      // 只给运行中的批次打上取消标记；任务到下一个检查点才停，结束要等测试结算。
+      guard let state = batchState, !Self.finishedStates.contains(state) else {
+        return ["success": false, "message": "这次搜索已经结束，暂时无法停止"]
       }
-    case ("DELETE", "subscribe/81"):
-      temporary = nil
-      return accepted
-    case ("DELETE", "subscribe/90"):
-      placeholder = nil
+      batchState = "cancelling"
       return accepted
     case ("GET", "system/setting/public/DefaultTvSubscribeConfig"):
       return ["value": ["include": "MP 默认包含", "quality": "MP 默认质量"]]
-    case ("GET", "history/download") where historyOverflows && query["page"] == "1":
-      return (0..<100).map { offset -> [String: Any] in
+    case ("GET", "history/download"):
+      guard historyOnSecondPage else { return query["page"] == "1" ? history : [] }
+      let filler = (0..<100).map { offset -> [String: Any] in
         [
           "id": 1_100 - offset, "media_source": "tmdb", "media_id": "777", "seasons": "S01", "episodes": "E01",
           "download_hash": "other-\(offset)",
         ]
       }
-    case ("GET", "history/download"):
-      if mode == .formalEndedOrganized { return [formalDownload] }
-      if earlierDownload {
-        return [[
-          "id": 5, "media_source": "tmdb", "media_id": "91", "seasons": "S02", "episodes": "E05",
-          "download_hash": "earlier-hash",
-        ] as [String: Any]]
-      }
-      guard submitted else { return [] as [[String: Any]] }
-      var otherSeason = history
-      otherSeason["id"] = 3
-      otherSeason["seasons"] = "S01"
-      otherSeason["download_hash"] = "other-hash"
-      return [otherSeason, history]
+      return query["page"] == "1" ? filler : query["page"] == "2" ? history : []
     case ("GET", "download/clients"):
-      guard earlierDownload else { return [["name": "fixture-client", "type": "qbittorrent"]] }
-      return [["name": "offline-client", "type": "qbittorrent"], ["name": "fixture-client", "type": "qbittorrent"]]
+      return [["name": offlineClient ? "offline-client" : "fixture-client", "type": "qbittorrent"]]
     case ("GET", "download"):
       if query["name"] == "offline-client" { throw URLError(.cannotConnectToHost) }
-      if mode == .existingDownload { return [["hash": "earlier-hash", "progress": 30]] }
-      guard mode == .downloading else { return [] as [[String: Any]] }
-      return [["hash": "target-hash", "progress": 42]]
+      return downloading.map { hash, progress -> [String: Any] in
+        var task: [String: Any] = ["hash": hash]
+        if let progress { task["progress"] = progress }
+        return task
+      }
     case ("GET", "transfer/queue"):
-      guard mode == .organizing else { return [] as [[String: Any]] }
-      return [["tasks": [["downloader": "fixture-client", "download_hash": "target-hash"]]]]
+      return queue.isEmpty ? [] : [["tasks": queue.map { ["downloader": "fixture-client", "download_hash": $0] }]]
     case ("GET", "history/transfer"):
-      var transfer = history
-      transfer["status"] = true
-      if mode == .formalEndedOrganized {
-        var organized = formalDownload
-        organized["status"] = true
-        return ["success": true, "data": ["list": [organized]]] as [String: Any]
+      let list = transfers.map { hash, status -> [String: Any] in
+        [
+          "id": 9, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02",
+          "episodes": "E05", "download_hash": hash, "status": status,
+        ]
       }
-      if mode == .transferFailed {
-        transfer["status"] = false
-        return ["success": true, "data": ["list": [transfer]]] as [String: Any]
-      }
-      let found = mode == .transferred
-        || (mode == .transferredUnderRecognizedTitle && query["title"] == "MP 识别标题")
-      return ["success": true, "data": ["list": found ? [transfer] : []]] as [String: Any]
+      return ["success": true, "data": ["list": list]] as [String: Any]
     default:
       throw URLError(.unsupportedURL)
     }
+  }
+
+  private func create(_ body: [String: Any]) throws -> Any {
+    createdBodies.append(body)
+    if let state = existingOnCreate {
+      rows[70] = Self.formalRow(state: state, marker: nil)
+      return ["success": true, "message": "订阅已存在", "data": ["id": 70]] as [String: Any]
+    }
+    if createLoss == false { throw URLError(.timedOut) }
+    // MoviePilot 按电视剧默认订阅配置填上请求没给的项，并安排一分钟后的自动搜索（暂停后会跳过）。
+    var fields = body
+    if fields["quality"] == nil { fields["quality"] = "MP 默认质量" }
+    fields["username"] = "fixture"
+    fields["state"] = "N"
+    fields["execution_status"] = ["source": "new", "batch_id": "fedcba9876543210fedcba9876543210"]
+    let id = nextID
+    nextID += 1
+    fields["id"] = id
+    rows[id] = fields
+    if createLandsTwice {
+      var twin = fields
+      twin["id"] = nextID
+      rows[nextID] = twin
+      nextID += 1
+    }
+    if createLoss == true { throw URLError(.networkConnectionLost) }
+    return ["success": true, "message": createMessage, "data": ["id": id]] as [String: Any]
+  }
+
+  private func save(_ fields: [String: Any]) throws -> Any {
+    guard let id = fields["id"] as? Int, rows[id] != nil else { return ["success": false] }
+    for (key, value) in fields {
+      if normalizesWrites, key == "sites", let sites = value as? [Int] {
+        rows[id]?[key] = Array(sites.reversed())
+      } else if normalizesWrites, value is NSNull, ["sites", "filter_groups"].contains(key) {
+        rows[id]?[key] = [] as [Any]
+      } else {
+        rows[id]?[key] = value
+      }
+    }
+    if failsReadBackAfterWrite {
+      failsReadBackAfterWrite = false
+      readBackFails = true
+    }
+    return ["success": true]
+  }
+
+  private func search(_ id: Int) throws -> Any {
+    guard let row = rows[id] else { return ["success": false] }
+    if searchRejected { return ["success": false, "message": "订阅不存在"] }
+    if searchLoss == false { throw URLError(.timedOut) }
+    searchedRows.append(row)
+    // 补搜先写进队列再回复：订阅行带上最新一次手动搜索的批次。
+    batchState = "running"
+    rows[id]?["execution_status"] = ["source": "manual", "batch_id": Self.batchID]
+    if searchLoss == true { throw URLError(.networkConnectionLost) }
+    return [
+      "success": true,
+      "data": ["batch_id": Self.batchID, "batch_ids": [Self.batchID], "single": true, "target_count": 1],
+    ] as [String: Any]
   }
 
   private func body(_ request: URLRequest) throws -> [String: Any] {

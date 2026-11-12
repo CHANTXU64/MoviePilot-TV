@@ -3446,11 +3446,6 @@ class APIService: ObservableObject {
   ) async throws -> (
     success: Bool, message: String?
   ) {
-    let session = sessionSnapshot()
-    if try await episodeTrialHoldsDeletion(identity: identity, season: season) {
-      return (false, EpisodeTrialHoldNotice.deleteBlockedMessage)
-    }
-    guard isSessionUnchanged(from: session) else { throw CancellationError() }
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
@@ -3465,17 +3460,6 @@ class APIService: ObservableObject {
       invalidateSubscriptionCaches()
     }
     return result
-  }
-
-  /// 按媒体删除不分剧集组，会把同一部剧、同一季的试看订阅一起删掉，绕过试看服务停搜索的那一步。
-  /// 试看订阅只有管理员在支持试看的版本上建得出来，MoviePilot 也只让管理员删别人的订阅，其他情况不多查一次。
-  private func episodeTrialHoldsDeletion(identity: MediaIdentity, season: Int?) async throws -> Bool {
-    guard canRequestSuperUserEndpoints,
-      EpisodeTrialAvailability.supports(backendVersion: settings?.BACKEND_VERSION)
-    else { return false }
-    return try await fetchSubscriptions(forceRefresh: true).contains {
-      $0.isEpisodeTrial(of: identity, season: season)
-    }
   }
 
   /// 复用（Fork）一个订阅分享

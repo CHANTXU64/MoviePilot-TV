@@ -125,7 +125,9 @@ nonisolated struct EpisodeTrialRequest: Sendable {
   var key: String { "\(seasonKey)|\(episodeID)|\(episodeNumber)" }
 
   var target: EpisodeTrialTarget {
-    EpisodeTrialTarget(identity: identity, season: season, episodeGroup: episodeGroup, seasonKey: seasonKey)
+    EpisodeTrialTarget(
+      identity: identity, season: season, episodeGroup: episodeGroup, seasonKey: seasonKey,
+      episodeKey: key, episodeNumber: episodeNumber, title: trimmedNonEmpty([media.title]))
   }
 
   var knownIdentities: Set<MediaIdentity> {
@@ -139,32 +141,48 @@ nonisolated struct EpisodeTrialRequest: Sendable {
   }
 }
 
-/// 临时订阅属于哪一季。随任务持久化，定时清理不需要用户重新打开这一集。
+/// 试看的是哪一季哪一集。随凭据持久化，App 重启后不用重新打开这一集也能收尾。
 nonisolated struct EpisodeTrialTarget: Codable, Equatable, Sendable {
   let source: String
   let mediaId: String
   let season: Int
   let episodeGroup: String?
   let seasonKey: String
+  /// 页面和进度用的这一集的键，与 `EpisodeTrialRequest.key` 相同。
+  let episodeKey: String
+  let episodeNumber: Int
+  /// 整理历史只能按标题查，用页面上的剧名。
+  let title: String?
 
-  init(identity: MediaIdentity, season: Int, episodeGroup: String?, seasonKey: String) {
+  init(
+    identity: MediaIdentity, season: Int, episodeGroup: String?, seasonKey: String, episodeKey: String,
+    episodeNumber: Int, title: String?
+  ) {
     source = identity.source
     mediaId = identity.mediaId
     self.season = season
     self.episodeGroup = episodeGroup
     self.seasonKey = seasonKey
+    self.episodeKey = episodeKey
+    self.episodeNumber = episodeNumber
+    self.title = title
   }
 
   var identity: MediaIdentity { MediaIdentity(source: source, mediaId: mediaId) }
 }
 
-nonisolated enum EpisodeTrialProgress: Equatable, Codable, Sendable {
+nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case checking
+  /// 可以试看：媒体库、订阅和下载里都没有这一集。
+  case notStarted
   case waitingForSubscription
   case subscriptionPaused
+  /// 同一季的另一集正在试看。
   case seasonTrialInProgress
   case searching
+  case cancelling
   case noEligibleResource
+  /// 发出的请求没拿到回执，或下载暂时找不到，状态说不清。
   case submissionUnconfirmed
   case downloading(progress: Double?)
   case organizing
@@ -179,164 +197,82 @@ nonisolated enum EpisodeTrialProgress: Equatable, Codable, Sendable {
   }
 }
 
-nonisolated struct EpisodeTrialJob: Codable, Sendable {
-  var progress: EpisodeTrialProgress = .checking
-  var target: EpisodeTrialTarget?
-  var formalSubscriptionID: Int?
-  var temporary: EpisodeTrialTemporarySubscription?
-  var finishedTemporaryID: Int?
-  var creationMarker: String?
-  var searchPending = false
-  /// 创建或补搜请求发出但没拿到回执的时刻；超过确认期仍查不到受理痕迹，按未受理收尾。
-  var pendingSince: Date?
+/// 证明服务器上某条订阅是本机为试看建的。只在 TV 核对后删掉了它、读到订阅列表里已经没有它，
+/// 或者发现它在别处被改过时消失。下载和入库的跟踪不在这里，只在内存里。
+nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
+  /// 创建前生成并保存。同一季重试沿用同一个标记，不论哪次请求落了库，订阅上都是它。
+  let marker: String
+  var target: EpisodeTrialTarget
+  let owner: String
+  /// 拿到回执、或在订阅列表里按标记认出后补上。
+  var subscriptionID: Int?
+  /// 写入试看规则后这条订阅的指纹。为空表示还是拒绝所有资源的占位，按 `include` 核对。
+  /// 写入后没读回来时同时记着写入前后两个，下次核对时按服务器实际的样子认。
+  var fingerprints: Set<String> = []
+  /// 补搜回执给的批次；回执丢了从订阅行的手动搜索状态补。
   var batchID: String?
-  var searchFinished = false
-  /// 补搜已受理且不能排除提交过下载。为真时不得重新发起，只能沿下载历史继续跟踪。
-  var searchMayHaveDownloaded = false
-  /// 补搜回执没拿到时订阅就没了，从这时起按下载历史等那次搜索的结果；过了搜索最长运行时间仍没有就不会再有。
-  var searchLostSince: Date?
-  var downloadHash: String?
-  var downloader: String?
-  /// 下载在下载器、整理队列和整理历史里都确认找不到的起始时刻。
-  var downloadMissingSince: Date?
-  /// MoviePilot 识别出的标准标题，整理历史按它查询。
-  var historyTitle: String?
-  var previousDownloadHistoryIDs: Set<Int> = []
-
-  var isTracking: Bool {
-    // 可以播放、整理失败都算结束：只剩服务器上的临时订阅要收尾。整理失败后在 MoviePilot 重新整理成功的，
-    // 页面再打开时按媒体库发现。
-    if progress.isReady || progress == .organizationFailed { return temporary != nil || creationMarker != nil }
-    return formalSubscriptionID != nil || temporary != nil || creationMarker != nil || searchPending
-      || (batchID != nil && !searchFinished) || searchMayHaveDownloaded || downloadHash != nil
-  }
-
-  /// 服务器上不再有本任务的临时订阅，也不会有本任务提交的下载时，才允许重新发起。
-  var canRestart: Bool {
-    if progress == .organizationFailed { return temporary == nil && creationMarker == nil }
-    return !progress.isReady && formalSubscriptionID == nil && temporary == nil && creationMarker == nil
-      && !searchPending && !searchMayHaveDownloaded && downloadHash == nil
-  }
-
-  /// 媒体库里这一集可能刚有或刚没：从没查过、整理中或整理完在等入库、整理失败（可能在 MoviePilot 重新整理）、
-  /// 已经可以播放（可能又被删掉）时。
-  /// 其余时候（搜索、下载中）这一集不会进媒体库，按集索引缓存查就够了，不用每次轮询都重读各台媒体服务器。
-  var libraryMayChange: Bool {
-    switch progress {
-    case .checking, .organizing, .organizationFailed, .waitingForLibrary, .ready: true
-    default: false
-    }
-  }
-
-  /// 服务器上可能还留着本任务的临时订阅，需要定时对账并清理。
-  var needsCleanup: Bool { target != nil && (temporary != nil || creationMarker != nil) }
-
-  /// 临时订阅的创建时间，用来决定清理频率。
-  var cleanupStartedAt: Date? {
-    (temporary?.marker ?? creationMarker).flatMap(EpisodeTrialTemporarySubscription.creationDate(of:))
-  }
-
-  func isPending(at now: Date) -> Bool {
-    guard let pendingSince else { return false }
-    return now.timeIntervalSince(pendingSince) < EpisodeTrialTemporarySubscription.confirmationWindow
-  }
+  /// 用户要求取消。发出停止请求之前就保存，App 中途退出后接着收尾。
+  var cancelRequested = false
 }
 
-nonisolated struct EpisodeTrialTemporarySubscription: Codable, Sendable {
+nonisolated enum EpisodeTrialTemporarySubscription {
   static let markerPrefix = "tv-episode-trial-"
   static let blockedInclude = "(?!)"
-  /// 一次创建或补搜从发出到在订阅列表里留下痕迹的最长等待。暂停、写规则和补搜在几秒内连续完成，
-  /// 超过这个时长仍停在某一步，说明发起方已经中断。
-  static let confirmationWindow: TimeInterval = 120
 
-  /// 标记带上创建时间，任何会话都能判断一条仍拒绝所有资源的占位订阅是否已被发起方放弃。
   static func makeMarker(at date: Date) -> String {
     "\(markerPrefix)\(Int(date.timeIntervalSince1970))-\(UUID().uuidString.lowercased())"
   }
 
-  static func creationDate(of marker: String) -> Date? {
-    guard marker.hasPrefix(markerPrefix),
-      let seconds = marker.dropFirst(markerPrefix.count).split(separator: "-").first,
-      !seconds.isEmpty, seconds.utf8.allSatisfy({ (48...57).contains($0) }),
-      let value = TimeInterval(seconds)
-    else { return nil }
-    return Date(timeIntervalSince1970: value)
-  }
-
-  static func isTrialRow(_ row: Subscribe) -> Bool {
+  static func hasMarker(_ row: Subscribe) -> Bool {
     row.filter?.hasPrefix(markerPrefix) == true
   }
 
-  /// 只创建、还没写入试看规则的占位订阅拒绝所有资源，删除它不会丢失用户设置或打断下载。
-  static func isAbandonedPlaceholder(_ row: Subscribe, owner: String, now: Date) -> Bool {
-    guard let id = row.id, id > 0, row.type == "电视剧", row.username == owner,
-      row.include == blockedInclude, let marker = row.filter, let created = creationDate(of: marker)
+  /// 订阅是否还是凭据对应的那一条，并且没被别处改过：占位阶段仍拒绝所有资源；写过规则后仍暂停，
+  /// 且 Web 能编辑的字段和本机记下的样子一致。
+  static func isUntouched(_ row: Subscribe, by credential: EpisodeTrialCredential) -> Bool {
+    let target = credential.target
+    guard row.id == credential.subscriptionID, row.filter == credential.marker, row.username == credential.owner,
+      row.type == "电视剧", row.identity == target.identity, row.season == target.season,
+      trimmedNonEmpty([row.episode_group]) == target.episodeGroup
     else { return false }
-    return now.timeIntervalSince(created) >= confirmationWindow
+    if row.include == blockedInclude { return true }
+    guard row.state == "S", let current = try? fingerprint(row) else { return false }
+    return credential.fingerprints.contains(current)
   }
 
-  let id: Int
-  let marker: String
-  let owner: String
-  // 只保存表单指纹。用户从其他入口编辑过这条订阅时，TV 放弃自动清理。
-  var fingerprints: Set<String> = []
-
-  /// 全部可写字段的指纹。只把后端会整理的几处先统一：空文本当作没填，站点去重排序，空列表当作没填。
-  /// 写入后没读回来时，后端整理过的样子也能认出是自己写的；别处改过任何字段都对不上。
+  /// Web 编辑框能改的字段的指纹（媒体身份另外核对）。名称、年份由 MoviePilot 定时按媒体信息刷新，不算在内，
+  /// 否则 TV 会把自己的订阅当成被别处改过。后端会整理的几处先统一：空文本当作没填，站点去重排序，空列表当作没填。
   static func fingerprint(_ row: Subscribe) throws -> String {
-    let blank = Subscribe(id: row.id, name: "", type: "")
-    var settings = row
-    // 分类路径由 MoviePilot 从稳定 ID 派生。
-    if settings.media_category_id != nil { settings.media_category = nil }
-    let texts: [WritableKeyPath<Subscribe, String?>] = [
-      \.year, \.keyword, \.quality, \.resolution, \.effect, \.include, \.exclude, \.downloader, \.save_path,
-      \.custom_words, \.filter, \.episode_group, \.media_category, \.music_type, \.audio_quality, \.audio_format,
-      \.media_category_id,
-    ]
-    for keyPath in texts where settings[keyPath: keyPath] == "" { settings[keyPath: keyPath] = nil }
-    settings.sites = settings.sites.flatMap { $0.isEmpty ? nil : Array(Set($0)).sorted() }
-    if settings.filter_groups?.isEmpty == true { settings.filter_groups = nil }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    let bytes = try encoder.encode(SubscriptionWriteDTO(original: blank, draft: settings))
-    return Data(SHA256.hash(data: bytes)).base64EncodedString()
-  }
-
-  func matches(_ row: Subscribe, target: EpisodeTrialTarget) -> Bool {
-    row.id == id && row.username == owner && row.type == "电视剧"
-      && row.identity == target.identity && row.season == target.season
-      && trimmedNonEmpty([row.episode_group]) == target.episodeGroup
-      && row.filter == marker
-  }
-
-  /// 回读的订阅是否仍是这次写入的试看设置。季集锁定和洗版开关必须原样保留；
-  /// 规则按含义比较：空文本与缺省相同，站点与缺省的空列表相同且不计顺序。
-  static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
-    guard let written = try? settingsDigest(draft), let read = try? settingsDigest(row) else { return false }
-    return written == read
-  }
-
-  /// `preservesSettings` 比较的那组字段按含义归一后的摘要。
-  static func settingsDigest(_ row: Subscribe) throws -> String {
     struct Settings: Encodable {
-      let season, start, total, bestVersion, bestVersionFull: Int?
-      let searchIMDb: Int
-      let sites: [Int]
-      let filterGroups: [String]
+      let type: String
+      let season, start, total, bestVersion, bestVersionFull, searchIMDb, searchInterval: Int?
+      let minBitrate, minBitDepth, minSampleRate: Int?
+      let sites: [Int]?
+      let filterGroups: [String]?
       let texts: [String?]
     }
-    func text(_ value: String?) -> String? { value == "" ? nil : value }
+    func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
     let settings = Settings(
-      season: row.season, start: row.start_episode, total: row.total_episode, bestVersion: row.best_version,
-      bestVersionFull: row.best_version_full, searchIMDb: row.search_imdbid ?? 0,
-      sites: Array(Set(row.sites ?? [])).sorted(), filterGroups: row.filter_groups ?? [],
+      type: row.type, season: row.season, start: row.start_episode, total: row.total_episode,
+      bestVersion: row.best_version, bestVersionFull: row.best_version_full, searchIMDb: row.search_imdbid,
+      searchInterval: row.search_interval, minBitrate: row.min_bitrate, minBitDepth: row.min_bit_depth,
+      minSampleRate: row.min_sample_rate,
+      sites: row.sites.flatMap { $0.isEmpty ? nil : Array(Set($0)).sorted() },
+      filterGroups: row.filter_groups.flatMap { $0.isEmpty ? nil : $0 },
       texts: [
         row.keyword, row.quality, row.resolution, row.effect, row.include, row.exclude, row.custom_words,
-        row.downloader, row.save_path,
+        row.downloader, row.save_path, row.filter, row.episode_group, row.audio_quality, row.audio_format,
+        // 分类路径由 MoviePilot 从稳定 ID 派生。
+        text(row.media_category_id) ?? row.media_category,
       ].map(text))
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    return String(decoding: try encoder.encode(settings), as: UTF8.self)
+    return Data(SHA256.hash(data: try encoder.encode(settings))).base64EncodedString()
+  }
+
+  /// 写入后读回的订阅是否保留了这次的季集锁定、洗版开关和试看规则。
+  static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
+    (try? fingerprint(draft)) == (try? fingerprint(row))
   }
 }
 
@@ -391,6 +327,7 @@ nonisolated struct EpisodeTrialBatch: Decodable {
   let download_counts: [String: Int]
 
   var isFinished: Bool { ["completed", "failed", "cancelled", "skipped"].contains(state) }
+  var submittedCount: Int { download_counts["submitted"] ?? 0 }
 
   static func isValidID(_ id: String) -> Bool {
     id.utf8.count == 32 && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
@@ -452,12 +389,26 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
   }
 
+  var subscriptionID: Int? { note?.subscription_download?.subscription_id }
+
   func matches(_ request: EpisodeTrialRequest) -> Bool {
+    matches(
+      identities: request.knownIdentities, season: request.season, episodeGroup: request.episodeGroup,
+      episode: request.episodeNumber)
+  }
+
+  func matches(_ target: EpisodeTrialTarget) -> Bool {
+    matches(
+      identities: [target.identity], season: target.season, episodeGroup: target.episodeGroup,
+      episode: target.episodeNumber)
+  }
+
+  private func matches(identities: Set<MediaIdentity>, season: Int, episodeGroup: String?, episode: Int) -> Bool {
     guard let identity = MediaIdentifier.resolve(source: media_source, mediaId: media_id),
-      request.knownIdentities.contains(identity),
-      trimmedNonEmpty([episode_group]) == request.episodeGroup,
-      seasons.map({ Self.contains(request.season, in: $0, prefix: "S", single: true) }) == true,
-      episodes.map({ Self.contains(request.episodeNumber, in: $0, prefix: "E", single: false) }) == true
+      identities.contains(identity),
+      trimmedNonEmpty([episode_group]) == episodeGroup,
+      seasons.map({ Self.contains(season, in: $0, prefix: "S", single: true) }) == true,
+      episodes.map({ Self.contains(episode, in: $0, prefix: "E", single: false) }) == true
     else { return false }
     return true
   }
@@ -485,35 +436,28 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
 }
 
 nonisolated extension Subscribe {
-  /// 还在试看中的临时订阅。期间占着这一季，不能另建、编辑、暂停或取消，试看结束后自动删除。
-  /// 试看订阅一直暂停着，只有刚创建、还没暂停的几秒里是拒绝所有资源的占位。在别处被重新启用、
-  /// 不再暂停的就已经是正式订阅，不再按试看拦着；带不带试看标记只决定它归不归试看服务收尾。
-  var isEpisodeTrial: Bool {
-    EpisodeTrialTemporarySubscription.isTrialRow(self)
-      && (state == "S" || include == EpisodeTrialTemporarySubscription.blockedInclude)
-  }
-
-  /// 是否是按这个媒体身份和季删除时会被一起删掉的试看订阅。MoviePilot 按来源对应的 ID 列匹配，
-  /// 不看剧集组；`season` 为空时整部剧都算。
-  func isEpisodeTrial(of identity: MediaIdentity, season: Int?) -> Bool {
-    guard isEpisodeTrial, season == nil || self.season == season else { return false }
-    if self.identity == identity { return true }
-    let sourceID: String? =
-      switch identity.source {
-      case "themoviedb": tmdbid.map(String.init)
-      case "douban": doubanid
-      case "bangumi": bangumiid.map(String.init)
-      case "anilist": anilistid.map(String.init)
-      default: nil
-      }
-    return sourceID == identity.mediaId
-  }
+  /// 带试看标记：不论是本机还是别的设备建的。订阅面板据此不把它当成自己刚建的订阅回滚。
+  /// 是不是本机正在试看的订阅，要问 `EpisodeTrialService.trialState(of:)`。
+  var hasEpisodeTrialMarker: Bool { EpisodeTrialTemporarySubscription.hasMarker(self) }
 
   /// 试看的是哪一季哪一集，例如「第 2 季第 5 集」，订阅卡上代替集数进度显示。
   var episodeTrialTargetText: String? {
-    guard isEpisodeTrial, let episode = start_episode, episode > 0 else { return nil }
+    guard hasEpisodeTrialMarker, let episode = start_episode, episode > 0 else { return nil }
     return season.map { "第 \($0) 季第 \(episode) 集" } ?? "第 \(episode) 集"
   }
+}
+
+/// 本机正在试看的订阅处在哪一步，订阅卡片和季订阅页据此显示。
+nonisolated enum EpisodeTrialState: Equatable, Sendable {
+  case active
+  case cancelling
+}
+
+/// 取消试看的结果。`pending` 表示已经请求停止，等搜索结束后由服务在后台删掉订阅。
+nonisolated enum EpisodeTrialCancelOutcome: Equatable, Sendable {
+  case done
+  case pending
+  case failed
 }
 
 /// 碰到试看订阅时的系统提示框文字，订阅面板、首页订阅卡和季订阅页共用。
@@ -525,20 +469,21 @@ nonisolated enum EpisodeTrialHoldNotice {
   static let manageMessage = "这是试看一集用的临时订阅，试看结束后会自动删除。取消试看后，这一季就能正常订阅；已经下载的文件不会删除。"
   /// 不能取消试看的账号（不是管理员）在订阅卡片上看到的说明。
   static let infoMessage = "这是试看一集用的临时订阅，试看结束后会自动删除。"
+  static let cancellingTitle = "正在取消试看"
+  static let cancellingMessage = "等这次搜索停下来后会自动删除试看订阅，之后这一季就能正常订阅。"
   static let cancelTitle = "取消试看"
   static let cancelAndSubscribeTitle = "取消试看，继续订阅"
   static let backTitle = "返回"
   static let cancelFailure = "暂时无法取消试看，请稍后重试。"
-  /// 按季或整部剧取消订阅时，同一季还有试看订阅（可能在另一个剧集组）。
-  static let deleteBlockedMessage = "这一季正在试看，先取消试看再取消订阅。"
+  static let cancelPending = "正在取消试看，搜索停下来后会自动完成。"
 }
 
 /// 试看的这一集入库后的提示。用户多半已经离开详情页，看不到进度，所以用全局提示告诉他可以播放了。
 nonisolated enum EpisodeTrialReadyNotice {
   static let messageKey = "message"
 
-  static func message(for request: EpisodeTrialRequest) -> String {
-    let title = trimmedNonEmpty([request.media.title]).map { "《\($0)》" } ?? "试看的剧集"
-    return "\(title)第 \(request.season) 季第 \(request.episodeNumber) 集已入库，可以播放了。"
+  static func message(for target: EpisodeTrialTarget) -> String {
+    let title = target.title.map { "《\($0)》" } ?? "试看的剧集"
+    return "\(title)第 \(target.season) 季第 \(target.episodeNumber) 集已入库，可以播放了。"
   }
 }
