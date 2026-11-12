@@ -75,8 +75,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
       // 模拟 TV 重建任务作用域，以及 MoviePilot 在接收下载后直接移除临时订阅。
       service.tearDown()
       fixture.setMode(.downloading)
-      var library: EpisodeAvailability = .notOnServer
-      let resumed = EpisodeTrialService(api: api, defaults: defaults) { _, _ in library }
+      let library = LibraryBox()
+      let resumed = EpisodeTrialService(api: api, defaults: defaults) { _, _ in library.value }
       defer { resumed.tearDown() }
       let downloading = await resumed.refresh(request)
       XCTAssertEqual(downloading, .downloading(progress: 42))
@@ -89,7 +89,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let transferred = await resumed.refresh(request)
       XCTAssertEqual(transferred, .waitingForLibrary)
 
-      library = .playable(server: "测试媒体库")
+      library.value = .playable(server: "测试媒体库")
       let ready = await resumed.refresh(request)
       XCTAssertEqual(ready, .ready(server: "测试媒体库"))
       XCTAssertFalse(fixture.mutations.contains("DELETE subscribe/81"))

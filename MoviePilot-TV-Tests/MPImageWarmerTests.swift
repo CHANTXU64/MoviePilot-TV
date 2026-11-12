@@ -895,7 +895,7 @@ final class MPImageWarmerTests: XCTestCase {
   private func source(at path: String) throws -> String {
     let testFileURL = URL(fileURLWithPath: #filePath)
     let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: repositoryRoot.appendingPathComponent(path))
+    return try String(contentsOf: repositoryRoot.appendingPathComponent(path), encoding: .utf8)
   }
 
   private func waitUntil(

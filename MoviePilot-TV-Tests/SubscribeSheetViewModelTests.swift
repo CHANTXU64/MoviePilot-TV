@@ -1106,7 +1106,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       currentUser: accountB
     )
     await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe/status/801")
-    await loadTask.value
+    _ = await loadTask.value
     await viewModel.cancel()
 
     let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -1988,7 +1988,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
 
     let duplicateLoad = Task { await viewModel.loadData() }
-    await duplicateLoad.value
+    _ = await duplicateLoad.value
 
     XCTAssertTrue(viewModel.isLoading)
     let lookupCountWhileSuspended = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -1997,7 +1997,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.release(
       path: "/api/v1/subscribe/media/123459")
-    await firstLoad.value
+    _ = await firstLoad.value
 
     let finalLookupCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "GET", path: "/api/v1/subscribe/media/123459")
@@ -2044,7 +2044,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await viewModel.cancel()
     await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe")
-    await loadTask.value
+    _ = await loadTask.value
     await viewModel.cancel()
 
     let pauseRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -2088,7 +2088,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
     await viewModel.cancel()
     await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe")
-    await loadTask.value
+    _ = await loadTask.value
     await viewModel.cancel()
 
     let pauseCount = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -2186,7 +2186,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     configureNoSubscribeUser(service)
     await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/system/setting/UserFilterRuleGroups")
-    await loadTask.value
+    _ = await loadTask.value
 
     XCTAssertTrue(viewModel.sites.isEmpty)
     XCTAssertTrue(viewModel.downloaders.isEmpty)

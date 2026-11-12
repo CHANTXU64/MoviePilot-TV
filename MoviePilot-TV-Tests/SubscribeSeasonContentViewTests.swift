@@ -205,7 +205,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.subscribedSeasons, [2])
 
     await staleGate.open()
-    await staleRefresh.value
+    _ = await staleRefresh.value
 
     XCTAssertEqual(viewModel.subscribedSeasons, [2])
     XCTAssertEqual(viewModel.seasonSubscriptions[2]?.id, 402)
