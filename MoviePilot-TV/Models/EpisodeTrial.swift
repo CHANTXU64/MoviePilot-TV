@@ -298,7 +298,7 @@ nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
   case removedElsewhere
   /// 试看订阅在别处被改过，TV 不再自动处理。
   case modifiedElsewhere
-  /// 试看订阅没按要求生效（洗版保护、集数、规则没保存上），已停止。说明写明原因。
+  /// 试看订阅没按要求生效（不是普通订阅、集数、规则没保存上），已停止。说明写明原因。
   case failed(String)
 
   init?(_ progress: EpisodeTrialProgress) {
@@ -427,12 +427,15 @@ nonisolated enum EpisodeTrialTemporarySubscription {
     return Data(SHA256.hash(data: try encoder.encode(settings))).base64EncodedString()
   }
 
-  /// 写入后读回的订阅是否保留了这次的季集锁定、洗版开关和试看规则。
+  /// 写入后读回的订阅是否保留了这次的季集锁定、普通订阅（不洗版）和试看规则。
   static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
     (try? fingerprint(draft)) == (try? fingerprint(row))
   }
 }
 
+/// 试看订阅固定是普通订阅，试看规则里不提供改成洗版。洗版订阅在 MoviePilot 上固定完整搜索，要把所有站点的所有页翻完
+/// 才挑资源下载；普通订阅按用户设的搜索策略（默认智能，各站第一页到齐就先提交）。普通订阅提交下载后，MoviePilot
+/// 会自己把订阅标成完成并删掉（记一条订阅历史、发完成通知），试看服务按下载记录接着跟踪。
 nonisolated struct EpisodeTrialCreateSubscription: Encodable {
   let name: String?
   let type = "电视剧"
@@ -443,7 +446,7 @@ nonisolated struct EpisodeTrialCreateSubscription: Encodable {
   let episode_group: String?
   let start_episode: Int
   let total_episode: Int
-  let best_version = 1
+  let best_version = 0
   let best_version_full = 0
   let include = EpisodeTrialTemporarySubscription.blockedInclude
   // 当前 MoviePilot 保留旧 filter 字段，实际筛选读取 include、exclude 和 filter_groups。

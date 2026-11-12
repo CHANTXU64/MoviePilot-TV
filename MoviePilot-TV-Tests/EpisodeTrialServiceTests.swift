@@ -37,7 +37,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(searched["state"] as? String, "S")
       XCTAssertEqual(searched["include"] as? String, "WEB")
       XCTAssertEqual(searched["quality"] as? String, "WEB-DL")
-      XCTAssertEqual(searched["best_version"] as? Int, 1)
+      XCTAssertEqual(created["best_version"] as? Int, 0, "普通订阅：按用户的搜索策略，不像洗版那样翻完所有站点才下载")
+      XCTAssertEqual(searched["best_version"] as? Int, 0)
       XCTAssertEqual(searched["best_version_full"] as? Int, 0)
       XCTAssertEqual(service.credentials.count, 1)
       XCTAssertEqual(service.trialState(of: try XCTUnwrap(backend.subscribe(81))), .active)
@@ -419,6 +420,40 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testMoviePilotCompletingTheTrialAfterSubmittingKeepsFollowingTheDownload() async throws {
+    // 普通订阅提交下载后，MoviePilot 自己把订阅标成完成并删掉：不当成在别处被删，接着跟踪下载、整理和入库。
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.deleteElsewhere(81)
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertFalse(backend.mutations.contains("DELETE subscribe/81"), "订阅已经没了，不再删")
+      XCTAssertTrue(service.credentials.isEmpty)
+
+      backend.moveToQueue("target-hash")
+      let organizing = await service.refresh(request)
+      XCTAssertEqual(organizing, .organizing)
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+    }
+  }
+
+  func testMoviePilotCompletingTheTrialWithoutADownloadRecordStopsTrackingInsteadOfSayingDeleted() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true, recordsHistory: false)
+      backend.deleteElsewhere(81)
+      let ended = await service.refresh(request)
+      XCTAssertEqual(ended, EpisodeTrialService.untrackable, "批次说提交过下载：是 MoviePilot 结束的订阅，不是被删")
+    }
+  }
+
   // MARK: - 取消
 
   func testCancelWaitsForTheSearchToStopBeforeDeleting() async throws {
@@ -689,7 +724,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
   func testPermanentFailureCleansUpInsteadOfRetrying() async throws {
     let scenarios: [(String, () -> Void, String)] = [
-      ("洗版保护", { FakeMoviePilot.shared.overrideOnCreate("best_version", 0) }, "试看订阅的洗版保护没有生效，已停止试看"),
+      ("普通订阅", { FakeMoviePilot.shared.overrideOnCreate("best_version", 1) }, "试看订阅没有按普通订阅创建，已停止试看"),
       ("集数", { FakeMoviePilot.shared.overrideOnCreate("start_episode", 4) }, "试看订阅的集数和要试看的这一集对不上，已停止试看"),
     ]
     for (name, scenario, message) in scenarios {

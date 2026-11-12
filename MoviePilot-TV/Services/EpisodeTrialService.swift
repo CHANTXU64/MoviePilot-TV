@@ -674,12 +674,19 @@ final class EpisodeTrialService: ObservableObject {
       if let existing = current {
         return .ended(existing.state == "S" ? .subscriptionPaused : .waitingForSubscription)
       }
-      // 订阅已不在了（在别处被删掉）。写过规则就可能补搜过，按下载记录接着看。
+      // 订阅已不在了：补搜提交了下载，MoviePilot 就会把这条普通订阅标成完成并删掉；否则是在别处被删掉。
+      // 写过规则就可能补搜过，按下载记录接着看；补搜批次说提交过下载、却找不到记录时按无法跟踪结束。
       guard !credential.fingerprints.isEmpty || credential.batchID != nil else {
         return .ended(conclude(credential.target.episodeKey, Self.removedElsewhere))
       }
-      startObservation(credential, missingRecord: Self.removedElsewhere)
-      return .ended(.submissionUnconfirmed)
+      var submitted = false
+      if let batchID = credential.batchID {
+        let batch = try? await searchBatch(batchID, operation: operation)
+        submitted = (batch?.submittedCount ?? 0) > 0
+        try operation.check()
+      }
+      startObservation(credential, missingRecord: submitted ? Self.untrackable : Self.removedElsewhere)
+      return .ended(submitted ? .downloading(progress: nil) : .submissionUnconfirmed)
     }
     guard EpisodeTrialTemporarySubscription.isUntouched(row, by: credential) else {
       try remove(credential)
@@ -745,12 +752,12 @@ final class EpisodeTrialService: ObservableObject {
   }
 
   /// 暂停占位订阅，再写入这一集的季集锁定和试看规则。写入前先记下写入后的指纹，没读回来时下次也认得出。
-  /// 保护条件没生效、集数对不上、MoviePilot 拒绝或没按规则保存，重试也不会变，按永久失败交给调用方收尾。
+  /// 不是普通订阅（MoviePilot 改成了洗版）、集数对不上、MoviePilot 拒绝或没按规则保存，重试也不会变，按永久失败交给调用方收尾。
   private func prepare(
     _ credential: inout EpisodeTrialCredential, row: Subscribe, operation: Operation
   ) async throws {
-    guard let id = credential.subscriptionID, row.best_version == 1, row.best_version_full == 0 else {
-      throw Failure(message: "试看订阅的洗版保护没有生效，已停止试看", isPermanent: true)
+    guard let id = credential.subscriptionID, (row.best_version ?? 0) == 0, (row.best_version_full ?? 0) == 0 else {
+      throw Failure(message: "试看订阅没有按普通订阅创建，已停止试看", isPermanent: true)
     }
     var paused = row
     if row.state != "S" {
