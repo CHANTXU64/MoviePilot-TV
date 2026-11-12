@@ -257,13 +257,34 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
-  func testDuplicatePlaceholderWithTheSameMarkerIsRemoved() async throws {
-    backend.landCreateTwice()
-    try await withService { _, service, _, request in
-      let start = await service.start(request)
-      XCTAssertEqual(start, .searching)
-      XCTAssertTrue(backend.mutations.contains("DELETE subscribe/82"), "同标记的第二条占位删掉")
-      XCTAssertNotNil(backend.subscribe(81))
+  func testSwitchingEpisodeWhileCreateIsUnconfirmedFailsOnceThenRecovers() async throws {
+    backend.landCreateLate()
+    try await withService { _, service, _, e05 in
+      let e03 = try XCTUnwrap(EpisodeTrialRequest(
+        media: MediaInfo(tmdb_id: 91, title: "试看测试", type: "电视剧"),
+        episode: MoviePilotEpisode(TmdbEpisode(id: 232, episodeNumber: 3), season: 2, index: 2)
+      ))
+      let lost = await service.start(e03)
+      XCTAssertEqual(lost, .submissionUnconfirmed)
+      let marker = try XCTUnwrap(service.credentials.first?.marker)
+
+      // E03 的创建在服务器上排在后面才处理，E05 的创建按季去重拿回的是 E03 的占位。
+      let mismatched = await service.start(e05)
+      XCTAssertEqual(mismatched, .unavailable("试看订阅的集数和要试看的这一集对不上，已停止试看"))
+      XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker], "同季换集沿用标记")
+      XCTAssertTrue(backend.mutations.contains("DELETE subscribe/81"), "E03 的占位核对后删掉")
+      XCTAssertNil(backend.subscribe(81))
+      XCTAssertTrue(backend.searched.isEmpty, "没有为 E03 补搜")
+      XCTAssertTrue(service.credentials.isEmpty)
+
+      let retried = await service.start(e05)
+      XCTAssertEqual(retried, .searching)
+      XCTAssertEqual(backend.searched.count, 1)
+      let searched = try XCTUnwrap(backend.searched.first)
+      XCTAssertEqual(searched["start_episode"] as? Int, 5)
+      XCTAssertEqual(searched["total_episode"] as? Int, 5)
+      XCTAssertNotEqual(service.credentials.first?.marker, marker, "重试换新标记")
+      XCTAssertEqual(service.credentials.first?.target.episodeNumber, 5)
     }
   }
 
@@ -1245,7 +1266,9 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private var createMessage = "新增订阅成功"
   /// 查询之后、新增之前，别处正好建了同季订阅，新增时按季去重返回它。
   private var existingOnCreate: String?
-  private var createLandsTwice = false
+  /// 这次创建落库晚：回执丢了，下一次创建请求到达前才落库（模拟上一次请求在服务器上排在后面处理）。
+  private var createLandsLate = false
+  private var lateCreate: [String: Any]?
   /// 补搜回执：nil 正常；true 排上队后回执丢失；false 请求没送到。
   private var searchLoss: Bool?
   private var searchRejected = false
@@ -1295,7 +1318,8 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       createLoss = nil
       createMessage = "新增订阅成功"
       existingOnCreate = nil
-      createLandsTwice = false
+      createLandsLate = false
+      lateCreate = nil
       searchLoss = nil
       searchRejected = false
       normalizesWrites = false
@@ -1344,7 +1368,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   func returnExistingOnCreate(state: String) { lock.withLock { existingOnCreate = state } }
   func setCreateMessage(_ message: String) { lock.withLock { createMessage = message } }
   func loseCreateReceipt(afterStoring: Bool?) { lock.withLock { createLoss = afterStoring } }
-  func landCreateTwice() { lock.withLock { createLandsTwice = true } }
+  func landCreateLate() { lock.withLock { createLandsLate = true } }
   func loseSearchReceipt(afterQueueing: Bool?) { lock.withLock { searchLoss = afterQueueing } }
   func rejectSearch() { lock.withLock { searchRejected = true } }
   func normalizeWrites() { lock.withLock { normalizesWrites = true } }
@@ -1529,6 +1553,36 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       return ["success": true, "message": "订阅已存在", "data": ["id": 70]] as [String: Any]
     }
     if createLoss == false { throw URLError(.timedOut) }
+    if createLandsLate {
+      createLandsLate = false
+      lateCreate = body
+      throw URLError(.timedOut)
+    }
+    if let late = lateCreate {
+      lateCreate = nil
+      _ = store(late)
+    }
+    // MoviePilot 由数据库唯一键按账号、类型、媒体身份、季和剧集组去重，已有就返回那一条。
+    var identity = body
+    if convertsIdentity { identity.merge(["media_source": "themoviedb", "media_id": "91"]) { _, new in new } }
+    if let existing = rows.values.filter({ Self.sameIdentity($0, identity, username: "fixture") })
+      .compactMap({ $0["id"] as? Int }).min()
+    {
+      if createLoss == true { throw URLError(.networkConnectionLost) }
+      return ["success": true, "message": "订阅已存在", "data": ["id": existing]] as [String: Any]
+    }
+    let id = store(body)
+    if createLoss == true { throw URLError(.networkConnectionLost) }
+    return ["success": true, "message": createMessage, "data": ["id": id]] as [String: Any]
+  }
+
+  private static func sameIdentity(_ row: [String: Any], _ body: [String: Any], username: String) -> Bool {
+    func text(_ value: Any?) -> String? { value.map { String(describing: $0) } }
+    return text(row["username"]) == username
+      && ["type", "media_source", "media_id", "season", "episode_group"].allSatisfy { text(row[$0]) == text(body[$0]) }
+  }
+
+  private func store(_ body: [String: Any]) -> Int {
     // MoviePilot 按电视剧默认订阅配置填上请求没给的项，并安排一分钟后的自动搜索（暂停后会跳过）。
     var fields = body
     if fields["quality"] == nil { fields["quality"] = "MP 默认质量" }
@@ -1548,14 +1602,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       failsReadBackAfterCreate = false
       readBackFails = true
     }
-    if createLandsTwice {
-      var twin = fields
-      twin["id"] = nextID
-      rows[nextID] = twin
-      nextID += 1
-    }
-    if createLoss == true { throw URLError(.networkConnectionLost) }
-    return ["success": true, "message": createMessage, "data": ["id": id]] as [String: Any]
+    return id
   }
 
   private func save(_ fields: [String: Any]) throws -> Any {

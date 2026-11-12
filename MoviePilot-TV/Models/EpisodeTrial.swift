@@ -282,6 +282,8 @@ nonisolated enum EpisodeTrialTemporarySubscription {
       row.type == "电视剧", row.identity.map(target.identities.contains) == true, row.season == target.season,
       trimmedNonEmpty([row.episode_group]) == target.episodeGroup
     else { return false }
+    // 占位阶段只凭「仍拒绝所有资源」认定没被改过：创建后 MoviePilot 会补默认值，读回之前不知道占位的样子，
+    // 记指纹也挡不住读回前的改动。别处只改了其他字段时 TV 仍会接管并删掉，这种订阅本来下载不了任何资源。
     if row.include == blockedInclude { return true }
     guard row.state == "S", let current = try? fingerprint(row) else { return false }
     return credential.fingerprints.contains(current)

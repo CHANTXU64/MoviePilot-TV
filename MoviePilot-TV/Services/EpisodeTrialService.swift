@@ -464,6 +464,8 @@ final class EpisodeTrialService: ObservableObject {
       switch try await drive(credential, operation: operation) {
       case .unconfirmed:
         // 创建没确认：再按「试看」时沿用同一个标记，不论哪次请求落了库，订阅上都是同一个标记。
+        // 同一季改试看别的集也沿用：换新标记会让已落库的旧占位没人认领，MoviePilot 按季去重时还会把新请求合到它上面。
+        // 认回的是旧集的占位时，准备阶段按集数对不上停止并删掉它，用户再按一次即可。
         if mayCreate {
           reusableMarker = credential.marker
         } else if credential.target.episodeKey == key {
@@ -632,30 +634,24 @@ final class EpisodeTrialService: ObservableObject {
     /// 服务器上这条订阅现在的样子；nil 表示已经不在（或当前账号看不到）。
     let current: Subscribe?
     if let id = credential.subscriptionID, credential.batchID != nil {
-      // 补搜已经发出，只等批次结束：按 ID 读这一条就够了。订阅详情不带手动搜索状态，补回批次和清理重复占位
+      // 补搜已经发出，只等批次结束：按 ID 读这一条就够了。订阅详情不带手动搜索状态，认领和补回批次
       // 都发生在这之前，要看整份列表。
       current = try await operation.api.fetchSubscriptionIfPresent(id: id)
       try operation.check()
     } else {
       let subscriptions = try await operation.api.fetchSubscriptions(forceRefresh: true)
       try operation.check()
-      let marked = subscriptions.filter { $0.filter == credential.marker && $0.username == credential.owner }
       if credential.subscriptionID == nil {
-        guard let id = marked.compactMap(\.id).filter({ $0 > 0 }).min() else { return .unconfirmed }
+        // MoviePilot 由数据库唯一键按账号和季去重，同一个标记最多落一条。
+        guard
+          let id = subscriptions.first(where: { $0.filter == credential.marker && $0.username == credential.owner })?
+            .id, id > 0
+        else { return .unconfirmed }
         credential.subscriptionID = id
         // 认领后由后台对账接着推进和收尾，不靠页面一直开着。
         try store(credential)
       }
       guard let id = credential.subscriptionID else { return .unconfirmed }
-
-      // 后端按季去重不是原子的，同一个标记可能落了两条；另一条仍是拒绝所有资源的占位，删掉。
-      for duplicate in marked where duplicate.id != id
-        && duplicate.include == EpisodeTrialTemporarySubscription.blockedInclude
-      {
-        guard let duplicateID = duplicate.id, duplicateID > 0 else { continue }
-        _ = await attempt("删除重复的试看占位订阅") { try await operation.api.deleteSubscription(id: duplicateID) }
-        try operation.check()
-      }
       current = subscriptions.first { $0.id == id }
     }
     guard let id = credential.subscriptionID else { return .unconfirmed }
@@ -785,6 +781,8 @@ final class EpisodeTrialService: ObservableObject {
       EpisodeTrialTemporarySubscription.preservesSettings(of: draft, in: updated)
     else {
       // 写完立刻读回的就是这次写入在服务器上的结果，记下它，收尾核对时认得出这是自己写过的订阅。
+      // 不一致多半是 MoviePilot 对写入值另有整理，每次都会出现；不记的话每次都留一条暂停的订阅要用户手动删。
+      // 代价是保存和读回之间别处恰好改了这条订阅，改动会随收尾一起删掉，空隙和删除前重读一样只隔一个请求。
       if updated.filter == credential.marker,
         let actual = try? EpisodeTrialTemporarySubscription.fingerprint(updated)
       {
@@ -801,6 +799,8 @@ final class EpisodeTrialService: ObservableObject {
     _ credential: EpisodeTrialCredential, row: Subscribe, operation: Operation
   ) async throws -> Driven {
     let outcome = credential.failure.map(EpisodeTrialProgress.unavailable) ?? Self.cancelled
+    // 回执和订阅行上都没有批次，就是补搜没被受理：MoviePilot 先把搜索任务入库才回执，订阅行显示最近一次任务。
+    // 请求还在服务器上没处理完的话，删掉订阅后那次搜索在提交下载前查不到订阅，会自己放弃。
     guard let batchID = credential.batchID ?? Self.manualBatch(of: row) else {
       return try await finish(credential, batch: nil, outcome: outcome, operation: operation)
     }
