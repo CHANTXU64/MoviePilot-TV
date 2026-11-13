@@ -382,7 +382,7 @@ final class EpisodeMatchingTests: XCTestCase {
         seasonReads.append(group)
         return [1, 2]
       },
-      transferRecords: {
+      transferRecords: { _ in
         recordReads += 1
         throw URLError(.timedOut)
       })
@@ -426,7 +426,7 @@ final class EpisodeMatchingTests: XCTestCase {
     return try await EpisodeMatchLoader.index(
       serverName: "emby", hasSeries: true, episodes: files, incompleteReason: nil,
       sources: EpisodeMatchingSources(
-        seasonList: { available[$0] ?? [] }, seasons: seasons, transferRecords: { records }),
+        seasonList: { available[$0] ?? [] }, seasons: seasons, transferRecords: { _ in records }),
       describe: { _ in "超时" })
   }
 

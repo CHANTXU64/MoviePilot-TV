@@ -85,25 +85,25 @@ nonisolated struct EpisodeEvidence: Equatable, Sendable {
   var lookups: [String: EpisodeLookupOutcome] = [:]
   /// TMDB 其他语言的季列表：默认顺序的季号 → 各语言的集列表。服务器上的标题常是英文或原语言的，MoviePilot 的是中文。
   var translatedSeasons: [Int: [[TmdbEpisode]]] = [:]
-  /// 这部剧在这台服务器上正第一次去 TMDB 核对：还没确定是哪一集的文件可能就是没找到的那些集，先别下结论。
-  /// 之后的重查在后台进行，不挡试看（没查成的按“可能已有”说明）。
-  var lookupInProgress = false
+  /// 还没在补查里核对过的文件（服务器条目 ID），比如这部剧第一次核对时的文件、之后刚入库的文件：没查清时它们可能就是
+  /// 没找到的那些集，先别下结论。核对过但没查清的不在这里：之后的重查在后台进行，不挡试看（按“可能已有”说明）。
+  var checkingFiles: Set<String> = []
   /// 没能读到这台服务器的媒体库配置：`lookups` 里的 `unresolved` 是因为没法核对，不是 TMDB 没查成。
   var librarySettingsUnknown = false
 
   init(
     independentFiles: Set<String> = [], lookups: [String: EpisodeLookupOutcome] = [:],
-    translatedSeasons: [Int: [[TmdbEpisode]]] = [:], lookupInProgress: Bool = false,
+    translatedSeasons: [Int: [[TmdbEpisode]]] = [:], checkingFiles: Set<String> = [],
     librarySettingsUnknown: Bool = false
   ) {
     self.independentFiles = independentFiles
     self.lookups = lookups
     self.translatedSeasons = translatedSeasons
-    self.lookupInProgress = lookupInProgress
+    self.checkingFiles = checkingFiles
     self.librarySettingsUnknown = librarySettingsUnknown
   }
 
-  var isEmpty: Bool { independentFiles.isEmpty && lookups.isEmpty && translatedSeasons.isEmpty && !lookupInProgress }
+  var isEmpty: Bool { independentFiles.isEmpty && lookups.isEmpty && translatedSeasons.isEmpty && checkingFiles.isEmpty }
 
   /// 反查到的这部剧的一集；单集资料可能来自 TMDB 的文件不算（编号可能是 TMDB 按季号集号给的）。
   func lookedUp(_ file: ServerMediaItem) -> ExternalEpisodeMatch? {

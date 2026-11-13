@@ -158,11 +158,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 连接（地址和服务器用户）沿用的时长；到期重新探测、重选用户，服务器端删改用户后能自行恢复。
   static let connectionTTL: TimeInterval = 600
   /// 服务器上一部剧的集索引沿用的时长：详情页的每集状态、起播和上一集/下一集共用，短时间内不重复读整部剧的集。
-  /// 这部剧的整理记录也沿用这么久。
   static let episodeIndexTTL: TimeInterval = 60
+  /// 一部剧的整理记录沿用的时长。期间服务器上出现读的时候没有的文件（比如刚入库的一集），或强制重读时，提前增量读一次。
+  static let transferRecordTTL: TimeInterval = 600
   /// 单集对应读整理记录时每页的条数和最多读几页：记录多的剧只用最近的这些，没对上记录的文件照常按季号集号对应。
   static let transferRecordPageSize = 100
   static let transferRecordPageLimit = 10
+  /// 留着做增量读的剧数，超出时丢掉最久没用的。
+  static let transferRecordHistoryCapacity = 32
   /// 起播前最多等这么久，让上一次播放的停止上报和进度写回先发完，续播询问才读得到刚保存的位置。
   /// 服务器连不上时不会一直卡在“正在准备播放”。
   static let pendingReportWait: Duration = .seconds(5)
@@ -187,8 +190,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 同一服务器的连接可复用。限制地址的恢复请求只与同样限制的请求共用连接。
   private let connections: CoalescingCache<ConnectionKey, any MediaServerConnection>
   private let episodeIndexes: CoalescingCache<String, ServerEpisodeIndex>
-  /// 这部剧在 MoviePilot 的整理记录，各台服务器的集索引共用。
-  private let transferRecords: CoalescingCache<String, [EpisodeTransferRecord]>
+  /// 这部剧在 MoviePilot 的整理记录，各台服务器的集索引共用。键是“TMDB 编号|剧名”。
+  private let transferRecords: CoalescingCache<String, SeriesTransferRecords>
+  /// 各部剧上次读到的整理记录和要过记录的文件，过了 `transferRecordTTL` 也留着，下次从这里增量读。
+  private var transferRecordHistory: [String: TransferRecordHistory] = [:]
   /// 各台服务器的媒体库配置（单集元数据来源）和读到的时间。只在补查一轮里读，建对应表时只看这里；
   /// 过了 `connectionTTL` 重新读，改了刮削配置最多过这么久就按新的判断。
   private var libraryProfiles: [String: (profiles: [MediaLibraryProfile], readAt: Date)] = [:]
@@ -198,6 +203,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private var lookupRounds: [String: LookupRound] = [:]
   /// 各部剧上一轮补查的开始时间：没查全的过一阵才再查，不随每次打开详情页重开一轮。
   private var lastLookupRound: [String: (startedAt: Date, files: Set<String>)] = [:]
+  /// 各部剧在补查里核对过的文件（一轮结束时记上）。没核对过的文件没查清时，没找到的集先显示正在核对、不能试看；
+  /// 核对过但没查清的，之后在后台重查，不挡试看。
+  private var checkedLookupFiles: [String: Set<String>] = [:]
   /// 一轮到点结束后，等已经发出的请求回来再通知一次（它们的结果会写进缓存，到点时还没回来）。
   private var lateLookupNotices: [String: Task<Void, Never>] = [:]
   /// 上次读到的 MoviePilot 集列表语言（`TMDB_LOCALE`），只读缓存时按它挑要比的其他语言。
@@ -232,7 +240,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     episodeIndexes = CoalescingCache(
       ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, now: now)
     transferRecords = CoalescingCache(
-      ttl: Self.episodeIndexTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
+      ttl: Self.transferRecordTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
   }
 
   var isResolving: Bool {
@@ -367,6 +375,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     connections.invalidateAll()
     episodeIndexes.invalidateAll()
     transferRecords.invalidateAll()
+    transferRecordHistory = [:]
     libraryProfiles = [:]
     lookupRounds.values.forEach { $0.cancel() }
     lookupRounds = [:]
@@ -669,9 +678,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           }
           return seasons.compactMap(\.season_number)
         },
-        transferRecords: {
+        transferRecords: { files in
           guard let self else { throw CancellationError() }
-          return try await self.seriesTransferRecords(context, round: refresh)
+          let fileKeys = Set(files.map { "\(Self.profileKey(connection))|\($0)" })
+          return try await self.seriesTransferRecords(context, files: fileKeys, round: refresh)
         },
         evidence: { [weak self] episodes, local in
           await self?.episodeEvidence(episodes: episodes, local: local, tmdbID: context.tmdbID, on: connection)
@@ -731,15 +741,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     if needsRound {
       startLookupRound(roundKey, tmdbID: tmdbID, episodes: episodes, local: local, files: candidates, on: connection)
     }
-    evidence.lookupInProgress = lookupRounds[roundKey]?.isFirst == true
+    // 只算还没有答案的：缓存里已经有答案（包括有歧义）的新文件不用等。没有答案就是没查全，一定会补查：
+    // 不是正在这一轮里查，就是等这一轮结束后马上查（出现新文件时不等重查间隔），不会一直挂着。
+    evidence.checkingFiles = candidates.subtracting(checkedLookupFiles[roundKey] ?? []).filter {
+      evidence.lookups[$0] == .unresolved
+    }
     return evidence
   }
 
   /// 进行中的一轮补查：查询任务和到点计时器。哪个先结束都由 `finishLookupRound` 收尾，按 `id` 只收一次。
-  /// `isFirst`：这部剧在这台服务器上第一次核对，没找到的集先显示正在核对、不能试看；之后的重查在后台进行，不挡试看。
+  /// `files` 是这一轮要查的文件，结束时记为核对过。
   private struct LookupRound {
     let id: UUID
-    let isFirst: Bool
+    let files: Set<String>
     let work: Task<Void, Never>
     let timer: Task<Void, Never>
 
@@ -780,7 +794,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       guard !Task.isCancelled else { return }
       self?.finishLookupRound(key, id: id, tmdbID: tmdbID, byDeadline: true)
     }
-    lookupRounds[key] = LookupRound(id: id, isFirst: previous == nil, work: work, timer: timer)
+    lookupRounds[key] = LookupRound(id: id, files: files, work: work, timer: timer)
   }
 
   /// 一轮补查结束（查完或到点）：停掉查询和计时器，作废集索引，通知详情页重读。查没查到都通知，“正在核对”不会挂着不走。
@@ -789,6 +803,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     guard !isTornDown, let round = lookupRounds[key], round.id == id else { return }
     lookupRounds[key] = nil
     round.cancel()
+    checkedLookupFiles[key, default: []].formUnion(round.files)
     episodeIndexes.invalidateAll()
     evidenceUpdates.send(tmdbID)
     guard byDeadline else { return }
@@ -847,61 +862,95 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：
   /// 同一个 MoviePilot 刚失败时，这一轮的各台服务器沿用相同结果，让单集匹配继续使用其他依据。
   /// 那次已经读完才来要的：成功了用它写进缓存的结果，失败了（或第一台中途取消）自己再读。都不用这一轮以前的缓存。
-  /// 不在强制重读时按缓存读。
+  /// 不在强制重读时按缓存读。`files` 是要记录的文件（“服务器|条目 ID”）。
   private func seriesTransferRecords(
-    _ context: EpisodePlaybackContext, round: RefreshRound?
+    _ context: EpisodePlaybackContext, files: Set<String>, round: RefreshRound?
   ) async throws -> [EpisodeTransferRecord] {
-    guard let round else { return try await seriesTransferRecords(context, forceRefresh: false) }
+    guard let round else { return try await seriesTransferRecords(context, files: files, forceRefresh: false) }
     guard round.claimsTransferRecordRefresh() else {
       return try await seriesTransferRecords(
-        context, forceRefresh: false, acceptsCachedValue: { _ in round.transferRecordsRefreshed })
+        context, files: files, forceRefresh: false, acceptsCachedValue: { _ in round.transferRecordsRefreshed })
     }
-    let records = try await seriesTransferRecords(context, forceRefresh: true)
+    let records = try await seriesTransferRecords(context, files: files, forceRefresh: true)
     round.transferRecordRefreshSucceeded()
     return records
   }
 
-  /// 这部剧在 MoviePilot 的成功整理记录，按 TMDB 编号筛出这部剧的。剧名为空时不查。集索引强制重读时一起重读，
-  /// 刚整理的文件才对得上。
+  /// 一部剧读到的整理记录：两种查法各自的结果，和读的时候已经要过记录的文件。
+  private nonisolated struct SeriesTransferRecords: Sendable {
+    let prefixed: TransferRecordQuery
+    /// 按开头查到的记录里一条这部剧的都没有时，按包含剧名查的结果。
+    let containing: TransferRecordQuery?
+    /// 开始读时已经要过这部剧记录的文件（“服务器|条目 ID”）。之后出现不在这里的文件，可能是刚整理入库的，要增量读一次。
+    let files: Set<String>
+
+    var records: [EpisodeTransferRecord] { prefixed.records.isEmpty ? containing?.records ?? [] : prefixed.records }
+  }
+
+  /// 一部剧上次读到的整理记录（下次从这里增量读）和要过记录的文件。
+  private struct TransferRecordHistory {
+    var last: SeriesTransferRecords?
+    var requestedFiles: Set<String> = []
+    var usedAt: Date
+  }
+
+  /// 这部剧在 MoviePilot 的成功整理记录，按 TMDB 编号筛出这部剧的。剧名为空时不查。
+  /// 缓存 `transferRecordTTL`；`files` 里有上次读时没有的文件，或强制重读、缓存过期时，从上次读到的结果增量读（见 `TransferRecordQuery`），
+  /// 一般只要读一页。查不到这部剧记录的结果也缓存，不是 MoviePilot 整理的剧不会每次都白读。
   ///
   /// `title` 不带通配符时，MoviePilot 分词后对标题、源路径和目标路径做包含匹配，剧名短（如「24」「You」）时混进大量别的剧，
   /// 读到的几页里可能一条这部剧的都没有。带 `*` 或 `?` 时按通配符对整串匹配，所以先用「剧名*」查标题以剧名开头的记录
   /// （路径是绝对路径，不会命中）；筛完一条这部剧的都没有时（记录里存的标题可能和现在的剧名不同），再退回包含匹配。
   private func seriesTransferRecords(
-    _ context: EpisodePlaybackContext, forceRefresh: Bool,
-    acceptsCachedValue: ([EpisodeTransferRecord]) -> Bool = { _ in true }
+    _ context: EpisodePlaybackContext, files: Set<String>, forceRefresh: Bool,
+    acceptsCachedValue: @escaping (SeriesTransferRecords) -> Bool = { _ in true }
   ) async throws -> [EpisodeTransferRecord] {
     guard let title = context.seriesName else { return [] }
     let tmdbID = context.tmdbID
+    let key = "\(tmdbID)|\(title)"
+    rememberTransferRecordRequest(key, files: files)
     return try await transferRecords.value(
-      for: "\(tmdbID)|\(title)", forceRefresh: forceRefresh, acceptsCachedValue: acceptsCachedValue,
+      for: key, forceRefresh: forceRefresh,
+      acceptsCachedValue: { files.isSubset(of: $0.files) && acceptsCachedValue($0) },
       validate: validateNotTornDown
     ) { [weak self] in
-      let fetch: (String, Int) async throws -> (records: [EpisodeTransferRecord], total: Int?) = { query, page in
+      let history = self?.transferRecordHistory[key]
+      let requested = history?.requestedFiles ?? []
+      let fetch: (String, Int) async throws -> TransferRecordQuery.Page = { query, page in
         guard let apiService = self?.apiService else { throw CancellationError() }
         return try await apiService.fetchEpisodeMatchTransferRecords(
           title: query, page: page, count: Self.transferRecordPageSize)
       }
-      let prefixed = try await Self.readTransferRecords(query: title + "*", tmdbID: tmdbID, fetch: fetch)
-      guard prefixed.isEmpty else { return prefixed }
-      return try await Self.readTransferRecords(query: Self.containingQuery(for: title), tmdbID: tmdbID, fetch: fetch)
-    }
+      func read(_ query: String, after previous: TransferRecordQuery?) async throws -> TransferRecordQuery {
+        try await TransferRecordQuery.read(
+          query: query, tmdbID: tmdbID, previous: previous, pageSize: Self.transferRecordPageSize,
+          pageLimit: Self.transferRecordPageLimit, fetch: fetch)
+      }
+      let prefixed = try await read(title + "*", after: history?.last?.prefixed)
+      let containing =
+        prefixed.records.isEmpty
+        ? try await read(Self.containingQuery(for: title), after: history?.last?.containing) : nil
+      let result = SeriesTransferRecords(prefixed: prefixed, containing: containing, files: requested)
+      self?.rememberTransferRecords(result, for: key)
+      return result
+    }.records
   }
 
-  /// 按一种查法读最多 `transferRecordPageLimit` 页，留下这部剧的记录。
-  private static func readTransferRecords(
-    query: String, tmdbID: Int,
-    fetch: (String, Int) async throws -> (records: [EpisodeTransferRecord], total: Int?)
-  ) async throws -> [EpisodeTransferRecord] {
-    var records: [EpisodeTransferRecord] = []
-    for page in 1...transferRecordPageLimit {
-      let batch = try await fetch(query, page)
-      records += batch.records.filter { $0.belongs(toSeries: tmdbID) }
-      // 按整页数量判断结尾：筛掉别的剧后变少不算读完。`total` 是 MoviePilot 按同一种查法数的总条数。
-      if batch.records.count < transferRecordPageSize { break }
-      if let total = batch.total, page * transferRecordPageSize >= total { break }
+  /// 记下要过这部剧记录的文件。读之前记：在途的那次读取开始前要过的，读完都算读过。
+  private func rememberTransferRecordRequest(_ key: String, files: Set<String>) {
+    guard !isTornDown else { return }
+    if transferRecordHistory[key] == nil, transferRecordHistory.count >= Self.transferRecordHistoryCapacity,
+      let oldest = transferRecordHistory.min(by: { $0.value.usedAt < $1.value.usedAt })?.key
+    {
+      transferRecordHistory[oldest] = nil
     }
-    return records
+    transferRecordHistory[key, default: TransferRecordHistory(usedAt: now())].requestedFiles.formUnion(files)
+    transferRecordHistory[key]?.usedAt = now()
+  }
+
+  private func rememberTransferRecords(_ records: SeriesTransferRecords, for key: String) {
+    guard !isTornDown else { return }
+    transferRecordHistory[key, default: TransferRecordHistory(usedAt: now())].last = records
   }
 
   /// 退回的包含匹配。剧名里没有 `*`、`?` 时原样传，MoviePilot 分词后做包含匹配；有的话 MoviePilot 会按通配符对整串匹配，

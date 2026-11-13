@@ -2350,6 +2350,60 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(calls, 2, "只查新文件，旧文件用缓存")
   }
 
+  func testNewFileIsCheckedBeforeTrialEvenAfterAnEarlierRound() async throws {
+    // 第一轮没查清旧文件（到点结束），之后的重查不挡试看。新入库一集：服务器叫它第 2 季第 39 集，可能就是缺的第 2 季第 3 集；
+    // 它还没核对过，查清之前同样先显示正在核对、不能试看，试看提交前的复查也挡住。
+    let old = #"{"Id":"far","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"Path":"/emby/长风渡/Season 2/38.mkv","ProviderIds":{"Tvdb":"8038"}}"#
+    configureLibraryWithoutEpisodeIDs(old)
+    configureTvdbOnlyLibraryWithTmdbAccess()
+    let episode = try groupEpisode(0)
+    let tmdbEpisodeID = try XCTUnwrap(episode.tmdbEpisodeID)
+    let directory = ScriptedTmdbDirectory(
+      found: ["tvdb 8039": [TmdbFoundEpisode(id: tmdbEpisodeID, showID: 100)]], released: false)
+    let coordinator = makeCoordinator(makeService(), tmdb: directory, roundBudget: .seconds(1))
+    let (first, firstSubscription) = lookupRoundEnd(coordinator)
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [first], timeout: 5)
+    firstSubscription.cancel()
+    let afterFirst = await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true)
+    XCTAssertEqual(afterFirst, [.unverified(server: "emby", reason: .lookupIncomplete)], "旧文件核对过、没查清：可以试看")
+
+    let added = #"{"Id":"new","Type":"Episode","ParentIndexNumber":2,"IndexNumber":39,"Path":"/emby/长风渡/Season 2/39.mkv","ProviderIds":{"Tvdb":"8039"}}"#
+    configureLibraryWithoutEpisodeIDs(old, added)
+    let (second, secondSubscription) = lookupRoundEnd(coordinator)
+    defer { secondSubscription.cancel() }
+    let checking = await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true)
+    XCTAssertEqual(checking, [.checking(server: "emby", files: 1)], "只算没核对过的新文件")
+    let recheck = await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true)
+    XCTAssertEqual(recheck?.first?.allowsTrial, false, "提交前的复查也挡住")
+    await directory.release()
+    await fulfillment(of: [second], timeout: 5)
+    let after = await coordinator.episodeAvailability(for: [episode], context: context())
+    XCTAssertEqual(after, [.playable(server: "emby")], "新文件反查到了这一集")
+  }
+
+  func testNewFileWhoseIDWasAlreadyAnsweredDoesNotWaitForARound() async throws {
+    // 这一集换了文件（洗版），服务器条目 ID 变了、TVDB 编号没变；这个编号以前反查出这部剧的两集（有歧义），已经缓存。
+    // 新条目没核对过，但缓存里已经有答案：按没查清处理、可以试看，不显示一个不会结束的“正在核对”。
+    let old = #"{"Id":"far","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"Path":"/emby/长风渡/Season 2/38.mkv","ProviderIds":{"Tvdb":"8038"}}"#
+    configureLibraryWithoutEpisodeIDs(old)
+    configureTvdbOnlyLibraryWithTmdbAccess()
+    let episode = try groupEpisode(0)
+    let directory = ScriptedTmdbDirectory(
+      found: ["tvdb 8038": [TmdbFoundEpisode(id: 556, showID: 100), TmdbFoundEpisode(id: 557, showID: 100)]])
+    let coordinator = makeCoordinator(makeService(), tmdb: directory)
+    let (first, firstSubscription) = lookupRoundEnd(coordinator)
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [first], timeout: 5)
+    firstSubscription.cancel()
+
+    configureLibraryWithoutEpisodeIDs(old.replacingOccurrences(of: #""Id":"far""#, with: #""Id":"far2""#))
+    let replaced = await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true)
+    XCTAssertEqual(replaced, [.unverified(server: "emby", reason: .lookupIncomplete)])
+    let calls = await directory.networkCalls
+    XCTAssertEqual(calls, 1, "编号查过，不再请求")
+  }
+
   func testRoundEndsAtTheDeadlineEvenIfARequestHangs() async throws {
     configureLibraryWithoutEpisodeIDs(
       #"{"Id":"far","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"Path":"/emby/长风渡/Season 2/38.mkv","ProviderIds":{"Tvdb":"8038"}}"#)
@@ -2528,6 +2582,90 @@ extension PlaybackCoordinatorTests {
     let after = await reread.value
     XCTAssertEqual(after, [.playable(server: "emby2")])
     XCTAssertEqual(transferHistoryQueries().count, queriesBefore + 1, "第二台跟上第一台的重读，不另读")
+  }
+
+  /// 新入库的第 11 集：没有 TMDB 单集 ID，路径对得上 `transferRecordE11`。
+  private static let unnumberedFileE11 =
+    #"{"Id":"e-y","Type":"Episode","Name":"Emby 集名","SeriesName":"长风渡","Path":"/data/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E11 - 第 11 集.mkv"}"#
+  private static let transferRecordE11 =
+    #"{"id":2,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S01","episodes":"E11","episode_group":"g1","dest":"/media/tv/长风渡 (2023)/Season 1/长风渡 - S01E11 - 第 11 集.mkv","status":true}"#
+
+  func testTransferRecordsAreReusedUntilANewFileAppearsThenReadIncrementally() async throws {
+    configureLibraryWithoutEpisodeIDs(Self.unnumberedFile)
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = ["长风渡*|1": Self.transferPage([Self.transferRecord(mediaID: "100")], total: 1)]
+    }
+    nonisolated(unsafe) var clock = Date()
+    let coordinator = makeCoordinator(makeService(), now: { clock })
+    let episodes = try groupSeason1()
+    _ = await coordinator.episodeAvailability(for: episodes, context: context())
+    XCTAssertEqual(transferHistoryQueries(), ["长风渡*|1"])
+
+    clock += PlaybackCoordinator.episodeIndexTTL + 60
+    let reused = await coordinator.episodeAvailability(for: episodes, context: context())
+    XCTAssertEqual(reused?.first, .playable(server: "emby"))
+    XCTAssertEqual(transferHistoryQueries().count, 1, "集索引过期重建，整理记录还在有效期内、文件没变，不重读")
+
+    // 新整理入库第 11 集：MoviePilot 的第 1 页最前面是新记录，接着是读过的那条。
+    configureLibraryWithoutEpisodeIDs(Self.unnumberedFile, Self.unnumberedFileE11)
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = [
+        "长风渡*|1": Self.transferPage([Self.transferRecordE11, Self.transferRecord(mediaID: "100")], total: 2)
+      ]
+    }
+    clock += PlaybackCoordinator.episodeIndexTTL + 60
+    let added = await coordinator.episodeAvailability(for: episodes, context: context())
+    XCTAssertEqual(Array(added?.prefix(2) ?? []), [.playable(server: "emby"), .playable(server: "emby")])
+    XCTAssertEqual(transferHistoryQueries(), ["长风渡*|1", "长风渡*|1"], "出现新文件就增量读，读到见过的记录为止")
+  }
+
+  func testIncrementalReadStartsOverWhenTheTotalShowsARecordWasRemoved() async throws {
+    // 上次读到两条（第 10 集和别的剧的一条），总数 2。之后别的剧那条被删、新整理了第 11 集：第 1 页是新记录和第 10 集，
+    // 总数仍是 2，对不上“上次 2 条 + 新出现 1 条”，从头重读，不留可能删掉的旧记录。
+    configureLibraryWithoutEpisodeIDs(Self.unnumberedFile)
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = [
+        "长风渡*|1": Self.transferPage(
+          [Self.transferRecord(mediaID: "100"), Self.transferRecord(mediaID: "200", id: 9)], total: 2)
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+    _ = await coordinator.episodeAvailability(for: try groupSeason1(), context: context())
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = [
+        "长风渡*|1": Self.transferPage([Self.transferRecordE11, Self.transferRecord(mediaID: "100")], total: 2)
+      ]
+    }
+    _ = await coordinator.episodeAvailability(for: try groupSeason1(), context: context(), forceRefresh: true)
+    XCTAssertEqual(transferHistoryQueries(), ["长风渡*|1", "长风渡*|1", "长风渡*|1"], "增量读一页，总数对不上，从头再读")
+  }
+
+  func testShowWithoutTransferRecordsIsNotReReadOnEveryVisit() async throws {
+    // 不是 MoviePilot 整理的剧：两种查法都没有这部剧的记录。查不到的结果也缓存；出现新文件时两种查法各增量读一页。
+    configureLibraryWithoutEpisodeIDs(Self.unnumberedFile)
+    let others = (1...100).map { Self.transferRecord(mediaID: "200", id: 1000 + $0) }
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = [
+        "长风渡*|1": Self.transferPage([], total: 0),
+        "长风渡|1": Self.transferPage(others, total: 150),
+        "长风渡|2": Self.transferPage(Array(others.prefix(50)).map { $0.replacingOccurrences(of: #""id":1"#, with: #""id":2"#) }, total: 150),
+      ]
+    }
+    nonisolated(unsafe) var clock = Date()
+    let coordinator = makeCoordinator(makeService(), now: { clock })
+    _ = await coordinator.episodeAvailability(for: try groupSeason1(), context: context())
+    XCTAssertEqual(transferHistoryQueries(), ["长风渡*|1", "长风渡|1", "长风渡|2"])
+
+    clock += PlaybackCoordinator.episodeIndexTTL + 60
+    _ = await coordinator.episodeAvailability(for: try groupSeason1(), context: context())
+    XCTAssertEqual(transferHistoryQueries().count, 3, "查不到的结果也沿用")
+
+    configureLibraryWithoutEpisodeIDs(Self.unnumberedFile, Self.unnumberedFileE11)
+    clock += PlaybackCoordinator.episodeIndexTTL + 60
+    _ = await coordinator.episodeAvailability(for: try groupSeason1(), context: context())
+    XCTAssertEqual(
+      transferHistoryQueries(), ["长风渡*|1", "长风渡|1", "长风渡|2", "长风渡*|1", "长风渡|1"],
+      "新文件：按开头查还是空的（总数没变），按包含查第 1 页就遇到读过的，不再读第 2 页")
   }
 
   func testSpecialsThatTMDBDoesNotHaveDoNotTurnEveryMissingEpisodeIntoAReadFailure() async throws {

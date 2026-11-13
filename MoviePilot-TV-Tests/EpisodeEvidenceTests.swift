@@ -194,7 +194,7 @@ final class EpisodeEvidenceTests: XCTestCase {
       let lookups = outcome.map { ["farOff": $0] } ?? [:]
       return index(
         [farOff],
-        evidence: EpisodeEvidence(independentFiles: ["farOff"], lookups: lookups, lookupInProgress: inProgress)
+        evidence: EpisodeEvidence(independentFiles: ["farOff"], lookups: lookups, checkingFiles: inProgress ? ["farOff"] : [])
       ).availability(of: 104)
     }
     let checking = availability(.unresolved, inProgress: true)
@@ -224,7 +224,7 @@ final class EpisodeEvidenceTests: XCTestCase {
         serverName: "emby", hasSeries: true,
         episodes: [file("e1", episode: 1, ids: ["tvdb": "9001"], path: "/tv/a.mkv")], incompleteReason: nil,
         sources: EpisodeMatchingSources(
-          seasonList: { _ in self.chineseSeason }, seasons: { _ in [1] }, transferRecords: { [] },
+          seasonList: { _ in self.chineseSeason }, seasons: { _ in [1] }, transferRecords: { _ in [] },
           evidence: { episodes, local in
             asked.append(episodes.map(\.id))
             XCTAssertTrue(local.confirmed.isEmpty, "给提供方的是只用本地数据建的表")
@@ -244,7 +244,7 @@ final class EpisodeEvidenceTests: XCTestCase {
       serverName: "emby", hasSeries: true, episodes: [file("n", episode: 1, ids: ["tmdb": "101"])],
       incompleteReason: nil,
       sources: EpisodeMatchingSources(
-        seasonList: { _ in [] }, seasons: { _ in [] }, transferRecords: { [] },
+        seasonList: { _ in [] }, seasons: { _ in [] }, transferRecords: { _ in [] },
         evidence: { episodes, _ in
           asked.append(episodes.map(\.id))
           return EpisodeEvidence()
@@ -611,7 +611,7 @@ final class EpisodeEvidenceTests: XCTestCase {
         index(
           [farOff],
           evidence: EpisodeEvidence(
-            independentFiles: ["farOff"], lookups: ["farOff": .unresolved], lookupInProgress: inProgress)))
+            independentFiles: ["farOff"], lookups: ["farOff": .unresolved], checkingFiles: inProgress ? ["farOff"] : [])))
     }
     XCTAssertEqual(
       EpisodeQueueStatus.resolve(episode, current: lookup(true), others: []),
