@@ -189,6 +189,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private let episodeIndexes: CoalescingCache<String, ServerEpisodeIndex>
   /// 这部剧在 MoviePilot 的整理记录，各台服务器的集索引共用。
   private let transferRecords: CoalescingCache<String, [EpisodeTransferRecord]>
+  /// 各台服务器的媒体库配置（单集元数据来源），和连接沿用一样久。
+  private let libraryProfiles: CoalescingCache<String, [MediaLibraryProfile]>
+  /// 用户确认过的单集（本机保存）。
+  private let confirmations: EpisodeConfirmationStore
+  /// 单集对应直接请求 TMDB 补查（带本机缓存和限速）。
+  private let tmdbDirectory: any TmdbEpisodeDirectory
   /// 设置页「播放」里的应用内播放开关。
   private let isEnabledInSettings: () -> Bool
   private var isTornDown = false
@@ -196,17 +202,23 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   init(
     apiService: APIService, mediaServerSession: URLSession = MediaServerHTTP.sharedSession,
     isEnabledInSettings: @escaping () -> Bool = { PlaybackPreferences.isInAppPlaybackEnabled },
+    confirmations: EpisodeConfirmationStore = .shared,
+    tmdbDirectory: any TmdbEpisodeDirectory = TmdbLookupStore.shared,
     now: @escaping () -> Date = Date.init
   ) {
     self.apiService = apiService
     self.mediaServerSession = mediaServerSession
     self.isEnabledInSettings = isEnabledInSettings
+    self.confirmations = confirmations
+    self.tmdbDirectory = tmdbDirectory
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
     episodeIndexes = CoalescingCache(
       ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, now: now)
     transferRecords = CoalescingCache(
       ttl: Self.episodeIndexTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
+    libraryProfiles = CoalescingCache(
+      ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
   }
 
   var isResolving: Bool {
@@ -341,6 +353,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     connections.invalidateAll()
     episodeIndexes.invalidateAll()
     transferRecords.invalidateAll()
+    libraryProfiles.invalidateAll()
     knownSeasons = nil
   }
 
@@ -641,9 +654,71 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         transferRecords: {
           guard let self else { throw CancellationError() }
           return try await self.seriesTransferRecords(context, round: refresh)
-        })
+        },
+        libraryProfiles: {
+          guard let self else { throw CancellationError() }
+          return try await self.libraryProfiles(on: connection)
+        },
+        userConfirmations: { [weak self] in
+          self?.userConfirmations(server: connection.serverName) ?? [:]
+        },
+        externalEvidence: { [weak self] request in
+          await self?.externalEvidence(request) ?? ExternalEvidenceResult()
+        },
+        tmdbID: context.tmdbID)
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
     }
+  }
+
+  /// 一台服务器的媒体库配置，和连接沿用一样久：改了刮削配置，最多过这么久就按新的判断。
+  private func libraryProfiles(on connection: any MediaServerConnection) async throws -> [MediaLibraryProfile] {
+    let key = [connection.serverName, connection.reportingServer.absoluteString, connection.userID]
+      .joined(separator: "|")
+    return try await libraryProfiles.value(for: key, validate: validateNotTornDown) {
+      try await connection.libraryProfiles()
+    }
+  }
+
+  /// 去 TMDB 补查。读不到 MoviePilot 的 TMDB 配置（不是管理员、没配 key、代理 TV 用不了）时不查。
+  private func externalEvidence(_ request: ExternalEvidenceRequest) async -> ExternalEvidenceResult {
+    guard let apiService else { return ExternalEvidenceResult() }
+    let access: TmdbAccess
+    do {
+      access = try await apiService.fetchTmdbAccess()
+    } catch {
+      if !(error is CancellationError) {
+        let reason = (error as? TmdbDirectError)?.message ?? Self.message(for: error)
+        Logger.warning("[Playback] 没有去 TMDB 补查单集：\(reason)")
+      }
+      return ExternalEvidenceResult()
+    }
+    return await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory)
+  }
+
+  // MARK: 用户确认的单集
+
+  private func confirmationNamespace(server: String) -> String? {
+    guard let apiService else { return nil }
+    return EpisodeConfirmationStore.namespace(
+      baseURL: apiService.baseURL, userName: apiService.currentOrStoredUserName, server: server)
+  }
+
+  private func userConfirmations(server: String) -> [String: EpisodeUserConfirmation] {
+    confirmationNamespace(server: server).map(confirmations.confirmations(in:)) ?? [:]
+  }
+
+  /// 用户在面板里确认“就是这一集”：记住这个文件，之后按下直接播。各台服务器的集索引都重建。
+  func rememberEpisodeConfirmation(server: String, match: UncertainEpisodeMatch, tmdbEpisodeID: Int) {
+    guard !isTornDown, let itemID = match.itemID, let namespace = confirmationNamespace(server: server) else { return }
+    confirmations.confirm(itemID: itemID, path: match.itemPath, tmdbEpisodeID: tmdbEpisodeID, in: namespace)
+    episodeIndexes.invalidateAll()
+  }
+
+  /// 取消确认：回到播放前先在面板里说明。
+  func forgetEpisodeConfirmation(server: String, match: UncertainEpisodeMatch) {
+    guard !isTornDown, let itemID = match.itemID, let namespace = confirmationNamespace(server: server) else { return }
+    confirmations.forget(itemID: itemID, in: namespace)
+    episodeIndexes.invalidateAll()
   }
 
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：
@@ -818,7 +893,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
               : index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID)
             let attempt = try await Self.prepareFirstPlayable(
               files, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
-              confirmedByTitle: index.confirmedByTitle)
+              confirmedBy: index.confirmedBy)
             return (index, attempt)
           }
           if let prepared = attempt.prepared { return prepared }
@@ -885,7 +960,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// `fromIndex` 为 false 时候选只是条目 ID（播放中换集），条目上没有编号时留给调用方按集索引核对。
   private static func prepareFirstPlayable(
     _ candidates: [ServerMediaItem], on connection: any MediaServerConnection, episode: QueuedEpisode,
-    tmdbEpisodeID: Int, fromIndex: Bool = true, confirmedByTitle: Set<String> = []
+    tmdbEpisodeID: Int, fromIndex: Bool = true, confirmedBy: [String: EpisodeConfirmationBasis] = [:]
   ) async throws -> EpisodeAttempt {
     var attempt = EpisodeAttempt()
     for candidate in candidates {
@@ -894,7 +969,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         else { return .stale }
         switch ServerEpisodeIndex.recheck(
           fresh, recorded: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID,
-          requiresTitle: confirmedByTitle.contains(candidate.id))
+          basis: confirmedBy[candidate.id])
         {
         case .same: return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
         case .changed: return .stale
@@ -954,7 +1029,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
       alternate = try await Self.prepareFirstPlayable(
         alternates, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
-        confirmedByTitle: index.confirmedByTitle)
+        confirmedBy: index.confirmedBy)
       if let prepared = alternate.prepared { return prepared }
       guard !refreshed, alternate.foundStale else { break }
       refreshed = true

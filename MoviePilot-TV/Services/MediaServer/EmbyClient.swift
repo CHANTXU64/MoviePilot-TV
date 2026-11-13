@@ -236,6 +236,12 @@ struct EmbyClient {
     return try await Self.decode(EmbyMediaFolderList.self, from: data).folders
   }
 
+  /// 各媒体库的文件夹和元数据来源配置（要管理员权限的密钥）。
+  func virtualFolders() async throws -> [MediaLibraryProfile] {
+    let data = try await send(url(["Library", "VirtualFolders"]))
+    return try await Self.decode(EmbyVirtualFolderList.self, from: data).profiles
+  }
+
   /// 重新扫描一个条目（一部剧或一个媒体库）下面的文件，参数同 MoviePilot。Emby 受理后在后台扫描。
   func refreshItem(id: String) async throws {
     _ = try await send(url(["Items", id, "Refresh"], query: ["Recursive": "true"]), method: "POST")

@@ -102,6 +102,14 @@ struct EpisodeActionSheet: View {
       systemImage = AppSymbol.retry
       loadingTitle = "正在检查"
       isLoading = isRechecking
+    case .confirmAndPlay:
+      title = "确认是这一集并播放"
+      systemImage = AppSymbol.save
+    case .forgetConfirmation:
+      title = "取消确认"
+      systemImage = AppSymbol.resetSubscription
+      loadingTitle = "正在检查"
+      isLoading = isRechecking
     }
     return SheetActionButton(
       title: title, systemImage: systemImage, loadingTitle: loadingTitle, isLoading: isLoading

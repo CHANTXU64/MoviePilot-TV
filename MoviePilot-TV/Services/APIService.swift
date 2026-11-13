@@ -1910,6 +1910,17 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap(SystemEnv.self, from: data)
   }
 
+  /// MoviePilot 的 TMDB 访问配置（key、接口地址、语言、网络代理），单集对应直接请求 TMDB 补查时用。
+  /// 系统配置接口只有管理员能读，回包里还有其他密码，只解码这几项；只在会话作用域的内存里缓存几分钟。
+  func fetchTmdbAccess() async throws -> TmdbAccess {
+    let settings = try await sessionCachedValue(sessionScope.tmdbAccessCache, key: "tmdb") { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: "/system/env")
+      return try await self.decodeOrUnwrap(TmdbAccessSettings.self, from: data)
+    }
+    return try settings.access.get()
+  }
+
   /// 搜索通用媒体信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (path: '/browse/media/search')
   /// - 应用场景: 聚合搜索页面的“电影”和“电视剧”分类结果展示。前端路由 /browse/ 后接的部分即为 API 路径。

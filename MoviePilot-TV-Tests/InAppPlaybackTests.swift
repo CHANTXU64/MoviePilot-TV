@@ -720,7 +720,20 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let enabled = enabledInSettings
     return PlaybackCoordinator(
       apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
-      now: now)
+      tmdbDirectory: OfflineTmdbDirectory(), now: now)
+  }
+
+  /// 测试不直接请求 TMDB。
+  private struct OfflineTmdbDirectory: TmdbEpisodeDirectory {
+    func findEpisodes(source: String, value: String, access: TmdbAccess) async throws -> [TmdbFoundEpisode] {
+      throw TmdbDirectError.unreachable
+    }
+    func seasonEpisodes(tvID: Int, season: Int, language: String, access: TmdbAccess) async throws -> [TmdbEpisode] {
+      throw TmdbDirectError.unreachable
+    }
+    func originalLanguage(tvID: Int, access: TmdbAccess) async throws -> String? {
+      throw TmdbDirectError.unreachable
+    }
   }
 
   private static func movie(
@@ -2126,7 +2139,12 @@ extension PlaybackCoordinatorTests {
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
     XCTAssertEqual(
       availability,
-      [.uncertain(server: "emby", match: UncertainEpisodeMatch(season: 2, episode: 3, episodeGroup: nil, airDate: .unknown))])
+      [
+        .uncertain(
+          server: "emby",
+          match: UncertainEpisodeMatch(
+            season: 2, episode: 3, episodeGroup: nil, airDate: .unknown, serverHasNoMetadata: true, itemID: "e-s2e3"))
+      ])
     let historyRequest = try XCTUnwrap(
       PlaybackURLProtocol.stub.requests().first { $0.url.path == "/api/v1/history/transfer" }, "先查整理记录")
     let query = URLComponents(url: historyRequest.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -2137,6 +2155,40 @@ extension PlaybackCoordinatorTests {
     XCTAssertNil(coordinator.failure, "整理记录读不到也照常按季号集号播")
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
     coordinator.endCurrentSession()
+  }
+
+  func testConfirmedEpisodePlaysDirectlyUntilTheConfirmationIsForgotten() async throws {
+    configureLibraryWithoutEpisodeIDs(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: nil))
+    let suite = "PlaybackCoordinatorConfirmations-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let service = makeService()
+    services.append(service)
+    let enabled = enabledInSettings
+    let coordinator = PlaybackCoordinator(
+      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
+      confirmations: EpisodeConfirmationStore(defaults: defaults), tmdbDirectory: OfflineTmdbDirectory())
+    let episode = try groupEpisode(0)
+    let tmdbEpisodeID = try XCTUnwrap(episode.tmdbEpisodeID)
+    let before = await coordinator.episodeAvailability(for: [episode], context: context())
+    guard case .uncertain(let server, let match)? = before?.first else { return XCTFail("先是只按季号集号对上") }
+    XCTAssertFalse(match.confirmedByUser)
+    XCTAssertEqual(EpisodeEntry(availability: before?.first).primaryAction, .openPanel)
+
+    coordinator.rememberEpisodeConfirmation(server: server, match: match, tmdbEpisodeID: tmdbEpisodeID)
+    let after = await coordinator.episodeAvailability(for: [episode], context: context())
+    guard case .uncertain(_, let confirmed)? = after?.first else { return XCTFail("确认后仍是按季号集号对上的文件") }
+    XCTAssertTrue(confirmed.confirmedByUser)
+    XCTAssertEqual(EpisodeEntry(availability: after?.first).primaryAction, .play)
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
+    coordinator.endCurrentSession()
+
+    coordinator.forgetEpisodeConfirmation(server: server, match: confirmed)
+    let forgotten = await coordinator.episodeAvailability(for: [episode], context: context())
+    guard case .uncertain(_, let reverted)? = forgotten?.first else { return XCTFail("取消确认后回到面板说明") }
+    XCTAssertFalse(reverted.confirmedByUser)
   }
 
   /// 没有 TMDB 单集 ID、Emby 也没解析出季号集号的文件，路径能对上 `transferRecord(mediaID: "100")`（挂载点不同）。
@@ -2372,11 +2424,21 @@ extension PlaybackCoordinatorTests {
   }
 
   func testSpecificEpisodeTitleConfirmsPlaybackAndMustStillMatchAtStart() async throws {
-    let item = #"{"Id":"e-title","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Name":"重逢","PremiereDate":"2025-10-02T16:00:00Z"}"#
+    let item = #"{"Id":"e-title","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Name":"重逢","PremiereDate":"2025-10-02T16:00:00Z","Path":"/emby/长风渡/Season 2/03.mkv"}"#
     configureLibraryWithoutEpisodeIDs(item)
     PlaybackURLProtocol.stub.configure {
       $0.tmdbEpisodes["/api/v1/tmdb/100/2"] =
         #"[{"id":555,"episode_number":3,"season_number":2,"name":"重逢","air_date":"2025-10-04"}]"#
+    }
+    // 媒体库配置读不到：服务器的标题可能是 TMDB 按季号集号给的，不能拿来核实。
+    let unknownSource = makeCoordinator(makeService())
+    let unverified = await unknownSource.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    guard case .uncertain? = unverified?.first else { return XCTFail("来源不明时只按季号集号") }
+
+    PlaybackURLProtocol.stub.configure {
+      $0.virtualFolders[Self.lan] = #"""
+        [{"Locations":["/emby"],"LibraryOptions":{"TypeOptions":[{"Type":"Episode","MetadataFetchers":["TheTVDB"]}]}}]
+        """#
     }
     let coordinator = makeCoordinator(makeService())
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
@@ -3938,6 +4000,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var mediaServerExists = #"{"success":true,"data":{"item":{}}}"#
     /// host → Emby `Library/SelectableMediaFolders` 的回包（没有时是空数组）
     var mediaFolders: [String: String] = [:]
+    /// host → Emby `Library/VirtualFolders` 的回包（没有时 404：媒体库配置读不到）
+    var virtualFolders: [String: String] = [:]
     var usersGate: DispatchSemaphore?
     /// 卡住“开始播放”上报（模拟网络慢）
     var reportStartGate: DispatchSemaphore?
@@ -4081,6 +4145,8 @@ private final class PlaybackURLProtocol: URLProtocol {
       respond(204, "")
     } else if path.hasSuffix("/Library/SelectableMediaFolders") {
       respond(200, scenario.mediaFolders[host] ?? "[]")
+    } else if path.hasSuffix("/Library/VirtualFolders") {
+      if let folders = scenario.virtualFolders[host] { respond(200, folders) } else { respond(404, "") }
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
       if let status = scenario.searchStatus[host] {
         respond(status, "{}")

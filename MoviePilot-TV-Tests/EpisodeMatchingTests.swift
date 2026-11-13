@@ -183,13 +183,17 @@ final class EpisodeMatchingTests: XCTestCase {
 
   func testTitleNeedsTheSameEpisodeNumberAndUniquenessOnBothSides() {
     let key = EpisodeListKey(episodeGroup: nil, season: 1)
-    func confirmed(_ files: [ServerMediaItem], _ titles: [String]) -> [String] {
+    func confirmed(_ files: [ServerMediaItem], _ titles: [String], independent: Bool = true) -> [String] {
       let season = titles.enumerated().map { TmdbEpisode(id: 101 + $0.offset, episodeNumber: 1 + $0.offset, name: $0.element) }
-      return ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: files, lists: [key: season])
+      let evidence = EpisodeEvidence(independentFiles: independent ? Set(files.map(\.id)) : [])
+      return ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: files, lists: [key: season], evidence: evidence)
         .confirmedEpisodes(tmdbEpisodeID: 101).map(\.id)
     }
     let correct = file("a", episode: 1, name: "A Quiet  Town")
     XCTAssertEqual(confirmed([correct], ["a quiet town", "After the rain"]), ["a"])
+    XCTAssertTrue(
+      confirmed([correct], ["a quiet town", "After the rain"], independent: false).isEmpty,
+      "服务器的单集资料可能来自 TMDB 时，标题一致证明不了什么")
     XCTAssertTrue(confirmed([correct], ["a quiet town", "A Quiet Town"]).isEmpty)
     XCTAssertTrue(confirmed([correct, file("b", episode: 2, name: "A Quiet Town")], ["a quiet town", "Other"]).isEmpty)
     XCTAssertTrue(confirmed([file("b", episode: 2, name: "A Quiet Town")], ["a quiet town", "Other"]).isEmpty)
@@ -240,7 +244,9 @@ final class EpisodeMatchingTests: XCTestCase {
       ])
     XCTAssertEqual(
       index.availability(of: 104),
-      .uncertain(server: "emby", match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches)))
+      .uncertain(
+        server: "emby",
+        match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches, itemID: "e1")))
     XCTAssertEqual(index.availability(of: 101), .notOnServer)
     XCTAssertNil(ServerEpisodeIndex.numberingGroup([]), "没有记录按默认顺序")
   }

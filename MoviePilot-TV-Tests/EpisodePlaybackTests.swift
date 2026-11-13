@@ -262,7 +262,7 @@ final class EpisodePlaybackModelTests: XCTestCase {
     let lookup = ServerEpisodeLookup.loaded(
       ServerEpisodeIndex(serverName: "a", hasSeries: true, episodes: [noIDs], lists: defaultLists))
     let availability = EpisodeAvailability.resolve(episode(101, number: 1), lookups: [lookup])
-    let match = UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: nil, airDate: .unknown)
+    let match = UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: nil, airDate: .unknown, itemID: "x")
     XCTAssertEqual(availability, .uncertain(server: "a", match: match))
     XCTAssertFalse(availability.isPlayable, "不确定的不算确定能播")
     XCTAssertEqual(

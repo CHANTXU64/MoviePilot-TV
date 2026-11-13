@@ -30,6 +30,8 @@ protocol MediaServerConnection: Sendable {
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL?
   /// 服务器上的媒体库和各自的文件夹：叫服务器入库时按整理后的路径找该刷新哪个媒体库。
   func libraryFolders() async throws -> [MediaLibraryFolder]
+  /// 各媒体库的文件夹和单集元数据来源：单集对应据此判断服务器上的单集资料是不是从 TMDB 来的。
+  func libraryProfiles() async throws -> [MediaLibraryProfile]
   /// 叫服务器重新扫描，新整理进来的文件不用等它自己发现。只等服务器受理，不等扫描完成。
   func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws
 }
