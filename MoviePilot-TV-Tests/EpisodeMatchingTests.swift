@@ -246,7 +246,7 @@ final class EpisodeMatchingTests: XCTestCase {
       index.availability(of: 104),
       .uncertain(
         server: "emby",
-        match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches, itemID: "e1")))
+        match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches)))
     XCTAssertEqual(index.availability(of: 101), .notOnServer)
     XCTAssertNil(ServerEpisodeIndex.numberingGroup([]), "没有记录按默认顺序")
   }

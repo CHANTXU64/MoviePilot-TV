@@ -483,8 +483,10 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   let kind: ServerMediaItem.Kind?
   /// 来源（小写，`themoviedb` 记作 `tmdb`）→ 编号；0、负数等无效编号不收（见 `ExternalMediaID.valid`）。
   let externalIDs: [String: String]
+  /// 详情页的主身份来源（规范写法，如 `tmdb`），`externalIDs` 里有它的有效编号时才有。
+  let primarySource: String?
 
-  init(mediaType: String?, externalIDs: [String: String]) {
+  init(mediaType: String?, externalIDs: [String: String], primarySource: String? = nil) {
     switch mediaType {
     case "电影": kind = .movie
     case "电视剧": kind = .series
@@ -497,6 +499,8 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
       normalized[source] = value
     }
     self.externalIDs = normalized
+    let primary = primarySource.map(ExternalMediaID.normalizedSource)
+    self.primarySource = primary.flatMap { normalized[$0] == nil ? nil : $0 }
   }
 
   /// 详情页：详情里的各个外部编号，加上入库查询所用的主身份（两者不一致时以有效的主身份为准）。
@@ -507,18 +511,26 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
     ids["tvdb"] = media.tvdb_id.map(String.init)
     ids["douban"] = media.douban_id
     ids["bangumi"] = media.bangumi_id.map(String.init)
+    var primary: String?
     if let identity = media.identity {
       let source = ExternalMediaID.normalizedSource(identity.source)
-      if ExternalMediaID.valid(identity.mediaId, source: source) != nil { ids[source] = identity.mediaId }
+      if ExternalMediaID.valid(identity.mediaId, source: source) != nil {
+        ids[source] = identity.mediaId
+        primary = source
+      }
     }
-    self.init(mediaType: media.type, externalIDs: ids)
+    self.init(mediaType: media.type, externalIDs: ids, primarySource: primary)
   }
 
-  /// 条目是不是要播的那一个。类型不符，或带着同来源编号却对不上的，都不是。
-  /// `strict`（启用了多台服务器）时还须至少有一个外部编号对得上：别的服务器上同号的条目常常没刮削、没有编号，
-  /// 只看类型会播错片。详情页本来就没有外部编号时只能比类型。
+  /// 条目是不是要播的那一个。类型不符的不是。条目带着主身份来源的编号时只看它：服务器常把次要来源刮错
+  /// （比如 TVDB 匹配到了别的条目，TMDB 和 IMDb 却是对的），MoviePilot 判断入库也只比主身份。
+  /// 没带主身份时，带着同来源编号却对不上的都不是；`strict`（启用了多台服务器）时还须至少有一个外部编号对得上：
+  /// 别的服务器上同号的条目常常没刮削、没有编号，只看类型会播错片。详情页本来就没有外部编号时只能比类型。
   func accepts(_ item: ServerMediaItem, strict: Bool) -> Bool {
     if let kind, item.kind != kind { return false }
+    if let primarySource, let expected = externalIDs[primarySource], let id = item.externalID(for: primarySource) {
+      return id.caseInsensitiveCompare(expected) == .orderedSame
+    }
     var matched = false
     for (source, value) in externalIDs {
       guard let id = item.externalID(for: source) else { continue }

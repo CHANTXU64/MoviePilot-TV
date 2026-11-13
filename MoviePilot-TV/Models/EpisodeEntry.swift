@@ -117,12 +117,6 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     return nil
   }
 
-  /// 只按季号集号找到、用户在面板里确认过就是这一集：按下直接播，面板里可以取消确认。
-  var isConfirmedByUser: Bool { uncertainMatch?.match.confirmedByUser == true }
-
-  /// 按下就播：确定能播，或用户确认过。
-  var playsDirectly: Bool { isPlayable || isConfirmedByUser }
-
   /// 卡片上显示播放角标、面板里有「播放」：确定能播，或按季号集号找到了文件。
   var offersPlayback: Bool { isPlayable || uncertainMatch != nil }
 
@@ -225,9 +219,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   /// 读屏读到的状态，跟在单集信息后面。
   var accessibilityStatus: String? {
     switch cardStatus {
-    case .playable:
-      if isPlayable { return "可以播放" }
-      return isConfirmedByUser ? "可以播放，你确认过是这一集" : "可以播放，可能不是这一集"
+    case .playable: return isPlayable ? "可以播放" : "可以播放，可能不是这一集"
     case .trialInProgress(let indicator):
       let percent = indicator.fraction.map { "，\(Int(($0 * 100).rounded()))%" } ?? ""
       return "试看中，\(indicator.label)\(percent)"
@@ -244,8 +236,8 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case openPanel
   }
 
-  /// 按下卡片：确定能播或用户确认过就直接播，否则打开单集面板（只按季号集号找到的，先在面板里说明再播）。
-  var primaryAction: PrimaryAction { playsDirectly ? .play : .openPanel }
+  /// 按下卡片：确定能播就直接播，否则打开单集面板（只按季号集号找到的，先在面板里说明再播）。
+  var primaryAction: PrimaryAction { isPlayable ? .play : .openPanel }
 
   enum PlayPauseAction: Equatable, Sendable {
     case play
@@ -254,9 +246,9 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case explain(String)
   }
 
-  /// 遥控器播放键：确定能播或用户确认过就播；只按季号集号找到的打开面板；不能播时说明原因。
+  /// 遥控器播放键：确定能播就播；只按季号集号找到的打开面板；不能播时说明原因。
   var playPauseAction: PlayPauseAction? {
-    if playsDirectly { return .play }
+    if isPlayable { return .play }
     if uncertainMatch != nil { return .openPanel }
     return notPlayableMessage.map(PlayPauseAction.explain)
   }
@@ -272,7 +264,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   /// 只按季号集号找到的集不放「播放」、有认不出是哪一集的文件时不放「试看」：要先看面板里的说明，从「详情」进去。
   var menuActions: [MenuAction] {
     var actions: [MenuAction] = []
-    if playsDirectly {
+    if isPlayable {
       actions.append(.play)
     } else if trial.isInProgress, let id = cancellableSubscriptionID {
       actions.append(.cancelTrial(subscriptionID: id))
@@ -292,10 +284,6 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case cancelTrial(subscriptionID: Int)
     /// 重新查这一集能不能播。
     case recheck
-    /// 只按季号集号找到的：确认就是这一集并播放，之后按下直接播。
-    case confirmAndPlay
-    /// 取消用户的确认，回到播放前先说明。
-    case forgetConfirmation
   }
 
   struct Panel: Equatable, Sendable {
@@ -310,17 +298,12 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     }
     if let uncertain = uncertainMatch {
       var message = uncertain.match.message(server: uncertain.server, allowsSeasonDateOffset: allowsSeasonDateOffset)
-      if uncertain.match.confirmedByUser {
-        return Panel(message: message, buttons: [.play, .forgetConfirmation])
-      }
       if trial.progress?.isReady == true {
         message = "试看的这一集已经整理入库。" + message
       } else if trialBlock == nil {
         message += "。按季号集号算这一集已经在媒体服务器上，所以不提供试看"
       }
-      // 没有文件的条目 ID 时记不住确认，只能播。
-      let buttons: [PanelButton] = uncertain.match.itemID == nil ? [.play] : [.play, .confirmAndPlay]
-      return Panel(message: message, buttons: buttons)
+      return Panel(message: message, buttons: [.play])
     }
     if trial.isStarting {
       // 按「试看」后面板就关了，进度看卡片；发起期间再打开时留着「试看」按钮（显示加载中），

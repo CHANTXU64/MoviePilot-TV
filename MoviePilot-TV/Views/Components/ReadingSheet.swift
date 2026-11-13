@@ -309,13 +309,16 @@ struct ReadingSheet<Sidebar: View>: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: ReadingSheetLayout.columnSpacing) {
+      // 两栏各是一个焦点区：左栏的按钮在底部、正文焦点块在右上，不分区时从正文往左按找不到按钮。
       if let sidebar {
         sidebar
           .frame(width: ReadingSheetLayout.sidebarWidth, alignment: .topLeading)
           .frame(maxHeight: .infinity, alignment: .topLeading)
+          .focusSection()
       }
 
       reading
+        .focusSection()
     }
     .padding(.horizontal, ReadingSheetLayout.horizontalPadding)
     .padding(.vertical, ReadingSheetLayout.verticalPadding)

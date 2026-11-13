@@ -688,7 +688,7 @@ private struct EpisodeBrowser: View {
 
   private func select(_ episode: MoviePilotEpisode) {
     if entry(for: episode)?.primaryAction == .play {
-      play(episode, allowsUncertain: confirmedByUser(episode))
+      play(episode, allowsUncertain: false)
     } else {
       panelEpisode = episode
     }
@@ -697,7 +697,7 @@ private struct EpisodeBrowser: View {
   /// 遥控器播放键（见 `EpisodeEntry.playPauseAction`）。没有应用内播放时不响应。
   private func playPause(_ episode: MoviePilotEpisode) {
     switch entry(for: episode)?.playPauseAction {
-    case .play: play(episode, allowsUncertain: confirmedByUser(episode))
+    case .play: play(episode, allowsUncertain: false)
     case .openPanel: panelEpisode = episode
     case .explain(let message): notificationManager.show(message: message, type: .info)
     case nil: break
@@ -706,7 +706,7 @@ private struct EpisodeBrowser: View {
 
   private func perform(_ action: EpisodeEntry.MenuAction, on episode: MoviePilotEpisode) {
     switch action {
-    case .play: play(episode, allowsUncertain: confirmedByUser(episode))
+    case .play: play(episode, allowsUncertain: false)
     case .startTrial: startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .details: panelEpisode = episode
@@ -725,24 +725,7 @@ private struct EpisodeBrowser: View {
       startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .recheck: retryAvailability(season: episode.seasonNumber)
-    case .confirmAndPlay:
-      guard let uncertain = entry(for: episode)?.uncertainMatch, let tmdbEpisodeID = episode.tmdbEpisodeID else { return }
-      apiService.sessionScope.playbackCoordinator.rememberEpisodeConfirmation(
-        server: uncertain.server, match: uncertain.match, tmdbEpisodeID: tmdbEpisodeID)
-      afterPanelDismiss = { play(episode, allowsUncertain: true) }
-      panelEpisode = nil
-      retryAvailability(season: episode.seasonNumber)
-    case .forgetConfirmation:
-      guard let uncertain = entry(for: episode)?.uncertainMatch else { return }
-      apiService.sessionScope.playbackCoordinator.forgetEpisodeConfirmation(
-        server: uncertain.server, match: uncertain.match)
-      retryAvailability(season: episode.seasonNumber)
     }
-  }
-
-  /// 用户确认过的集按下直接播，起播时要允许只按季号集号对上的文件。
-  private func confirmedByUser(_ episode: MoviePilotEpisode) -> Bool {
-    entry(for: episode)?.isConfirmedByUser == true
   }
 
   private func runAfterPanelDismiss() {

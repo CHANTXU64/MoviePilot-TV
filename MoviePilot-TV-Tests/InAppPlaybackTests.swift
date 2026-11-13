@@ -75,6 +75,24 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(versions.map(\.displayTitle), ["4K HDR", "1080p"])
   }
 
+  func testPrimaryIdentityDecidesWhenTheServerMisidentifiedAnotherSource() throws {
+    // Emby 把 TVDB 刮成了别的条目（TMDB、IMDb 都对）：MoviePilot 按 TMDB 判断已入库，这里也按主身份认。
+    let media = MediaInfo(
+      tmdb_id: 63926, imdb_id: "tt4508902", tvdb_id: 293088, source: "themoviedb", media_id: "63926", type: "电视剧")
+    let expected = LibraryItemExpectation(media: media)
+    XCTAssertEqual(expected.primarySource, "tmdb")
+    let wrongTVDB = try embyItem(
+      #"{"Id":"s1","Type":"Series","ProviderIds":{"Tmdb":"63926","Imdb":"tt4508902","Tvdb":"362966"}}"#)
+    XCTAssertTrue(expected.accepts(wrongTVDB, strict: true))
+    let wrongTMDB = try embyItem(
+      #"{"Id":"s2","Type":"Series","ProviderIds":{"Tmdb":"1","Imdb":"tt4508902","Tvdb":"293088"}}"#)
+    XCTAssertFalse(expected.accepts(wrongTMDB, strict: false), "主身份对不上，其他编号再对也不是")
+    let noTMDB = try embyItem(#"{"Id":"s3","Type":"Series","ProviderIds":{"Imdb":"tt4508902","Tvdb":"362966"}}"#)
+    XCTAssertFalse(expected.accepts(noTMDB, strict: false), "没带主身份时任一编号冲突都不算")
+    let movie = try embyItem(#"{"Id":"m","Type":"Movie","ProviderIds":{"Tmdb":"63926"}}"#)
+    XCTAssertFalse(expected.accepts(movie, strict: false), "类型不符")
+  }
+
   func testLibraryItemExpectationCollectsDetailExternalIDs() {
     let media = MediaInfo(
       tmdb_id: 222, douban_id: "35", imdb_id: " tt0001 ", tvdb_id: 9, source: "themoviedb", media_id: "222",
@@ -2143,7 +2161,7 @@ extension PlaybackCoordinatorTests {
         .uncertain(
           server: "emby",
           match: UncertainEpisodeMatch(
-            season: 2, episode: 3, episodeGroup: nil, airDate: .unknown, serverHasNoMetadata: true, itemID: "e-s2e3"))
+            season: 2, episode: 3, episodeGroup: nil, airDate: .unknown, serverHasNoMetadata: true))
       ])
     let historyRequest = try XCTUnwrap(
       PlaybackURLProtocol.stub.requests().first { $0.url.path == "/api/v1/history/transfer" }, "先查整理记录")
@@ -2155,40 +2173,6 @@ extension PlaybackCoordinatorTests {
     XCTAssertNil(coordinator.failure, "整理记录读不到也照常按季号集号播")
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
     coordinator.endCurrentSession()
-  }
-
-  func testConfirmedEpisodePlaysDirectlyUntilTheConfirmationIsForgotten() async throws {
-    configureLibraryWithoutEpisodeIDs(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: nil))
-    let suite = "PlaybackCoordinatorConfirmations-\(UUID().uuidString)"
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let service = makeService()
-    services.append(service)
-    let enabled = enabledInSettings
-    let coordinator = PlaybackCoordinator(
-      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
-      confirmations: EpisodeConfirmationStore(defaults: defaults), tmdbDirectory: OfflineTmdbDirectory())
-    let episode = try groupEpisode(0)
-    let tmdbEpisodeID = try XCTUnwrap(episode.tmdbEpisodeID)
-    let before = await coordinator.episodeAvailability(for: [episode], context: context())
-    guard case .uncertain(let server, let match)? = before?.first else { return XCTFail("先是只按季号集号对上") }
-    XCTAssertFalse(match.confirmedByUser)
-    XCTAssertEqual(EpisodeEntry(availability: before?.first).primaryAction, .openPanel)
-
-    coordinator.rememberEpisodeConfirmation(server: server, match: match, tmdbEpisodeID: tmdbEpisodeID)
-    let after = await coordinator.episodeAvailability(for: [episode], context: context())
-    guard case .uncertain(_, let confirmed)? = after?.first else { return XCTFail("确认后仍是按季号集号对上的文件") }
-    XCTAssertTrue(confirmed.confirmedByUser)
-    XCTAssertEqual(EpisodeEntry(availability: after?.first).primaryAction, .play)
-    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
-    XCTAssertNil(coordinator.failure)
-    XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
-    coordinator.endCurrentSession()
-
-    coordinator.forgetEpisodeConfirmation(server: server, match: confirmed)
-    let forgotten = await coordinator.episodeAvailability(for: [episode], context: context())
-    guard case .uncertain(_, let reverted)? = forgotten?.first else { return XCTFail("取消确认后回到面板说明") }
-    XCTAssertFalse(reverted.confirmedByUser)
   }
 
   /// 没有 TMDB 单集 ID、Emby 也没解析出季号集号的文件，路径能对上 `transferRecord(mediaID: "100")`（挂载点不同）。

@@ -191,8 +191,6 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private let transferRecords: CoalescingCache<String, [EpisodeTransferRecord]>
   /// 各台服务器的媒体库配置（单集元数据来源），和连接沿用一样久。
   private let libraryProfiles: CoalescingCache<String, [MediaLibraryProfile]>
-  /// 用户确认过的单集（本机保存）。
-  private let confirmations: EpisodeConfirmationStore
   /// 单集对应直接请求 TMDB 补查（带本机缓存和限速）。
   private let tmdbDirectory: any TmdbEpisodeDirectory
   /// 设置页「播放」里的应用内播放开关。
@@ -202,14 +200,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   init(
     apiService: APIService, mediaServerSession: URLSession = MediaServerHTTP.sharedSession,
     isEnabledInSettings: @escaping () -> Bool = { PlaybackPreferences.isInAppPlaybackEnabled },
-    confirmations: EpisodeConfirmationStore = .shared,
     tmdbDirectory: any TmdbEpisodeDirectory = TmdbLookupStore.shared,
     now: @escaping () -> Date = Date.init
   ) {
     self.apiService = apiService
     self.mediaServerSession = mediaServerSession
     self.isEnabledInSettings = isEnabledInSettings
-    self.confirmations = confirmations
     self.tmdbDirectory = tmdbDirectory
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
@@ -659,9 +655,6 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           guard let self else { throw CancellationError() }
           return try await self.libraryProfiles(on: connection)
         },
-        userConfirmations: { [weak self] in
-          self?.userConfirmations(server: connection.serverName) ?? [:]
-        },
         externalEvidence: { [weak self] request in
           await self?.externalEvidence(request) ?? ExternalEvidenceResult()
         },
@@ -693,32 +686,6 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       return ExternalEvidenceResult()
     }
     return await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory)
-  }
-
-  // MARK: 用户确认的单集
-
-  private func confirmationNamespace(server: String) -> String? {
-    guard let apiService else { return nil }
-    return EpisodeConfirmationStore.namespace(
-      baseURL: apiService.baseURL, userName: apiService.currentOrStoredUserName, server: server)
-  }
-
-  private func userConfirmations(server: String) -> [String: EpisodeUserConfirmation] {
-    confirmationNamespace(server: server).map(confirmations.confirmations(in:)) ?? [:]
-  }
-
-  /// 用户在面板里确认“就是这一集”：记住这个文件，之后按下直接播。各台服务器的集索引都重建。
-  func rememberEpisodeConfirmation(server: String, match: UncertainEpisodeMatch, tmdbEpisodeID: Int) {
-    guard !isTornDown, let itemID = match.itemID, let namespace = confirmationNamespace(server: server) else { return }
-    confirmations.confirm(itemID: itemID, path: match.itemPath, tmdbEpisodeID: tmdbEpisodeID, in: namespace)
-    episodeIndexes.invalidateAll()
-  }
-
-  /// 取消确认：回到播放前先在面板里说明。
-  func forgetEpisodeConfirmation(server: String, match: UncertainEpisodeMatch) {
-    guard !isTornDown, let itemID = match.itemID, let namespace = confirmationNamespace(server: server) else { return }
-    confirmations.forget(itemID: itemID, in: namespace)
-    episodeIndexes.invalidateAll()
   }
 
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：

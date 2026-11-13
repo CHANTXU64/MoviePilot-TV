@@ -24,6 +24,8 @@ struct EpisodeActionSheet: View {
     ) {
       sidebar(panel)
     }
+    // 挂在整个面板上：只挂在左栏时，打开面板的默认焦点仍会落到右上的正文。
+    .defaultFocus($focusedButton, panel.buttons.isEmpty ? nil : 0)
   }
 
   static func blocks(for episode: MoviePilotEpisode) -> [ReadingBlock] {
@@ -60,7 +62,6 @@ struct EpisodeActionSheet: View {
         }
       }
     }
-    .defaultFocus($focusedButton, 0)
   }
 
   @ViewBuilder
@@ -100,14 +101,6 @@ struct EpisodeActionSheet: View {
     case .recheck:
       title = "重新检查"
       systemImage = AppSymbol.retry
-      loadingTitle = "正在检查"
-      isLoading = isRechecking
-    case .confirmAndPlay:
-      title = "确认是这一集并播放"
-      systemImage = AppSymbol.save
-    case .forgetConfirmation:
-      title = "取消确认"
-      systemImage = AppSymbol.resetSubscription
       loadingTitle = "正在检查"
       isLoading = isRechecking
     }

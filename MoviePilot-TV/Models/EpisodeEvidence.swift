@@ -1,6 +1,6 @@
 import Foundation
 
-// 单集对应在文件和 MoviePilot 数据之外用到的依据：服务器单集资料的来源、TMDB 反查和其他语言的标题、用户的确认。
+// 单集对应在文件和 MoviePilot 数据之外用到的依据：服务器单集资料的来源、TMDB 反查和其他语言的标题。
 // 对应规则见 `EpisodeMatching.swift`。
 
 // MARK: - 服务器单集资料的来源
@@ -69,17 +69,14 @@ nonisolated struct EpisodeEvidence: Equatable, Sendable {
   var lookedUp: [String: ExternalEpisodeMatch] = [:]
   /// TMDB 其他语言的季列表：默认顺序的季号 → 各语言的集列表。服务器上的标题常是英文或原语言的，MoviePilot 的是中文。
   var translatedSeasons: [Int: [[TmdbEpisode]]] = [:]
-  /// 用户在单集面板里确认过的文件：服务器条目 ID → TMDB 单集 ID（路径已核对过没变）。
-  var userConfirmed: [String: Int] = [:]
 
   init(
     independentFiles: Set<String> = [], lookedUp: [String: ExternalEpisodeMatch] = [:],
-    translatedSeasons: [Int: [[TmdbEpisode]]] = [:], userConfirmed: [String: Int] = [:]
+    translatedSeasons: [Int: [[TmdbEpisode]]] = [:]
   ) {
     self.independentFiles = independentFiles
     self.lookedUp = lookedUp
     self.translatedSeasons = translatedSeasons
-    self.userConfirmed = userConfirmed
   }
 }
 
@@ -150,14 +147,4 @@ nonisolated struct ExternalEvidenceResult: Equatable, Sendable {
   var translatedSeasons: [Int: [[TmdbEpisode]]] = [:]
 
   var isEmpty: Bool { lookedUp.isEmpty && translatedSeasons.isEmpty }
-}
-
-// MARK: - 用户的确认
-
-/// 用户在单集面板里确认过的一个文件。
-nonisolated struct EpisodeUserConfirmation: Codable, Equatable, Sendable {
-  let tmdbEpisodeID: Int
-  /// 确认时服务器看到的文件路径；换了文件（洗版、重新整理）路径就变了，确认随之失效。
-  let path: String?
-  let confirmedAt: Date
 }

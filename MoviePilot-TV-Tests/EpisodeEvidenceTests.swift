@@ -2,7 +2,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// 单集对应在文件和 MoviePilot 数据之外的依据：媒体库的单集来源、TMDB 反查和其他语言的标题、用户的确认，
+/// 单集对应在文件和 MoviePilot 数据之外的依据：媒体库的单集来源、TMDB 反查和其他语言的标题，
 /// 以及直接请求 TMDB 的缓存和限速。
 final class EpisodeEvidenceTests: XCTestCase {
   // MARK: 替身
@@ -100,42 +100,6 @@ final class EpisodeEvidenceTests: XCTestCase {
     let mismatchedIDs = english.map { TmdbEpisode(id: ($0.id ?? 0) + 50, episodeNumber: $0.episodeNumber, name: $0.name) }
     let other = index(files, evidence: EpisodeEvidence(independentFiles: ["e1"], translatedSeasons: [1: [mismatchedIDs]]))
     XCTAssertTrue(other.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty, "另一份列表的同号集不是同一集时不算")
-  }
-
-  func testUserConfirmationPlaysDirectlyButStaysAnUncertainMatch() throws {
-    let target = file("e1", episode: 1, path: "/tv/a.mkv")
-    let built = index([target], evidence: EpisodeEvidence(userConfirmed: ["e1": 101]))
-    let match = try XCTUnwrap(built.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
-    XCTAssertTrue(match.confirmedByUser)
-    XCTAssertEqual(match.itemID, "e1")
-    XCTAssertEqual(match.itemPath, "/tv/a.mkv")
-    XCTAssertTrue(built.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty)
-    XCTAssertEqual(built.summary.confirmedByUser, 1)
-
-    let confirmedEntry = EpisodeEntry(availability: .uncertain(server: "emby", match: match))
-    XCTAssertEqual(confirmedEntry.primaryAction, .play)
-    XCTAssertEqual(confirmedEntry.playPauseAction, .play)
-    XCTAssertEqual(confirmedEntry.menuActions, [.play, .details])
-    XCTAssertEqual(confirmedEntry.panel.buttons, [.play, .forgetConfirmation])
-    XCTAssertTrue(try XCTUnwrap(confirmedEntry.panel.message).contains("你确认过"))
-
-    let other = index([target], evidence: EpisodeEvidence(userConfirmed: ["e1": 105]))
-    let unconfirmed = try XCTUnwrap(other.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
-    XCTAssertFalse(unconfirmed.confirmedByUser, "确认的是另一集时不算")
-    let entry = EpisodeEntry(availability: .uncertain(server: "emby", match: unconfirmed))
-    XCTAssertEqual(entry.primaryAction, .openPanel)
-    XCTAssertEqual(entry.panel.buttons, [.play, .confirmAndPlay])
-  }
-
-  func testUserConfirmationStopsCountingWhenTheFileChanges() {
-    let confirmation = EpisodeUserConfirmation(tmdbEpisodeID: 101, path: "/tv/a.mkv", confirmedAt: Date())
-    let episodes = [
-      file("same", episode: 1, path: "/tv/a.mkv"),
-      file("moved", episode: 1, path: "/tv/a-2160p.mkv"),
-    ]
-    XCTAssertEqual(
-      EpisodeMatchLoader.userConfirmed(["same": confirmation, "moved": confirmation, "gone": confirmation], among: episodes),
-      ["same": 101])
   }
 
   func testFileWithoutAnyMetadataSuggestsRefreshingIt() throws {
@@ -412,28 +376,5 @@ final class EpisodeEvidenceTests: XCTestCase {
     clock += TmdbLookupStore.freshLife + 60
     _ = try await store.seasonEpisodes(tvID: 100, season: 1, language: "en-US", access: access)
     XCTAssertEqual(transport.count, 2, "刚播出的季几天后重新取")
-  }
-
-  // MARK: 用户的确认
-
-  @MainActor
-  func testConfirmationsAreSeparatedByAccountAndServer() throws {
-    let suite = "EpisodeConfirmationStoreTests-\(UUID().uuidString)"
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let store = EpisodeConfirmationStore(defaults: defaults, capacity: 2)
-    let mine = EpisodeConfirmationStore.namespace(baseURL: "http://mp", userName: "a", server: "emby")
-    let theirs = EpisodeConfirmationStore.namespace(baseURL: "http://mp", userName: "b", server: "emby")
-    store.confirm(itemID: "1", path: "/a.mkv", tmdbEpisodeID: 101, in: mine, at: Date(timeIntervalSince1970: 1))
-    XCTAssertEqual(store.confirmations(in: mine)["1"]?.tmdbEpisodeID, 101)
-    XCTAssertTrue(store.confirmations(in: theirs).isEmpty)
-    XCTAssertEqual(
-      EpisodeConfirmationStore(defaults: defaults).confirmations(in: mine)["1"]?.path, "/a.mkv", "重启后还在")
-    store.confirm(itemID: "2", path: nil, tmdbEpisodeID: 102, in: mine, at: Date(timeIntervalSince1970: 2))
-    store.confirm(itemID: "3", path: nil, tmdbEpisodeID: 103, in: theirs, at: Date(timeIntervalSince1970: 3))
-    XCTAssertNil(store.confirmations(in: mine)["1"], "超出容量丢最早的")
-    store.forget(itemID: "2", in: mine)
-    XCTAssertTrue(store.confirmations(in: mine).isEmpty)
-    XCTAssertEqual(store.confirmations(in: theirs).count, 1)
   }
 }
