@@ -682,12 +682,13 @@ private struct EpisodeBrowser: View {
     }
     return EpisodeEntry(
       availability: state?.results?[episode.id], isCheckingAvailability: state?.results == nil,
-      trial: snapshot, trialBlock: block, canCancelTrial: trial.canCancelTrial)
+      trial: snapshot, trialBlock: block, canCancelTrial: trial.canCancelTrial,
+      allowsSeasonDateOffset: groupID == nil && catalog.hasOnlyDefaultOrder)
   }
 
   private func select(_ episode: MoviePilotEpisode) {
     if entry(for: episode)?.primaryAction == .play {
-      play(episode)
+      play(episode, allowsUncertain: false)
     } else {
       panelEpisode = episode
     }
@@ -696,7 +697,7 @@ private struct EpisodeBrowser: View {
   /// 遥控器播放键（见 `EpisodeEntry.playPauseAction`）。没有应用内播放时不响应。
   private func playPause(_ episode: MoviePilotEpisode) {
     switch entry(for: episode)?.playPauseAction {
-    case .play: play(episode)
+    case .play: play(episode, allowsUncertain: false)
     case .openPanel: panelEpisode = episode
     case .explain(let message): notificationManager.show(message: message, type: .info)
     case nil: break
@@ -705,7 +706,7 @@ private struct EpisodeBrowser: View {
 
   private func perform(_ action: EpisodeEntry.MenuAction, on episode: MoviePilotEpisode) {
     switch action {
-    case .play: play(episode)
+    case .play: play(episode, allowsUncertain: false)
     case .startTrial: startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .details: panelEpisode = episode
@@ -734,7 +735,7 @@ private struct EpisodeBrowser: View {
   }
 
   /// 按集起播：带上这一集所在那一季的集列表，播放器里能接着播上一集、下一集。
-  private func play(_ episode: MoviePilotEpisode, allowsUncertain: Bool = false) {
+  private func play(_ episode: MoviePilotEpisode, allowsUncertain: Bool) {
     guard let playback, let context = playbackContext(playback),
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }

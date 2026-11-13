@@ -7,10 +7,8 @@ import Foundation
 // 服务器上的季号集号来自整理时写进的文件名或 NFO：按默认顺序，或按订阅时选的剧集组，和详情页现在选的剧集组无关。
 // 按可信程度依次对应：
 // 1. 文件带 TMDB 单集编号：确定。一个文件包含多集、只记了第一集的编号时，按默认顺序核对后覆盖后几集。
-// 2. 文件对上 MoviePilot 的整理记录：比较完整路径、由多集核实的目录对应或共同路径尾部，再按记录换算成 TMDB 单集。
-// 3. 剩余文件有 TVDB 单集 ID 时，用外部映射找 TMDB 单集。
-// 4. 以上都没有：按文件的季号集号，在这部剧整理记录用过的剧集组（没有记录就是默认顺序）里找同季同集，再比播出日期。
-//    不确定，播放前要说明可能不是这一集。MoviePilot 自己判断入库也只看季号集号，这一步和它的判断一致。
+// 2. 文件对上 MoviePilot 的整理记录：比较完整路径或共同路径尾部，再按记录换算成 TMDB 单集。
+// 3. 按整理时使用的编号找同季同集。同季唯一的具体标题可以核实单集；其余候选在面板里说明日期等依据。
 // 以编号为准：某一集有确定的文件时只用确定的；带 TMDB 单集编号的文件只按编号对应。
 // 哪一步都没对上的文件分两种：有季号集号、只是集列表里没有那一集的，按它自己的编号不会是别的集，不影响别的集；
 // 季号集号缺失或认不出的，不知道是哪一集，这部剧没找到的集可能就是它。
@@ -152,7 +150,7 @@ nonisolated struct EpisodeTransferRecord: Decodable, Equatable, Sendable {
 nonisolated struct EpisodeFilePath: Sendable {
   private let fullPath: String
   private let tail: [String]
-  let parent: ArraySlice<String>
+  let stemPath: String
 
   var filename: String { tail[tail.count - 1] }
 
@@ -162,13 +160,13 @@ nonisolated struct EpisodeFilePath: Sendable {
     var components = fullPath.split(separator: "/").map(String.init)
     guard components.count >= 2 else { return nil }
     let file = components.removeLast()
-    parent = components[...]
     if let dot = file.lastIndex(of: "."), dot != file.startIndex, file.distance(from: dot, to: file.endIndex) <= 6 {
       components.append(String(file[..<dot]))
     } else {
       components.append(file)
     }
     self.fullPath = fullPath
+    stemPath = (fullPath.hasPrefix("/") ? "/" : "") + components.joined(separator: "/")
     tail = components.map { $0.precomposedStringWithCanonicalMapping.lowercased() }
   }
 
@@ -189,11 +187,6 @@ nonisolated enum AirDateCheck: Equatable, Sendable {
   /// 有一边没有日期，或格式认不出。
   case unknown
 
-  var isCompatible: Bool {
-    if case .differs = self { return false }
-    return true
-  }
-
   /// 两边都以 `yyyy-MM-dd` 开头时才比（服务器的日期带时间，只取日期部分）。
   static func compare(server: String?, moviePilot: String?) -> AirDateCheck {
     guard let serverDay = day(server), let moviePilotDay = day(moviePilot) else { return .unknown }
@@ -202,7 +195,7 @@ nonisolated enum AirDateCheck: Equatable, Sendable {
   }
 
   /// 日期部分和它对应的天数，格式不对时为 nil。
-  private static func day(_ value: String?) -> (text: String, number: Int)? {
+  fileprivate static func day(_ value: String?) -> (text: String, number: Int)? {
     guard let value else { return nil }
     let bytes = Array(value.utf8.prefix(10))
     guard bytes.count == 10, bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-"),
@@ -227,12 +220,40 @@ nonisolated enum AirDateCheck: Equatable, Sendable {
   }
 }
 
-extension ServerMediaItem {
-  nonisolated var tvdbEpisodeIDForMapping: Int? {
-    guard kind == .episode, tmdbEpisodeID == nil,
-      episodeNumberEnd == nil || episodeNumberEnd == episodeNumber
+private nonisolated enum EpisodeTitle {
+  // 常见占位名不提供身份信息，包括纯集号、数字与常见语言的「第 N 集」。
+  private static let placeholder = #"^(?:(?:(?:season|s)\s*[0-9]+[\s:.-]*)?(?:episode|ep|e|part|chapter)\s*[. #:-]*[0-9]+(?:\s*[-–]\s*[0-9]+)?|[0-9零〇一二三四五六七八九十百]+\s*[集話话回章]|[0-9]+\s*(?:화|회))$"#
+  private static let generic: Set<String> = ["tba", "tbd", "untitled", "special", "未命名", "特别篇", "特別編"]
+
+  static func normalized(_ raw: String?) -> String? {
+    guard let raw else { return nil }
+    let title = raw.precomposedStringWithCompatibilityMapping.lowercased()
+      .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+      .trimmingCharacters(in: .punctuationCharacters)
+    guard title.contains(where: \.isLetter), !generic.contains(title),
+      !PlaybackTitles.isPlaceholderEpisodeName(title, episodeNumber: nil),
+      title.range(of: placeholder, options: .regularExpression) == nil
     else { return nil }
-    return MediaIdentifier.validNumericIdentifier(externalID(for: "tvdb").flatMap(Int.init))
+    return title
+  }
+
+  /// 不同文字的译名可能正确；文字相同时，两个具体标题相异就保留日期提示。
+  static func conflicts(_ lhs: String?, _ rhs: String?) -> Bool {
+    guard let lhs = normalized(lhs), let rhs = normalized(rhs), lhs != rhs else { return false }
+    func scripts(_ title: String) -> Set<Int> {
+      Set(title.unicodeScalars.compactMap { scalar in
+        switch scalar.value {
+        case 0x61...0x7A, 0xC0...0x024F: 1
+        case 0x3040...0x30FF, 0x31F0...0x31FF: 2
+        case 0x3400...0x9FFF, 0x20000...0x323AF: 3
+        case 0x1100...0x11FF, 0xAC00...0xD7AF: 4
+        case 0x0400...0x052F: 5
+        default: nil
+        }
+      })
+    }
+    let left = scripts(lhs), right = scripts(rhs)
+    return left.isEmpty || right.isEmpty || !left.isDisjoint(with: right)
   }
 }
 
@@ -244,11 +265,13 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   /// 按哪个剧集组的编号比的（这部剧整理记录里用过的）；默认顺序为 nil。
   let episodeGroup: String?
   let airDate: AirDateCheck
+  var hasConsistentSeasonOffset = false
 
   /// 给用户的说明，`server` 是这个文件所在的服务器。
-  func message(server: String) -> String {
+  func message(server: String, allowsSeasonDateOffset: Bool = false) -> String {
     let numbering = episodeGroup == nil ? "季号集号" : "整理时所用剧集组的季号集号"
     let base = "“\(server)”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按\(numbering)找到的第 \(season) 季第 \(episode) 集"
+    if allowsSeasonDateOffset && hasConsistentSeasonOffset { return base + "，仍可能不是这一集" }
     switch airDate {
     case .matches:
       return base + "，播出日期也对得上，但仍可能不是这一集"
@@ -264,11 +287,6 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
 
 /// 一台服务器上这部剧的文件和 TMDB 单集的对应。
 nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
-  nonisolated struct ExternalMatch: Equatable, Sendable {
-    let tvdbID: Int
-    let tmdbID: Int
-  }
-
   /// 按季号集号对上的一个文件。
   struct UncertainFile: Equatable, Sendable {
     let item: ServerMediaItem
@@ -279,7 +297,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   struct Summary: Equatable, Sendable {
     var byEpisodeID = 0
     var byTransferRecord = 0
-    var byExternalID = 0
+    var byTitle = 0
     var bySeasonEpisode = 0
     var airDateMatches = 0
     var airDateDiffers = 0
@@ -290,10 +308,10 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 
     /// 有文件没带 TMDB 单集编号时的日志说明；都带编号时为 nil。不写路径和编号本身。
     var logText: String? {
-      guard byTransferRecord + byExternalID + bySeasonEpisode + unplaced + unidentified > 0 else { return nil }
-      let external = byExternalID > 0 ? "按 TVDB 单集编号对上 \(byExternalID) 个，" : ""
+      guard byTransferRecord + byTitle + bySeasonEpisode + unplaced + unidentified > 0 else { return nil }
+      let titleMatches = byTitle > 0 ? "按单集标题核实 \(byTitle) 个，" : ""
       return "按 TMDB 单集编号对上 \(byEpisodeID) 个文件，按整理记录对上 \(byTransferRecord) 个，"
-        + external
+        + titleMatches
         + "按季号集号对上 \(bySeasonEpisode) 个（播出日期对上 \(airDateMatches) 个、对不上 \(airDateDiffers) 个），"
         + "有季号集号但集列表里没有那一集 \(unplaced) 个，认不出是哪一集 \(unidentified) 个"
     }
@@ -303,9 +321,9 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 这台服务器上找到了这部剧
   let hasSeries: Bool
   /// 确定的对应：TMDB 单集 ID → 有文件的单集条目。带编号的按服务器返回的顺序在前（同一集在多个媒体库里各有一条），
-  /// 接着是多集文件覆盖的、按整理记录对上的，最后是按 TVDB 单集编号对上的。
+  /// 接着是多集文件覆盖的、按整理记录对上的和按标题核实的。
   let confirmed: [Int: [ServerMediaItem]]
-  let externalMatches: [String: ExternalMatch]
+  let confirmedByTitle: Set<String>
   /// 按季号集号的对应，只留没有确定文件的集。
   let uncertain: [Int: [UncertainFile]]
   /// 认不出是哪一集的文件数：没有 TMDB 单集编号，季号集号缺失或认不出，也没对上整理记录。这部剧没找到的集可能就是其中之一
@@ -320,16 +338,15 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// `records` 是这部剧成功的整理记录（已按 TMDB 编号筛过）。
   init(
     serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String? = nil,
-    lists: [EpisodeListKey: [TmdbEpisode]] = [:], records: [EpisodeTransferRecord] = [],
-    externalMatches: [String: ExternalMatch] = [:]
+    lists: [EpisodeListKey: [TmdbEpisode]] = [:], records: [EpisodeTransferRecord] = []
   ) {
     self.serverName = serverName
     self.hasSeries = hasSeries
     self.incompleteReason = incompleteReason
-    self.externalMatches = externalMatches
-    let plan = Plan(episodes: episodes, records: records, lists: lists)
+    let plan = Plan(episodes: episodes, records: records)
     var confirmed: [Int: [ServerMediaItem]] = [:]
     var uncertain: [Int: [UncertainFile]] = [:]
+    var titleMatches: [(file: ServerMediaItem, id: Int)] = []
     var summary = Summary()
     func confirm(_ file: ServerMediaItem, as id: Int) {
       guard confirmed[id]?.contains(where: { $0.id == file.id }) != true else { return }
@@ -356,7 +373,15 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         confirm(file, as: coveredID)
       }
     }
-    for file in plan.files where file.tmdbEpisodeID == nil && externalMatches[file.id] == nil {
+    let seasonEvidence = lists.mapValues(SeasonEvidence.init)
+    let filesBySeason = Dictionary(grouping: plan.files, by: SeasonCopy.init)
+    let offsets = plan.seasonOffsets(using: seasonEvidence, filesBySeason: filesBySeason)
+    let titlesBySeason = filesBySeason.mapValues { files in
+      Dictionary(grouping: files.compactMap { file in
+        EpisodeTitle.normalized(file.name).map { ($0, file.episodeNumber) }
+      }, by: \.0).mapValues { Set($0.map(\.1)) }
+    }
+    for file in plan.files where file.tmdbEpisodeID == nil {
       switch plan.step(for: file) {
       case .recorded(let placement):
         let ids = placement.episodes.compactMap { Self.episodeID(number: $0, in: lists[placement.list]) }
@@ -368,18 +393,34 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         }
       case .numbered(let key, let range):
         // 没有这份列表：读取失败（记在 `incompleteReason`），或这一季不在那套编号里。
-        guard let list = lists[key] else {
+        guard let evidence = seasonEvidence[key] else {
           summary.unplaced += 1
           continue
         }
+        let first = evidence.episodes[range.lowerBound]
+        let copy = SeasonCopy(file)
+        if range.count == 1, let first, let id = first.id, let title = evidence.uniqueTitle(of: first),
+          EpisodeTitle.normalized(file.name) == title, title != EpisodeTitle.normalized(file.seriesName),
+          titlesBySeason[copy]?[title] == [file.episodeNumber]
+        {
+          titleMatches.append((file, id))
+          summary.byTitle += 1
+          continue
+        }
         // 文件的播出日期是它第一集的。
-        let airDate = AirDateCheck.compare(
-          server: file.premiereDate, moviePilot: list.first { $0.episodeNumber == range.lowerBound }?.airDate)
+        let airDate = AirDateCheck.compare(server: file.premiereDate, moviePilot: first?.airDate)
+        let hasOffset: Bool
+        if case .differs = airDate, key.episodeGroup == nil, range.count == 1 {
+          hasOffset = offsets.contains(copy)
+        } else {
+          hasOffset = false
+        }
         var matched = false
         for number in range {
-          guard let id = Self.episodeID(number: number, in: list) else { continue }
+          guard let id = evidence.episodes[number]?.id else { continue }
           let match = UncertainEpisodeMatch(
-            season: key.season, episode: number, episodeGroup: key.episodeGroup, airDate: airDate)
+            season: key.season, episode: number, episodeGroup: key.episodeGroup, airDate: airDate,
+            hasConsistentSeasonOffset: hasOffset)
           uncertain[id, default: []].append(UncertainFile(item: file, match: match))
           matched = true
         }
@@ -397,20 +438,15 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         summary.unidentified += 1
       }
     }
-    if !externalMatches.isEmpty {
-      for file in plan.files {
-        guard let match = externalMatches[file.id] else { continue }
-        confirm(file, as: match.tmdbID)
-        summary.byExternalID += 1
-      }
-    }
+    for (file, id) in titleMatches { confirm(file, as: id) }
+    confirmedByTitle = Set(titleMatches.map(\.file.id))
     self.confirmed = confirmed
     self.uncertain = uncertain.filter { confirmed[$0.key] == nil }
     unidentifiedFileCount = summary.unidentified
     self.summary = summary
   }
 
-  /// 建对应表要读的 MoviePilot 集列表：多集文件、整理记录、季集号兜底和目录样本需要的列表。
+  /// 建对应表要读的 MoviePilot 集列表：多集文件、整理记录和季集号兜底需要的列表。
   static func requiredLists(for episodes: [ServerMediaItem], records: [EpisodeTransferRecord]) -> Set<EpisodeListKey> {
     let plan = Plan(episodes: episodes, records: records)
     var keys = Set(
@@ -424,7 +460,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       case .unidentified: break
       }
     }
-    return keys.union(plan.directoryEvidence.flatMap { $0.value.map(\.placement.list) })
+    return keys
   }
 
   /// 没有对上整理记录的文件按哪套编号比季号集号：这部剧最近一条整理记录用的剧集组；没有记录时按默认顺序。
@@ -443,15 +479,44 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     case unidentified
   }
 
+  private struct SeasonEvidence {
+    let episodes: [Int: TmdbEpisode]
+    let titleCounts: [String: Int]
+    let minimumDateGap: Int?
+
+    init(_ list: [TmdbEpisode]) {
+      let numbered = list.compactMap { episode in episode.episodeNumber.map { ($0, episode) } }
+      let groups = Dictionary(grouping: numbered, by: \.0)
+      episodes = groups.compactMapValues { entries in entries.count == 1 ? entries.first?.1 : nil }
+      titleCounts = Dictionary(grouping: list.compactMap { EpisodeTitle.normalized($0.name) }, by: { $0 }).mapValues(\.count)
+      let dates = list.compactMap { AirDateCheck.day($0.airDate)?.number }.sorted()
+      minimumDateGap = zip(dates, dates.dropFirst()).map { $1 - $0 }.min()
+    }
+
+    func uniqueTitle(of episode: TmdbEpisode) -> String? {
+      guard let title = EpisodeTitle.normalized(episode.name), titleCounts[title] == 1 else { return nil }
+      return title
+    }
+  }
+
+  private struct SeasonCopy: Hashable {
+    let seriesID: String?
+    let season: Int?
+
+    init(_ file: ServerMediaItem) {
+      seriesID = trimmedNonEmpty([file.seriesID])
+      season = file.seasonNumber
+    }
+  }
+
   /// 每个没有编号的文件走哪一步。`requiredLists` 和建表共用，读的列表和用的列表一致。
   private struct Plan {
     let files: [ServerMediaItem]
     /// 服务器条目 ID → 整理记录里的位置。
     let placements: [String: EpisodePlacement]
     let numberingGroup: String?
-    let directoryEvidence: [DirectoryPair: [DirectoryAnchor]]
 
-    init(episodes: [ServerMediaItem], records: [EpisodeTransferRecord], lists: [EpisodeListKey: [TmdbEpisode]] = [:]) {
+    init(episodes: [ServerMediaItem], records: [EpisodeTransferRecord]) {
       files = episodes.filter(\.hasFile)
       numberingGroup = ServerEpisodeIndex.numberingGroup(records)
       let recordsWithPaths = records.compactMap { record -> Record? in
@@ -459,17 +524,16 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         return Record(path: path, placement: placement)
       }
       guard !recordsWithPaths.isEmpty else {
-        directoryEvidence = [:]
         placements = [:]
         return
       }
       let paths = files.compactMap { file in
         EpisodeFilePath(path: file.path).map { File(item: file, path: $0) }
       }
-      let byFilename = Dictionary(grouping: paths, by: \.path.filename)
-      directoryEvidence = Self.findDirectoryEvidence(byFilename: byFilename, records: recordsWithPaths)
-      let mappedDirectories = Self.confirmDirectories(directoryEvidence, lists: lists)
-      placements = Self.matchRecords(recordsWithPaths, byFilename: byFilename, mappedDirectories: mappedDirectories)
+      let byFilename = Dictionary(grouping: paths, by: \.path.filename).mapValues {
+        Dictionary(grouping: $0, by: \.path.stemPath)
+      }
+      placements = Self.matchRecords(recordsWithPaths, byFilename: byFilename)
     }
 
     private struct File {
@@ -482,93 +546,34 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       let placement: EpisodePlacement
     }
 
-    struct DirectoryPair: Hashable {
-      let record: ArraySlice<String>
-      let server: ArraySlice<String>
-    }
-
-    struct DirectoryAnchor {
-      let episodeID: Int
-      let filename: String
-      let placement: EpisodePlacement
-    }
-
-    /// 先按文件名找可能的目录对应。至少需要两个不同的单集 ID，合并集不能作为样本。
-    private static func findDirectoryEvidence(
-      byFilename: [String: [File]], records: [Record]
-    ) -> [DirectoryPair: [DirectoryAnchor]] {
-      var evidence: [DirectoryPair: [DirectoryAnchor]] = [:]
-      for record in records where record.placement.episodes.count == 1 {
-        for file in byFilename[record.path.filename] ?? [] {
-          guard let id = file.item.tmdbEpisodeID,
-            (file.item.episodeNumberEnd ?? file.item.episodeNumber) == file.item.episodeNumber,
-            file.path.parent != record.path.parent
-          else { continue }
-          let pair = DirectoryPair(record: record.path.parent, server: file.path.parent)
-          evidence[pair, default: []].append(
-            DirectoryAnchor(episodeID: id, filename: file.path.filename, placement: record.placement))
-        }
-      }
-      return evidence.filter { Set($0.value.map(\.episodeID)).count >= 2 }
-    }
-
-    /// 同一季和编号下至少两份文件经单集 ID 核对一致，才用这对目录。同一侧指向多个目录时不猜。
-    private static func confirmDirectories(
-      _ evidence: [DirectoryPair: [DirectoryAnchor]], lists: [EpisodeListKey: [TmdbEpisode]]
-    ) -> [DirectoryPair: Set<EpisodeListKey>] {
-      let verified = evidence.compactMapValues { anchors -> Set<EpisodeListKey>? in
-        let supported = Dictionary(grouping: anchors, by: \.placement.list).compactMap { key, group -> EpisodeListKey? in
-          let checked = group.compactMap { anchor -> (anchor: DirectoryAnchor, expected: Int)? in
-            guard let number = anchor.placement.episodes.first,
-              let id = episodeID(number: number, in: lists[key])
-            else { return nil }
-            return (anchor: anchor, expected: id)
-          }
-          guard checked.allSatisfy({ $0.anchor.episodeID == $0.expected }),
-            Set(checked.map(\.anchor.episodeID)).count >= 2,
-            Set(checked.map(\.anchor.filename)).count >= 2
-          else { return nil }
-          return key
-        }
-        return supported.isEmpty ? nil : Set(supported)
-      }
-      let byRecord = Dictionary(grouping: verified.keys, by: \.record)
-      let byServer = Dictionary(grouping: verified.keys, by: \.server)
-      return verified.filter { byRecord[$0.key.record]?.count == 1 && byServer[$0.key.server]?.count == 1 }
-    }
-
     private struct RecordMatch {
       let rank: Int
       let placement: EpisodePlacement?
     }
 
-    /// 只用文件最匹配的整理记录。该记录也必须唯一最匹配这个文件，避免两个副本借用同一条记录。
-    /// 强匹配有冲突时保留冲突，不退回更短的路径；同一位置的重复历史可以一起印证。
-    private static func matchRecords(
-      _ records: [Record], byFilename: [String: [File]], mappedDirectories: [DirectoryPair: Set<EpisodeListKey>]
-    ) -> [String: EpisodePlacement] {
+    /// 同一目录的同名版本共享整理记录；不同目录的候选要能分出强弱。
+    /// 强匹配有冲突时不退回更短的路径；同一位置的重复历史可以一起印证。
+    private static func matchRecords(_ records: [Record], byFilename: [String: [String: [File]]]) -> [String: EpisodePlacement] {
       var bestByFile: [String: RecordMatch] = [:]
       for record in records {
-        var ranks: [String: Int] = [:]
-        for file in byFilename[record.path.filename] ?? [] {
-          let suffix = file.path.commonSuffixRank(with: record.path)
-          let pair = DirectoryPair(record: record.path.parent, server: file.path.parent)
-          // 推断出的目录优先于普通尾部，完整路径仍然最强。
-          let mapped = mappedDirectories[pair]?.contains(record.placement.list) == true
-          let rank = suffix == .max || !mapped ? suffix : Int.max - 1
-          guard rank >= 2 else { continue }
-          ranks[file.item.id] = max(ranks[file.item.id] ?? 0, rank)
+        guard let copies = byFilename[record.path.filename] else { continue }
+        let ranks = copies.compactMapValues { files -> Int? in
+          guard let rank = files.map({ $0.path.commonSuffixRank(with: record.path) }).max(), rank >= 2 else { return nil }
+          return rank
         }
         guard let strongest = ranks.values.max() else { continue }
-        let winnerCount = ranks.values.filter { $0 == strongest }.count
-        for (id, rank) in ranks {
-          let proposed = rank == strongest && winnerCount == 1 ? record.placement : nil
-          if let current = bestByFile[id], current.rank >= rank {
-            if current.rank == rank, current.placement != proposed {
-              bestByFile[id] = RecordMatch(rank: rank, placement: nil)
+        let unique = ranks.values.filter { $0 == strongest }.count == 1
+        for (stem, rank) in ranks {
+          let proposed = rank == strongest && unique ? record.placement : nil
+          for file in copies[stem] ?? [] {
+            let id = file.item.id
+            if let current = bestByFile[id], current.rank >= rank {
+              if current.rank == rank, current.placement != proposed {
+                bestByFile[id] = RecordMatch(rank: rank, placement: nil)
+              }
+            } else {
+              bestByFile[id] = RecordMatch(rank: rank, placement: proposed)
             }
-          } else {
-            bestByFile[id] = RecordMatch(rank: rank, placement: proposed)
           }
         }
       }
@@ -581,6 +586,38 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       let last = max(file.episodeNumberEnd ?? first, first)
       guard last - first < EpisodeTransferRecord.maximumEpisodesPerFile else { return .unidentified }
       return .numbered(EpisodeListKey(episodeGroup: numberingGroup, season: season), first...last)
+    }
+
+    func seasonOffsets(
+      using seasons: [EpisodeListKey: SeasonEvidence], filesBySeason: [SeasonCopy: [ServerMediaItem]]
+    ) -> Set<SeasonCopy> {
+      guard numberingGroup == nil else { return [] }
+      return Set(filesBySeason.compactMap { copy, entries in
+        guard copy.seriesID != nil, let season = copy.season, season > 0 else { return nil }
+        let key = EpisodeListKey(episodeGroup: nil, season: season)
+        guard let evidence = seasons[key], let gap = evidence.minimumDateGap, gap > 4 else { return nil }
+        var datedEpisodes: Set<Int> = []
+        var offsets: Set<Int> = []
+        for file in entries {
+          let date = AirDateCheck.day(file.premiereDate)
+          guard let number = file.episodeNumber, let episode = evidence.episodes[number], let id = episode.id,
+            file.episodeNumberEnd == nil || file.episodeNumberEnd == number
+          else {
+            if date != nil { return nil }
+            continue
+          }
+          if let idOnFile = file.tmdbEpisodeID, idOnFile != id { return nil }
+          if let placement = placements[file.id], placement.list != key || placement.episodes != [number] { return nil }
+          if EpisodeTitle.conflicts(file.name, episode.name) { return nil }
+          guard let date else { continue }
+          guard let tmdbDate = AirDateCheck.day(episode.airDate) else { return nil }
+          let delta = date.number - tmdbDate.number
+          guard (2...3).contains(abs(delta)), 2 * abs(delta) < gap else { return nil }
+          offsets.insert(delta)
+          datedEpisodes.insert(number)
+        }
+        return offsets.count == 1 && datedEpisodes.count >= 3 ? copy : nil
+      })
     }
   }
 
@@ -611,7 +648,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 
   /// 起播前重新读到的条目还是不是要播的这一集。`recorded` 是对应表里记的条目，只知道条目 ID 时为 nil。
   static func recheck(
-    _ fresh: ServerMediaItem, recorded: ServerMediaItem?, tmdbEpisodeID: Int, external: ExternalMatch? = nil
+    _ fresh: ServerMediaItem, recorded: ServerMediaItem?, tmdbEpisodeID: Int, requiresTitle: Bool = false
   ) -> Recheck {
     if fresh.tmdbEpisodeID == tmdbEpisodeID { return .same }
     guard let recorded else { return fresh.tmdbEpisodeID == nil ? .needsIndex : .changed }
@@ -623,14 +660,10 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       else { return .changed }
       return .same
     }
-    if let external {
-      guard fresh.tmdbEpisodeID == nil, fresh.tvdbEpisodeIDForMapping == external.tvdbID,
-        external.tmdbID == tmdbEpisodeID, fresh.hasFile,
-        fresh.seriesID == recorded.seriesID, fresh.path == recorded.path,
-        fresh.seasonNumber == recorded.seasonNumber, fresh.episodeNumber == recorded.episodeNumber,
-        fresh.episodeNumberEnd == recorded.episodeNumberEnd
+    if requiresTitle {
+      guard fresh.hasFile, fresh.seriesID == recorded.seriesID,
+        let title = EpisodeTitle.normalized(fresh.name), title == EpisodeTitle.normalized(recorded.name)
       else { return .changed }
-      return .same
     }
     // 按整理记录或季号集号对应的：仍然没有编号，季号集号和文件路径都没变。
     guard fresh.tmdbEpisodeID == nil, fresh.seasonNumber == recorded.seasonNumber,
@@ -692,12 +725,11 @@ struct EpisodeMatchingSources {
   let seasons: (_ episodeGroup: String?) async throws -> [Int]
   /// 这部剧成功的整理记录（已按 TMDB 编号筛过）
   let transferRecords: () async throws -> [EpisodeTransferRecord]
-  var externalPlacements: (@MainActor @Sendable () async throws -> [Int: ExternalEpisodePlacement])? = nil
 }
 
 enum EpisodeMatchLoader {
   /// 一台服务器上这部剧的对应表。`episodes` 是从服务器读到的这部剧的全部集，`incompleteReason` 是读服务器时没读全的说明。
-  /// 有文件没带 TMDB 单集编号时才读整理记录。未确认的文件可用 TVDB 单集编号补查，季号集号用于兜底。
+  /// 有文件没带 TMDB 单集编号时才读整理记录。未确认的文件按季集号查找，并用标题和日期核对。
   /// 集列表读不到时那一季的文件无法对应，记为没读全。集列表是空的有两种可能：MoviePilot 读 TMDB 失败（过一会儿可能就好），
   /// 或那套编号里根本没有这一季（比如 TMDB 没有第 0 季而服务器上有特别篇，或服务器按 TVDB 分季）。这时再读那套编号的季列表：
   /// 季列表里确实没有这一季，这一季的文件按集列表里没有那一集处理，不影响别的集；季列表里有这一季或也读不到，才算没读全。
@@ -706,8 +738,6 @@ enum EpisodeMatchLoader {
     serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String?,
     sources: EpisodeMatchingSources, describe: (Error) -> String
   ) async throws -> ServerEpisodeIndex {
-    let clock = ContinuousClock()
-    let historyStarted = clock.now
     var records: [EpisodeTransferRecord] = []
     if episodes.contains(where: { $0.hasFile && $0.tmdbEpisodeID == nil }) {
       do {
@@ -716,15 +746,12 @@ enum EpisodeMatchLoader {
         Logger.warning("[Playback] 没能读取 MoviePilot 的整理记录，将尝试其他单集匹配依据: \(describe(error))")
       }
     }
-    let historyTime = historyStarted.duration(to: clock.now)
     var lists: [EpisodeListKey: [TmdbEpisode]] = [:]
     var listFailure: String?
     var absentSeasons: [EpisodeListKey] = []
     /// 每套编号的季列表只读一次（键是剧集组，默认顺序为空串）；读不到记为空集合。
     var seasonCatalogs: [String: Set<Int>] = [:]
-    let planStarted = clock.now
     let required = await requiredLists(episodes: episodes, records: records)
-    let listsStarted = clock.now
     for key in required.sorted() {
       let list: [TmdbEpisode]
       do {
@@ -760,69 +787,14 @@ enum EpisodeMatchLoader {
     if let listFailure {
       Logger.warning("[Playback] “\(serverName)”上这部剧没有读全: \(listFailure)")
     }
-    let pathStarted = clock.now
-    let base = await buildIndex(
+    try Task.checkCancellation()
+    let index = await buildIndex(
       serverName: serverName, hasSeries: hasSeries, episodes: episodes,
       incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records)
-    let localTime = planStarted.duration(to: listsStarted) + pathStarted.duration(to: clock.now)
-    var index = base
-    let externalStarted = clock.now
-    if let lookup = sources.externalPlacements {
-      let confirmed = Set(base.confirmed.values.joined().map(\.id))
-      let candidates = episodes.filter { $0.hasFile && $0.tvdbEpisodeIDForMapping != nil && !confirmed.contains($0.id) }
-      if !candidates.isEmpty {
-        let cachedLists = lists
-        let seasonList = sources.seasonList
-        let matches = await PlaybackMetadataLookup.withinTimeout(ExternalEpisodeMapping.lookupBudget) {
-          await externalMatches(candidates, lists: cachedLists, load: lookup, seasonList: seasonList)
-        }
-        try Task.checkCancellation()
-        if let matches, !matches.isEmpty {
-          index = await buildIndex(
-            serverName: serverName, hasSeries: hasSeries, episodes: episodes,
-            incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records, externalMatches: matches)
-        }
-      }
-    }
     if let summary = index.summary.logText {
       Logger.info("[Playback] “\(serverName)”上这部剧（整理记录 \(records.count) 条）：\(summary)")
-      Logger.info(
-        "[Playback] 单集匹配耗时：整理历史 \(historyTime)，季集列表 \(listsStarted.duration(to: pathStarted))，"
-          + "本地建索引 \(localTime)，外部 ID 阶段 \(externalStarted.duration(to: clock.now))")
     }
     return index
-  }
-
-  private static func externalMatches(
-    _ candidates: [ServerMediaItem], lists: [EpisodeListKey: [TmdbEpisode]],
-    load: () async throws -> [Int: ExternalEpisodePlacement],
-    seasonList: (EpisodeListKey) async throws -> [TmdbEpisode]
-  ) async -> [String: ServerEpisodeIndex.ExternalMatch] {
-    guard let placements = try? await load(), !placements.isEmpty else { return [:] }
-    let hits = candidates.compactMap { file -> (file: ServerMediaItem, id: Int, placement: ExternalEpisodePlacement)? in
-      guard let id = file.tvdbEpisodeIDForMapping, let placement = placements[id] else { return nil }
-      return (file, id, placement)
-    }
-    var result: [String: ServerEpisodeIndex.ExternalMatch] = [:]
-    for (key, hits) in Dictionary(grouping: hits, by: \.placement.list).sorted(by: { $0.key < $1.key }) {
-      guard !Task.isCancelled else { return [:] }
-      let list: [TmdbEpisode]
-      if let cached = lists[key] {
-        list = cached
-      } else {
-        list = (try? await seasonList(key)) ?? []
-      }
-      let byNumber = Dictionary(grouping: list, by: \.episodeNumber)
-      for hit in hits {
-        guard let episodes = byNumber[hit.placement.episode], episodes.count == 1,
-          let episode = episodes.first, let tmdbID = episode.id,
-          AirDateCheck.compare(server: hit.placement.airDate, moviePilot: episode.airDate) == .matches,
-          AirDateCheck.compare(server: hit.file.premiereDate, moviePilot: hit.placement.airDate).isCompatible
-        else { continue }
-        result[hit.file.id] = .init(tvdbID: hit.id, tmdbID: tmdbID)
-      }
-    }
-    return result
   }
 
   @concurrent
@@ -833,12 +805,11 @@ enum EpisodeMatchLoader {
   @concurrent
   private static func buildIndex(
     serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String?,
-    lists: [EpisodeListKey: [TmdbEpisode]], records: [EpisodeTransferRecord],
-    externalMatches: [String: ServerEpisodeIndex.ExternalMatch] = [:]
+    lists: [EpisodeListKey: [TmdbEpisode]], records: [EpisodeTransferRecord]
   ) async -> ServerEpisodeIndex {
     ServerEpisodeIndex(
       serverName: serverName, hasSeries: hasSeries, episodes: episodes, incompleteReason: incompleteReason,
-      lists: lists, records: records, externalMatches: externalMatches)
+      lists: lists, records: records)
   }
 }
 

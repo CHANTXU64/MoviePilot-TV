@@ -714,13 +714,13 @@ final class PlaybackCoordinatorTests: XCTestCase {
   private var enabledInSettings = true
 
   private func makeCoordinator(
-    _ service: APIService, now: @escaping () -> Date = Date.init, externalMapping: ExternalEpisodeMapping? = nil
+    _ service: APIService, now: @escaping () -> Date = Date.init
   ) -> PlaybackCoordinator {
     services.append(service)
     let enabled = enabledInSettings
     return PlaybackCoordinator(
       apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
-      now: now, externalEpisodeMapping: externalMapping)
+      now: now)
   }
 
   private static func movie(
@@ -2029,7 +2029,7 @@ extension PlaybackCoordinatorTests {
   func testEpisodePlaysTheServerEpisodeWithTheSameTMDBEpisodeID() async throws {
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
 
     XCTAssertNil(coordinator.failure)
     let session = try XCTUnwrap(coordinator.session)
@@ -2062,7 +2062,7 @@ extension PlaybackCoordinatorTests {
     let season = MoviePilotEpisode.list(
       try JSONDecoder().decode([TmdbEpisode].self, from: Data(withStills.utf8)), season: 1)
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(QueuedEpisode(context: context(), episode: season[0], seasonEpisodes: season)))
+    await run(coordinator, .episode(QueuedEpisode(context: context(), episode: season[0], seasonEpisodes: season), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     func still(_ path: String) throws -> URL {
       try XCTUnwrap(APIService.shared.getSeasonPosterURL(posterPath: path, mediaPosterPath: nil))
@@ -2093,7 +2093,7 @@ extension PlaybackCoordinatorTests {
   func testEpisodeNotOnServerExplainsWithoutPlaying() async throws {
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(1)))
+    await run(coordinator, .episode(try queued(1), allowsUncertain: true))
 
     XCTAssertNil(coordinator.session)
     XCTAssertEqual(coordinator.failure?.message, "没有在媒体服务器上找到这一集")
@@ -2133,7 +2133,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(query.first { $0.name == "title" }?.value, "长风渡*", "先查标题以剧名开头的记录")
     XCTAssertEqual(query.first { $0.name == "status" }?.value, "true")
 
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure, "整理记录读不到也照常按季号集号播")
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
     coordinator.endCurrentSession()
@@ -2319,7 +2319,7 @@ extension PlaybackCoordinatorTests {
       $0.mediaSeasons = #"[{"season_number":1,"name":"第 1 季"},{"season_number":2,"name":"第 2 季"}]"#
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
     XCTAssertEqual(
@@ -2344,85 +2344,56 @@ extension PlaybackCoordinatorTests {
     let inDefault = await coordinator.episodeAvailability(for: [defaultOrder[1]], context: context(group: nil))
     XCTAssertEqual(inDefault, [.playable(server: "emby")], "详情页选不选剧集组都是同一集")
 
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-x")
     coordinator.endCurrentSession()
   }
 
-  func testTransferPathsLearnTheDirectoryFromOtherIdentifiedEpisodes() async throws {
+  func testSameDirectoryVersionsBothRemainPlaybackCandidates() async throws {
     configureLibraryWithoutEpisodeIDs(
-      #"{"Id":"anchor-a","Type":"Episode","ParentIndexNumber":2,"IndexNumber":2,"ProviderIds":{"Tmdb":"554"},"Path":"/emby/第二季/02.mkv"}"#,
-      #"{"Id":"anchor-b","Type":"Episode","ParentIndexNumber":2,"IndexNumber":4,"ProviderIds":{"Tmdb":"556"},"Path":"/emby/第二季/04.mkv"}"#,
-      #"{"Id":"right","Type":"Episode","Path":"/emby/第二季/03.mkv"}"#,
-      #"{"Id":"wrong","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Path":"/emby/另一份/03.mkv"}"#)
+      #"{"Id":"original","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Path":"/emby/长风渡/Season 2/03.mp4"}"#,
+      #"{"Id":"alternate","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Path":"/emby/长风渡/Season 2/03.mkv"}"#)
     PlaybackURLProtocol.stub.configure {
       $0.transferHistory = """
-        [{"id":1,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E02","dest":"/mp/Season 2/02.mkv","status":true},
-         {"id":2,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E04","dest":"/mp/Season 2/04.mkv","status":true},
-         {"id":3,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E03","dest":"/mp/Season 2/03.mkv","status":true}]
+        [{"id":1,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E03","dest":"/mp/长风渡/Season 2/03.mp4","status":true}]
         """
+      $0.items.removeValue(forKey: "\(Self.lan)|original")
     }
     let coordinator = makeCoordinator(makeService())
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
     XCTAssertEqual(availability, [.playable(server: "emby")])
-
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: false))
     XCTAssertNil(coordinator.failure)
-    XCTAssertEqual(coordinator.session?.item.id, "right")
+    XCTAssertEqual(coordinator.session?.item.id, "alternate")
+    let itemPaths = PlaybackURLProtocol.stub.requests().map(\.url.path)
+    XCTAssertTrue(itemPaths.contains { $0.hasSuffix("/Items/original") })
     coordinator.endCurrentSession()
   }
 
-  func testTVDBEpisodeMappingUsesTheSameFileDespiteDifferentNumbering() async throws {
-    let item = #"{"Id":"e-38","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"ProviderIds":{"Tvdb":"10861306"},"PremiereDate":"2025-10-03T16:00:00Z"}"#
+  func testSpecificEpisodeTitleConfirmsPlaybackAndMustStillMatchAtStart() async throws {
+    let item = #"{"Id":"e-title","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Name":"重逢","PremiereDate":"2025-10-02T16:00:00Z"}"#
     configureLibraryWithoutEpisodeIDs(item)
     PlaybackURLProtocol.stub.configure {
       $0.tmdbEpisodes["/api/v1/tmdb/100/2"] =
-        #"[{"id":555,"episode_number":3,"season_number":2,"air_date":"2025-10-04"}]"#
-      $0.externalCatalog =
-        #"[{"anidb_id":18677,"tvdb_id":405920,"themoviedb_id":{"tv":100},"season":{"tmdb":2,"tvdb":3},"episode_offset":{"tmdb":2}}]"#
-      $0.externalSegments[18677] =
-        #"{"mappings":{"anidb_id":18677,"thetvdb_id":405920,"themoviedb_id":"100"},"episodes":{"1":{"tvdbId":10861306,"tvdbShowId":405920,"seasonNumber":3,"episodeNumber":1,"airDate":"2025-10-04"}}}"#
+        #"[{"id":555,"episode_number":3,"season_number":2,"name":"重逢","air_date":"2025-10-04"}]"#
     }
-    let mapping = ExternalEpisodeMapping(session: PlaybackURLProtocol.session)
-    let coordinator = makeCoordinator(makeService(), externalMapping: mapping)
+    let coordinator = makeCoordinator(makeService())
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
     XCTAssertEqual(availability, [.playable(server: "emby")])
     XCTAssertEqual(EpisodeEntry(availability: availability?.first).primaryAction, .play)
-
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: false))
     XCTAssertNil(coordinator.failure)
-    XCTAssertEqual(coordinator.session?.item.id, "e-38")
-    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == "api.ani.zip" }.count, 1)
+    XCTAssertEqual(coordinator.session?.item.id, "e-title")
     coordinator.endCurrentSession()
 
     PlaybackURLProtocol.stub.configure {
-      let changed = item.replacingOccurrences(of: "10861306", with: "10861307")
-        .replacingOccurrences(of: #""IndexNumber":38"#, with: #""IndexNumber":3"#)
-      $0.items["\(Self.lan)|e-38"] = changed
+      let changed = item.replacingOccurrences(of: "重逢", with: "另一集")
+      $0.items["\(Self.lan)|e-title"] = changed
       $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(changed)
     }
     await run(coordinator, .episode(try queued(0), allowsUncertain: false))
-    XCTAssertNil(coordinator.session, "播放前 TVDB 单集 ID 变化时，旧映射不能放行")
-  }
-
-  func testTVDBMappingDiskCacheSurvivesAnotherCoordinatorWithoutNetworking() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    PlaybackURLProtocol.stub.configure {
-      $0.externalCatalog =
-        #"[{"anidb_id":18677,"tvdb_id":405920,"themoviedb_id":{"tv":120089},"season":{"tmdb":3,"tvdb":3}}]"#
-      $0.externalSegments[18677] =
-        #"{"mappings":{"anidb_id":18677,"thetvdb_id":405920,"themoviedb_id":"120089"},"episodes":{"1":{"tvdbId":10861306,"tvdbShowId":405920,"seasonNumber":3,"episodeNumber":1,"airDate":"2025-10-04"}}}"#
-    }
-    let first = ExternalEpisodeMapping(session: PlaybackURLProtocol.session, directory: directory)
-    let loaded = try await first.placements(for: 120089)
-    XCTAssertEqual(loaded[10861306], ExternalEpisodePlacement(season: 3, episode: 1, airDate: "2025-10-04"))
-    PlaybackURLProtocol.stub.reset()
-    let second = ExternalEpisodeMapping(session: PlaybackURLProtocol.session, directory: directory)
-    let cached = try await second.placements(for: 120089)
-    XCTAssertEqual(cached, loaded)
-    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty)
+    XCTAssertNil(coordinator.session, "起播前标题变化时不能绕过面板使用季集号兜底")
   }
 
   func testNextEpisodeMatchedOnlyByNumbersPlaysWithoutStopping() async throws {
@@ -2431,7 +2402,7 @@ extension PlaybackCoordinatorTests {
       Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
       Self.embyEpisode("e-s2e4", season: 2, episode: 4, tmdb: nil))
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
     guard case .play(let entry, let skipped) = next else { return XCTFail("应接着播第 4 集，实际 \(next)") }
@@ -2470,7 +2441,7 @@ extension PlaybackCoordinatorTests {
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: owned)
     XCTAssertEqual(availability, [.playable(server: "emby2")])
 
-    await run(coordinator, .episode(try queued(0, owned)))
+    await run(coordinator, .episode(try queued(0, owned), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "f1")
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e3/PlaybackInfo" })
@@ -2487,7 +2458,7 @@ extension PlaybackCoordinatorTests {
       availability, [.playable(server: "emby"), .notOnServer, .playable(server: "emby"), .unidentifiable(.missingEpisodeID)])
 
     _ = await coordinator.episodeAvailability(for: episodes, context: context())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(
       PlaybackURLProtocol.stub.requests().filter { $0.url.path.hasSuffix("/Episodes") }.count, 1,
       "详情页的每集状态和起播共用这部剧的集索引")
@@ -2621,7 +2592,7 @@ extension PlaybackCoordinatorTests {
       availability, [.notOnServer, .playable(server: "emby"), .playable(server: "emby"), .notOnServer],
       "第 4 集在第 3 集的文件里，不能当成不在服务器上（否则会给它试看）")
 
-    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[2], seasonEpisodes: season)))
+    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[2], seasonEpisodes: season), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3-4", "播第 4 集就是播这个文件")
     coordinator.endCurrentSession()
@@ -2637,7 +2608,7 @@ extension PlaybackCoordinatorTests {
     let coordinator = makeCoordinator(makeService())
     let season = try defaultSeason2Episodes()
     let context = context(group: nil)
-    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[3], seasonEpisodes: season)))
+    await run(coordinator, .episode(QueuedEpisode(context: context, episode: season[3], seasonEpisodes: season), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
 
     let previous = try await coordinator.adjacentEpisode(.previous, from: session.playback)
@@ -2691,7 +2662,7 @@ extension PlaybackCoordinatorTests {
     let coordinator = makeCoordinator(makeService())
     let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
     XCTAssertNil(availability, "旧后端不显示每集的播放状态")
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(coordinator.failure?.message, PlaybackError.backendTooOld.errorDescription)
     XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "不发任何请求")
   }
@@ -2707,7 +2678,7 @@ extension PlaybackCoordinatorTests {
       $0.items["\(second)|f1"] = Self.embyEpisode("f1", season: 1, episode: 10, tmdb: 555)
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby2"))))
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby2")), allowsUncertain: true))
 
     XCTAssertEqual(coordinator.session?.item.id, "f1")
     XCTAssertFalse(
@@ -2719,7 +2690,7 @@ extension PlaybackCoordinatorTests {
   func testNextEpisodeFollowsMoviePilotOrderOnTheCurrentServer() async throws {
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
 
     let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
@@ -2756,7 +2727,7 @@ extension PlaybackCoordinatorTests {
       $0.episodes["\(second)|t1"] = Self.embyEpisodes(Self.embyEpisode("f2", season: 1, episode: 11, tmdb: 556))
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
 
     let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
@@ -2777,7 +2748,7 @@ extension PlaybackCoordinatorTests {
     let target = await coordinator.locateLibraryItem(
       "s1", expected: context().expected, in: try servers(Self.embyServer(name: "emby", host: Self.lan)))
     XCTAssertNil(target, "设置里关掉后详情页不显示播放")
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(coordinator.failure?.message, PlaybackError.disabledInSettings.errorDescription)
     XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "不发任何请求")
   }
@@ -2791,7 +2762,7 @@ extension PlaybackCoordinatorTests {
       $0.items["\(Self.lan)|e-s2e3"] =
         #"{"Id":"e-s2e3","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"ProviderIds":{"Tmdb":"555"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
     }
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(coordinator.resumePrompt?.position, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
     XCTAssertEqual(coordinator.resumePrompt?.prepared.title, "长风渡 · 第 1 季 第 10 集 · 重逢")
   }
@@ -2813,7 +2784,7 @@ extension PlaybackCoordinatorTests {
         #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "x-local", "第一份不能直连时换同一台服务器上的另一份")
     coordinator.endCurrentSession()
@@ -2828,7 +2799,7 @@ extension PlaybackCoordinatorTests {
       $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-new", season: 2, episode: 4, tmdb: 556))
       $0.items["\(Self.lan)|e-new"] = Self.embyEpisode("e-new", season: 2, episode: 4, tmdb: 556)
     }
-    await run(coordinator, .episode(try queued(1)))
+    await run(coordinator, .episode(try queued(1), allowsUncertain: true))
     XCTAssertEqual(coordinator.session?.item.id, "e-new", "缓存里没有时重新读一次服务器")
     coordinator.endCurrentSession()
   }
@@ -2845,7 +2816,7 @@ extension PlaybackCoordinatorTests {
       $0.items = ["\(second)|f1": Self.embyEpisode("f1", season: 2, episode: 3, tmdb: 555)]
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(coordinator.session?.item.id, "f1")
     let searchesOnFirst = PlaybackURLProtocol.stub.requests().filter {
       $0.url.host == Self.lan && ($0.url.query ?? "").contains("AnyProviderIdEquals")
@@ -2865,7 +2836,7 @@ extension PlaybackCoordinatorTests {
       $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555))
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let requestsToSecond = { PlaybackURLProtocol.stub.requests().filter { $0.url.host == second }.count }
     let before = requestsToSecond()
@@ -2881,7 +2852,7 @@ extension PlaybackCoordinatorTests {
     configureDefaultOrderLibrary()
     var clock = Date()
     let coordinator = makeCoordinator(makeService(), now: { clock })
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     clock += 45 * 60
     let seriesReads = {
@@ -2911,7 +2882,7 @@ extension PlaybackCoordinatorTests {
         #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
 
     var result: PlaybackCoordinator.SwitchResult?
@@ -2954,7 +2925,7 @@ extension PlaybackCoordinatorTests {
       $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555))
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let before = try await coordinator.adjacentEpisode(.next, from: session.playback)
     XCTAssertEqual(before, .missing, "后面还有集，只是还没入库")
@@ -2980,7 +2951,7 @@ extension PlaybackCoordinatorTests {
     // 播完时重新读集列表，MoviePilot 读 TMDB 失败、返回了空列表：下一集是组内第 12 集开播时就知道，服务器上有就接着播。
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = "[]" }
 
@@ -3009,7 +2980,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(availability, [.playable(server: "emby")])
 
     PlaybackURLProtocol.stub.configure { $0.unreachableHosts = [Self.lan] }
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, wan)
     coordinator.endCurrentSession()
@@ -3031,14 +3002,14 @@ extension PlaybackCoordinatorTests {
         Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557))
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
     XCTAssertEqual(
       next, .play(try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)), skippedMissing: true))
     coordinator.endCurrentSession()
 
-    await run(coordinator, .episode(try queued(2)))
+    await run(coordinator, .episode(try queued(2), allowsUncertain: true))
     let last = try XCTUnwrap(coordinator.session)
     let afterLast = try await coordinator.adjacentEpisode(.next, from: last.playback)
     XCTAssertEqual(afterLast, .stop(EpisodeAvailability.unmatchedMessage(server: "emby", noun: "下一集")))
@@ -3048,7 +3019,7 @@ extension PlaybackCoordinatorTests {
         + "也对不上 MoviePilot 的整理记录），下一集可能就在其中。可以在媒体服务器上刷新元数据后重试")
     coordinator.endCurrentSession()
 
-    await run(coordinator, .episode(try queued(1)))
+    await run(coordinator, .episode(try queued(1), allowsUncertain: true))
     XCTAssertEqual(coordinator.failure?.message, EpisodeAvailability.unmatchedMessage(server: "emby"))
   }
 
@@ -3065,14 +3036,14 @@ extension PlaybackCoordinatorTests {
     }
     let coordinator = makeCoordinator(makeService())
     let owned = context(libraryServer: "emby")
-    await run(coordinator, .episode(try queued(0, owned)))
+    await run(coordinator, .episode(try queued(0, owned), allowsUncertain: true))
     let first = try XCTUnwrap(coordinator.session)
     let next = try await coordinator.adjacentEpisode(.next, from: first.playback)
     XCTAssertEqual(
       next, .play(try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)), skippedMissing: true))
     coordinator.endCurrentSession()
 
-    await run(coordinator, .episode(try queued(2, owned)))
+    await run(coordinator, .episode(try queued(2, owned), allowsUncertain: true))
     let last = try XCTUnwrap(coordinator.session)
     let afterLast = try await coordinator.adjacentEpisode(.next, from: last.playback)
     XCTAssertEqual(afterLast, .stop(EpisodeAvailability.unmatchedMessage(server: "emby2", noun: "下一集")))
@@ -3090,7 +3061,7 @@ extension PlaybackCoordinatorTests {
     }
     let coordinator = makeCoordinator(makeService())
     let owned = context(libraryServer: "emby")
-    await run(coordinator, .episode(try queued(0, owned)))
+    await run(coordinator, .episode(try queued(0, owned), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
 
     let failure = "媒体服务器“emby2”按外部编号查找失败：服务器出错（HTTP 500），请稍后重试"
@@ -3109,7 +3080,7 @@ extension PlaybackCoordinatorTests {
       $0.episodesStatus["\(Self.lan)|broken"] = 500
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
     coordinator.endCurrentSession()
@@ -3130,7 +3101,7 @@ extension PlaybackCoordinatorTests {
         Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555))
       $0.items["\(Self.lan)|e-new"] = Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555)
     }
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-new", "重新读到的已经是另一集：重读集索引，播现在的那一条")
     coordinator.endCurrentSession()
@@ -3140,7 +3111,7 @@ extension PlaybackCoordinatorTests {
     // 队列给的第 12 集是 e-s2e5，换集前 Emby 重新刮削，它成了 999，557 换成了 e-557。
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     PlaybackURLProtocol.stub.configure {
       $0.items["\(Self.lan)|e-s2e5"] = Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 999)
@@ -3170,7 +3141,7 @@ extension PlaybackCoordinatorTests {
       $0.items["\(Self.lan)|e-new"] = confirmed
     }
 
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-new")
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e3/PlaybackInfo" })
@@ -3180,7 +3151,7 @@ extension PlaybackCoordinatorTests {
   func testSwitchingEpisodeExplainsWhenTheFreshItemLacksAnIDAndHasNoConfirmedCopy() async throws {
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     // 集列表仍把条目列为 TMDB 557，单条详情已读不到这个编号。
     PlaybackURLProtocol.stub.configure {
@@ -3197,7 +3168,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.path == "/Shows/s1/Episodes" }.count, 2)
     coordinator.endCurrentSession()
 
-    await run(coordinator, .episode(try queued(2)))
+    await run(coordinator, .episode(try queued(2), allowsUncertain: true))
     XCTAssertNil(coordinator.session)
     XCTAssertEqual(coordinator.failure?.message, message)
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e5/PlaybackInfo" })
@@ -3223,7 +3194,7 @@ extension PlaybackCoordinatorTests {
     }
     let before = ownerReads()
 
-    await run(coordinator, .episode(try queued(1, owned)))
+    await run(coordinator, .episode(try queued(1, owned), allowsUncertain: true))
     XCTAssertEqual(coordinator.session?.item.id, "f2")
     XCTAssertEqual(ownerReads(), before)
     coordinator.endCurrentSession()
@@ -3257,7 +3228,7 @@ extension PlaybackCoordinatorTests {
     configureDefaultOrderLibrary()
     let service = makeService()
     let coordinator = makeCoordinator(service)
-    await run(coordinator, .episode(try queued(2)))
+    await run(coordinator, .episode(try queued(2), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let first = try await coordinator.adjacentEpisode(.next, from: session.playback)
     XCTAssertEqual(first, .missing, "第 2 季第 1 集还不在服务器上")
@@ -3271,7 +3242,7 @@ extension PlaybackCoordinatorTests {
 
     // 从没读到过第 2 季：停下请用户重试，不说成“下一集还不在”。
     let fresh = makeCoordinator(makeService())
-    await run(fresh, .episode(try queued(2)))
+    await run(fresh, .episode(try queued(2), allowsUncertain: true))
     let freshSession = try XCTUnwrap(fresh.session)
     let unavailable = try await fresh.adjacentEpisode(.next, from: freshSession.playback)
     XCTAssertEqual(unavailable, .stop("第 2 季集列表暂不可用，请重试"))
@@ -3286,7 +3257,7 @@ extension PlaybackCoordinatorTests {
 
     // MoviePilot 里的密钥没变，Emby 拒绝它：说明是密钥的问题。
     PlaybackURLProtocol.stub.configure { $0.rejectedKeys = ["emby-key"] }
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.session)
     XCTAssertEqual(
       coordinator.failure?.message,
@@ -3316,13 +3287,13 @@ extension PlaybackCoordinatorTests {
       $0.itemStatus["\(Self.lan)|x-a"] = 500
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "x-b")
     coordinator.endCurrentSession()
 
     PlaybackURLProtocol.stub.configure { $0.itemStatus["\(Self.lan)|x-b"] = 500 }
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertNil(coordinator.session)
     XCTAssertEqual(coordinator.failure?.message, "媒体服务器“emby”读取条目失败：服务器出错（HTTP 500），请稍后重试")
   }
@@ -3343,7 +3314,7 @@ extension PlaybackCoordinatorTests {
     configureDefaultOrderLibrary()
     PlaybackURLProtocol.stub.configure { $0.episodes["\(Self.lan)|s1"] = "{}" }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     XCTAssertEqual(
       coordinator.failure?.message, "媒体服务器“emby”读取剧集列表失败：返回的不是媒体服务器的数据，请检查地址或反向代理设置")
   }
@@ -3437,7 +3408,7 @@ extension PlaybackCoordinatorTests {
       $0.items["\(newHost)|f1"] = episode
     }
 
-    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby"))))
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby")), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "f1")
     XCTAssertEqual(streamURL(coordinator)?.host, newHost)
@@ -3467,7 +3438,7 @@ extension PlaybackCoordinatorTests {
     configureDefaultOrderLibrary()
     PlaybackURLProtocol.stub.configure { $0.itemStatus = ["\(Self.lan)|old-s": 500] }
     let episodes = makeCoordinator(makeService())
-    await run(episodes, .episode(try queued(0, context(libraryServer: "emby", libraryItemID: "old-s"))))
+    await run(episodes, .episode(try queued(0, context(libraryServer: "emby", libraryItemID: "old-s")), allowsUncertain: true))
     XCTAssertNil(episodes.failure)
     XCTAssertEqual(episodes.session?.item.id, "e-s2e3")
     XCTAssertTrue(
@@ -3479,7 +3450,7 @@ extension PlaybackCoordinatorTests {
     // 队列给的第 12 集条目删了，重读集索引时一个媒体库报 500、另一个里没有第 12 集：说明是哪一步失败，不说“已经找不到”。
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     PlaybackURLProtocol.stub.configure {
       $0.items["\(Self.lan)|e-s2e5"] = nil
@@ -3500,7 +3471,7 @@ extension PlaybackCoordinatorTests {
     // 不因为另一项失败退回旧列表。（本用例固定两项的结果，不复现两项先后完成的时序。）
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0)))
+    await run(coordinator, .episode(try queued(0), allowsUncertain: true))
     let session = try XCTUnwrap(coordinator.session)
     let reordered =
       #"[{"id":555,"season_number":2,"episode_number":10,"name":"重逢"},{"id":557,"season_number":2,"episode_number":11,"name":"归来"},{"id":556,"season_number":2,"episode_number":12,"name":"离别"}]"#
@@ -3531,7 +3502,7 @@ extension PlaybackCoordinatorTests {
       $0.items["\(Self.lan)|s1"] = #"{"Id":"s1","Type":"Series","Name":"长风渡"}"#
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby"))))
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby")), allowsUncertain: true))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
     coordinator.endCurrentSession()
@@ -3957,8 +3928,6 @@ private final class PlaybackStub: @unchecked Sendable {
     var transferHistory: String?
     /// 按查询回整理记录：`title|page` → `data`（`{"list":[…],"total":…}`）。不为空时优先，没列出的查询回空的一页。
     var transferHistoryPages: [String: String] = [:]
-    var externalCatalog = "[]"
-    var externalSegments: [Int: String] = [:]
     /// MoviePilot `/api/v1/media/seasons`（默认顺序的季列表）；nil 时回 404。
     var mediaSeasons: String?
     /// MoviePilot 媒体详情（`/api/v1/media/{id}`）：路径 → 详情 JSON；没列出的回 404。
@@ -4023,8 +3992,7 @@ private final class PlaybackURLProtocol: URLProtocol {
   }()
 
   override class func canInit(with request: URLRequest) -> Bool {
-    guard let host = request.url?.host else { return false }
-    return host.hasSuffix("playback-tests.local") || host == "api.ani.zip" || host == "raw.githubusercontent.com"
+    request.url?.host?.hasSuffix("playback-tests.local") == true
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -4039,20 +4007,6 @@ private final class PlaybackURLProtocol: URLProtocol {
       headers: request.allHTTPHeaderFields ?? [:], body: Self.body(of: request))
     let scenario = Self.stub.record(recorded)
 
-    if host == "raw.githubusercontent.com" {
-      respond(200, scenario.externalCatalog)
-      return
-    }
-    if host == "api.ani.zip" {
-      let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
-        .first { $0.name == "anidb_id" }?.value.flatMap(Int.init)
-      if let data = id.flatMap({ scenario.externalSegments[$0] }) {
-        respond(200, data)
-      } else {
-        respond(404, "{}")
-      }
-      return
-    }
     if host == "mp.playback-tests.local" {
       if url.path == "/api/v1/system/setting/MediaServers" {
         respond(200, #"{"value":\#(scenario.mediaServers)}"#)

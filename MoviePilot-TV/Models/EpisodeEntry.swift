@@ -82,17 +82,19 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   let trialBlock: EpisodeTrialBlock?
   /// 能不能取消试看（管理员）。
   let canCancelTrial: Bool
+  let allowsSeasonDateOffset: Bool
 
   init(
     availability: EpisodeAvailability?, isCheckingAvailability: Bool = false,
     trial: EpisodeTrialSnapshot = EpisodeTrialSnapshot(), trialBlock: EpisodeTrialBlock? = .unsupported,
-    canCancelTrial: Bool = false
+    canCancelTrial: Bool = false, allowsSeasonDateOffset: Bool = false
   ) {
     self.availability = availability
     self.isCheckingAvailability = isCheckingAvailability
     self.trial = trial
     self.trialBlock = trialBlock
     self.canCancelTrial = canCancelTrial
+    self.allowsSeasonDateOffset = allowsSeasonDateOffset
   }
 
   // MARK: 播放
@@ -295,7 +297,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       return Panel(message: "在“\(server)”上可以播放", buttons: [.play])
     }
     if let uncertain = uncertainMatch {
-      var message = uncertain.match.message(server: uncertain.server)
+      var message = uncertain.match.message(server: uncertain.server, allowsSeasonDateOffset: allowsSeasonDateOffset)
       if trial.progress?.isReady == true {
         message = "试看的这一集已经整理入库。" + message
       } else if trialBlock == nil {

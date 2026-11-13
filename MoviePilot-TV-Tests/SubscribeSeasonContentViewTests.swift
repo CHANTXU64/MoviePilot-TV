@@ -740,10 +740,12 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertFalse(viewModel.hasSeasonLoadError)
     XCTAssertEqual(viewModel.seasonInfos.compactMap(\.season_number), [1])
     XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+    XCTAssertFalse(viewModel.episodeGroupCatalog.hasOnlyDefaultOrder, "未加载完成时保留日期提示")
     await gate.open()
     try await catalog
 
     XCTAssertEqual(viewModel.episodeGroups.map(\.id), ["group-a"])
+    XCTAssertFalse(viewModel.episodeGroupCatalog.hasOnlyDefaultOrder, "有非空剧集组时保留日期提示")
     let groupRequests = await stub.requestCount(path: "/api/v1/media/groups/987654")
     XCTAssertEqual(groupRequests, 2)
     let seasonsRequests = await stub.requestCount(path: "/api/v1/media/seasons")
@@ -777,11 +779,20 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     configureSubscriptionSnapshotAccess(service, userName: "no-episode-groups")
 
     let catalog = EpisodeGroupCatalog(apiService: service)
+    XCTAssertFalse(catalog.hasOnlyDefaultOrder)
     try await catalog.load(tmdbID: 987_654, apiService: service)
 
     XCTAssertTrue(catalog.groups.isEmpty)
+    XCTAssertTrue(catalog.hasOnlyDefaultOrder)
     let requests = await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/media/groups/987654")
     XCTAssertEqual(requests, 1)
+
+    await SubscriptionSnapshotURLProtocol.stub.setEpisodeGroupsResponse(
+      #"[{"id":"empty","name":"空编排","group_count":1,"episode_count":0}]"#)
+    let withEmptyGroup = EpisodeGroupCatalog(apiService: service)
+    try await withEmptyGroup.load(tmdbID: 987_655, apiService: service)
+    XCTAssertEqual(withEmptyGroup.groups.map(\.id), ["empty"])
+    XCTAssertTrue(withEmptyGroup.hasOnlyDefaultOrder)
   }
 
   func testEpisodeGroupCatalogStopsAfterOneAutomaticRetry() async throws {
