@@ -191,9 +191,11 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
   case playable(server: String)
   /// 只按季号集号找到了文件，可能不是这一集：可以播，但播放前要说明。没有服务器确定有这一集时才是这个结果。
   case uncertain(server: String, match: UncertainEpisodeMatch)
-  /// 确认服务器上没有这一集：整部剧不在任何可播放的服务器上，或这部剧的文件都对上了、其中没有这一集。
+  /// 确认服务器上没有这一集：整部剧不在任何可播放的服务器上，或这部剧认得出的文件里没有这一集
+  /// （有季号集号、只是集列表里没有那一集的文件，按它自己的编号不会是这一集）。
   case notOnServer
-  /// 按没有处理（队列照常往后找），但 `server` 上有文件哪一步都没对上，这一集可能就是其中之一，刷新元数据后可能就能对上。
+  /// 没找到这一集，但 `server` 上有文件认不出是哪一集（季号集号缺失或认不出，也对不上整理记录），这一集可能就是其中之一，
+  /// 刷新元数据后可能就认得出。队列照常往后找；详情页照样可以试看，但要先在面板里说明。
   case unmatched(server: String)
   /// 无法确认是哪一集，不提供单集播放。
   case unidentifiable(UnidentifiableReason)
@@ -214,15 +216,29 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
 
   static let notOnServerMessage = "没有在媒体服务器上找到这一集"
 
-  /// 有文件没对上、也没匹配到 `noun`（“这一集”“下一集”）时的提示。
+  /// 没找到 `noun`（“这一集”“下一集”）、服务器上又有认不出是哪一集的文件时的提示。
   static func unmatchedMessage(server: String, noun: String = "这一集") -> String {
-    "未匹配到\(noun)，媒体服务器“\(server)”上有文件既没有 TMDB 编号，也对不上整理记录和季号集号，可刷新元数据后重试"
+    "没有找到\(noun)，但媒体服务器“\(server)”上有文件认不出是哪一集（没有 TMDB 编号，季号集号缺失或认不出，"
+      + "也对不上 MoviePilot 的整理记录），\(noun)可能就在其中。可以在媒体服务器上刷新元数据后重试"
+  }
+
+  /// 单集面板里提供试看前的一句说明。
+  static func unidentifiedFilesNote(server: String) -> String {
+    "媒体服务器“\(server)”上有文件认不出是哪一集，这一集可能已经在里面"
   }
 
   /// 确定能播。
   var isPlayable: Bool {
     if case .playable = self { return true }
     return false
+  }
+
+  /// 可以为这一集发起试看：服务器上确认没有，或没找到、只是有认不出是哪一集的文件（要先在面板里说明）。
+  var allowsTrial: Bool {
+    switch self {
+    case .notOnServer, .unmatched: true
+    default: false
+    }
   }
 
   /// 不能确定能播时给用户的说明（不确定时说明为什么可能不是这一集）；确定能播时为 nil。
@@ -238,7 +254,8 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
   }
 
   /// 按服务器顺序看：第一台确定有这一集的服务器为准，排在前面的服务器上只按季号集号对上也让给它（以编号为准）。
-  /// 没有确定的，第一台按季号集号对上的为准；都没有时，读取失败（没读全）在前，其次无法对应、有文件没对上，都不是才算确认没有。
+  /// 没有确定的，第一台按季号集号对上的为准；都没有时，读取失败（没读全）在前，其次这一集缺编号、服务器上有认不出是哪一集的文件，
+  /// 都不是才算确认没有。
   static func resolve(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> EpisodeAvailability {
     guard episode.tmdbEpisodeID != nil else { return .unidentifiable(.missingEpisodeID) }
     var uncertain: EpisodeAvailability?
@@ -268,13 +285,13 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
   case elsewhere(server: String)
   /// 确认哪台服务器上都没有，可以跳过
   case absent
-  /// 没有匹配到，`server` 上有部分文件缺少编号。继续找，找不到能播的集时再说明。
+  /// 没找到，`server` 上有认不出是哪一集的文件。继续找，找不到能播的集时再说明。
   case unmatched(server: String)
   /// 无法确认（读取失败、没读全、缺少编号等），不能当作没有而跳过。说明里写明是哪台服务器。
   case unknown(String)
 
   /// 只看当前服务器就能定下的结果：能播，或当前服务器就无法确认（读取失败时这一集可能就在它上面，别的服务器有也不能说“只在别处”）。
-  /// 当前服务器上没有（含个别文件没编号、没匹配上）时返回 nil，要再看其他服务器才分得清“在别处”和“哪里都没有”。
+  /// 当前服务器上没有（含有认不出是哪一集的文件）时返回 nil，要再看其他服务器才分得清“在别处”和“哪里都没有”。
   static func onCurrentServer(_ episode: MoviePilotEpisode, lookup: ServerEpisodeLookup) -> EpisodeQueueStatus? {
     if case .loaded(let index) = lookup, let tmdbEpisodeID = episode.tmdbEpisodeID,
       let item = index.playableEpisode(tmdbEpisodeID: tmdbEpisodeID)
@@ -361,8 +378,8 @@ nonisolated enum EpisodeNavigator {
   }
 
   /// 从正在播的这一集往前或往后找第一集能在当前服务器上播的（只按季号集号对上的也算）。
-  /// - 没有或有文件没对上而没匹配到的集跳过；和正在播的是同一个文件的（一个文件包含多集）也跳过。
-  ///   往后找不到能播的集时，提示在哪台服务器上刷新元数据。
+  /// - 没有的集跳过，没找到但服务器上有认不出是哪一集的文件的也跳过；和正在播的是同一个文件的（一个文件包含多集）也跳过。
+  ///   往后找不到能播的集、又跳过了后一种时，提示在哪台服务器上刷新元数据。
   /// - 只在别的服务器上有、无法确认、集列表读不到或是空的时停下，返回原因，不当作没有而跳过。
   /// - 正在播的那一季重新读不到、或读到的列表里没有这一集时，按这一集所在的那份找（见 `currentSeasonList`）；
   ///   其他季读到空列表时，`loadSeason` 有可信的旧列表就给旧列表，没有就停下。

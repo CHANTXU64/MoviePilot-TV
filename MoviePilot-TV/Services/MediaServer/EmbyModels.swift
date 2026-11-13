@@ -147,6 +147,8 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
+  /// 文件外的流（外挂字幕等），不是文件里的轨道。
+  var isExternal: Bool?
   /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
   var width: Int?
   var height: Int?
@@ -159,16 +161,18 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
   var extendedVideoSubType: String?
 
-  init(type: String?, codec: String?, isDefault: Bool? = nil) {
+  init(type: String?, codec: String?, isDefault: Bool? = nil, isExternal: Bool? = nil) {
     self.type = type
     self.codec = codec
     self.isDefault = isDefault
+    self.isExternal = isExternal
   }
 
   private enum CodingKeys: String, CodingKey {
     case type = "Type"
     case codec = "Codec"
     case isDefault = "IsDefault"
+    case isExternal = "IsExternal"
     case width = "Width"
     case height = "Height"
     case realFrameRate = "RealFrameRate"
@@ -183,6 +187,7 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     type = try? container.decodeIfPresent(String.self, forKey: .type)
     codec = try? container.decodeIfPresent(String.self, forKey: .codec)
     isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
+    isExternal = try? container.decodeIfPresent(Bool.self, forKey: .isExternal)
     width = try? container.decodeIfPresent(Int.self, forKey: .width)
     height = try? container.decodeIfPresent(Int.self, forKey: .height)
     frameRate =
@@ -201,6 +206,8 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
+  /// `MediaStreams` 里有读不出的条目：数不准文件里有几条轨道。
+  let hasUnreadableStreams: Bool
   init(
     id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
   ) {
@@ -209,6 +216,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.container = container
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
+    hasUnreadableStreams = false
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -225,9 +233,31 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     name = try? container.decodeIfPresent(String.self, forKey: .name)
     self.container = try? container.decodeIfPresent(String.self, forKey: .container)
     self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
-    mediaStreams =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams))?
-      .compactMap(\.value) ?? []
+    let streams = try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams)
+    mediaStreams = streams?.compactMap(\.value) ?? []
+    hasUnreadableStreams = streams?.contains { $0.value == nil } ?? false
+  }
+
+  /// 文件里音视频和字幕轨的条数（不含外挂字幕等文件外的流）。没有流信息、有条目读不出或类型认不出、
+  /// 或一条音视频流都没有时为 nil：数不准。封面图、字体等附件不是轨道，不算。
+  var embeddedTrackCount: Int? {
+    guard !hasUnreadableStreams else { return nil }
+    var count = 0
+    var hasAudioOrVideo = false
+    for stream in mediaStreams where stream.isExternal != true {
+      switch stream.type?.lowercased() {
+      case "video", "audio":
+        count += 1
+        hasAudioOrVideo = true
+      case "subtitle":
+        count += 1
+      case "embeddedimage", "attachment":
+        continue
+      default:
+        return nil
+      }
+    }
+    return hasAudioOrVideo ? count : nil
   }
 
   /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
@@ -239,7 +269,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
-      displayModeHint: DisplayModeHint(source: self))
+      displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount)
   }
 }
 

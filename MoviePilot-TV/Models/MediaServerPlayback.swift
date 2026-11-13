@@ -374,16 +374,20 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let unsupportedReason: PlaybackUnsupported?
   /// 开了「匹配内容」时开播前向电视申请的显示模式；读不准片源格式时为 nil，交给 MPVUI 开播后自己申请。
   let displayModeHint: DisplayModeHint?
+  /// 文件里音视频和字幕轨的条数（不含外挂字幕），取自起播时已经读到的片源信息；数不准时为 nil。
+  /// 播放失败时据此判断 mpv 跳过的 zlib 压缩轨道是不是包括了全部画面和声音（见 `PlaybackSession.failureMessage`）。
+  let embeddedTrackCount: Int?
 
   init(
     id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
-    displayModeHint: DisplayModeHint? = nil
+    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil
   ) {
     self.id = id
     self.name = name
     self.container = container
     self.unsupportedReason = unsupportedReason
     self.displayModeHint = displayModeHint
+    self.embeddedTrackCount = embeddedTrackCount
   }
 
   var isDirectlyPlayable: Bool { unsupportedReason == nil }

@@ -57,7 +57,14 @@ final class EpisodeTrialService: ObservableObject {
   private let libraryScan: LibraryScan
   private let now: @MainActor () -> Date
   private let sleep: Sleep
-  private var observations: [String: Observation] = [:]
+  private var observations: [String: Observation] = [:] {
+    didSet {
+      let keys = Set(observations.keys)
+      if keys != followedDownloads { followedDownloads = keys }
+    }
+  }
+  /// 订阅删掉以后还在跟下载的集（试看键）。卡片据此在某次查询没查成时照样显示试看中。
+  @Published private(set) var followedDownloads: Set<String> = []
   /// 已经结束的试看留下的结局：没有符合条件的资源、搜索失败或被跳过、在别处改过或删掉、已取消、整理失败等。
   /// 用户再次发起或这一集入库前一直显示，刷新不会把它改回「可以试看」。按账号保存，App 重启后仍在；从旧到新排列。
   /// 卡片不刷新进度，没有进度时显示这里保存的结局。
@@ -223,6 +230,28 @@ final class EpisodeTrialService: ObservableObject {
       } else if await wakeUps.next() == nil {
         return
       }
+    }
+  }
+
+  /// 集列表里一集的试看状态，卡片和单集面板据此显示。`key`、`seasonKey` 与 `EpisodeTrialRequest` 的相同。
+  func snapshot(key: String, seasonKey: String) -> EpisodeTrialSnapshot {
+    EpisodeTrialSnapshot(
+      key: key, seasonKey: seasonKey, progress: progress, endings: endings, credentials: credentials,
+      followedDownloads: followedDownloads)
+  }
+
+  /// 这些集里本次运行查到已经入库的。详情页重新查播放状态前记下，查完交给 `libraryRechecked`。
+  func readyEpisodes(among keys: [String]) -> Set<String> {
+    Set(keys.filter { progress[$0]?.isReady == true })
+  }
+
+  /// 详情页重新查过播放状态。`results` 是这次查到的每集情况（试看键 → 结果），`readyBeforeCheck` 是开始查之前已经入库的集。
+  /// 其中这次在媒体服务器上没找到的（确认没有，或只剩认不出是哪一集的文件，和试看入口的判断一样；比如文件被删了），
+  /// 不再当作能播：清掉进度，页面再打开这一集时按服务器现状重新推导。读取失败的不动：不知道还在不在。
+  /// 查的途中才入库的也不动：那次结果可能是入库前读的。只用详情页已经读到的结果，不另发请求。
+  func libraryRechecked(_ results: [String: EpisodeAvailability], readyBeforeCheck: Set<String>) {
+    for key in readyBeforeCheck where results[key]?.allowsTrial == true && progress[key]?.isReady == true {
+      progress[key] = nil
     }
   }
 
@@ -556,7 +585,8 @@ final class EpisodeTrialService: ObservableObject {
     if !related.isEmpty {
       return .unavailable("已有相关订阅，无法确认与当前季集使用同一套编号")
     }
-    guard library == .notOnServer else {
+    // 和详情页的入口一致：服务器上确认没有，或只是有认不出是哪一集的文件（面板里已经说明这一集可能在里面）。
+    guard library?.allowsTrial == true else {
       return .unavailable(library?.message ?? "无法确认媒体库是否已有这一集")
     }
     guard mayCreate else { return .notStarted }

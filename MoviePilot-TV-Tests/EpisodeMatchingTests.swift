@@ -169,7 +169,9 @@ final class EpisodeMatchingTests: XCTestCase {
       "“emby”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按季号集号找到的第 1 季第 2 集，"
         + "但播出日期对不上（服务器上是 2025-03-01，这一集是 2025-01-02），很可能不是这一集")
     XCTAssertEqual(
-      index.summary.logText, "按 TMDB 单集编号对上 0 个文件，按整理记录对上 0 个，按季号集号对上 3 个（播出日期对上 1 个、对不上 1 个），没对上 0 个")
+      index.summary.logText,
+      "按 TMDB 单集编号对上 0 个文件，按整理记录对上 0 个，按季号集号对上 3 个（播出日期对上 1 个、对不上 1 个），"
+        + "有季号集号但集列表里没有那一集 0 个，认不出是哪一集 0 个")
   }
 
   func testMultiEpisodeFileWithoutIDsCoversItsRange() {
@@ -192,13 +194,31 @@ final class EpisodeMatchingTests: XCTestCase {
     XCTAssertEqual(index.availability(of: 105), .notOnServer)
   }
 
-  func testFilesThatMatchNothingAreUnresolved() {
-    let index = index([file("bare", season: nil, episode: nil), file("e9", episode: 9)])
-    XCTAssertEqual(index.unresolvedFileCount, 2, "没有季号集号、集列表里没有第 9 集")
-    XCTAssertEqual(index.availability(of: 101), .unmatched(server: "emby"))
-    let missingList = ServerEpisodeIndex(
-      serverName: "emby", hasSeries: true, episodes: [file("e1", season: 2, episode: 1)], lists: lists)
-    XCTAssertEqual(missingList.availability(of: 101), .unmatched(server: "emby"), "要用的集列表没读到")
+  func testFileWithoutSeasonOrEpisodeNumberMayBeAnyMissingEpisode() {
+    // 没有季号或集号、也对不上整理记录：不知道是哪一集，没找到的集可能就是它。
+    for bare in [
+      file("bare", season: nil, episode: nil), file("no-episode", season: 1, episode: nil),
+      file("no-season", season: nil, episode: 3), file("huge-range", episode: 1, end: 999),
+    ] {
+      let index = index([file("e1", episode: 1), bare])
+      XCTAssertEqual(index.unidentifiedFileCount, 1, bare.id)
+      XCTAssertEqual(index.availability(of: 102), .unmatched(server: "emby"), bare.id)
+      XCTAssertEqual(index.summary.unidentified, 1, bare.id)
+    }
+  }
+
+  func testNumberedFileThatIsNotInTheListDoesNotHideOtherEpisodes() {
+    // S01E09 不在集列表里（只有 6 集）、S02E01 那一季的列表没有：它们按自己的编号不会是第 2 集，第 2 集照常是没有。
+    let index = index([
+      file("e1", episode: 1), file("e9", episode: 9), file("s2e1", season: 2, episode: 1),
+      file("recorded", season: nil, episode: nil, path: "/data/Season 1/a - S01E40.mkv"),
+    ], records: [record("/media/Season 1/a - S01E40.mkv", episodes: "E40")])
+    XCTAssertEqual(index.unidentifiedFileCount, 0)
+    XCTAssertEqual(index.summary.unplaced, 3, "整理记录给了位置、集列表里没有那一集的也算有编号")
+    XCTAssertEqual(index.availability(of: 102), .notOnServer)
+    let episode = MoviePilotEpisode(TmdbEpisode(id: 102, episodeNumber: 2), season: 1, index: 1)
+    XCTAssertEqual(
+      EpisodeQueueStatus.resolve(episode, current: .loaded(index), others: []), .absent, "队列照常当作没有、跳过")
   }
 
   func testRecheckOfAFileMatchedWithoutAnID() {
@@ -243,10 +263,15 @@ final class EpisodeMatchingTests: XCTestCase {
   func testLoaderReadsRecordsAndListsOnlyWhenNeeded() async throws {
     var recordReads = 0
     var listReads: [EpisodeListKey] = []
+    var seasonReads: [String?] = []
     let sources = EpisodeMatchingSources(
       seasonList: { key in
         listReads.append(key)
         return key.season == 1 ? self.defaultSeason1 : []
+      },
+      seasons: { group in
+        seasonReads.append(group)
+        return [1, 2]
       },
       transferRecords: {
         recordReads += 1
@@ -258,6 +283,7 @@ final class EpisodeMatchingTests: XCTestCase {
     XCTAssertEqual(identified.availability(of: 101), .playable(server: "emby"))
     XCTAssertEqual(recordReads, 0, "文件都带编号时不读整理记录")
     XCTAssertEqual(listReads, [])
+    XCTAssertEqual(seasonReads, [], "没遇到空集列表时不读季列表")
 
     let unidentified = try await EpisodeMatchLoader.index(
       serverName: "emby", hasSeries: true,
@@ -271,6 +297,68 @@ final class EpisodeMatchingTests: XCTestCase {
     }
     XCTAssertEqual(
       unidentified.availability(of: 102), .failed("MoviePilot 返回的第 2 季集列表是空的，无法对应这一季的文件"),
-      "第 2 季的列表是空的：那一季的文件无法对应，不能说没有")
+      "第 2 季的列表是空的、季列表里却有第 2 季：多半是没读到，那一季的文件无法对应，不能说没有")
+    XCTAssertEqual(seasonReads, [nil], "遇到空集列表才读默认顺序的季列表")
+  }
+
+  // MARK: 集列表是空的
+
+  /// 没有 TMDB 单集编号的文件：第 1 季第 1 集，和第 0 季（特别篇）第 1 集。
+  private var specialsAndSeason1: [ServerMediaItem] {
+    [file("e1", episode: 1), file("sp1", season: 0, episode: 1)]
+  }
+
+  @MainActor
+  private func loadIndex(
+    _ files: [ServerMediaItem], seasons: @escaping (String?) async throws -> [Int],
+    records: [EpisodeTransferRecord] = [], lists extra: [EpisodeListKey: [TmdbEpisode]] = [:]
+  ) async throws -> ServerEpisodeIndex {
+    let available = lists.merging(extra) { _, new in new }
+    return try await EpisodeMatchLoader.index(
+      serverName: "emby", hasSeries: true, episodes: files, incompleteReason: nil,
+      sources: EpisodeMatchingSources(
+        seasonList: { available[$0] ?? [] }, seasons: seasons, transferRecords: { records }),
+      describe: { _ in "超时" })
+  }
+
+  @MainActor
+  func testSeasonThatTheNumberingDoesNotHaveDoesNotBlockOtherEpisodes() async throws {
+    // TMDB 没有第 0 季，服务器上有特别篇：第 0 季的集列表是空的，季列表里也没有第 0 季。
+    // 这些文件按自己的编号不会是正片的哪一集，第 2 集照常是没有（可以试看），不是“没读全”。
+    let index = try await loadIndex(specialsAndSeason1, seasons: { _ in [1, 2] })
+    XCTAssertNil(index.incompleteReason)
+    XCTAssertEqual(index.availability(of: 102), .notOnServer)
+    XCTAssertEqual(index.summary.unplaced, 1)
+    guard case .uncertain = index.availability(of: 101) else { return XCTFail("第 1 季的文件照常按季号集号对应") }
+  }
+
+  @MainActor
+  func testEmptyListOfASeasonThatExistsIsStillAReadFailure() async throws {
+    let cases: [(String, (String?) async throws -> [Int])] = [
+      ("季列表里有这一季", { _ in [0, 1, 2] }),
+      ("季列表也是空的", { _ in [] }),
+      ("季列表读不到", { _ in throw URLError(.timedOut) }),
+    ]
+    for (name, seasons) in cases {
+      let index = try await loadIndex(specialsAndSeason1, seasons: seasons)
+      XCTAssertEqual(
+        index.availability(of: 102), .failed("MoviePilot 返回的第 0 季集列表是空的，无法对应这一季的文件"), name)
+    }
+  }
+
+  @MainActor
+  func testSeasonListIsReadOncePerNumberingAndFromTheEpisodeGroup() async throws {
+    // 这部剧按剧集组 g1 整理过：没有记录的文件按 g1 的编号比，g1 没有第 3、4 季，读一次 g1 的季列表就够了。
+    var reads: [String?] = []
+    let index = try await loadIndex(
+      [file("g3", season: 3, episode: 1), file("g4", season: 4, episode: 1)],
+      seasons: { group in
+        reads.append(group)
+        return [1, 2]
+      },
+      records: [record("/other/Season 1/b.mkv", episodes: "E10", group: "g1", date: "2026-01-01 00:00:00")])
+    XCTAssertEqual(reads, ["g1"])
+    XCTAssertNil(index.incompleteReason)
+    XCTAssertEqual(index.availability(of: 104), .notOnServer)
   }
 }

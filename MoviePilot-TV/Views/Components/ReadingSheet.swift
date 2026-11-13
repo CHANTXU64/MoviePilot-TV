@@ -324,7 +324,9 @@ struct ReadingSheet<Sidebar: View>: View {
       height: ReadingSheetLayout.sheetHeight,
       alignment: .topLeading
     )
-    .if(focusesBodyByDefault) { $0.defaultFocus($focusedChunkIndex, 0) }
+    // 修饰符一直挂着、只换默认值：左栏按钮在面板开着时出现或消失，内容不重建，正在读的滚动位置和焦点不丢。
+    // 不由正文接默认焦点时给 nil（不偏向任何一块），交给左栏自己指定。
+    .defaultFocus($focusedChunkIndex, focusesBodyByDefault ? 0 : nil)
   }
 
   private var reading: some View {

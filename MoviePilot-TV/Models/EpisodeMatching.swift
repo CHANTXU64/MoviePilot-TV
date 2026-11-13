@@ -11,6 +11,8 @@ import Foundation
 // 3. 都没有：按文件的季号集号，在这部剧整理记录用过的剧集组（没有记录就是默认顺序）里找同季同集，再比播出日期。
 //    不确定，播放前要说明可能不是这一集。MoviePilot 自己判断入库也只看季号集号，这一步和它的判断一致。
 // 以编号为准：某一集有确定的文件时只用确定的；带 TMDB 单集编号的文件只按编号对应。
+// 哪一步都没对上的文件分两种：有季号集号、只是集列表里没有那一集的，按它自己的编号不会是别的集，不影响别的集；
+// 季号集号缺失或认不出的，不知道是哪一集，这部剧没找到的集可能就是它。
 
 // MARK: - MoviePilot 集列表与整理记录
 
@@ -254,14 +256,17 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     var bySeasonEpisode = 0
     var airDateMatches = 0
     var airDateDiffers = 0
-    var unresolved = 0
+    /// 有季号集号（或整理记录给了位置），但 MoviePilot 的集列表里没有那一集：这一季不在那套编号里，或集号超出了列表。
+    var unplaced = 0
+    /// 季号集号缺失或认不出，也没对上整理记录：不知道是哪一集。
+    var unidentified = 0
 
     /// 有文件没带 TMDB 单集编号时的日志说明；都带编号时为 nil。不写路径和编号本身。
     var logText: String? {
-      guard byTransferRecord + bySeasonEpisode + unresolved > 0 else { return nil }
+      guard byTransferRecord + bySeasonEpisode + unplaced + unidentified > 0 else { return nil }
       return "按 TMDB 单集编号对上 \(byEpisodeID) 个文件，按整理记录对上 \(byTransferRecord) 个，"
         + "按季号集号对上 \(bySeasonEpisode) 个（播出日期对上 \(airDateMatches) 个、对不上 \(airDateDiffers) 个），"
-        + "没对上 \(unresolved) 个"
+        + "有季号集号但集列表里没有那一集 \(unplaced) 个，认不出是哪一集 \(unidentified) 个"
     }
   }
 
@@ -273,9 +278,9 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   let confirmed: [Int: [ServerMediaItem]]
   /// 按季号集号的对应，只留没有确定文件的集。
   let uncertain: [Int: [UncertainFile]]
-  /// 有文件、哪一步都没对上的文件数：没有编号又没有季号集号，或整理记录、集列表里找不到它的位置。
-  /// 找不到某一集时提示用户刷新元数据，判断照常按没有处理（见 `availability(of:)`）。
-  let unresolvedFileCount: Int
+  /// 认不出是哪一集的文件数：没有 TMDB 单集编号，季号集号缺失或认不出，也没对上整理记录。这部剧没找到的集可能就是其中之一
+  /// （见 `availability(of:)`）。有季号集号、只是集列表里没有那一集的文件不算在内：按它自己的编号不会是别的集。
+  let unidentifiedFileCount: Int
   /// 没有读全时的失败说明（已写明服务器和操作）：这部剧在这台服务器上有几份（不同媒体库），有的读取失败；
   /// 或按外部编号查找、按 ID 补查、读 MoviePilot 集列表有一步失败。读到的照常用，找不到某一集时不能说这台上没有。
   let incompleteReason: String?
@@ -324,14 +329,15 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       case .recorded(let placement):
         let ids = placement.episodes.compactMap { Self.episodeID(number: $0, in: lists[placement.list]) }
         if ids.isEmpty {
-          summary.unresolved += 1
+          summary.unplaced += 1
         } else {
           ids.forEach { confirm(file, as: $0) }
           summary.byTransferRecord += 1
         }
       case .numbered(let key, let range):
+        // 没有这份列表：读取失败（记在 `incompleteReason`），或这一季不在那套编号里。
         guard let list = lists[key] else {
-          summary.unresolved += 1
+          summary.unplaced += 1
           continue
         }
         // 文件的播出日期是它第一集的。
@@ -346,7 +352,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
           matched = true
         }
         guard matched else {
-          summary.unresolved += 1
+          summary.unplaced += 1
           continue
         }
         summary.bySeasonEpisode += 1
@@ -355,13 +361,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         case .differs: summary.airDateDiffers += 1
         case .unknown: break
         }
-      case .unresolved:
-        summary.unresolved += 1
+      case .unidentified:
+        summary.unidentified += 1
       }
     }
     self.confirmed = confirmed
     self.uncertain = uncertain.filter { confirmed[$0.key] == nil }
-    unresolvedFileCount = summary.unresolved
+    unidentifiedFileCount = summary.unidentified
     self.summary = summary
   }
 
@@ -376,7 +382,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       switch plan.step(for: file) {
       case .recorded(let placement): keys.insert(placement.list)
       case .numbered(let key, _): keys.insert(key)
-      case .unresolved: break
+      case .unidentified: break
       }
     }
     return keys
@@ -394,7 +400,8 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   private enum Step {
     case recorded(EpisodePlacement)
     case numbered(EpisodeListKey, ClosedRange<Int>)
-    case unresolved
+    /// 季号或集号缺失，或集号范围大得不像一个文件：不知道是哪一集。
+    case unidentified
   }
 
   /// 每个没有编号的文件走哪一步。`requiredLists` 和建表共用，读的列表和用的列表一致。
@@ -421,9 +428,9 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 
     func step(for file: ServerMediaItem) -> Step {
       if let key = FilePathKey(path: file.path), let placement = placements[key] { return .recorded(placement) }
-      guard let season = file.seasonNumber, let first = file.episodeNumber else { return .unresolved }
+      guard let season = file.seasonNumber, let first = file.episodeNumber else { return .unidentified }
       let last = max(file.episodeNumberEnd ?? first, first)
-      guard last - first < EpisodeTransferRecord.maximumEpisodesPerFile else { return .unresolved }
+      guard last - first < EpisodeTransferRecord.maximumEpisodesPerFile else { return .unidentified }
       return .numbered(EpisodeListKey(episodeGroup: numberingGroup, season: season), first...last)
     }
   }
@@ -501,15 +508,15 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 
   /// 这一集在这台服务器上的情况。确定的文件 → 能播；按季号集号对上 → 不确定；都没有时按原因分：
   /// - 没读全：有一步读取失败，不能说这台上没有（`failed`，说明是哪一步）。
-  /// - 有文件哪一步都没对上：按没有处理，提示可以刷新元数据（`unmatched`）。
-  /// - 其他：确认没有（`notOnServer`）。
+  /// - 有认不出是哪一集的文件：这一集可能就是其中之一（`unmatched`），可以刷新元数据。
+  /// - 其他：确认没有（`notOnServer`）。有季号集号、只是集列表里没有那一集的文件不影响别的集。
   func availability(of tmdbEpisodeID: Int) -> EpisodeAvailability {
     if !confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty { return .playable(server: serverName) }
     if let file = uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).first {
       return .uncertain(server: serverName, match: file.match)
     }
     if let incompleteReason { return .failed(incompleteReason) }
-    if unresolvedFileCount > 0 { return .unmatched(server: serverName) }
+    if unidentifiedFileCount > 0 { return .unmatched(server: serverName) }
     return .notOnServer
   }
 }
@@ -520,6 +527,9 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 struct EpisodeMatchingSources {
   /// 一份 MoviePilot 集列表
   let seasonList: (EpisodeListKey) async throws -> [TmdbEpisode]
+  /// 一套编号有哪几季：`episodeGroup` 为 nil 是默认顺序（TMDB 季号），否则是那个剧集组（组内季号）。
+  /// MoviePilot 读 TMDB 失败时返回空列表。
+  let seasons: (_ episodeGroup: String?) async throws -> [Int]
   /// 这部剧成功的整理记录（已按 TMDB 编号筛过）
   let transferRecords: () async throws -> [EpisodeTransferRecord]
 }
@@ -527,7 +537,9 @@ struct EpisodeMatchingSources {
 enum EpisodeMatchLoader {
   /// 一台服务器上这部剧的对应表。`episodes` 是从服务器读到的这部剧的全部集，`incompleteReason` 是读服务器时没读全的说明。
   /// 有文件没带 TMDB 单集编号时才读整理记录；读不到只记日志，这些文件照常按季号集号对应。
-  /// 集列表读不到或是空的（MoviePilot 读 TMDB 失败时返回空列表）时，那一季的文件无法对应，记为没读全。
+  /// 集列表读不到时那一季的文件无法对应，记为没读全。集列表是空的有两种可能：MoviePilot 读 TMDB 失败（过一会儿可能就好），
+  /// 或那套编号里根本没有这一季（比如 TMDB 没有第 0 季而服务器上有特别篇，或服务器按 TVDB 分季）。这时再读那套编号的季列表：
+  /// 季列表里确实没有这一季，这一季的文件按集列表里没有那一集处理，不影响别的集；季列表里有这一季或也读不到，才算没读全。
   /// `describe` 把错误转成给用户看的说明。
   static func index(
     serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String?,
@@ -543,17 +555,40 @@ enum EpisodeMatchLoader {
     }
     var lists: [EpisodeListKey: [TmdbEpisode]] = [:]
     var listFailure: String?
+    var absentSeasons: [EpisodeListKey] = []
+    /// 每套编号的季列表只读一次（键是剧集组，默认顺序为空串）；读不到记为空集合。
+    var seasonCatalogs: [String: Set<Int>] = [:]
     for key in ServerEpisodeIndex.requiredLists(for: episodes, records: records).sorted() {
+      let list: [TmdbEpisode]
       do {
-        let list = try await sources.seasonList(key)
-        if list.isEmpty {
-          listFailure = listFailure ?? "MoviePilot 返回的\(key.title)集列表是空的，无法对应这一季的文件"
-        } else {
-          lists[key] = list
-        }
+        list = try await sources.seasonList(key)
       } catch let error where !(error is CancellationError) {
         listFailure = listFailure ?? "没能从 MoviePilot 读取\(key.title)的集列表，无法对应这一季的文件：\(describe(error))"
+        continue
       }
+      guard list.isEmpty else {
+        lists[key] = list
+        continue
+      }
+      let numbering = key.episodeGroup ?? ""
+      if seasonCatalogs[numbering] == nil {
+        do {
+          seasonCatalogs[numbering] = Set(try await sources.seasons(key.episodeGroup))
+        } catch let error where !(error is CancellationError) {
+          Logger.warning("[Playback] 没能从 MoviePilot 读取季列表，分不清\(key.title)是不存在还是没读到: \(describe(error))")
+          seasonCatalogs[numbering] = []
+        }
+      }
+      if let seasons = seasonCatalogs[numbering], !seasons.isEmpty, !seasons.contains(key.season) {
+        absentSeasons.append(key)
+      } else {
+        listFailure = listFailure ?? "MoviePilot 返回的\(key.title)集列表是空的，无法对应这一季的文件"
+      }
+    }
+    if !absentSeasons.isEmpty {
+      Logger.info(
+        "[Playback] “\(serverName)”上有文件所在的季在 MoviePilot 的编号里没有（\(absentSeasons.map(\.title).joined(separator: "、"))），"
+          + "这些文件按集列表里没有那一集处理")
     }
     if let listFailure {
       Logger.warning("[Playback] “\(serverName)”上这部剧没有读全: \(listFailure)")

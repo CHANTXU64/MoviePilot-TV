@@ -5,12 +5,12 @@ import XCTest
 /// 详情页每集的入口：卡片状态、按下与长按、单集面板。纯逻辑，不涉及界面和网络。
 final class EpisodeEntryTests: XCTestCase {
   private func trial(
-    _ progress: EpisodeTrialProgress? = nil, subscriptionID: Int? = nil, cancelRequested: Bool = false,
-    otherEpisode: Int? = nil, starting: Bool = false
+    _ progress: EpisodeTrialProgress? = nil, subscriptionID: Int? = nil, followingDownload: Bool = false,
+    cancelRequested: Bool = false, otherEpisode: Int? = nil, starting: Bool = false
   ) -> EpisodeTrialSnapshot {
     EpisodeTrialSnapshot(
-      progress: progress, subscriptionID: subscriptionID, isCancelRequested: cancelRequested,
-      otherEpisodeInSeason: otherEpisode, isStarting: starting)
+      progress: progress, subscriptionID: subscriptionID, isFollowingDownload: followingDownload,
+      isCancelRequested: cancelRequested, otherEpisodeInSeason: otherEpisode, isStarting: starting)
   }
 
   private func entry(
@@ -44,10 +44,8 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(missing.notPlayableMessage, EpisodeAvailability.notOnServerMessage)
   }
 
-  func testTrialIsOnlyOfferedWhenTheServerConfirmsTheEpisodeIsMissing() {
-    for availability in [
-      EpisodeAvailability.failed("连不上“客厅”"), .unmatched(server: "客厅"), .unidentifiable(.missingEpisodeID),
-    ] {
+  func testTrialIsNotOfferedWhenTheServerCouldNotBeChecked() {
+    for availability in [EpisodeAvailability.failed("连不上“客厅”"), .unidentifiable(.missingEpisodeID)] {
       let unsure = entry(availability)
       XCTAssertFalse(unsure.canStartTrial, "\(availability)")
       XCTAssertEqual(unsure.menuActions, [.details], "\(availability)")
@@ -55,8 +53,52 @@ final class EpisodeEntryTests: XCTestCase {
       XCTAssertEqual(unsure.panel.message, availability.message, "\(availability)")
     }
     XCTAssertNil(entry(.failed("连不上")).cardStatus, "读取失败在行头提示一次，不盖在每张卡上")
-    XCTAssertEqual(entry(.unmatched(server: "客厅")).cardStatus, .attention)
     XCTAssertEqual(entry(.unidentifiable(.missingEpisodeID)).cardStatus, .attention)
+  }
+
+  // MARK: 有认不出是哪一集的文件
+
+  func testUnidentifiedFilesOnTheServerStillAllowATrialAfterExplainingInThePanel() {
+    // 服务器上有文件认不出是哪一集，这一集可能就在里面：角上照样提示，但不把这一集挡住；
+    // 先在面板里说明再给「试看」，长按菜单不放，免得绕过说明。
+    let unmatched = entry(.unmatched(server: "客厅"))
+    XCTAssertEqual(unmatched.cardStatus, .attention)
+    XCTAssertTrue(unmatched.canStartTrial)
+    XCTAssertEqual(unmatched.primaryAction, .openPanel)
+    XCTAssertEqual(unmatched.menuActions, [.details])
+    XCTAssertEqual(unmatched.panel.buttons, [.startTrial(isRetry: false), .recheck])
+    XCTAssertEqual(
+      unmatched.panel.message,
+      "媒体服务器“客厅”上有文件认不出是哪一集，这一集可能已经在里面。试看会下载这一集，下好的文件会留在媒体库里")
+    XCTAssertEqual(unmatched.notPlayableMessage, EpisodeAvailability.unmatchedMessage(server: "客厅"))
+    XCTAssertEqual(unmatched.accessibilityStatus, EpisodeAvailability.unmatchedMessage(server: "客厅"))
+  }
+
+  func testUnidentifiedFilesKeepTheExplanationWhateverTheTrialState() {
+    let note = "媒体服务器“客厅”上有文件认不出是哪一集，这一集可能已经在里面"
+    let unaired = entry(.unmatched(server: "客厅"), block: .notAired("2099-01-01"))
+    XCTAssertEqual(unaired.panel.message, note + "。这一集 2099-01-01 播出，播出后才能试看")
+    XCTAssertEqual(unaired.panel.buttons, [.recheck])
+
+    let blocked = entry(.unmatched(server: "客厅"), trial: trial(otherEpisode: 3))
+    XCTAssertEqual(blocked.panel.message, note + "。这一季的第 3 集正在试看，结束后才能试看这一集")
+    XCTAssertEqual(blocked.panel.buttons, [.recheck])
+
+    let failed = entry(.unmatched(server: "客厅"), trial: trial(.unavailable("MoviePilot 拒绝创建试看订阅")))
+    XCTAssertEqual(failed.panel.message, note + "。MoviePilot 拒绝创建试看订阅")
+    XCTAssertEqual(failed.panel.buttons, [.startTrial(isRetry: true), .recheck])
+
+    let ended = entry(.unmatched(server: "客厅"), trial: trial(.concluded(.noEligibleResource)))
+    XCTAssertEqual(
+      ended.panel.message, note + "。没有找到符合试看规则的资源，可以在设置里调整试看订阅规则后重新试看",
+      "上一次试看结束了，重新试看前也要先说明")
+    XCTAssertEqual(ended.panel.buttons, [.startTrial(isRetry: true), .recheck])
+    XCTAssertEqual(ended.menuActions, [.details])
+
+    let unsupported = entry(.unmatched(server: "客厅"), block: .unsupported)
+    XCTAssertFalse(unsupported.canStartTrial)
+    XCTAssertEqual(unsupported.panel.message, EpisodeAvailability.unmatchedMessage(server: "客厅"))
+    XCTAssertEqual(unsupported.panel.buttons, [.recheck])
   }
 
   func testUnsupportedOrUnairedEpisodesDoNotOfferTrial() {
@@ -170,6 +212,18 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(
       restored.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
     XCTAssertEqual(restored.menuActions, [.cancelTrial(subscriptionID: 81), .details])
+  }
+
+  func testAQueryFailureWhileOnlyFollowingTheDownloadKeepsShowingTheTrialInProgress() {
+    // MoviePilot 提交下载后删了试看订阅，服务只在跟下载；这次没查成，照样显示试看中、不提供重新试看。
+    let following = entry(
+      .notOnServer, trial: trial(.unavailable("暂时无法确认试看进度"), followingDownload: true))
+    XCTAssertEqual(
+      following.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
+    XCTAssertFalse(following.canStartTrial)
+    XCTAssertEqual(following.menuActions, [.details])
+    XCTAssertEqual(following.panel.message, "暂时无法确认试看进度")
+    XCTAssertEqual(following.panel.buttons, [], "订阅已经删了，没有可取消的")
   }
 
   func testATransientQueryFailureKeepsShowingTheTrialInProgress() {

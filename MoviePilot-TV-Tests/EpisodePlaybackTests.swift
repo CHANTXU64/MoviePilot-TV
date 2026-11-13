@@ -276,7 +276,8 @@ final class EpisodePlaybackModelTests: XCTestCase {
   }
 
   func testAFileWithoutTMDBIDIsTreatedAsUnmatchedAndExplained() {
-    // 第 1、3 集有 TMDB 单集 ID，第 2 集的文件刚入库还没刮削到：第 2 集按没有处理，队列照常往后找；说明里提示可以刷新元数据。
+    // 第 1、3 集有 TMDB 单集 ID，第 2 集的文件刚入库还没刮削到（也没有季号集号）：第 2 集按没有处理，队列照常往后找；
+    // 说明里提示这一集可能就在认不出的文件里，可以刷新元数据。
     let lookup = index(
       "a",
       [
@@ -286,7 +287,8 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(EpisodeAvailability.resolve(episode(1), lookups: [lookup]), .playable(server: "a"))
     let unmatched = EpisodeAvailability.resolve(episode(2), lookups: [lookup])
     XCTAssertEqual(unmatched, .unmatched(server: "a"))
-    XCTAssertEqual(unmatched.message, "未匹配到这一集，媒体服务器“a”上有文件既没有 TMDB 编号，也对不上整理记录和季号集号，可刷新元数据后重试")
+    XCTAssertEqual(unmatched.message, "没有找到这一集，但媒体服务器“a”上有文件认不出是哪一集（没有 TMDB 编号，季号集号缺失或认不出，"
+        + "也对不上 MoviePilot 的整理记录），这一集可能就在其中。可以在媒体服务器上刷新元数据后重试")
     XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), current: lookup, others: []), .unmatched(server: "a"))
     XCTAssertEqual(
       EpisodeAvailability.resolve(episode(4), lookups: [index("a", [serverEpisode("a1", tmdb: 1)])]), .notOnServer,
@@ -308,7 +310,8 @@ final class EpisodePlaybackModelTests: XCTestCase {
       "媒体服务器“b”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试", "读取失败在前：稍后重试可能就有")
     XCTAssertEqual(
       EpisodeAvailability.resolve(episode(2), lookups: [unmatched]).message,
-      "未匹配到这一集，媒体服务器“a”上有文件既没有 TMDB 编号，也对不上整理记录和季号集号，可刷新元数据后重试")
+      "没有找到这一集，但媒体服务器“a”上有文件认不出是哪一集（没有 TMDB 编号，季号集号缺失或认不出，"
+        + "也对不上 MoviePilot 的整理记录），这一集可能就在其中。可以在媒体服务器上刷新元数据后重试")
   }
 
   func testIncompleteServerIndexIsNotTreatedAsMissing() {

@@ -9,6 +9,8 @@ nonisolated struct EpisodeTrialSnapshot: Equatable, Sendable {
   var progress: EpisodeTrialProgress?
   /// 本机这一集的试看订阅（已确认的）。
   var subscriptionID: Int?
+  /// 试看订阅已经删掉（MoviePilot 提交下载后自己删的），服务还在跟这一集的下载、整理和入库。
+  var isFollowingDownload = false
   var isCancelRequested = false
   /// 同一季另一集正在本机试看时，那一集的集号。MoviePilot 按季合并订阅，这时不能试看这一集。
   var otherEpisodeInSeason: Int?
@@ -16,36 +18,42 @@ nonisolated struct EpisodeTrialSnapshot: Equatable, Sendable {
   var isStarting = false
 
   init(
-    progress: EpisodeTrialProgress? = nil, subscriptionID: Int? = nil, isCancelRequested: Bool = false,
-    otherEpisodeInSeason: Int? = nil, isStarting: Bool = false
+    progress: EpisodeTrialProgress? = nil, subscriptionID: Int? = nil, isFollowingDownload: Bool = false,
+    isCancelRequested: Bool = false, otherEpisodeInSeason: Int? = nil, isStarting: Bool = false
   ) {
     self.progress = progress
     self.subscriptionID = subscriptionID
+    self.isFollowingDownload = isFollowingDownload
     self.isCancelRequested = isCancelRequested
     self.otherEpisodeInSeason = otherEpisodeInSeason
     self.isStarting = isStarting
   }
 
+  /// `followedDownloads` 是服务正在跟下载的集（试看键），见 `EpisodeTrialService.followedDownloads`。
   init(
     key: String, seasonKey: String, progress: [String: EpisodeTrialProgress], endings: [EpisodeTrialStoredEnding],
-    credentials: [EpisodeTrialCredential]
+    credentials: [EpisodeTrialCredential], followedDownloads: Set<String> = []
   ) {
     self.progress = progress[key] ?? endings.last(where: { $0.key == key })?.ending.progress
     let own = credentials.first { $0.target.episodeKey == key && $0.subscriptionID != nil }
     subscriptionID = own?.subscriptionID
+    isFollowingDownload = followedDownloads.contains(key)
     isCancelRequested = own?.cancelRequested == true
     otherEpisodeInSeason = credentials.first {
       $0.target.seasonKey == seasonKey && $0.target.episodeKey != key
     }?.target.episodeNumber
   }
 
-  /// 本机这一集的试看还在进行。正在发起也算；有本机的试看订阅、进度却还没写（App 刚启动）或这次没查成
-  /// （后台接着重试）时也算，不能因为一次查询失败就不显示试看中。
+  /// 服务还在跟这一集：有本机的试看订阅，或订阅删掉后还在跟下载。
+  var isTracked: Bool { subscriptionID != nil || isFollowingDownload }
+
+  /// 本机这一集的试看还在进行。正在发起也算；服务还在跟这一集、进度却还没写（App 刚启动）或这次没查成
+  /// （稍后接着查）时也算，不能因为一次查询失败就不显示试看中。
   var isInProgress: Bool {
     if isStarting { return true }
     if let progress, progress.isInProgress { return true }
     switch progress {
-    case nil, .notStarted, .unavailable: return subscriptionID != nil
+    case nil, .notStarted, .unavailable: return isTracked
     default: return false
     }
   }
@@ -128,9 +136,16 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     }
   }
 
-  /// 可以发起（或重新发起）试看：媒体服务器上确认没有、条件都满足、这一集和这一季都没在试看。
+  /// 可以发起（或重新发起）试看：媒体服务器上确认没有，或没找到、只是有认不出是哪一集的文件（面板里先说明）；
+  /// 条件都满足、这一集和这一季都没在试看。
   var canStartTrial: Bool {
-    trialBlock == nil && availability == .notOnServer && !trial.isInProgress && !isSeasonOccupied
+    trialBlock == nil && availability?.allowsTrial == true && !trial.isInProgress && !isSeasonOccupied
+  }
+
+  /// 有认不出是哪一集的文件、这一集可能已经在里面时，那台服务器的名字。
+  private var unidentifiedFilesServer: String? {
+    guard case .unmatched(let server) = availability else { return nil }
+    return server
   }
 
   /// 可以取消的试看订阅；没在试看、已在取消或不能取消时为 nil。
@@ -189,7 +204,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case .cancelling: return TrialIndicator(label: "正在取消试看", fraction: nil, stage: nil)
     case .submissionUnconfirmed: return TrialIndicator(label: "正在确认进度", fraction: nil, stage: nil)
     case nil, .notStarted, .unavailable:
-      return trial.subscriptionID == nil ? nil : TrialIndicator(label: "试看中", fraction: nil, stage: nil)
+      return trial.isTracked ? TrialIndicator(label: "试看中", fraction: nil, stage: nil) : nil
     default: return nil
     }
   }
@@ -239,14 +254,14 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   }
 
   /// 长按菜单：只列现在能做的，最后是详情。菜单里的操作单集面板里都有。
-  /// 只按季号集号找到的集不放「播放」：要先看面板里的说明，从「详情」进去播。
+  /// 只按季号集号找到的集不放「播放」、有认不出是哪一集的文件时不放「试看」：要先看面板里的说明，从「详情」进去。
   var menuActions: [MenuAction] {
     var actions: [MenuAction] = []
     if isPlayable {
       actions.append(.play)
     } else if trial.isInProgress, let id = cancellableSubscriptionID {
       actions.append(.cancelTrial(subscriptionID: id))
-    } else if canStartTrial {
+    } else if canStartTrial, unidentifiedFilesServer == nil {
       actions.append(.startTrial)
     }
     actions.append(.details)
@@ -292,9 +307,16 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       let buttons: [PanelButton] = cancellableSubscriptionID.map { [.cancelTrial(subscriptionID: $0)] } ?? []
       return Panel(message: Self.inProgressMessage(trial), buttons: buttons)
     }
+    // 有认不出是哪一集的文件：先说这一集可能已经在里面，再给能做的操作，保留「重新检查」。
+    let unidentified = unidentifiedFilesServer
+    func explained(_ message: String?, _ buttons: [PanelButton]) -> Panel {
+      guard let unidentified else { return Panel(message: message, buttons: buttons) }
+      let note = EpisodeAvailability.unidentifiedFilesNote(server: unidentified)
+      return Panel(message: message.map { "\(note)。\($0)" } ?? note, buttons: buttons + [.recheck])
+    }
     let retry: [PanelButton] = canStartTrial ? [.startTrial(isRetry: true)] : []
     if case .concluded(let ending) = trial.progress {
-      return Panel(message: ending.message, buttons: retry)
+      return explained(ending.message, retry)
     }
     if isCheckingAvailability {
       return Panel(message: "正在检查这一集能不能播放", buttons: [])
@@ -306,30 +328,34 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     switch availability {
     case .playable, .uncertain:
       return Panel(message: nil, buttons: [.play])
-    case .failed, .unmatched, .unidentifiable:
-      // 读取失败、个别文件没编号、没法按编号对应：都不能确认服务器上没有，不提供试看。
+    case .failed, .unidentifiable:
+      // 读取失败、这一集缺编号：都不能确认服务器上没有，不提供试看。
       return Panel(message: availability.message, buttons: [.recheck])
-    case .notOnServer:
+    case .notOnServer, .unmatched:
       break
     }
     if let other = trial.otherEpisodeInSeason {
-      return Panel(message: "这一季的第 \(other) 集正在试看，结束后才能试看这一集", buttons: [])
+      return explained("这一季的第 \(other) 集正在试看，结束后才能试看这一集", [])
     }
     switch trial.progress {
     case .seasonTrialInProgress, .waitingForSubscription, .subscriptionPaused:
-      return Panel(message: Self.startFeedback(trial.progress), buttons: [])
+      return explained(Self.startFeedback(trial.progress), [])
     case .unavailable(let message):
-      return Panel(message: message, buttons: retry)
+      return explained(message, retry)
     default:
       break
     }
     switch trialBlock {
     case .notAired(let date):
-      return Panel(message: "媒体服务器上没有这一集。这一集 \(date) 播出，播出后才能试看", buttons: [])
+      let aired = "这一集 \(date) 播出，播出后才能试看"
+      return unidentified == nil
+        ? Panel(message: "媒体服务器上没有这一集。\(aired)", buttons: []) : explained(aired, [])
     case .unsupported:
-      return Panel(message: EpisodeAvailability.notOnServerMessage, buttons: [])
+      return Panel(message: availability.message, buttons: unidentified == nil ? [] : [.recheck])
     case nil:
-      return Panel(message: Self.trialIntroduction, buttons: [.startTrial(isRetry: false)])
+      return unidentified == nil
+        ? Panel(message: Self.trialIntroduction, buttons: [.startTrial(isRetry: false)])
+        : explained(Self.trialDescription, [.startTrial(isRetry: false)])
     }
   }
 
@@ -369,7 +395,8 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     }
   }
 
-  static let trialIntroduction = "媒体服务器上没有这一集。试看会下载这一集，下好的文件会留在媒体库里"
+  static let trialDescription = "试看会下载这一集，下好的文件会留在媒体库里"
+  static let trialIntroduction = "媒体服务器上没有这一集。" + trialDescription
 
   // MARK: 播出日期
 

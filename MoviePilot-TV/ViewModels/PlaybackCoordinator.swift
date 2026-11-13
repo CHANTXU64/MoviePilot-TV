@@ -316,6 +316,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     phase = .idle
     connections.invalidateAll()
     episodeIndexes.invalidateAll()
+    transferRecords.invalidateAll()
     knownSeasons = nil
   }
 
@@ -445,6 +446,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   /// 在每台可播放的服务器上读这部剧的集索引，单台失败只记在它自己的结果里。各台互不依赖，同时读；
   /// 结果按服务器顺序排（所属服务器在前，第一台有的为准）。取消时只返回已经读到的。
+  /// `forceRefresh` 时各台都重读，这部剧的整理记录只重读一次，各台共用（见 `RefreshRound`）。
   private func episodeLookups(
     _ context: EpisodePlaybackContext, servers: [MediaServerConf], preferredUserName: String?,
     excluding excluded: String? = nil, forceRefresh: Bool = false
@@ -452,13 +454,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let strict = Self.requiresStrictMatch(servers)
     let targets = Self.playableServers(in: servers, preferring: context.libraryItem?.server)
       .filter { $0.name != excluded }
+    let round = forceRefresh ? RefreshRound() : nil
     var lookups = [ServerEpisodeLookup?](repeating: nil, count: targets.count)
     await withTaskGroup(of: (Int, ServerEpisodeLookup?).self) { group in
       for position in targets.indices {
         let server = targets[position]
         group.addTask {
           let lookup = await self.episodeLookup(
-            context, on: server, strict: strict, preferredUserName: preferredUserName, forceRefresh: forceRefresh)
+            context, on: server, strict: strict, preferredUserName: preferredUserName, refresh: round)
           return (position, lookup)
         }
       }
@@ -550,11 +553,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 一台服务器上这部剧的集索引；取消时为 nil。失败的说明已写明服务器和那一步（见 `MediaServerError`）。
   private func episodeLookup(
     _ context: EpisodePlaybackContext, on server: MediaServerConf, strict: Bool, preferredUserName: String?,
-    forceRefresh: Bool
+    refresh: RefreshRound?
   ) async -> ServerEpisodeLookup? {
     do {
       let index = try await withConnection(to: server, preferredUserName: preferredUserName) {
-        try await self.episodeIndex(context, on: $0, strict: strict, forceRefresh: forceRefresh)
+        try await self.episodeIndex(context, on: $0, strict: strict, refresh: refresh)
       }
       return .loaded(index)
     } catch {
@@ -563,16 +566,30 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     }
   }
 
-  /// 一台服务器上这部剧的集索引，缓存 `episodeIndexTTL`，见 `loadEpisodeIndex`。
+  /// 一轮强制重读（详情页重试、起播时重读过时的服务器、播完重读当前服务器）。各台服务器的集索引都重读；
+  /// 这部剧的整理记录只有第一台用到的那次强制重读，之后各台跟上那次在途的读取或读它刚写进缓存的结果（`CoalescingCache`），
+  /// 不必每台都重发一遍、最后只用上一遍。
+  @MainActor
+  private final class RefreshRound {
+    private var transferRecordsRefreshed = false
+
+    /// 这一轮第一次要整理记录时为 true（强制重读），之后为 false。
+    func refreshesTransferRecords() -> Bool {
+      defer { transferRecordsRefreshed = true }
+      return !transferRecordsRefreshed
+    }
+  }
+
+  /// 一台服务器上这部剧的集索引，缓存 `episodeIndexTTL`，见 `loadEpisodeIndex`。`refresh` 不为 nil 时不沿用缓存。
   private func episodeIndex(
     _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
-    forceRefresh: Bool = false
+    refresh: RefreshRound? = nil
   ) async throws -> ServerEpisodeIndex {
     let key = [
       connection.serverName, connection.reportingServer.absoluteString, connection.userID, context.seriesLookupKey,
       strict ? "strict" : "",
     ].joined(separator: "|")
-    return try await episodeIndexes.value(for: key, forceRefresh: forceRefresh, validate: validateNotTornDown) {
+    return try await episodeIndexes.value(for: key, forceRefresh: refresh != nil, validate: validateNotTornDown) {
       [weak self] in
       let sources = EpisodeMatchingSources(
         seasonList: { list in
@@ -580,16 +597,35 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           return try await apiService.fetchTmdbEpisodes(
             tmdbID: context.tmdbID, season: list.season, episodeGroup: list.episodeGroup)
         },
+        seasons: { episodeGroup in
+          guard let apiService = self?.apiService else { throw CancellationError() }
+          let seasons: [TmdbSeason]
+          if let episodeGroup {
+            seasons = try await apiService.getGroupSeasons(groupId: episodeGroup)
+          } else {
+            // 按 TMDB 身份查：MoviePilot 直接给 TMDB 的季列表（含特别篇第 0 季），不按剧名识别。
+            let media = MediaInfo(
+              tmdb_id: context.tmdbID, source: "themoviedb", media_id: String(context.tmdbID),
+              title: context.seriesName, type: "电视剧")
+            seasons = try await apiService.getMediaSeasons(media: media, allSeasons: true)
+          }
+          return seasons.compactMap(\.season_number)
+        },
         transferRecords: {
           guard let self else { throw CancellationError() }
-          return try await self.seriesTransferRecords(context, forceRefresh: forceRefresh)
+          return try await self.seriesTransferRecords(
+            context, forceRefresh: refresh?.refreshesTransferRecords() == true)
         })
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
     }
   }
 
-  /// 这部剧在 MoviePilot 的成功整理记录：按剧名查（同时匹配路径，会混进别的剧），按 TMDB 编号筛出这部剧的。
-  /// 剧名为空时不查。集索引强制重读时一起重读，刚整理的文件才对得上。
+  /// 这部剧在 MoviePilot 的成功整理记录，按 TMDB 编号筛出这部剧的。剧名为空时不查。集索引强制重读时一起重读，
+  /// 刚整理的文件才对得上。
+  ///
+  /// `title` 不带通配符时，MoviePilot 分词后对标题、源路径和目标路径做包含匹配，剧名短（如「24」「You」）时混进大量别的剧，
+  /// 读到的几页里可能一条这部剧的都没有。带 `*` 或 `?` 时按通配符对整串匹配，所以先用「剧名*」查标题以剧名开头的记录
+  /// （路径是绝对路径，不会命中）；筛完一条这部剧的都没有时（记录里存的标题可能和现在的剧名不同），再退回包含匹配。
   private func seriesTransferRecords(
     _ context: EpisodePlaybackContext, forceRefresh: Bool
   ) async throws -> [EpisodeTransferRecord] {
@@ -598,18 +634,37 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     return try await transferRecords.value(
       for: "\(tmdbID)|\(title)", forceRefresh: forceRefresh, validate: validateNotTornDown
     ) { [weak self] in
-      var records: [EpisodeTransferRecord] = []
-      for page in 1...Self.transferRecordPageLimit {
+      let fetch: (String, Int) async throws -> (records: [EpisodeTransferRecord], total: Int?) = { query, page in
         guard let apiService = self?.apiService else { throw CancellationError() }
-        let batch = try await apiService.fetchEpisodeMatchTransferRecords(
-          title: title, page: page, count: Self.transferRecordPageSize)
-        records += batch.records.filter { $0.belongs(toSeries: tmdbID) }
-        // 按整页数量判断结尾：筛掉别的剧后变少不算读完。
-        if batch.records.count < Self.transferRecordPageSize { break }
-        if let total = batch.total, page * Self.transferRecordPageSize >= total { break }
+        return try await apiService.fetchEpisodeMatchTransferRecords(
+          title: query, page: page, count: Self.transferRecordPageSize)
       }
-      return records
+      let prefixed = try await Self.readTransferRecords(query: title + "*", tmdbID: tmdbID, fetch: fetch)
+      guard prefixed.isEmpty else { return prefixed }
+      return try await Self.readTransferRecords(query: Self.containingQuery(for: title), tmdbID: tmdbID, fetch: fetch)
     }
+  }
+
+  /// 按一种查法读最多 `transferRecordPageLimit` 页，留下这部剧的记录。
+  private static func readTransferRecords(
+    query: String, tmdbID: Int,
+    fetch: (String, Int) async throws -> (records: [EpisodeTransferRecord], total: Int?)
+  ) async throws -> [EpisodeTransferRecord] {
+    var records: [EpisodeTransferRecord] = []
+    for page in 1...transferRecordPageLimit {
+      let batch = try await fetch(query, page)
+      records += batch.records.filter { $0.belongs(toSeries: tmdbID) }
+      // 按整页数量判断结尾：筛掉别的剧后变少不算读完。`total` 是 MoviePilot 按同一种查法数的总条数。
+      if batch.records.count < transferRecordPageSize { break }
+      if let total = batch.total, page * transferRecordPageSize >= total { break }
+    }
+    return records
+  }
+
+  /// 退回的包含匹配。剧名里没有 `*`、`?` 时原样传，MoviePilot 分词后做包含匹配；有的话 MoviePilot 会按通配符对整串匹配，
+  /// 前后补上 `*` 才是包含。
+  private static func containingQuery(for title: String) -> String {
+    title.contains("*") || title.contains("?") ? "*\(title)*" : title
   }
 
   /// 播放中的当前服务器上这部剧的集索引，`strict` 按当前的服务器配置。
@@ -619,7 +674,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     guard let apiService else { throw CancellationError() }
     let servers = try await apiService.fetchCachedMediaServers()
     return try await episodeIndex(
-      context, on: connection, strict: Self.requiresStrictMatch(servers), forceRefresh: forceRefresh)
+      context, on: connection, strict: Self.requiresStrictMatch(servers),
+      refresh: forceRefresh ? RefreshRound() : nil)
   }
 
   /// 一台服务器上对得上这部剧的整剧条目：按外部编号找到的（同一部剧可能在几个媒体库里各有一个）都留着，
@@ -693,6 +749,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     var missingIdentity: PlaybackError?
     var outdated: [MediaServerConf] = []
     var uncertain: [MediaServerConf] = []
+    /// 重读过时的服务器是一轮：各台都重读，整理记录只重读一次。
+    let refreshRound = RefreshRound()
     enum Pass { case cached, refreshed, uncertain }
     for pass in [Pass.cached, .refreshed, .uncertain] {
       let servers: [MediaServerConf] =
@@ -708,7 +766,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           ) {
             connection in
             let index = try await self.episodeIndex(
-              queued.context, on: connection, strict: strict, forceRefresh: pass == .refreshed)
+              queued.context, on: connection, strict: strict, refresh: pass == .refreshed ? refreshRound : nil)
             let files =
               pass == .uncertain
               ? index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).map(\.item)
@@ -1424,9 +1482,9 @@ final class PlaybackSession: Identifiable {
   private(set) var mpvPlayer: MPVPlayer?
   /// 当前条目已经记进日志的 mpv 警告和错误条数（见 `record`）。
   private var loggedMPVMessages = 0
-  /// mpv 打开当前文件时跳过了 zlib 压缩的轨道：MPVUI 的 libmpv 没编 zlib，解不开。只是字幕轨压缩时字幕不显示；
-  /// 画面和声音都压缩时一帧都解不出来，播放失败时据此说明原因。
-  private var skippedCompressedTrack = false
+  /// mpv 打开当前文件时跳过的 zlib 压缩轨道（MPVUI 的 libmpv 没编 zlib，解不开），按 mpv 报的轨道号记。
+  /// 只是字幕轨压缩时字幕不显示；画面和声音都压缩时一帧都解不出来，播放失败时据此说明原因。
+  private var skippedCompressedTracks: Set<String> = []
   /// mpv 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
   var onFailure: ((String) -> Void)?
   /// 按集播放时，播放界面的队列从这里取上一集、下一集和同季列表。
@@ -1474,7 +1532,9 @@ final class PlaybackSession: Identifiable {
   /// mpv 自己的警告和错误（MPVUI 默认只转发这两级）写进日志：播放失败时看得出卡在哪一步，比如读不到数据、解不了码。
   /// 解码出错时可能每帧都报，每个条目只记前 `mpvLogLimit` 条。流地址和密钥照常隐去。测试也直接调用它模拟 mpv。
   func record(_ message: MPVLogMessage) {
-    if message.prefix == "mkv", message.message.contains("compressed with zlib") { skippedCompressedTrack = true }
+    if message.prefix == "mkv", message.message.contains("compressed with zlib") {
+      skippedCompressedTracks.insert(Self.compressedTrackNumber(in: message.message) ?? message.message)
+    }
     guard loggedMPVMessages < Self.mpvLogLimit else { return }
     loggedMPVMessages += 1
     let text = message.message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1489,6 +1549,12 @@ final class PlaybackSession: Identifiable {
   }
 
   static let mpvLogLimit = 50
+
+  /// mpv 警告「Track 3 was compressed with zlib …」里的轨道号；认不出时为 nil。
+  private static func compressedTrackNumber(in text: String) -> String? {
+    guard let range = text.range(of: #"Track \d+ was compressed"#, options: .regularExpression) else { return nil }
+    return text[range].split(separator: " ").dropFirst().first.map(String.init)
+  }
 
   private var currentSeconds: Double {
     let seconds = mpvPlayer?.position.seconds ?? 0
@@ -1521,7 +1587,7 @@ final class PlaybackSession: Identifiable {
     endCurrentItem()
     mpvPlayer?.stop()
     loggedMPVMessages = 0
-    skippedCompressedTrack = false
+    skippedCompressedTracks = []
     prepared = next
     self.startPosition = startPosition
     lastReportedPause = false
@@ -1601,7 +1667,10 @@ final class PlaybackSession: Identifiable {
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
-      onFailure?(Self.failureMessage(for: error, skippedCompressedTrack: skippedCompressedTrack))
+      onFailure?(
+        Self.failureMessage(
+          for: error, skippedCompressedTracks: skippedCompressedTracks.count,
+          embeddedTrackCount: prepared.stream.source.embeddedTrackCount))
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
@@ -1609,12 +1678,20 @@ final class PlaybackSession: Identifiable {
     }
   }
 
-  /// 播放失败时给用户的说明。能确认原因的单独说：mpv 跳过了 zlib 压缩的轨道，结果一帧画面、一段声音都没播出来。
-  static func failureMessage(for error: MPVPlayerError, skippedCompressedTrack: Bool) -> String {
-    if skippedCompressedTrack, case .playbackFailed(let code, _) = error, code == nothingToPlay {
+  /// 播放失败时给用户的说明。mpv 跳过过 zlib 压缩的轨道、又一帧画面一段声音都没播出来时单独说，
+  /// 只说有依据的：mpv 的警告不说跳过的是哪类轨道，跳过的条数不少于文件里音视频和字幕轨的总数
+  /// （`embeddedTrackCount`，数不准时为 nil）时，才能确定画面和声音都在里面；否则只说有轨道压缩、可能因此播不了。
+  /// 只比音视频条数不够：字幕轨压缩、音视频因别的原因没播出来时条数也可能凑够。
+  static func failureMessage(
+    for error: MPVPlayerError, skippedCompressedTracks: Int, embeddedTrackCount: Int?
+  ) -> String {
+    guard skippedCompressedTracks > 0, case .playbackFailed(let code, _) = error, code == nothingToPlay else {
+      return "无法播放该影片，请检查与媒体服务器的网络连接"
+    }
+    if let embeddedTrackCount, skippedCompressedTracks >= embeddedTrackCount {
       return "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放"
     }
-    return "无法播放该影片，请检查与媒体服务器的网络连接"
+    return "这个文件有轨道用了 zlib 压缩，应用内播放器解不开，可能因此播不了，可以用媒体服务器自己的 App 播放"
   }
 
   /// libmpv 的 `MPV_ERROR_NOTHING_TO_PLAY`：没有任何音频或视频数据被播放出来。

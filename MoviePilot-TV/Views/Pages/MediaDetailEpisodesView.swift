@@ -655,6 +655,11 @@ private struct EpisodeBrowser: View {
     EpisodeTrialRequest(media: media, episode: episode, episodeGroup: groupID, libraryItem: playback?.libraryItem)
   }
 
+  /// 一集的试看键，与按它建的请求的 `key` 相同。
+  private func trialKey(for episode: MoviePilotEpisode) -> String? {
+    EpisodeTrialRequest.key(tmdbID: tmdbID, episode: episode, episodeGroup: groupID)
+  }
+
   /// 一集的入口状态；没有应用内播放时为 nil（按下只看简介，长按只有详情）。
   private func entry(for episode: MoviePilotEpisode) -> EpisodeEntry? {
     guard playback != nil else { return nil }
@@ -662,12 +667,10 @@ private struct EpisodeBrowser: View {
     if state?.isOffered == false { return nil }
     var snapshot = EpisodeTrialSnapshot()
     var block: EpisodeTrialBlock? = .unsupported
-    if let key = EpisodeTrialRequest.key(tmdbID: tmdbID, episode: episode, episodeGroup: groupID) {
+    if let key = trialKey(for: episode) {
       let seasonKey = EpisodeTrialRequest.seasonKey(
         tmdbID: tmdbID, season: episode.seasonNumber, episodeGroup: groupID)
-      snapshot = EpisodeTrialSnapshot(
-        key: key, seasonKey: seasonKey, progress: trial.progress, endings: trial.endings,
-        credentials: trial.credentials)
+      snapshot = trial.snapshot(key: key, seasonKey: seasonKey)
       snapshot.isStarting = startingTrials.contains(key)
       if media.identity != nil,
         EpisodeTrialAvailability.isAvailable(
@@ -777,7 +780,7 @@ private struct EpisodeBrowser: View {
     let request = trialRequest(for: episode)
     // 只在可能有试看要跟的时候刷新进度：已经能播、或不能试看时不请求后端。
     let pollsTrial = request != nil && !entry.offersPlayback
-      && (entry.availability == .notOnServer || entry.trial.subscriptionID != nil || entry.trial.progress != nil)
+      && (entry.availability?.allowsTrial == true || entry.trial.isTracked || entry.trial.progress != nil)
     EpisodeActionSheet(
       episode: episode,
       seriesTitle: media.cleanedTitle ?? media.title,
@@ -838,7 +841,7 @@ private struct EpisodeBrowser: View {
   }
 
   /// 查这一季每集能不能播：一季一次，在各台能播放的服务器上读这部剧的集（协调器缓存一分钟）。
-  /// 重试时强制重读，期间沿用上次的结果。
+  /// 重试时强制重读，期间沿用上次的结果。查之前就已试看入库的集，这次查到确认没有了，交给试看服务不再当作能播。
   private func loadAvailability(_ request: AvailabilityRequest?) async {
     guard let request, canPublish(request.session),
       case .loaded(let episodes) = group.episodeStates[request.season],
@@ -849,12 +852,18 @@ private struct EpisodeBrowser: View {
     var pending = previous ?? SeasonAvailability(source: request.source)
     pending.isRefreshing = previous?.results != nil
     group.availability[request.season] = pending
+    let readyBeforeCheck = trial.readyEpisodes(among: episodes.compactMap(trialKey(for:)))
     let results = await apiService.sessionScope.playbackCoordinator.episodeAvailability(
       for: episodes, context: context, forceRefresh: forceRefresh)
     guard canPublish(request.session) else { return }
     var state = SeasonAvailability(source: request.source, retry: request.retry)
     if let results {
       state.results = Dictionary(zip(episodes.map(\.id), results), uniquingKeysWith: { first, _ in first })
+      let rechecked = zip(episodes, results).compactMap { episode, availability in
+        trialKey(for: episode).map { ($0, availability) }
+      }
+      trial.libraryRechecked(
+        Dictionary(rechecked, uniquingKeysWith: { first, _ in first }), readyBeforeCheck: readyBeforeCheck)
     } else {
       state.results = [:]
       state.isOffered = false
