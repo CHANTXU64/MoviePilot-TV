@@ -208,10 +208,23 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
   /// 没找到这一集，但 `server` 上有文件认不出是哪一集（季号集号缺失或认不出，也对不上整理记录），这一集可能就是其中之一，
   /// 刷新元数据后可能就认得出。队列照常往后找；详情页照样可以试看，但要先在面板里说明。
   case unmatched(server: String)
+  /// 没找到这一集，但 `server` 上有带外部编号的文件没能在 TMDB 核对是哪一集，这一集可能就是其中之一。
+  /// 和 `unmatched` 一样可以试看（先在面板里说明），原因和后续操作不同：不是刷新元数据能解决的。
+  case unverified(server: String, reason: UnverifiedReason)
+  /// 这部剧第一次去 TMDB 核对，`server` 上还有 `files` 个带编号的文件没查完：先不下结论，不能试看，核对完自动更新。
+  case checking(server: String, files: Int)
   /// 无法确认是哪一集，不提供单集播放。
   case unidentifiable(UnidentifiableReason)
   /// 有服务器读取失败或没读全，无法确认。说明里写明是哪台服务器、哪一步。
   case failed(String)
+
+  /// 带编号的文件为什么没核对成。
+  enum UnverifiedReason: Equatable, Sendable {
+    /// 连不上 TMDB、被限流、到时间没查完，或 TMDB 的对应关系有歧义。稍后会再查。
+    case lookupIncomplete
+    /// 没能读取媒体服务器的媒体库配置，不知道单集资料从哪来，没法核对。
+    case librarySettingsUnreadable
+  }
 
   enum UnidentifiableReason: Equatable, Sendable {
     /// MoviePilot 没有给出这一集的 TMDB 单集 ID。
@@ -238,6 +251,35 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     "媒体服务器“\(server)”上有文件认不出是哪一集，这一集可能已经在里面"
   }
 
+  /// 没找到 `noun`、服务器上又有带编号的文件没核对成时的提示。
+  static func unverifiedMessage(server: String, reason: UnverifiedReason, noun: String = "这一集") -> String {
+    switch reason {
+    case .lookupIncomplete:
+      "没有找到\(noun)，但媒体服务器“\(server)”上有文件没能在 TMDB 核对是哪一集（连不上 TMDB、被限流，"
+        + "或 TMDB 的对应关系有歧义），\(noun)可能就在其中。稍后会再核对"
+    case .librarySettingsUnreadable:
+      "没有找到\(noun)，但没能读取媒体服务器“\(server)”的媒体库配置，带外部编号的文件没法核对是哪一集，"
+        + "\(noun)可能就在其中"
+    }
+  }
+
+  /// 单集面板里提供试看前的一句说明。
+  static func unverifiedFilesNote(server: String, reason: UnverifiedReason) -> String {
+    switch reason {
+    case .lookupIncomplete: "媒体服务器“\(server)”上有文件没能在 TMDB 核对是哪一集，这一集可能已经在里面"
+    case .librarySettingsUnreadable: "没能读取媒体服务器“\(server)”的媒体库配置，有文件没法核对是哪一集，这一集可能已经在里面"
+    }
+  }
+
+  static func checkingMessage(server: String, files: Int) -> String {
+    "媒体服务器“\(server)”上有 \(files) 个文件正在向 TMDB 核对是哪一集，这一集可能就在其中，核对完会自动更新"
+  }
+
+  /// 播放器里找上一集、下一集时：不会自动更新，请用户稍后再试。
+  static func checkingQueueMessage(server: String) -> String {
+    "媒体服务器“\(server)”上还有文件正在向 TMDB 核对是哪一集，稍后再试"
+  }
+
   /// 确定能播。
   var isPlayable: Bool {
     if case .playable = self { return true }
@@ -247,7 +289,7 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
   /// 可以为这一集发起试看：服务器上确认没有，或没找到、只是有认不出是哪一集的文件（要先在面板里说明）。
   var allowsTrial: Bool {
     switch self {
-    case .notOnServer, .unmatched: true
+    case .notOnServer, .unmatched, .unverified: true
     default: false
     }
   }
@@ -259,32 +301,36 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     case .uncertain(let server, let match): return match.message(server: server)
     case .notOnServer: return Self.notOnServerMessage
     case .unmatched(let server): return Self.unmatchedMessage(server: server)
+    case .unverified(let server, let reason): return Self.unverifiedMessage(server: server, reason: reason)
+    case .checking(let server, let files): return Self.checkingMessage(server: server, files: files)
     case .unidentifiable(let reason): return reason.message
     case .failed(let message): return message
     }
   }
 
   /// 按服务器顺序看：第一台确定有这一集的服务器为准，排在前面的服务器上只按季号集号对上也让给它（以编号为准）。
-  /// 没有确定的，第一台按季号集号对上的为准；都没有时，读取失败（没读全）在前，其次这一集缺编号、服务器上有认不出是哪一集的文件，
-  /// 都不是才算确认没有。
+  /// 没有确定的，第一台按季号集号对上的为准；都没有时，读取失败（没读全）在前，其次正在核对、这一集缺编号、
+  /// 服务器上有认不出或没核对成的文件，都不是才算确认没有。
   static func resolve(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> EpisodeAvailability {
     guard episode.tmdbEpisodeID != nil else { return .unidentifiable(.missingEpisodeID) }
     var uncertain: EpisodeAvailability?
     var failure: EpisodeAvailability?
     var unidentifiable: EpisodeAvailability?
     var unmatched: EpisodeAvailability?
+    var checking: EpisodeAvailability?
     for lookup in lookups {
       let result = lookup.availability(of: episode)
       switch result {
       case .playable: return result
       case .uncertain: if uncertain == nil { uncertain = result }
       case .failed: if failure == nil { failure = result }
+      case .checking: if checking == nil { checking = result }
       case .unidentifiable: if unidentifiable == nil { unidentifiable = result }
-      case .unmatched: if unmatched == nil { unmatched = result }
+      case .unmatched, .unverified: if unmatched == nil { unmatched = result }
       case .notOnServer: break
       }
     }
-    return uncertain ?? failure ?? unidentifiable ?? unmatched ?? .notOnServer
+    return uncertain ?? failure ?? checking ?? unidentifiable ?? unmatched ?? .notOnServer
   }
 }
 
@@ -296,8 +342,8 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
   case elsewhere(server: String)
   /// 确认哪台服务器上都没有，可以跳过
   case absent
-  /// 没找到，`server` 上有认不出是哪一集的文件。继续找，找不到能播的集时再说明。
-  case unmatched(server: String)
+  /// 没找到，`server` 上有认不出（`unverified` 为 nil）或没核对成的文件。继续找，找不到能播的集时再说明。
+  case unmatched(server: String, unverified: EpisodeAvailability.UnverifiedReason? = nil)
   /// 无法确认（读取失败、没读全、缺少编号等），不能当作没有而跳过。说明里写明是哪台服务器。
   case unknown(String)
 
@@ -310,7 +356,8 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
       return .playable(item)
     }
     switch lookup.availability(of: episode) {
-    case .playable, .uncertain, .notOnServer, .unmatched: return nil
+    case .playable, .uncertain, .notOnServer, .unmatched, .unverified: return nil
+    case .checking(let server, _): return .unknown(EpisodeAvailability.checkingQueueMessage(server: server))
     case .unidentifiable(let reason): return .unknown(reason.message)
     case .failed(let message): return .unknown(message)
     }
@@ -325,6 +372,8 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
     case .playable(let server), .uncertain(let server, _): return .elsewhere(server: server)
     case .notOnServer: return .absent
     case .unmatched(let server): return .unmatched(server: server)
+    case .unverified(let server, let reason): return .unmatched(server: server, unverified: reason)
+    case .checking(let server, _): return .unknown(EpisodeAvailability.checkingQueueMessage(server: server))
     case .unidentifiable(let reason): return .unknown(reason.message)
     case .failed(let message): return .unknown(message)
     }
@@ -430,7 +479,7 @@ nonisolated enum EpisodeNavigator {
     var index = currentIndex + direction.step
     var scannedSeasons = 0
     var skippedMissing = false
-    var unmatchedServer: String?
+    var unmatchedServer: (server: String, unverified: EpisodeAvailability.UnverifiedReason?)?
     while true {
       while list.indices.contains(index) {
         let episode = list[index]
@@ -442,9 +491,9 @@ nonisolated enum EpisodeNavigator {
             EpisodeQueueEntry(episode: episode, item: item, seasonEpisodes: list), skippedMissing: skippedMissing)
         case .absent:
           skippedMissing = true
-        case .unmatched(let server):
+        case .unmatched(let server, let unverified):
           skippedMissing = true
-          if unmatchedServer == nil { unmatchedServer = server }
+          if unmatchedServer == nil { unmatchedServer = (server, unverified) }
         case .elsewhere(let server):
           return .stop("\(direction.noun)在另一台媒体服务器“\(server)”上，请回到详情页选择")
         case .unknown(let message):
@@ -456,7 +505,11 @@ nonisolated enum EpisodeNavigator {
       scannedSeasons += 1
       guard order.indices.contains(seasonPosition), scannedSeasons <= maximumSeasonsToScan else {
         if direction == .next, let unmatchedServer {
-          return .stop(EpisodeAvailability.unmatchedMessage(server: unmatchedServer, noun: direction.noun))
+          let message =
+            unmatchedServer.unverified.map {
+              EpisodeAvailability.unverifiedMessage(server: unmatchedServer.server, reason: $0, noun: direction.noun)
+            } ?? EpisodeAvailability.unmatchedMessage(server: unmatchedServer.server, noun: direction.noun)
+          return .stop(message)
         }
         return skippedMissing ? .missing : .end
       }

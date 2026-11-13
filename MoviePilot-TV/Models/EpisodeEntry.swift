@@ -149,10 +149,13 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     trialBlock == nil && availability?.allowsTrial == true && !trial.isInProgress && !isSeasonOccupied
   }
 
-  /// 有认不出是哪一集的文件、这一集可能已经在里面时，那台服务器的名字。
-  private var unidentifiedFilesServer: String? {
-    guard case .unmatched(let server) = availability else { return nil }
-    return server
+  /// 有认不出或没核对成的文件、这一集可能已经在里面时，面板里先说的那句话。
+  private var possiblyPresentNote: String? {
+    switch availability {
+    case .unmatched(let server): EpisodeAvailability.unidentifiedFilesNote(server: server)
+    case .unverified(let server, let reason): EpisodeAvailability.unverifiedFilesNote(server: server, reason: reason)
+    default: nil
+    }
   }
 
   /// 可以取消的试看订阅；没在试看、已在取消或不能取消时为 nil。
@@ -190,7 +193,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     if trial.isInProgress, let indicator = Self.trialIndicator(trial) { return .trialInProgress(indicator) }
     if let stoppedEnding { return .trialStopped(stoppedEnding) }
     switch availability {
-    case .unmatched, .unidentifiable: return .attention
+    case .unmatched, .unverified, .unidentifiable: return .attention
     default: return nil
     }
   }
@@ -268,7 +271,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       actions.append(.play)
     } else if trial.isInProgress, let id = cancellableSubscriptionID {
       actions.append(.cancelTrial(subscriptionID: id))
-    } else if canStartTrial, unidentifiedFilesServer == nil {
+    } else if canStartTrial, possiblyPresentNote == nil {
       actions.append(.startTrial)
     }
     actions.append(.details)
@@ -314,11 +317,10 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       let buttons: [PanelButton] = cancellableSubscriptionID.map { [.cancelTrial(subscriptionID: $0)] } ?? []
       return Panel(message: Self.inProgressMessage(trial), buttons: buttons)
     }
-    // 有认不出是哪一集的文件：先说这一集可能已经在里面，再给能做的操作，保留「重新检查」。
-    let unidentified = unidentifiedFilesServer
+    // 有认不出或没核对成的文件：先说这一集可能已经在里面，再给能做的操作，保留「重新检查」。
+    let unidentified = possiblyPresentNote
     func explained(_ message: String?, _ buttons: [PanelButton]) -> Panel {
-      guard let unidentified else { return Panel(message: message, buttons: buttons) }
-      let note = EpisodeAvailability.unidentifiedFilesNote(server: unidentified)
+      guard let note = unidentified else { return Panel(message: message, buttons: buttons) }
       return Panel(message: message.map { "\(note)。\($0)" } ?? note, buttons: buttons + [.recheck])
     }
     let retry: [PanelButton] = canStartTrial ? [.startTrial(isRetry: true)] : []
@@ -338,7 +340,10 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case .failed, .unidentifiable:
       // 读取失败、这一集缺编号：都不能确认服务器上没有，不提供试看。
       return Panel(message: availability.message, buttons: [.recheck])
-    case .notOnServer, .unmatched:
+    case .checking:
+      // 正在核对：核对完自动更新，不用重试。
+      return Panel(message: availability.message, buttons: [])
+    case .notOnServer, .unmatched, .unverified:
       break
     }
     if let other = trial.otherEpisodeInSeason {

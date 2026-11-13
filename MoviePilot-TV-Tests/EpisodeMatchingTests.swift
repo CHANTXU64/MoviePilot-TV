@@ -191,7 +191,10 @@ final class EpisodeMatchingTests: XCTestCase {
           id: $0.id, kind: .episode, name: $0.name, seasonNumber: $0.seasonNumber, episodeNumber: $0.episodeNumber,
           externalIDs: ["tvdb": "9\($0.id)"])
       }
-      let evidence = EpisodeEvidence(independentFiles: independent ? Set(files.map(\.id)) : [])
+      // TVDB 编号在 TMDB 明确查空，才用标题核实。
+      let evidence = EpisodeEvidence(
+        independentFiles: independent ? Set(files.map(\.id)) : [],
+        lookups: Dictionary(uniqueKeysWithValues: files.map { ($0.id, EpisodeLookupOutcome.notFound) }))
       return ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: files, lists: [key: season], evidence: evidence)
         .confirmedEpisodes(tmdbEpisodeID: 101).map(\.id)
     }

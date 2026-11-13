@@ -75,18 +75,18 @@ final class EpisodeEvidenceTests: XCTestCase {
   func testExternalIDLookupConfirmsEvenWhenNumberingDiffers() {
     let shifted = file("e1", episode: 1, ids: ["tvdb": "9001"], name: "Rainy Day")
     let found = ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "9001")
-    let confirmed = index([shifted], evidence: EpisodeEvidence(independentFiles: ["e1"], lookedUp: ["e1": found]))
+    let confirmed = index([shifted], evidence: EpisodeEvidence(independentFiles: ["e1"], lookups: ["e1": .found(found)]))
     XCTAssertEqual(confirmed.confirmedEpisodes(tmdbEpisodeID: 103).map(\.id), ["e1"])
     XCTAssertTrue(confirmed.uncertainEpisodes(tmdbEpisodeID: 101).isEmpty, "反查到的以 TMDB 的对应为准，不再按季号集号算第 1 集")
     XCTAssertEqual(confirmed.confirmedBy["e1"], .externalID(source: "tvdb", value: "9001"))
     XCTAssertEqual(confirmed.summary.byLookup, 1)
 
-    let fromTmdb = index([shifted], evidence: EpisodeEvidence(lookedUp: ["e1": found]))
+    let fromTmdb = index([shifted], evidence: EpisodeEvidence(lookups: ["e1": .found(found)]))
     XCTAssertTrue(fromTmdb.confirmedEpisodes(tmdbEpisodeID: 103).isEmpty, "外部编号可能是 TMDB 按季号集号给的")
     XCTAssertEqual(fromTmdb.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["e1"])
   }
 
-  func testTitleInAnotherLanguageConfirmsOnlyTheSameTmdbEpisode() {
+  func testTitleConfirmsOnlyAfterTheIDWasExplicitlyNotFound() throws {
     let english: [TmdbEpisode] = ["Rainy Day", "Sunny Day", "Snowy Day", "Cloudy Day"].enumerated().map {
       TmdbEpisode(id: 101 + $0.offset, episodeNumber: 1 + $0.offset, name: $0.element)
     }
@@ -94,20 +94,36 @@ final class EpisodeEvidenceTests: XCTestCase {
       file("e1", episode: 1, ids: ["tvdb": "1"], name: "Rainy  Day"),
       file("e2", episode: 2, ids: ["tvdb": "2"], name: "Something Else"),
     ]
-    let evidence = EpisodeEvidence(independentFiles: ["e1", "e2"], translatedSeasons: [1: [english]])
-    let built = index(files, evidence: evidence)
-    XCTAssertEqual(built.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["e1"])
-    XCTAssertEqual(built.confirmedBy["e1"], .title)
-    XCTAssertEqual(built.uncertainEpisodes(tmdbEpisodeID: 102).map(\.item.id), ["e2"])
+    func built(_ outcome: EpisodeLookupOutcome?, files: [ServerMediaItem], lists: [TmdbEpisode]? = nil)
+      -> ServerEpisodeIndex
+    {
+      let lookups = outcome.map { outcome in ["e1": outcome, "e2": outcome] } ?? [:]
+      return index(
+        files,
+        evidence: EpisodeEvidence(
+          independentFiles: ["e1", "e2"], lookups: lookups, translatedSeasons: [1: [lists ?? english]]))
+    }
+    let notFound = built(.notFound, files: files)
+    XCTAssertEqual(notFound.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["e1"])
+    XCTAssertEqual(notFound.confirmedBy["e1"], .title)
+    XCTAssertEqual(notFound.uncertainEpisodes(tmdbEpisodeID: 102).map(\.item.id), ["e2"])
+
+    for outcome: EpisodeLookupOutcome? in [nil, .unresolved, .ambiguous] {
+      let held = built(outcome, files: files)
+      XCTAssertTrue(held.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty, "编号没明确查空（\(String(describing: outcome))）不用标题确认")
+      let match = try XCTUnwrap(held.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
+      XCTAssertTrue(match.titleMatches)
+      XCTAssertTrue(match.message(server: "emby").contains("只能作参考"), "集名相同放在面板里供参考")
+    }
 
     let mismatchedIDs = english.map { TmdbEpisode(id: ($0.id ?? 0) + 50, episodeNumber: $0.episodeNumber, name: $0.name) }
-    let other = index(files, evidence: EpisodeEvidence(independentFiles: ["e1"], translatedSeasons: [1: [mismatchedIDs]]))
-    XCTAssertTrue(other.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty, "另一份列表的同号集不是同一集时不算")
+    XCTAssertTrue(
+      built(.notFound, files: files, lists: mismatchedIDs).confirmedEpisodes(tmdbEpisodeID: 101).isEmpty,
+      "另一份列表的同号集不是同一集时不算")
 
     let unscraped = [file("e1", episode: 1, name: "Rainy Day")]
-    let noTVDB = index(unscraped, evidence: EpisodeEvidence(independentFiles: ["e1"], translatedSeasons: [1: [english]]))
     XCTAssertTrue(
-      noTVDB.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty,
+      built(.notFound, files: unscraped).confirmedEpisodes(tmdbEpisodeID: 101).isEmpty,
       "没有 TVDB 单集编号：标题可能是旧刮削或第三方 NFO 按 TMDB 写的")
   }
 
@@ -128,31 +144,32 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(ServerEpisodeIndex.recheck(rescraped, recorded: recorded, tmdbEpisodeID: 103, basis: basis), .changed)
   }
 
-  func testRequestCoversEveryUnconfirmedIndependentSingleEpisodeFile() throws {
+  func testRequestCoversEveryUnconfirmedSingleEpisodeFileWithAnID() throws {
     let files = [
       file("both", episode: 1, ids: ["tvdb": "1", "imdb": "tt1"], name: "Rainy Day"),
-      file("titleNoTVDB", episode: 2, name: "Sunny Day"),
-      file("placeholder", episode: 3, ids: ["imdb": "tt3"], name: "第 3 集"),
+      file("noIDs", episode: 2, name: "Sunny Day"),
+      file("imdbOnly", episode: 3, ids: ["imdb": "tt3"], name: "Snowy Day"),
       file("farOff", episode: 38, ids: ["tvdb": "38"]),
       file("noNumbers", season: nil, episode: nil, ids: ["tvdb": "77"]),
       file("double", episode: 3, end: 4, ids: ["tvdb": "4"]),
       file("fromTmdb", episode: 4, ids: ["tvdb": "5"]),
       file("hasTmdb", episode: 4, ids: ["tmdb": "104", "tvdb": "6"]),
     ]
-    let evidence = EpisodeEvidence(
-      independentFiles: ["both", "titleNoTVDB", "placeholder", "farOff", "noNumbers", "double", "hasTmdb"])
+    let local = index(files, evidence: EpisodeEvidence())
+    let independent: Set<String> = ["both", "noIDs", "imdbOnly", "farOff", "noNumbers", "double", "hasTmdb"]
     let request = try XCTUnwrap(
-      ExternalEvidenceRequest(tmdbID: 100, episodes: files, index: index(files, evidence: evidence), evidence: evidence))
+      ExternalEvidenceRequest(tmdbID: 100, episodes: files, local: local, independentFiles: independent))
     XCTAssertEqual(
-      request.candidates.map(\.itemID), ["both", "placeholder", "farOff", "noNumbers"],
-      "季号集号对不上任何一集、认不出的也反查；没有编号又不能比标题的不查；多集文件、已带 TMDB 编号的不查")
+      request.candidates.map(\.itemID), ["both", "imdbOnly", "farOff", "noNumbers"],
+      "季号集号对不上任何一集、认不出的也反查；没有编号的、多集文件、已带 TMDB 编号的不查")
     XCTAssertEqual(request.candidates[0].externalIDs.map(\.source), ["tvdb", "imdb"])
     XCTAssertEqual(request.candidates[0].titleSeason, 1)
-    XCTAssertNil(request.candidates[1].titleSeason, "占位标题不比")
+    XCTAssertNil(request.candidates[1].titleSeason, "没有 TVDB 单集编号不比标题")
     XCTAssertNil(request.candidates[2].titleSeason, "季号集号没对上一集，不按标题比")
-    XCTAssertNil(
-      ExternalEvidenceRequest(
-        tmdbID: 100, episodes: files, index: index(files, evidence: EpisodeEvidence()), evidence: EpisodeEvidence()))
+    let unknownLibrary = try XCTUnwrap(
+      ExternalEvidenceRequest(tmdbID: 100, episodes: files, local: local, independentFiles: nil))
+    XCTAssertTrue(unknownLibrary.candidates.map(\.itemID).contains("fromTmdb"), "还没读到媒体库配置时都算可能要查")
+    XCTAssertNil(ExternalEvidenceRequest(tmdbID: 100, episodes: files, local: local, independentFiles: []))
   }
 
   func testLookupConfirmsFilesThatNumbersCannotPlace() {
@@ -160,9 +177,9 @@ final class EpisodeEvidenceTests: XCTestCase {
     let noNumbers = file("noNumbers", season: nil, episode: nil, ids: ["tvdb": "77"])
     let evidence = EpisodeEvidence(
       independentFiles: ["farOff", "noNumbers"],
-      lookedUp: [
-        "farOff": ExternalEpisodeMatch(tmdbEpisodeID: 102, source: "tvdb", value: "38"),
-        "noNumbers": ExternalEpisodeMatch(tmdbEpisodeID: 104, source: "tvdb", value: "77"),
+      lookups: [
+        "farOff": .found(ExternalEpisodeMatch(tmdbEpisodeID: 102, source: "tvdb", value: "38")),
+        "noNumbers": .found(ExternalEpisodeMatch(tmdbEpisodeID: 104, source: "tvdb", value: "77")),
       ])
     let built = index([farOff, noNumbers], evidence: evidence)
     XCTAssertEqual(built.confirmedEpisodes(tmdbEpisodeID: 102).map(\.id), ["farOff"])
@@ -170,38 +187,70 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(built.unidentifiedFileCount, 0, "反查到了就不再算认不出")
   }
 
+  func testMissingEpisodeIsNotDeclaredMissingWhileAFileIsStillBeingLookedUp() {
+    // 服务器把一集编成第 1 季第 38 集（TMDB 第 1 季只有 4 集），它可能就是第 4 集：没查清之前，第 4 集不能直接说没有。
+    let farOff = file("farOff", episode: 38, ids: ["tvdb": "38"])
+    func availability(_ outcome: EpisodeLookupOutcome?, inProgress: Bool) -> EpisodeAvailability {
+      let lookups = outcome.map { ["farOff": $0] } ?? [:]
+      return index(
+        [farOff],
+        evidence: EpisodeEvidence(independentFiles: ["farOff"], lookups: lookups, lookupInProgress: inProgress)
+      ).availability(of: 104)
+    }
+    let checking = availability(.unresolved, inProgress: true)
+    XCTAssertEqual(checking, .checking(server: "emby", files: 1), "第一次核对时不下结论")
+    XCTAssertFalse(checking.allowsTrial, "核对完之前不能试看")
+    let afterRound = availability(.unresolved, inProgress: false)
+    XCTAssertEqual(
+      afterRound, .unverified(server: "emby", reason: .lookupIncomplete), "没查成：可以试看，但先说明媒体库里可能已有")
+    XCTAssertTrue(afterRound.allowsTrial)
+    XCTAssertEqual(availability(.ambiguous, inProgress: false), .unverified(server: "emby", reason: .lookupIncomplete))
+    let unreadable = index(
+      [farOff],
+      evidence: EpisodeEvidence(lookups: ["farOff": .unresolved], librarySettingsUnknown: true)
+    ).availability(of: 104)
+    XCTAssertEqual(unreadable, .unverified(server: "emby", reason: .librarySettingsUnreadable))
+    XCTAssertEqual(availability(.notFound, inProgress: false), .notOnServer, "编号明确查空：按它自己的编号不会是别的集")
+    XCTAssertEqual(availability(nil, inProgress: true), .notOnServer, "没有要查的文件时补查不影响")
+  }
+
   // MARK: 读取
 
   @MainActor
-  func testLoaderLooksUpOnlyWhenTheLibraryDoesNotScrapeEpisodesFromTmdb() async throws {
-    var requests: [ExternalEvidenceRequest] = []
-    func load(_ fetchers: [String]?, profilesFail: Bool = false) async throws -> ServerEpisodeIndex {
+  func testLoaderUsesOnlyEvidenceThatIsAlreadyAtHand() async throws {
+    var asked: [[String]] = []
+    func load(_ evidence: EpisodeEvidence) async throws -> ServerEpisodeIndex {
       try await EpisodeMatchLoader.index(
         serverName: "emby", hasSeries: true,
         episodes: [file("e1", episode: 1, ids: ["tvdb": "9001"], path: "/tv/a.mkv")], incompleteReason: nil,
         sources: EpisodeMatchingSources(
           seasonList: { _ in self.chineseSeason }, seasons: { _ in [1] }, transferRecords: { [] },
-          libraryProfiles: {
-            if profilesFail { throw URLError(.timedOut) }
-            return [MediaLibraryProfile(paths: ["/tv"], episodeFetchers: fetchers)]
-          },
-          externalEvidence: { request in
-            requests.append(request)
-            return ExternalEvidenceResult(
-              lookedUp: ["e1": ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "9001")])
-          }, tmdbID: 100),
+          evidence: { episodes, local in
+            asked.append(episodes.map(\.id))
+            XCTAssertTrue(local.confirmed.isEmpty, "给提供方的是只用本地数据建的表")
+            return evidence
+          }),
         describe: { _ in "超时" })
     }
-    let independent = try await load(["TheTVDB"])
-    XCTAssertEqual(independent.availability(of: 103), .playable(server: "emby"))
-    XCTAssertEqual(requests.map(\.tmdbID), [100])
-    requests = []
-    let fromTmdb = try await load(["TheTVDB", "TheMovieDb"])
-    guard case .uncertain = fromTmdb.availability(of: 101) else { return XCTFail("来源含 TMDB 时只按季号集号") }
-    XCTAssertTrue(requests.isEmpty, "不去补查")
-    let unknown = try await load(nil, profilesFail: true)
-    guard case .uncertain = unknown.availability(of: 101) else { return XCTFail("读不到配置按来源不明处理") }
-    XCTAssertTrue(requests.isEmpty)
+    let found = ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "9001")
+    let confirmed = try await load(EpisodeEvidence(independentFiles: ["e1"], lookups: ["e1": .found(found)]))
+    XCTAssertEqual(confirmed.availability(of: 103), .playable(server: "emby"))
+    XCTAssertEqual(asked, [["e1"]])
+    let none = try await load(EpisodeEvidence())
+    guard case .uncertain = none.availability(of: 101) else { return XCTFail("没有依据时只按季号集号") }
+
+    asked = []
+    _ = try await EpisodeMatchLoader.index(
+      serverName: "emby", hasSeries: true, episodes: [file("n", episode: 1, ids: ["tmdb": "101"])],
+      incompleteReason: nil,
+      sources: EpisodeMatchingSources(
+        seasonList: { _ in [] }, seasons: { _ in [] }, transferRecords: { [] },
+        evidence: { episodes, _ in
+          asked.append(episodes.map(\.id))
+          return EpisodeEvidence()
+        }),
+      describe: { _ in "超时" })
+    XCTAssertTrue(asked.isEmpty, "文件都带 TMDB 单集编号时不要依据")
   }
 
   // MARK: 去 TMDB 补查
@@ -211,45 +260,52 @@ final class EpisodeEvidenceTests: XCTestCase {
     var seasons: [String: [TmdbEpisode]] = [:]
     var language: String? = "ja"
     var coolingDownOnFind = false
+    var failing: Set<String> = []
     private(set) var calls: [String] = []
-
-    func set(found: [String: [TmdbFoundEpisode]], seasons: [String: [TmdbEpisode]], coolingDown: Bool = false) {
-      self.found = found
-      self.seasons = seasons
-      coolingDownOnFind = coolingDown
-    }
-
     var cached: Set<String> = []
     private(set) var inFlight = 0
     private(set) var maxInFlight = 0
     var delay: Duration = .zero
 
+    func set(
+      found: [String: [TmdbFoundEpisode]], seasons: [String: [TmdbEpisode]], coolingDown: Bool = false,
+      failing: Set<String> = []
+    ) {
+      self.found = found
+      self.seasons = seasons
+      coolingDownOnFind = coolingDown
+      self.failing = failing
+    }
+
     func setDelay(_ delay: Duration) { self.delay = delay }
     func setCached(_ keys: Set<String>) { cached = keys }
 
-    func findEpisodes(source: String, value: String, access: TmdbAccess, cachedOnly: Bool) async throws
-      -> [TmdbFoundEpisode]
+    func findEpisodes(source: String, value: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?)
+      async throws -> [TmdbFoundEpisode]
     {
-      if cachedOnly, !cached.contains("\(source) \(value)") { throw TmdbDirectError.notCached }
-      calls.append("find \(source) \(value)")
+      let cachedOnly = access == nil
+      let key = "\(source) \(value)"
+      if cachedOnly, !cached.contains(key) { throw TmdbDirectError.notCached }
+      calls.append("find \(key)")
       inFlight += 1
       maxInFlight = max(maxInFlight, inFlight)
       defer { inFlight -= 1 }
       if delay > .zero { try await Task.sleep(for: delay) }
       if coolingDownOnFind { throw TmdbDirectError.coolingDown }
-      return found["\(source) \(value)"] ?? []
+      if failing.contains(key) { throw TmdbDirectError.status(500) }
+      return found[key] ?? []
     }
 
-    func seasonEpisodes(tvID: Int, season: Int, language: String, access: TmdbAccess, cachedOnly: Bool) async throws
-      -> [TmdbEpisode]
-    {
-      if cachedOnly { throw TmdbDirectError.notCached }
+    func seasonEpisodes(
+      tvID: Int, season: Int, language: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?
+    ) async throws -> [TmdbEpisode] {
+      if access == nil { throw TmdbDirectError.notCached }
       calls.append("season \(season) \(language)")
       return seasons["\(season) \(language)"] ?? []
     }
 
-    func originalLanguage(tvID: Int, access: TmdbAccess, cachedOnly: Bool) async throws -> String? {
-      if cachedOnly { throw TmdbDirectError.notCached }
+    func originalLanguage(tvID: Int, access: TmdbAccess?, deadline: ContinuousClock.Instant?) async throws -> String? {
+      if access == nil { throw TmdbDirectError.notCached }
       calls.append("language")
       return language
     }
@@ -257,28 +313,38 @@ final class EpisodeEvidenceTests: XCTestCase {
 
   private let access = TmdbAccess(apiKey: "k", domain: "api.themoviedb.org", locale: "zh")
 
-  func testCollectKeepsOnlyAnUnambiguousEpisodeOfThisSeries() async {
+  func testCollectSortsEveryFileIntoFoundNotFoundAmbiguousOrUnresolved() async {
     let directory = FakeDirectory()
     await directory.set(
       found: [
         "tvdb 1": [TmdbFoundEpisode(id: 103, showID: 100), TmdbFoundEpisode(id: 900, showID: 999)],
         "tvdb 2": [TmdbFoundEpisode(id: 104, showID: 100), TmdbFoundEpisode(id: 105, showID: 100)],
         "tvdb 3": [], "imdb tt3": [TmdbFoundEpisode(id: 106, showID: 100)],
+        "tvdb 4": [], "imdb tt4": [],
+        "tvdb 6": [TmdbFoundEpisode(id: 700, showID: 999)],
       ],
-      seasons: ["1 ja": [TmdbEpisode(id: 101, episodeNumber: 1, name: "雨の日")], "1 en-US": []])
+      seasons: ["1 ja": [TmdbEpisode(id: 101, episodeNumber: 1, name: "雨の日")], "1 en-US": []],
+      failing: ["imdb tt5"])
     let request = ExternalEvidenceRequest(
       tmdbID: 100,
       candidates: [
         .init(itemID: "a", externalIDs: [("tvdb", "1")], titleSeason: nil),
         .init(itemID: "b", externalIDs: [("tvdb", "2"), ("imdb", "tt2")], titleSeason: 1),
         .init(itemID: "c", externalIDs: [("tvdb", "3"), ("imdb", "tt3")], titleSeason: nil),
+        .init(itemID: "d", externalIDs: [("tvdb", "4"), ("imdb", "tt4")], titleSeason: 1),
+        .init(itemID: "e", externalIDs: [("tvdb", "5"), ("imdb", "tt5")], titleSeason: 2),
+        .init(itemID: "f", externalIDs: [("tvdb", "6")], titleSeason: 1),
       ])
-    let result = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory, cachedOnly: false)
-    XCTAssertTrue(result.isComplete)
-    XCTAssertEqual(result.lookedUp["a"], ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "1"))
-    XCTAssertNil(result.lookedUp["b"], "这部剧有两集：关联有歧义")
-    XCTAssertEqual(result.lookedUp["c"]?.tmdbEpisodeID, 106, "TVDB 查不到再用 IMDb")
-    XCTAssertEqual(result.translatedSeasons[1]?.count, 1, "没反查到的文件再取原语言和英文季列表，空列表不要")
+    let result = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory)
+    XCTAssertEqual(result.lookups["a"], .found(ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "1")))
+    XCTAssertEqual(result.lookups["b"], .ambiguous, "这部剧有两集：关联有歧义")
+    XCTAssertEqual(result.lookups["c"], .found(ExternalEpisodeMatch(tmdbEpisodeID: 106, source: "imdb", value: "tt3")))
+    XCTAssertEqual(result.lookups["d"], .notFound, "每个编号都明确查空")
+    XCTAssertEqual(result.lookups["e"], .unresolved, "有一个编号没查成就不算查空")
+    XCTAssertEqual(result.lookups["f"], .ambiguous, "编号指向别的剧是身份冲突，不算查空")
+    XCTAssertFalse(result.isComplete)
+    XCTAssertEqual(result.translatedSeasons[1]?.count, 1, "只给编号明确查空的文件取季列表，空列表不要")
+    XCTAssertNil(result.translatedSeasons[2], "没查成的不比标题")
     let calls = await directory.calls
     XCTAssertFalse(calls.contains("find imdb tt2"), "有歧义时不再用别的编号")
     XCTAssertTrue(calls.contains("season 1 ja") && calls.contains("season 1 en-US"))
@@ -289,8 +355,8 @@ final class EpisodeEvidenceTests: XCTestCase {
     await directory.set(found: [:], seasons: [:], coolingDown: true)
     let request = ExternalEvidenceRequest(
       tmdbID: 100, candidates: [.init(itemID: "a", externalIDs: [("tvdb", "1")], titleSeason: 1)])
-    let result = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory, cachedOnly: false)
-    XCTAssertTrue(result.isEmpty)
+    let result = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory)
+    XCTAssertEqual(result.lookups["a"], .unresolved)
     XCTAssertFalse(result.isComplete)
     let calls = await directory.calls
     XCTAssertFalse(calls.contains("language"), "限流后这一轮不再发请求")
@@ -306,9 +372,10 @@ final class EpisodeEvidenceTests: XCTestCase {
         .init(itemID: "a", externalIDs: [("tvdb", "1")], titleSeason: nil),
         .init(itemID: "b", externalIDs: [("tvdb", "2")], titleSeason: 1),
       ])
-    let result = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory, cachedOnly: true)
-    XCTAssertEqual(result.lookedUp["a"]?.tmdbEpisodeID, 103, "缓存里有的马上用")
-    XCTAssertFalse(result.isComplete, "没查过的交给后台")
+    let result = await TmdbEpisodeEvidence.collect(request, access: nil, directory: directory)
+    XCTAssertEqual(result.lookups["a"], .found(ExternalEpisodeMatch(tmdbEpisodeID: 103, source: "tvdb", value: "1")))
+    XCTAssertEqual(result.lookups["b"], .unresolved, "没查过的交给后台")
+    XCTAssertFalse(result.isComplete)
     let calls = await directory.calls
     XCTAssertEqual(calls, ["find tvdb 1"], "只读缓存时不发请求")
   }
@@ -320,12 +387,13 @@ final class EpisodeEvidenceTests: XCTestCase {
       tmdbID: 100,
       candidates: (0..<12).map { .init(itemID: "f\($0)", externalIDs: [("tvdb", "\($0)")], titleSeason: nil) })
     let result = await TmdbEpisodeEvidence.collect(
-      request, access: access, directory: directory, cachedOnly: false, budget: .milliseconds(200))
+      request, access: access, directory: directory, deadline: .now.advanced(by: .milliseconds(200)))
     let calls = await directory.calls
     let peak = await directory.maxInFlight
     XCTAssertEqual(peak, 2, "同时最多两个，不往限速队列里堆")
     XCTAssertLessThan(calls.count, 12, "到时间不再发新的")
     XCTAssertFalse(result.isComplete)
+    XCTAssertEqual(result.lookups.count, 12, "没轮到的也记为没查成")
   }
 
   func testOtherLanguagesSkipTheOneMoviePilotAlreadyUses() {
@@ -392,15 +460,15 @@ final class EpisodeEvidenceTests: XCTestCase {
   func testLookupsAreCachedOnDiskAndTheKeyStaysOutOfIt() async throws {
     let transport = FakeTransport()
     transport.respond(
-      "/find/81189", body: #"{"tv_episode_results":[{"id":103,"show_id":100},{"id":0,"show_id":100}]}"#)
+      "/find/81189", body: #"{"tv_episode_results":[{"id":103,"show_id":100,"name":"x"}]}"#)
     let fileURL = temporaryFile()
     defer { try? FileManager.default.removeItem(at: fileURL) }
     let proxy = TmdbProxy(kind: .http(tls: false), host: "192.168.1.2", port: 7890, username: nil, password: nil)
     let secret = TmdbAccess(apiKey: "secret-key", domain: "api.example.org/prefix", proxy: proxy)
     let store = TmdbLookupStore(fileURL: fileURL, transport: transport)
-    let found = try await store.findEpisodes(source: "tvdb", value: "81189", access: secret, cachedOnly: false)
+    let found = try await store.findEpisodes(source: "tvdb", value: "81189", access: secret, deadline: nil)
     XCTAssertEqual(found, [TmdbFoundEpisode(id: 103, showID: 100)])
-    _ = try await store.findEpisodes(source: "tvdb", value: "81189", access: secret, cachedOnly: false)
+    _ = try await store.findEpisodes(source: "tvdb", value: "81189", access: secret, deadline: nil)
     XCTAssertEqual(transport.count, 1, "第二次用缓存")
     let url = try XCTUnwrap(transport.requested.first)
     XCTAssertEqual(url.host, "api.example.org")
@@ -415,10 +483,10 @@ final class EpisodeEvidenceTests: XCTestCase {
     let saved = try String(contentsOf: fileURL, encoding: .utf8)
     XCTAssertFalse(saved.contains("secret-key"), "缓存里不存 key")
     let reloaded = TmdbLookupStore(fileURL: fileURL, transport: transport)
-    _ = try await reloaded.findEpisodes(source: "tvdb", value: "81189", access: secret, cachedOnly: true)
+    _ = try await reloaded.findEpisodes(source: "tvdb", value: "81189", access: nil, deadline: nil)
     XCTAssertEqual(transport.count, 1, "重启后从磁盘读")
     do {
-      _ = try await reloaded.findEpisodes(source: "tvdb", value: "1", access: secret, cachedOnly: true)
+      _ = try await reloaded.findEpisodes(source: "tvdb", value: "1", access: nil, deadline: nil)
       XCTFail("只读缓存时没有就报没查过")
     } catch {
       XCTAssertEqual(error as? TmdbDirectError, .notCached)
@@ -432,30 +500,30 @@ final class EpisodeEvidenceTests: XCTestCase {
     transport.respond("/find/2", status: 429, body: "{}", headers: ["Retry-After": "30"])
     nonisolated(unsafe) var clock = Date(timeIntervalSince1970: 1_000_000)
     let store = TmdbLookupStore(fileURL: nil, transport: transport, now: { clock })
-    let empty = try await store.findEpisodes(source: "tvdb", value: "1", access: access, cachedOnly: false)
+    let empty = try await store.findEpisodes(source: "tvdb", value: "1", access: access, deadline: nil)
     XCTAssertEqual(empty, [])
     clock += TmdbLookupStore.missLife - 60
-    _ = try await store.findEpisodes(source: "tvdb", value: "1", access: access, cachedOnly: false)
+    _ = try await store.findEpisodes(source: "tvdb", value: "1", access: access, deadline: nil)
     XCTAssertEqual(transport.count, 1)
     clock += 120
-    _ = try await store.findEpisodes(source: "tvdb", value: "1", access: access, cachedOnly: false)
+    _ = try await store.findEpisodes(source: "tvdb", value: "1", access: access, deadline: nil)
     XCTAssertEqual(transport.count, 2, "查不到的过一周再查")
 
     do {
-      _ = try await store.findEpisodes(source: "tvdb", value: "2", access: access, cachedOnly: false)
+      _ = try await store.findEpisodes(source: "tvdb", value: "2", access: access, deadline: nil)
       XCTFail("429 要报限流")
     } catch {
       XCTAssertEqual(error as? TmdbDirectError, .coolingDown)
     }
     do {
-      _ = try await store.findEpisodes(source: "tvdb", value: "3", access: access, cachedOnly: false)
+      _ = try await store.findEpisodes(source: "tvdb", value: "3", access: access, deadline: nil)
       XCTFail("暂停期间不发请求")
     } catch {
       XCTAssertEqual(error as? TmdbDirectError, .coolingDown)
     }
     XCTAssertEqual(transport.count, 3)
     clock += 31
-    _ = try? await store.findEpisodes(source: "tvdb", value: "3", access: access, cachedOnly: false)
+    _ = try? await store.findEpisodes(source: "tvdb", value: "3", access: access, deadline: nil)
     XCTAssertEqual(transport.count, 4, "过了 Retry-After 再查")
   }
 
@@ -466,10 +534,90 @@ final class EpisodeEvidenceTests: XCTestCase {
       body: #"{"episodes":[{"id":101,"episode_number":1,"name":"Rainy Day","air_date":"2026-11-10"}]}"#)
     nonisolated(unsafe) var clock = ISO8601DateFormatter().date(from: "2026-11-13T00:00:00Z")!
     let store = TmdbLookupStore(fileURL: nil, transport: transport, now: { clock })
-    let list = try await store.seasonEpisodes(tvID: 100, season: 1, language: "en-US", access: access, cachedOnly: false)
+    let list = try await store.seasonEpisodes(tvID: 100, season: 1, language: "en-US", access: access, deadline: nil)
     XCTAssertEqual(list.first?.name, "Rainy Day")
     clock += TmdbLookupStore.freshLife + 60
-    _ = try await store.seasonEpisodes(tvID: 100, season: 1, language: "en-US", access: access, cachedOnly: false)
+    _ = try await store.seasonEpisodes(tvID: 100, season: 1, language: "en-US", access: access, deadline: nil)
     XCTAssertEqual(transport.count, 2, "刚播出的季几天后重新取")
+  }
+
+  func testOnlyAWellFormedEmptyResultCountsAsNotFound() async throws {
+    let transport = FakeTransport()
+    transport.respond("/find/1", body: #"{"movie_results":[]}"#)
+    transport.respond("/find/2", status: 404, body: "<html>not found</html>")
+    transport.respond("/find/3", body: #"{"tv_episode_results":[{"id":5,"show_id":100},{"id":0,"show_id":100}]}"#)
+    transport.respond("/find/4", body: #"{"tv_episode_results":[]}"#)
+    let store = TmdbLookupStore(fileURL: nil, transport: transport)
+    for value in ["1", "2", "3"] {
+      do {
+        _ = try await store.findEpisodes(source: "tvdb", value: value, access: access, deadline: nil)
+        XCTFail("\(value) 不能当作查不到")
+      } catch {
+        XCTAssertNotNil(error as? TmdbDirectError)
+      }
+      do {
+        _ = try await store.findEpisodes(source: "tvdb", value: value, access: nil, deadline: nil)
+        XCTFail("\(value) 不缓存")
+      } catch {
+        XCTAssertEqual(error as? TmdbDirectError, .notCached)
+      }
+    }
+    let empty = try await store.findEpisodes(source: "tvdb", value: "4", access: access, deadline: nil)
+    XCTAssertEqual(empty, [])
+    let cachedEmpty = try await store.findEpisodes(source: "tvdb", value: "4", access: nil, deadline: nil)
+    XCTAssertEqual(cachedEmpty, [], "合法的空数组才缓存成查不到")
+  }
+
+  func testRequestsStillQueuedAtTheDeadlineAreNotSent() async throws {
+    let transport = FakeTransport()
+    for value in 1...4 { transport.respond("/find/\(value)", body: #"{"tv_episode_results":[]}"#) }
+    let store = TmdbLookupStore(fileURL: nil, transport: transport, maxConcurrent: 1)
+    let past = ContinuousClock.now.advanced(by: .milliseconds(-1))
+    do {
+      _ = try await store.findEpisodes(source: "tvdb", value: "1", access: access, deadline: past)
+      XCTFail("过了截止时间不发")
+    } catch {
+      XCTAssertTrue(error is CancellationError)
+    }
+    XCTAssertEqual(transport.count, 0)
+  }
+
+  // MARK: 说明要对得上原因
+
+  func testCheckingAndUnverifiedStatesExplainTheirOwnCause() throws {
+    let checking = EpisodeEntry(availability: .checking(server: "emby", files: 2), trialBlock: nil)
+    XCTAssertEqual(checking.panel.buttons, [], "核对完会自动更新，不给试看也不用重试")
+    XCTAssertTrue(try XCTUnwrap(checking.panel.message).contains("正在向 TMDB 核对"))
+    XCTAssertNil(checking.cardStatus, "核对中不是读取失败，不在卡片上警告")
+    XCTAssertFalse(try XCTUnwrap(checking.notPlayableMessage).contains("读取失败"))
+
+    let failedLookup = EpisodeEntry(availability: .unverified(server: "emby", reason: .lookupIncomplete), trialBlock: nil)
+    let message = try XCTUnwrap(failedLookup.panel.message)
+    XCTAssertTrue(message.contains("没能在 TMDB 核对"), "说清是 TMDB 没查成")
+    XCTAssertFalse(message.contains("刷新元数据"), "不是刷新元数据能解决的")
+    XCTAssertEqual(failedLookup.panel.buttons, [.startTrial(isRetry: false), .recheck], "可以选择仍要试看")
+    XCTAssertEqual(failedLookup.cardStatus, .attention)
+    XCTAssertEqual(failedLookup.menuActions, [.details], "要先看面板里的说明")
+
+    let unreadable = EpisodeAvailability.unverified(server: "emby", reason: .librarySettingsUnreadable)
+    XCTAssertTrue(try XCTUnwrap(unreadable.message).contains("媒体库配置"))
+  }
+
+  func testQueueDoesNotSkipAnEpisodeThatIsStillBeingChecked() {
+    let episode = MoviePilotEpisode(TmdbEpisode(id: 104, episodeNumber: 4), season: 1, index: 3)
+    let farOff = file("farOff", episode: 38, ids: ["tvdb": "38"])
+    func lookup(_ inProgress: Bool) -> ServerEpisodeLookup {
+      .loaded(
+        index(
+          [farOff],
+          evidence: EpisodeEvidence(
+            independentFiles: ["farOff"], lookups: ["farOff": .unresolved], lookupInProgress: inProgress)))
+    }
+    XCTAssertEqual(
+      EpisodeQueueStatus.resolve(episode, current: lookup(true), others: []),
+      .unknown(EpisodeAvailability.checkingQueueMessage(server: "emby")), "核对中不能当作没有而跳过")
+    XCTAssertEqual(
+      EpisodeQueueStatus.resolve(episode, current: lookup(false), others: []),
+      .unmatched(server: "emby", unverified: .lookupIncomplete))
   }
 }

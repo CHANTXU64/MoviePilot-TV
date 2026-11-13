@@ -270,11 +270,18 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   var hasConsistentSeasonOffset = false
   /// 服务器上这个文件没有资料：没有任何外部编号，也没有首播日期。多半没刮削到，标题就是文件名。
   var serverHasNoMetadata = false
+  /// 服务器上的集名和这一集同季唯一的具体标题相同，但不够确认（集名来源不清楚，或编号还没在 TMDB 查空），在面板里供参考。
+  var titleMatches = false
 
   /// 给用户的说明，`server` 是这个文件所在的服务器。
   func message(server: String, allowsSeasonDateOffset: Bool = false) -> String {
     let numbering = episodeGroup == nil ? "季号集号" : "整理时所用剧集组的季号集号"
     let base = "“\(server)”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按\(numbering)找到的第 \(season) 季第 \(episode) 集"
+    let titleNote = titleMatches ? "。服务器上的集名和这一集相同，但集名也可能是按季号集号填的，只能作参考" : ""
+    return main(base, allowsSeasonDateOffset: allowsSeasonDateOffset) + titleNote
+  }
+
+  private func main(_ base: String, allowsSeasonDateOffset: Bool) -> String {
     if allowsSeasonDateOffset && hasConsistentSeasonOffset { return base + "，仍可能不是这一集" }
     switch airDate {
     case .matches:
@@ -339,6 +346,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 认不出是哪一集的文件数：没有 TMDB 单集编号，季号集号缺失或认不出，也没对上整理记录。这部剧没找到的集可能就是其中之一
   /// （见 `availability(of:)`）。有季号集号、只是集列表里没有那一集的文件不算在内：按它自己的编号不会是别的集。
   let unidentifiedFileCount: Int
+  /// 带着外部编号、还没能在 TMDB 确定是哪一集的文件数（没查、没查完或查出多集）。这部剧没找到的集可能就是其中之一：
+  /// 补查进行中时先不下结论，查完仍没确定的按有认不出的文件处理（见 `availability(of:)`）。
+  let unresolvedFileCount: Int
+  /// 这部剧在这台服务器上正第一次去 TMDB 核对。
+  let lookupInProgress: Bool
+  /// 没查清的文件为什么没查清。
+  let unverifiedReason: EpisodeAvailability.UnverifiedReason
   /// 没有读全时的失败说明（已写明服务器和操作）：这部剧在这台服务器上有几份（不同媒体库），有的读取失败；
   /// 或按外部编号查找、按 ID 补查、读 MoviePilot 集列表有一步失败。读到的照常用，找不到某一集时不能说这台上没有。
   let incompleteReason: String?
@@ -404,9 +418,8 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
           summary.byTransferRecord += 1
         }
       case .numbered(let key, let range):
-        let independent = evidence.independentFiles.contains(file.id)
         // 外部编号反查到的是 TMDB 自己的对应，两边季号集号不同也以它为准。
-        if independent, let found = evidence.lookedUp[file.id] {
+        if let found = evidence.lookedUp(file) {
           lateMatches.append((file, found.tmdbEpisodeID, .externalID(source: found.source, value: found.value)))
           summary.byLookup += 1
           continue
@@ -418,17 +431,18 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         }
         let first = season.episodes[range.lowerBound]
         let copy = SeasonCopy(file)
-        if evidence.titleCanVerify(file), range.count == 1, let first, let id = first.id,
+        // 集名和 MoviePilot 的列表，或 TMDB 其他语言的列表（只有默认顺序）里这一集同季唯一的具体标题相同。
+        var titleMatches = false
+        if range.count == 1, let first, let id = first.id,
           let title = EpisodeTitle.normalized(file.name), title != EpisodeTitle.normalized(file.seriesName),
           titlesBySeason[copy]?[title] == [file.episodeNumber]
         {
-          // MoviePilot 的列表，或 TMDB 其他语言的列表（只有默认顺序）里，这一集同季唯一的具体标题。
           let others = key.episodeGroup == nil ? translated[key.season] ?? [] : []
-          let titled = ([season] + others).contains { list in
+          titleMatches = ([season] + others).contains { list in
             guard let candidate = list.episodes[range.lowerBound], candidate.id == id else { return false }
             return list.uniqueTitle(of: candidate) == title
           }
-          if titled {
+          if titleMatches, evidence.titleCanVerify(file) {
             lateMatches.append((file, id, .title))
             summary.byTitle += 1
             continue
@@ -448,7 +462,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
           guard let id = season.episodes[number]?.id else { continue }
           let match = UncertainEpisodeMatch(
             season: key.season, episode: number, episodeGroup: key.episodeGroup, airDate: airDate,
-            hasConsistentSeasonOffset: hasOffset, serverHasNoMetadata: hasNoMetadata)
+            hasConsistentSeasonOffset: hasOffset, serverHasNoMetadata: hasNoMetadata, titleMatches: titleMatches)
           uncertain[id, default: []].append(UncertainFile(item: file, match: match))
           matched = true
         }
@@ -464,7 +478,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         }
       case .unidentified:
         // 认不出季号集号，但编号在 TMDB 反查到了这部剧的一集。
-        if evidence.independentFiles.contains(file.id), let found = evidence.lookedUp[file.id] {
+        if let found = evidence.lookedUp(file) {
           lateMatches.append((file, found.tmdbEpisodeID, .externalID(source: found.source, value: found.value)))
           summary.byLookup += 1
         } else {
@@ -477,6 +491,12 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     self.confirmed = confirmed
     self.uncertain = uncertain.filter { confirmed[$0.key] == nil }
     unidentifiedFileCount = summary.unidentified
+    let placed = Set(confirmed.values.flatMap { $0.map(\.id) })
+    unresolvedFileCount = plan.files.filter { file in
+      !placed.contains(file.id) && evidence.lookups[file.id]?.leavesFileUnplaced == true
+    }.count
+    lookupInProgress = evidence.lookupInProgress
+    unverifiedReason = evidence.librarySettingsUnknown ? .librarySettingsUnreadable : .lookupIncomplete
     self.summary = summary
   }
 
@@ -741,14 +761,20 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
 
   /// 这一集在这台服务器上的情况。确定的文件 → 能播；按季号集号对上 → 不确定；都没有时按原因分：
   /// - 没读全：有一步读取失败，不能说这台上没有（`failed`，说明是哪一步）。
-  /// - 有认不出是哪一集的文件：这一集可能就是其中之一（`unmatched`），可以刷新元数据。
-  /// - 其他：确认没有（`notOnServer`）。有季号集号、只是集列表里没有那一集的文件不影响别的集。
+  /// - 有带编号的文件第一次在向 TMDB 核对：这一集可能就是其中之一，先不下结论（`checking`，不能试看），核对完自动更新。
+  /// - 有带编号的文件没核对成：这一集可能就是其中之一（`unverified`），试看前在面板里说明原因。
+  /// - 有认不出是哪一集的文件：这一集可能就是其中之一（`unmatched`），试看前在面板里说明，可以刷新元数据。
+  /// - 其他：确认没有（`notOnServer`）。有季号集号、只是集列表里没有那一集、编号在 TMDB 也明确查空的文件不影响别的集。
   func availability(of tmdbEpisodeID: Int) -> EpisodeAvailability {
     if !confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty { return .playable(server: serverName) }
     if let file = uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).first {
       return .uncertain(server: serverName, match: file.match)
     }
     if let incompleteReason { return .failed(incompleteReason) }
+    if unresolvedFileCount > 0 {
+      if lookupInProgress { return .checking(server: serverName, files: unresolvedFileCount) }
+      return .unverified(server: serverName, reason: unverifiedReason)
+    }
     if unidentifiedFileCount > 0 { return .unmatched(server: serverName) }
     return .notOnServer
   }
@@ -765,35 +791,27 @@ struct EpisodeMatchingSources {
   let seasons: (_ episodeGroup: String?) async throws -> [Int]
   /// 这部剧成功的整理记录（已按 TMDB 编号筛过）
   let transferRecords: () async throws -> [EpisodeTransferRecord]
-  /// 这台服务器各媒体库的文件夹和单集元数据来源；没有时按来源不明处理（见 `EpisodeEvidence.independentFiles`）。
-  var libraryProfiles: (() async throws -> [MediaLibraryProfile])?
-  /// 去 TMDB 补查还没确定对应的文件：只读本机缓存，马上返回；缓存里没有的由提供方在后台去查，查到后自己通知刷新。
-  /// 不抛错。
-  var externalEvidence: ((ExternalEvidenceRequest) async -> ExternalEvidenceResult)?
-  /// 这部剧的 TMDB 编号，补查时用。
-  var tmdbID: Int?
+  /// 文件以外的依据（见 `EpisodeEvidence`）：`local` 是只用本地数据建的对应表。只给本机已有的，马上返回，不等任何外部请求；
+  /// 缺的由提供方在后台补，补完自己通知刷新。
+  var evidence: ((_ episodes: [ServerMediaItem], _ local: ServerEpisodeIndex) async -> EpisodeEvidence)?
 
   init(
     seasonList: @escaping @MainActor (EpisodeListKey) async throws -> [TmdbEpisode],
     seasons: @escaping (_ episodeGroup: String?) async throws -> [Int],
     transferRecords: @escaping () async throws -> [EpisodeTransferRecord],
-    libraryProfiles: (() async throws -> [MediaLibraryProfile])? = nil,
-    externalEvidence: ((ExternalEvidenceRequest) async -> ExternalEvidenceResult)? = nil, tmdbID: Int? = nil
+    evidence: ((_ episodes: [ServerMediaItem], _ local: ServerEpisodeIndex) async -> EpisodeEvidence)? = nil
   ) {
     self.seasonList = seasonList
     self.seasons = seasons
     self.transferRecords = transferRecords
-    self.libraryProfiles = libraryProfiles
-    self.externalEvidence = externalEvidence
-    self.tmdbID = tmdbID
+    self.evidence = evidence
   }
 }
 
 enum EpisodeMatchLoader {
   /// 一台服务器上这部剧的对应表。`episodes` 是从服务器读到的这部剧的全部集，`incompleteReason` 是读服务器时没读全的说明。
-  /// 有文件没带 TMDB 单集编号时才读整理记录和媒体库配置。未确认的文件按季集号查找，并用标题和日期核对；
-  /// 还没确定对应、单集资料又不是从 TMDB 取的文件，再用 TMDB 补查过的外部编号和其他语言的标题（只读本机缓存，
-  /// 不等网络），有结果就重新建表。
+  /// 有文件没带 TMDB 单集编号时才读整理记录。未确认的文件按季集号查找，用日期核对；再合上文件以外的依据（本机已有的
+  /// 媒体库配置和 TMDB 补查结果，不等网络）重新建表。
   /// 集列表读不到时那一季的文件无法对应，记为没读全。集列表是空的有两种可能：MoviePilot 读 TMDB 失败（过一会儿可能就好），
   /// 或那套编号里根本没有这一季（比如 TMDB 没有第 0 季而服务器上有特别篇，或服务器按 TVDB 分季）。这时再读那套编号的季列表：
   /// 季列表里确实没有这一季，这一季的文件按集列表里没有那一集处理，不影响别的集；季列表里有这一季或也读不到，才算没读全。
@@ -803,19 +821,12 @@ enum EpisodeMatchLoader {
     sources: EpisodeMatchingSources, describe: (Error) -> String
   ) async throws -> ServerEpisodeIndex {
     var records: [EpisodeTransferRecord] = []
-    var evidence = EpisodeEvidence()
-    if episodes.contains(where: { $0.hasFile && $0.tmdbEpisodeID == nil }) {
+    let hasUnnumberedFiles = episodes.contains { $0.hasFile && $0.tmdbEpisodeID == nil }
+    if hasUnnumberedFiles {
       do {
         records = try await sources.transferRecords()
       } catch let error where !(error is CancellationError) {
         Logger.warning("[Playback] 没能读取 MoviePilot 的整理记录，将尝试其他单集匹配依据: \(describe(error))")
-      }
-      if let libraryProfiles = sources.libraryProfiles {
-        do {
-          evidence.independentFiles = MediaLibraryProfile.independentFiles(episodes, in: try await libraryProfiles())
-        } catch let error where !(error is CancellationError) {
-          Logger.warning("[Playback] 没能读取“\(serverName)”的媒体库配置，不用单集标题和外部编号核实: \(describe(error))")
-        }
       }
     }
     var lists: [EpisodeListKey: [TmdbEpisode]] = [:]
@@ -862,15 +873,11 @@ enum EpisodeMatchLoader {
     try Task.checkCancellation()
     var index = await buildIndex(
       serverName: serverName, hasSeries: hasSeries, episodes: episodes,
-      incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records, evidence: evidence)
-    if let lookup = sources.externalEvidence, let tmdbID = sources.tmdbID,
-      let request = ExternalEvidenceRequest(tmdbID: tmdbID, episodes: episodes, index: index, evidence: evidence)
-    {
-      let found = await lookup(request)
+      incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records, evidence: EpisodeEvidence())
+    if hasUnnumberedFiles, let provide = sources.evidence {
+      let evidence = await provide(episodes, index)
       try Task.checkCancellation()
-      if !found.isEmpty {
-        evidence.lookedUp = found.lookedUp
-        evidence.translatedSeasons = found.translatedSeasons
+      if !evidence.isEmpty {
         index = await buildIndex(
           serverName: serverName, hasSeries: hasSeries, episodes: episodes,
           incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records, evidence: evidence)

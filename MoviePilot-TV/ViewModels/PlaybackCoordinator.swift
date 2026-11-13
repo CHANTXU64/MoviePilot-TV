@@ -189,19 +189,27 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private let episodeIndexes: CoalescingCache<String, ServerEpisodeIndex>
   /// 这部剧在 MoviePilot 的整理记录，各台服务器的集索引共用。
   private let transferRecords: CoalescingCache<String, [EpisodeTransferRecord]>
-  /// 各台服务器的媒体库配置（单集元数据来源），和连接沿用一样久。
-  private let libraryProfiles: CoalescingCache<String, [MediaLibraryProfile]>
+  /// 各台服务器的媒体库配置（单集元数据来源）和读到的时间。只在补查一轮里读，建对应表时只看这里；
+  /// 过了 `connectionTTL` 重新读，改了刮削配置最多过这么久就按新的判断。
+  private var libraryProfiles: [String: (profiles: [MediaLibraryProfile], readAt: Date)] = [:]
   /// 单集对应直接请求 TMDB 补查（带本机缓存和限速）。
   private let tmdbDirectory: any TmdbEpisodeDirectory
-  /// 后台补查：键是“服务器|TMDB 编号”，同一部剧在同一台服务器上同时只查一轮。
-  private var backgroundLookups: [String: Task<Void, Never>] = [:]
-  /// 各部剧上一轮后台补查的开始时间：没查全（请求失败、到时间）的过一阵才再查，不随每次打开详情页重发。
-  private var lastBackgroundLookup: [String: Date] = [:]
+  /// 进行中的补查：键是“服务器|TMDB 编号”，同一部剧在同一台服务器上同时只有一轮。
+  private var lookupRounds: [String: LookupRound] = [:]
+  /// 各部剧上一轮补查的开始时间：没查全的过一阵才再查，不随每次打开详情页重开一轮。
+  private var lastLookupRound: [String: (startedAt: Date, files: Set<String>)] = [:]
+  /// 一轮到点结束后，等已经发出的请求回来再通知一次（它们的结果会写进缓存，到点时还没回来）。
+  private var lateLookupNotices: [String: Task<Void, Never>] = [:]
+  /// 上次读到的 MoviePilot 集列表语言（`TMDB_LOCALE`），只读缓存时按它挑要比的其他语言。
+  private var tmdbLocale: String?
   private let now: () -> Date
-  /// 后台补查查到新结果时发出这部剧的 TMDB 编号，详情页据此重读播放状态（集索引已作废，补查结果在本机缓存里）。
+  /// 一轮补查结束时发出这部剧的 TMDB 编号（集索引已作废，结果在本机缓存里），详情页据此重读播放状态：
+  /// 查到的集变成能播，“正在核对”的集按查完的结果显示。
   let evidenceUpdates = PassthroughSubject<Int, Never>()
-  /// 没查全的剧过这么久才再在后台查一轮。
-  static let backgroundLookupRetryInterval: TimeInterval = 600
+  /// 一轮补查结束后，这么久之内不再开下一轮。
+  static let lookupRoundRetryInterval: TimeInterval = 600
+  /// 一轮补查最多多久（见 `TmdbEpisodeEvidence.roundBudget`），测试可以改短。
+  private let lookupRoundBudget: Duration
   /// 设置页「播放」里的应用内播放开关。
   private let isEnabledInSettings: () -> Bool
   private var isTornDown = false
@@ -210,12 +218,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     apiService: APIService, mediaServerSession: URLSession = MediaServerHTTP.sharedSession,
     isEnabledInSettings: @escaping () -> Bool = { PlaybackPreferences.isInAppPlaybackEnabled },
     tmdbDirectory: any TmdbEpisodeDirectory = TmdbLookupStore.shared,
+    lookupRoundBudget: Duration = TmdbEpisodeEvidence.roundBudget,
     now: @escaping () -> Date = Date.init
   ) {
     self.apiService = apiService
     self.mediaServerSession = mediaServerSession
     self.isEnabledInSettings = isEnabledInSettings
     self.tmdbDirectory = tmdbDirectory
+    self.lookupRoundBudget = lookupRoundBudget
     self.now = now
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
@@ -223,8 +233,6 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, now: now)
     transferRecords = CoalescingCache(
       ttl: Self.episodeIndexTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
-    libraryProfiles = CoalescingCache(
-      ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
   }
 
   var isResolving: Bool {
@@ -359,9 +367,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     connections.invalidateAll()
     episodeIndexes.invalidateAll()
     transferRecords.invalidateAll()
-    libraryProfiles.invalidateAll()
-    backgroundLookups.values.forEach { $0.cancel() }
-    backgroundLookups = [:]
+    libraryProfiles = [:]
+    lookupRounds.values.forEach { $0.cancel() }
+    lookupRounds = [:]
+    lateLookupNotices.values.forEach { $0.cancel() }
+    lateLookupNotices = [:]
     knownSeasons = nil
   }
 
@@ -663,64 +673,175 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           guard let self else { throw CancellationError() }
           return try await self.seriesTransferRecords(context, round: refresh)
         },
-        libraryProfiles: {
-          guard let self else { throw CancellationError() }
-          return try await self.libraryProfiles(on: connection)
-        },
-        externalEvidence: { [weak self] request in
-          await self?.externalEvidence(request, server: connection.serverName) ?? ExternalEvidenceResult()
-        },
-        tmdbID: context.tmdbID)
+        evidence: { [weak self] episodes, local in
+          await self?.episodeEvidence(episodes: episodes, local: local, tmdbID: context.tmdbID, on: connection)
+            ?? EpisodeEvidence()
+        })
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
     }
   }
 
-  /// 一台服务器的媒体库配置，和连接沿用一样久：改了刮削配置，最多过这么久就按新的判断。
-  private func libraryProfiles(on connection: any MediaServerConnection) async throws -> [MediaLibraryProfile] {
-    let key = [connection.serverName, connection.reportingServer.absoluteString, connection.userID]
-      .joined(separator: "|")
-    return try await libraryProfiles.value(for: key, validate: validateNotTornDown) {
-      try await connection.libraryProfiles()
+  // MARK: 单集对应的补查
+
+  private static func profileKey(_ connection: any MediaServerConnection) -> String {
+    [connection.serverName, connection.reportingServer.absoluteString, connection.userID].joined(separator: "|")
+  }
+
+  /// 读过的媒体库配置和它还新不新（过了 `connectionTTL` 要重读）；没读过时为 nil。过期的照常用到重读成功为止，
+  /// 不然每次重读期间，靠编号确认过的集会短暂变回不确定。
+  private func storedLibraryProfiles(for connection: any MediaServerConnection) -> (
+    profiles: [MediaLibraryProfile], isFresh: Bool
+  )? {
+    guard let entry = libraryProfiles[Self.profileKey(connection)] else { return nil }
+    return (entry.profiles, now().timeIntervalSince(entry.readAt) < Self.connectionTTL)
+  }
+
+  /// 建对应表时文件以外的依据：只用本机已有的（读过的媒体库配置、TMDB 补查缓存），不等任何外部请求，已确定的集和起播不受影响。
+  /// 缺媒体库配置或缓存没查全时在后台开一轮补查（见 `startLookupRound`）。这一轮进行中时，还没确定是哪一集的带编号文件
+  /// 记为 `unresolved`，没找到的集先显示正在核对、不能试看；一轮结束后按查到的结果显示（没查成的按可能已有处理）。
+  private func episodeEvidence(
+    episodes: [ServerMediaItem], local: ServerEpisodeIndex, tmdbID: Int, on connection: any MediaServerConnection
+  ) async -> EpisodeEvidence {
+    let roundKey = "\(connection.serverName)|\(tmdbID)"
+    var evidence = EpisodeEvidence()
+    var needsRound = false
+    var candidates: Set<String> = []
+    if let stored = storedLibraryProfiles(for: connection) {
+      evidence.independentFiles = MediaLibraryProfile.independentFiles(episodes, in: stored.profiles)
+      if let request = ExternalEvidenceRequest(
+        tmdbID: tmdbID, episodes: episodes, local: local, independentFiles: evidence.independentFiles)
+      {
+        let cached = await TmdbEpisodeEvidence.collect(
+          request, access: nil, locale: tmdbLocale, directory: tmdbDirectory)
+        evidence.lookups = cached.lookups
+        evidence.translatedSeasons = cached.translatedSeasons
+        needsRound = !cached.isComplete
+        candidates = Set(request.candidates.map(\.itemID))
+      }
+      needsRound = needsRound || !stored.isFresh
+    } else if let pending = ExternalEvidenceRequest(
+      tmdbID: tmdbID, episodes: episodes, local: local, independentFiles: nil)
+    {
+      // 还没读到媒体库配置（这一轮里先读；或读失败了）：带编号的文件都没法核对，没找到的集不能直接说没有。
+      needsRound = true
+      candidates = Set(pending.candidates.map(\.itemID))
+      for id in candidates { evidence.lookups[id] = .unresolved }
+      evidence.librarySettingsUnknown = true
+    }
+    if needsRound {
+      startLookupRound(roundKey, tmdbID: tmdbID, episodes: episodes, local: local, files: candidates, on: connection)
+    }
+    evidence.lookupInProgress = lookupRounds[roundKey]?.isFirst == true
+    return evidence
+  }
+
+  /// 进行中的一轮补查：查询任务和到点计时器。哪个先结束都由 `finishLookupRound` 收尾，按 `id` 只收一次。
+  /// `isFirst`：这部剧在这台服务器上第一次核对，没找到的集先显示正在核对、不能试看；之后的重查在后台进行，不挡试看。
+  private struct LookupRound {
+    let id: UUID
+    let isFirst: Bool
+    let work: Task<Void, Never>
+    let timer: Task<Void, Never>
+
+    func cancel() {
+      work.cancel()
+      timer.cancel()
     }
   }
 
-  /// 建对应表时的 TMDB 补查：只读本机缓存，马上返回，不让已确定的集和起播等网络。缓存里没查全的交给后台查，
-  /// 查到新结果后作废集索引、通知详情页重读。读不到 MoviePilot 的 TMDB 配置（不是管理员、没配 key、代理 TV 用不了）时不查。
-  private func externalEvidence(_ request: ExternalEvidenceRequest, server: String) async -> ExternalEvidenceResult {
-    guard let apiService else { return ExternalEvidenceResult() }
+  /// 后台补查一轮：读媒体库配置、读 MoviePilot 的 TMDB 配置、去 TMDB 查，从开始算最多 `lookupRoundBudget`，
+  /// 到点结束。结束时（查没查到、查成没查成都一样）作废集索引、通知详情页重读，“正在核对”不会挂着不走。
+  /// 同一部剧在同一台服务器上同时只有一轮；上一轮开始后 `lookupRoundRetryInterval` 内不再开，除非出现了上一轮没查过的文件
+  /// （比如刚入库的一集）。`files` 是这次要查的文件。
+  private func startLookupRound(
+    _ key: String, tmdbID: Int, episodes: [ServerMediaItem], local: ServerEpisodeIndex, files: Set<String>,
+    on connection: any MediaServerConnection
+  ) {
+    guard !isTornDown, lookupRounds[key] == nil else { return }
+    let previous = lastLookupRound[key]
+    if let previous, now().timeIntervalSince(previous.startedAt) < Self.lookupRoundRetryInterval,
+      files.isSubset(of: previous.files)
+    {
+      return
+    }
+    lastLookupRound[key] = (now(), files.union(previous?.files ?? []))
+    lateLookupNotices[key]?.cancel()
+    lateLookupNotices[key] = nil
+    let deadline = ContinuousClock.now.advanced(by: lookupRoundBudget)
+    let id = UUID()
+    let work = Task { [weak self] in
+      await self?.runLookupRound(tmdbID: tmdbID, episodes: episodes, local: local, on: connection, deadline: deadline)
+      self?.finishLookupRound(key, id: id, tmdbID: tmdbID)
+    }
+    // 到点直接收尾，不等查询退场：排队等名额、等在途请求都不响应取消，等它们会让“正在核对”拖过截止时间。
+    // 到点后还没发出的请求在 `TmdbLookupStore` 里按截止时间放弃。
+    let timer = Task { [weak self] in
+      try? await Task.sleep(until: deadline, clock: .continuous)
+      guard !Task.isCancelled else { return }
+      self?.finishLookupRound(key, id: id, tmdbID: tmdbID, byDeadline: true)
+    }
+    lookupRounds[key] = LookupRound(id: id, isFirst: previous == nil, work: work, timer: timer)
+  }
+
+  /// 一轮补查结束（查完或到点）：停掉查询和计时器，作废集索引，通知详情页重读。查没查到都通知，“正在核对”不会挂着不走。
+  /// 到点结束时，已经发出的请求还会把结果写进缓存（最多再等一个请求超时），那时再通知一次。
+  private func finishLookupRound(_ key: String, id: UUID, tmdbID: Int, byDeadline: Bool = false) {
+    guard !isTornDown, let round = lookupRounds[key], round.id == id else { return }
+    lookupRounds[key] = nil
+    round.cancel()
+    episodeIndexes.invalidateAll()
+    evidenceUpdates.send(tmdbID)
+    guard byDeadline else { return }
+    lateLookupNotices[key] = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(URLSessionTmdbTransport.resourceTimeout + 1))
+      guard !Task.isCancelled, let self, !self.isTornDown else { return }
+      self.lateLookupNotices[key] = nil
+      self.episodeIndexes.invalidateAll()
+      self.evidenceUpdates.send(tmdbID)
+    }
+  }
+
+  private func runLookupRound(
+    tmdbID: Int, episodes: [ServerMediaItem], local: ServerEpisodeIndex, on connection: any MediaServerConnection,
+    deadline: ContinuousClock.Instant
+  ) async {
+    let profiles: [MediaLibraryProfile]
+    let stored = storedLibraryProfiles(for: connection)
+    if let stored, stored.isFresh {
+      profiles = stored.profiles
+    } else {
+      do {
+        profiles = try await connection.libraryProfiles()
+        guard !isTornDown, !Task.isCancelled else { return }
+        libraryProfiles[Self.profileKey(connection)] = (profiles, now())
+      } catch {
+        if error is CancellationError || Task.isCancelled { return }
+        // 重读失败时沿用读过的；从没读到过就不核实。
+        guard let stored else {
+          Logger.warning(
+            "[Playback] 没能读取“\(connection.serverName)”的媒体库配置，不用单集外部编号和标题核实: \(Self.message(for: error))")
+          return
+        }
+        profiles = stored.profiles
+      }
+    }
+    let independent = MediaLibraryProfile.independentFiles(episodes, in: profiles)
+    guard
+      let request = ExternalEvidenceRequest(tmdbID: tmdbID, episodes: episodes, local: local, independentFiles: independent),
+      let apiService
+    else { return }
     let access: TmdbAccess
     do {
       access = try await apiService.fetchTmdbAccess()
+      tmdbLocale = access.locale
     } catch {
-      if !(error is CancellationError) {
+      if !(error is CancellationError), !Task.isCancelled {
         let reason = (error as? TmdbDirectError)?.message ?? Self.message(for: error)
         Logger.warning("[Playback] 没有去 TMDB 补查单集：\(reason)")
       }
-      return ExternalEvidenceResult()
+      return
     }
-    let cached = await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory, cachedOnly: true)
-    if !cached.isComplete { lookUpInBackground(request, access: access, server: server, known: cached) }
-    return cached
-  }
-
-  /// 后台去 TMDB 查一轮。同一部剧在同一台服务器上同时只查一轮，没查全的过 `backgroundLookupRetryInterval` 才再查；
-  /// 只有比缓存里多查到东西时才通知刷新，查不到不会让详情页反复重读。
-  private func lookUpInBackground(
-    _ request: ExternalEvidenceRequest, access: TmdbAccess, server: String, known: ExternalEvidenceResult
-  ) {
-    let key = "\(server)|\(request.tmdbID)"
-    guard !isTornDown, backgroundLookups[key] == nil else { return }
-    if let last = lastBackgroundLookup[key], now().timeIntervalSince(last) < Self.backgroundLookupRetryInterval { return }
-    lastBackgroundLookup[key] = now()
-    let directory = tmdbDirectory
-    backgroundLookups[key] = Task { [weak self] in
-      let found = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory, cachedOnly: false)
-      guard let self, !Task.isCancelled, !self.isTornDown else { return }
-      self.backgroundLookups[key] = nil
-      guard found.adds(to: known) else { return }
-      self.episodeIndexes.invalidateAll()
-      self.evidenceUpdates.send(request.tmdbID)
-    }
+    _ = await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory, deadline: deadline)
   }
 
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：
@@ -1045,6 +1166,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     switch availability {
     case .playable, .uncertain, .notOnServer:
       throw PlaybackError.episodeUnavailable("媒体服务器“\(connection.serverName)”上已经找不到这一集")
+    case .checking(let server, _):
+      // 播放器里不会自动更新，请用户稍后再试。
+      throw PlaybackError.episodeUnavailable(EpisodeAvailability.checkingQueueMessage(server: server))
     case let other:
       throw PlaybackError.episodeUnavailable(other.message ?? EpisodeAvailability.notOnServerMessage)
     }

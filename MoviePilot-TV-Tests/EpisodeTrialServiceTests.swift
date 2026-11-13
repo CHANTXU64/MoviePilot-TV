@@ -127,6 +127,9 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(readyBefore, [request.key])
       service.libraryRechecked([request.key: .failed("媒体服务器读取失败")], readyBeforeCheck: readyBefore)
       XCTAssertTrue(entry().isPlayable)
+      // 还在向 TMDB 核对：同样不知道，照样能播。
+      service.libraryRechecked([request.key: .checking(server: "emby", files: 1)], readyBeforeCheck: readyBefore)
+      XCTAssertTrue(entry().isPlayable)
 
       // 这次查到媒体服务器上确认没有了（文件被删）：不再显示能播，可以重新试看。
       service.libraryRechecked([request.key: .notOnServer], readyBeforeCheck: readyBefore)

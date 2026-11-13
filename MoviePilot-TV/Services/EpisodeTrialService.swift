@@ -251,11 +251,11 @@ final class EpisodeTrialService: ObservableObject {
   /// 详情页重新查过播放状态。`results` 是这次查到的每集情况（试看键 → 结果），`readyBeforeCheck` 是开始查之前已经入库的集。
   /// 其中这次读成功的，以这次的结果为准：清掉进度，不再按之前的入库结果当作能播。没找到的（比如文件被删了）页面再打开时
   /// 按服务器现状重新推导；只按季号集号找到的（比如媒体服务器刷新元数据后丢了 TMDB 单集编号）要先在面板里说明可能不是这一集。
-  /// 读取失败的不动：不知道还在不在。查的途中才入库的也不动：那次结果可能是入库前读的。只用详情页已经读到的结果，不另发请求。
+  /// 读取失败、还在向 TMDB 核对的不动：不知道还在不在。查的途中才入库的也不动：那次结果可能是入库前读的。只用详情页已经读到的结果，不另发请求。
   func libraryRechecked(_ results: [String: EpisodeAvailability], readyBeforeCheck: Set<String>) {
     for key in readyBeforeCheck where progress[key]?.isReady == true {
       switch results[key] {
-      case nil, .failed: continue
+      case nil, .failed, .checking: continue
       default: progress[key] = nil
       }
     }

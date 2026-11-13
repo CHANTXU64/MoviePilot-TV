@@ -159,74 +159,81 @@ nonisolated struct TmdbFoundEpisode: Codable, Equatable, Sendable {
   let showID: Int
 }
 
-/// 补查用到的 TMDB 查询。`TmdbLookupStore` 带缓存和限速，测试用替身。`cachedOnly` 时只读缓存，没有就抛 `notCached`。
+/// 补查用到的 TMDB 查询。`TmdbLookupStore` 带缓存和限速，测试用替身。`access` 为 nil 时只读缓存，没有就抛 `notCached`。
+/// `deadline` 之后不再发请求（排队到点的直接放弃，抛 `coolingDown` 以外的 `CancellationError`）。
 nonisolated protocol TmdbEpisodeDirectory: Sendable {
   /// 按外部编号反查单集。`source` 是规范来源（`tvdb`、`imdb`）。
-  func findEpisodes(source: String, value: String, access: TmdbAccess, cachedOnly: Bool) async throws
-    -> [TmdbFoundEpisode]
+  func findEpisodes(source: String, value: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?)
+    async throws -> [TmdbFoundEpisode]
   /// 一季的集列表（默认顺序），`language` 如 `en-US`、`ja`。这一季不存在时为空。
-  func seasonEpisodes(tvID: Int, season: Int, language: String, access: TmdbAccess, cachedOnly: Bool) async throws
-    -> [TmdbEpisode]
+  func seasonEpisodes(
+    tvID: Int, season: Int, language: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?
+  ) async throws -> [TmdbEpisode]
   /// 剧的原始语言（`original_language`），如 `ja`。
-  func originalLanguage(tvID: Int, access: TmdbAccess, cachedOnly: Bool) async throws -> String?
+  func originalLanguage(tvID: Int, access: TmdbAccess?, deadline: ContinuousClock.Instant?) async throws -> String?
 }
 
 // MARK: - 补查
 
 nonisolated enum TmdbEpisodeEvidence {
-  /// 后台一轮补查最多花这么久，到点不再发新请求，已经查到的照常用；没查完的下次打开再查（查到的已经缓存）。
-  static let budget: Duration = .seconds(30)
+  /// 一轮补查从开始算最多这么久（读媒体库配置、读 MoviePilot 的 TMDB 配置、排队和请求 TMDB 都算在里面），
+  /// 到点结束，没查完的下一轮再查（查到的已经缓存）。
+  static let roundBudget: Duration = .seconds(30)
   /// 一轮里同时在途的查询数，和 `TmdbLookupStore` 的并发上限一致：不往限速队列里堆请求，到点后不会再有排着队的请求发出去。
   static let maxInFlight = 2
 
-  /// 先按外部编号反查，反查到这部剧唯一一集的就算确定；剩下的有具体标题的文件，再取这一季的原语言和英文列表核对标题。
-  /// `cachedOnly` 时只读本机缓存（建对应表时用，不等网络），没查过的记为没查全。
+  /// 先按外部编号反查：反查到这部剧唯一一集的就是它；每个编号都明确查空的，再取这一季的原语言和英文列表，供标题核对。
+  /// `access` 为 nil 时只读本机缓存（建对应表时用，不等网络），没查过的记为 `unresolved`；这时 MoviePilot 集列表的语言
+  /// 用 `locale`（上次读到的），和补查时取的语言一致，否则会一直等一份补查从来不取的列表。
   static func collect(
-    _ request: ExternalEvidenceRequest, access: TmdbAccess, directory: any TmdbEpisodeDirectory, cachedOnly: Bool,
-    budget: Duration = budget
+    _ request: ExternalEvidenceRequest, access: TmdbAccess?, locale: String? = nil,
+    directory: any TmdbEpisodeDirectory, deadline: ContinuousClock.Instant = .now.advanced(by: roundBudget)
   ) async -> ExternalEvidenceResult {
-    let deadline = ContinuousClock.now.advanced(by: budget)
+    let cachedOnly = access == nil
     var result = ExternalEvidenceResult()
     var stopped = false
     var failures = 0
-    let lookups = request.candidates.filter { !$0.externalIDs.isEmpty }
-    await withTaskGroup(of: LookupOutcome.self) { group in
-      var pending = lookups.makeIterator()
+    await withTaskGroup(of: (String, EpisodeLookupOutcome, LookupTrouble?).self) { group in
+      var pending = request.candidates.makeIterator()
       func startNext() -> Bool {
-        guard !stopped, ContinuousClock.now < deadline, let candidate = pending.next() else { return false }
+        guard !stopped, ContinuousClock.now < deadline, !Task.isCancelled, let candidate = pending.next() else {
+          return false
+        }
         group.addTask {
-          await lookUp(
-            candidate, tmdbID: request.tmdbID, access: access, directory: directory, cachedOnly: cachedOnly,
-            deadline: deadline)
+          await lookUp(candidate, tmdbID: request.tmdbID, access: access, directory: directory, deadline: deadline)
         }
         return true
       }
       for _ in 0..<maxInFlight where !startNext() { break }
-      while let outcome = await group.next() {
-        if let match = outcome.match { result.lookedUp[outcome.itemID] = match }
-        if !outcome.isComplete { result.isComplete = false }
-        if outcome.failed { failures += 1 }
-        if outcome.coolingDown { stopped = true }
+      while let next = await group.next() {
+        let (itemID, outcome, trouble) = next
+        result.lookups[itemID] = outcome
+        switch trouble {
+        case .failed?: failures += 1
+        case .coolingDown?: stopped = true
+        case nil: break
+        }
         _ = startNext()
       }
-      // 没轮到的（限流、到时间）都没查。
-      if pending.next() != nil { result.isComplete = false }
+      // 没轮到的（限流、到时间、取消）都没查。
+      while let candidate = pending.next() { result.lookups[candidate.itemID] = .unresolved }
     }
+    if result.lookups.values.contains(.unresolved) { result.isComplete = false }
     let seasons = Set(request.candidates.compactMap { candidate in
-      result.lookedUp[candidate.itemID] == nil ? candidate.titleSeason : nil
+      result.lookups[candidate.itemID] == .notFound ? candidate.titleSeason : nil
     })
     var seasonLists = 0
     if !seasons.isEmpty {
       do {
-        guard !stopped, ContinuousClock.now < deadline else { throw TmdbDirectError.coolingDown }
-        let original = try await directory.originalLanguage(tvID: request.tmdbID, access: access, cachedOnly: cachedOnly)
-        let languages = otherLanguages(original: original, locale: access.locale)
+        guard !stopped, ContinuousClock.now < deadline else { throw CancellationError() }
+        let original = try await directory.originalLanguage(tvID: request.tmdbID, access: access, deadline: deadline)
+        let languages = otherLanguages(original: original, locale: access?.locale ?? locale)
         for season in seasons.sorted() {
           for language in languages {
             guard ContinuousClock.now < deadline, !Task.isCancelled else { throw CancellationError() }
             do {
               let list = try await directory.seasonEpisodes(
-                tvID: request.tmdbID, season: season, language: language, access: access, cachedOnly: cachedOnly)
+                tvID: request.tmdbID, season: season, language: language, access: access, deadline: deadline)
               if !list.isEmpty {
                 result.translatedSeasons[season, default: []].append(list)
                 seasonLists += 1
@@ -246,55 +253,49 @@ nonisolated enum TmdbEpisodeEvidence {
       }
     }
     if !cachedOnly {
+      let found = result.lookups.values.filter { if case .found = $0 { return true } else { return false } }.count
+      let unresolved = result.lookups.values.filter { $0 == .unresolved }.count
       Logger.info(
-        "[Playback] 去 TMDB 补查 \(request.candidates.count) 个还没确定对应的文件：按外部编号反查到 \(result.lookedUp.count) 个，"
-          + "取了 \(seasonLists) 份其他语言的季列表"
+        "[Playback] 去 TMDB 补查 \(request.candidates.count) 个还没确定对应的文件：按外部编号反查到 \(found) 个，"
+          + "\(unresolved) 个没查成，取了 \(seasonLists) 份其他语言的季列表"
           + (failures > 0 ? "，\(failures) 次请求失败" : "") + (stopped ? "，TMDB 限流或连不上，这一轮先停" : "")
-          + (ContinuousClock.now >= deadline ? "，到时间没查完的下次再查" : ""))
+          + (ContinuousClock.now >= deadline ? "，到时间没查完的下一轮再查" : ""))
     }
     return result
   }
 
-  private struct LookupOutcome: Sendable {
-    let itemID: String
-    var match: ExternalEpisodeMatch?
-    var isComplete = true
-    var failed = false
-    var coolingDown = false
-  }
+  private enum LookupTrouble: Sendable { case failed, coolingDown }
 
-  /// 依次用各个外部编号反查。结果里这部剧只有一集才算；有两集以上说明 TMDB 的关联有歧义，不再用别的编号。
+  /// 依次用各个外部编号反查。结果里这部剧只有一集就是它；不止一集，或编号指向别的剧，都说明对应关系有歧义，不再用别的编号。
+  /// 都没查到时，每个编号都明确查空才算 `notFound`；有编号没查成（没缓存、失败、限流、到时间）就是 `unresolved`。
   private static func lookUp(
-    _ candidate: ExternalEvidenceRequest.Candidate, tmdbID: Int, access: TmdbAccess,
-    directory: any TmdbEpisodeDirectory, cachedOnly: Bool, deadline: ContinuousClock.Instant
-  ) async -> LookupOutcome {
-    var outcome = LookupOutcome(itemID: candidate.itemID)
+    _ candidate: ExternalEvidenceRequest.Candidate, tmdbID: Int, access: TmdbAccess?,
+    directory: any TmdbEpisodeDirectory, deadline: ContinuousClock.Instant
+  ) async -> (String, EpisodeLookupOutcome, LookupTrouble?) {
+    var unanswered = false
+    var trouble: LookupTrouble?
     for (source, value) in candidate.externalIDs {
       guard ContinuousClock.now < deadline, !Task.isCancelled else {
-        outcome.isComplete = false
+        unanswered = true
         break
       }
       do {
-        let mine = try await directory.findEpisodes(source: source, value: value, access: access, cachedOnly: cachedOnly)
-          .filter { $0.showID == tmdbID }
+        let all = try await directory.findEpisodes(source: source, value: value, access: access, deadline: deadline)
+        let mine = all.filter { $0.showID == tmdbID }
         if mine.count == 1, let found = mine.first {
-          outcome.match = ExternalEpisodeMatch(tmdbEpisodeID: found.id, source: source, value: value)
-          return outcome
+          return (candidate.itemID, .found(ExternalEpisodeMatch(tmdbEpisodeID: found.id, source: source, value: value)), nil)
         }
-        if mine.count > 1 { break }
-      } catch TmdbDirectError.notCached {
-        outcome.isComplete = false
+        // 不止一集，或这个编号在 TMDB 指向别的剧（身份冲突）：都不能当作查空，不放行标题确认。
+        if !mine.isEmpty || !all.isEmpty { return (candidate.itemID, .ambiguous, nil) }
       } catch TmdbDirectError.coolingDown {
-        outcome.isComplete = false
-        outcome.coolingDown = true
-        break
+        return (candidate.itemID, .unresolved, .coolingDown)
       } catch {
-        outcome.isComplete = false
+        unanswered = true
         if error is CancellationError { break }
-        outcome.failed = true
+        if error as? TmdbDirectError != .notCached { trouble = .failed }
       }
     }
-    return outcome
+    return (candidate.itemID, unanswered ? .unresolved : .notFound, trouble)
   }
 
   /// 要取的其他语言：剧的原始语言和英文，去掉 MoviePilot 集列表已经用的语言（按语言部分比，`zh-CN` 和 `zh` 算同一种）。
@@ -321,6 +322,8 @@ nonisolated protocol TmdbTransport: Sendable {
 /// 按代理配置复用 URLSession。不存 Cookie、不用系统缓存（结果自己缓存）。
 nonisolated final class URLSessionTmdbTransport: TmdbTransport, @unchecked Sendable {
   static let requestTimeout: TimeInterval = 6
+  /// 一个请求最晚这么久结束（含重定向、读完回包）。
+  static let resourceTimeout: TimeInterval = requestTimeout * 2
   private let lock = NSLock()
   private var sessions: [TmdbProxy?: URLSession] = [:]
 
@@ -336,7 +339,7 @@ nonisolated final class URLSessionTmdbTransport: TmdbTransport, @unchecked Senda
     if let session = sessions[proxy] { return session }
     let configuration = URLSessionConfiguration.ephemeral
     configuration.timeoutIntervalForRequest = Self.requestTimeout
-    configuration.timeoutIntervalForResource = Self.requestTimeout * 2
+    configuration.timeoutIntervalForResource = Self.resourceTimeout
     configuration.httpCookieStorage = nil
     configuration.urlCache = nil
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -414,28 +417,36 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
     self.now = now
   }
 
+  /// 缓存文件带版本：判断规则变了（比如什么算“查不到”）就换版本，旧文件里按旧规则存的结果一条都不用。
+  static let cacheVersion = 2
+
   static var defaultFileURL: URL? {
-    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("TmdbEpisodeLookup.json")
+    guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+    // 第 1 版把 404 和缺字段的反查回包存成了“查不到”，会放行标题确认。
+    try? FileManager.default.removeItem(at: directory.appendingPathComponent("TmdbEpisodeLookup.json"))
+    return directory.appendingPathComponent("TmdbEpisodeLookup.v\(cacheVersion).json")
   }
 
   // MARK: 查询
 
-  func findEpisodes(source: String, value: String, access: TmdbAccess, cachedOnly: Bool) async throws
-    -> [TmdbFoundEpisode]
+  func findEpisodes(source: String, value: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?)
+    async throws -> [TmdbFoundEpisode]
   {
     let externalSource = source == "imdb" ? "imdb_id" : "\(source)_id"
-    let payload = try await cached("find|\(source)|\(value)", cachedOnly: cachedOnly) {
-      let data = try await self.get(access, path: ["find", value], query: ["external_source": externalSource])
-      guard let data else { return (.found([]), Self.missLife) }
+    let payload = try await cached("find|\(source)|\(value)", access: access, deadline: deadline) {
+      // 查不到时 TMDB 返回 200 和空数组。404、缺 `tv_episode_results`、条目缺编号都不算查不到：
+      // “明确查空”会放行标题确认，只认合法的空数组；其余报错、不缓存，这个文件记为没查清。
+      guard let data = try await self.get(access, path: ["find", value], query: ["external_source": externalSource])
+      else { throw TmdbDirectError.status(404) }
       guard let decoded = try? JSONDecoder().decode(FindResponse.self, from: data) else {
         throw TmdbDirectError.invalidResponse
       }
-      let found = decoded.episodes.compactMap { episode -> TmdbFoundEpisode? in
+      var found: [TmdbFoundEpisode] = []
+      for episode in decoded.episodes {
         guard let id = MediaIdentifier.validNumericIdentifier(episode.id),
           let show = MediaIdentifier.validNumericIdentifier(episode.showID)
-        else { return nil }
-        return TmdbFoundEpisode(id: id, showID: show)
+        else { throw TmdbDirectError.invalidResponse }
+        found.append(TmdbFoundEpisode(id: id, showID: show))
       }
       return (.found(found), found.isEmpty ? Self.missLife : Self.longLife)
     }
@@ -443,10 +454,10 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
     return found
   }
 
-  func seasonEpisodes(tvID: Int, season: Int, language: String, access: TmdbAccess, cachedOnly: Bool) async throws
-    -> [TmdbEpisode]
-  {
-    let payload = try await cached("season|\(tvID)|\(season)|\(language)", cachedOnly: cachedOnly) {
+  func seasonEpisodes(
+    tvID: Int, season: Int, language: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?
+  ) async throws -> [TmdbEpisode] {
+    let payload = try await cached("season|\(tvID)|\(season)|\(language)", access: access, deadline: deadline) {
       let data = try await self.get(
         access, path: ["tv", String(tvID), "season", String(season)], query: ["language": language])
       guard let data else { return (.episodes([]), Self.missLife) }
@@ -464,8 +475,8 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
     }
   }
 
-  func originalLanguage(tvID: Int, access: TmdbAccess, cachedOnly: Bool) async throws -> String? {
-    let payload = try await cached("language|\(tvID)", cachedOnly: cachedOnly) {
+  func originalLanguage(tvID: Int, access: TmdbAccess?, deadline: ContinuousClock.Instant?) async throws -> String? {
+    let payload = try await cached("language|\(tvID)", access: access, deadline: deadline) {
       let data = try await self.get(access, path: ["tv", String(tvID)], query: [:])
       guard let data else { return (.language(nil), Self.missLife) }
       guard let decoded = try? JSONDecoder().decode(SeriesResponse.self, from: data) else {
@@ -497,17 +508,18 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
 
   // MARK: 缓存
 
-  /// 有没过期的缓存就用；`cachedOnly` 时到此为止，没有就抛 `notCached`（不等在途的请求）。否则同一请求在途时等它，
-  /// 再否则限速后发请求，成功的存起来。
+  /// 有没过期的缓存就用；`access` 为 nil 时到此为止，没有就抛 `notCached`（不等在途的请求）。否则同一请求在途时等它，
+  /// 再否则限速后发请求，成功的存起来。排队拿到名额时已过 `deadline` 就不发。
   private func cached(
-    _ key: String, cachedOnly: Bool, load: @escaping @Sendable () async throws -> (Payload, TimeInterval)
+    _ key: String, access: TmdbAccess?, deadline: ContinuousClock.Instant?,
+    load: @escaping @Sendable () async throws -> (Payload, TimeInterval)
   ) async throws -> Payload {
     let stored = loadEntries()
     if let entry = stored[key], entry.expiresAt > now() { return entry.payload }
-    if cachedOnly { throw TmdbDirectError.notCached }
+    guard access != nil else { throw TmdbDirectError.notCached }
     if let task = inFlight[key] { return try await task.value }
     if let pausedUntil, pausedUntil > now() { throw TmdbDirectError.coolingDown }
-    let task = Task<Payload, Error> { try await self.perform(key, load: load) }
+    let task = Task<Payload, Error> { try await self.perform(key, deadline: deadline, load: load) }
     inFlight[key] = task
     defer { inFlight[key] = nil }
     return try await task.value
@@ -515,10 +527,11 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
 
   /// 排队拿到请求名额后再看一次是否暂停（排队期间可能刚遇到限流），再发请求。
   private func perform(
-    _ key: String, load: @Sendable () async throws -> (Payload, TimeInterval)
+    _ key: String, deadline: ContinuousClock.Instant?, load: @Sendable () async throws -> (Payload, TimeInterval)
   ) async throws -> Payload {
     await acquire()
     defer { release() }
+    if let deadline, ContinuousClock.now >= deadline { throw CancellationError() }
     if let pausedUntil, pausedUntil > now() { throw TmdbDirectError.coolingDown }
     let (payload, life) = try await load()
     store(key, Entry(expiresAt: now().addingTimeInterval(life), payload: payload))
@@ -596,7 +609,8 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
 
   /// 发一个 GET。404 返回 nil：这一季、这部剧不存在，或反查的编号格式不对（查不到时 TMDB 本来返回 200 和空结果），
   /// 都按查不到缓存。地址里带 key，不写日志。
-  private func get(_ access: TmdbAccess, path: [String], query: [String: String]) async throws -> Data? {
+  private func get(_ access: TmdbAccess?, path: [String], query: [String: String]) async throws -> Data? {
+    guard let access else { throw TmdbDirectError.notCached }
     let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
     let segments = path.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }
     guard var components = URLComponents(string: "https://\(access.domain)/3/" + segments.joined(separator: "/")) else {
@@ -648,9 +662,10 @@ actor TmdbLookupStore: TmdbEpisodeDirectory {
 
     private enum CodingKeys: String, CodingKey { case episodes = "tv_episode_results" }
 
+    /// 缺字段或不是数组时解码失败，不当作查不到。
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
-      episodes = (try? container.decodeIfPresent([Episode].self, forKey: .episodes)) ?? []
+      episodes = try container.decode([Episode].self, forKey: .episodes)
     }
   }
 
