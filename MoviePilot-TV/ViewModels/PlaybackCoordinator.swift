@@ -106,7 +106,7 @@ struct PreparedPlayback {
   /// 所播文件的时长（秒），见 `PlaybackDuration`。`playerSeconds` 是 mpv 读到的时长，还没读到时传 nil。
   func durationSeconds(playerSeconds: Double?) -> Double? {
     PlaybackDuration.seconds(
-      source: stream.source.runtimeSeconds, player: playerSeconds, item: item.runtimeSeconds)
+      player: playerSeconds, source: stream.source.runtimeSeconds, item: item.runtimeSeconds)
   }
 }
 

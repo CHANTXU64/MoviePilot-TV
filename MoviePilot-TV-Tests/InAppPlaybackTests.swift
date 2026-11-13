@@ -256,17 +256,17 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(Duration.seconds(3754).formatted(.runtime), "1:02:34")
   }
 
-  func testDurationPrefersSelectedSourceThenPlayerThenItem() {
-    // 条目记的是 2 小时的版本，选的是 3 小时的加长版：以所选片源为准。
-    XCTAssertEqual(PlaybackDuration.seconds(source: 10_800, player: 10_790, item: 7200), 10_800)
-    // 片源没给时长时，播放器读到的是所播文件的实际长度，比条目上那个版本的更准。
-    XCTAssertEqual(PlaybackDuration.seconds(source: nil, player: 10_790, item: 7200), 10_790)
-    // 刚入库、Emby 还没分析出时长，播放器也还没读到：退回条目的。
-    XCTAssertEqual(PlaybackDuration.seconds(source: nil, player: nil, item: 7200), 7200)
-    // 0、负数、非有限值都跳过。
-    XCTAssertEqual(PlaybackDuration.seconds(source: 0, player: .infinity, item: 7200), 7200)
-    XCTAssertEqual(PlaybackDuration.seconds(source: -1, player: .nan, item: 0), nil)
-    XCTAssertNil(PlaybackDuration.seconds(source: nil, player: nil, item: nil))
+  func testDurationPrefersPlayerThenSelectedSourceThenItem() {
+    // 起播后 mpv 读到的就是正在播的文件：服务器的片源记录过时（文件被洗版换成 3 小时的加长版，Emby 还记 2 小时）也不受影响。
+    XCTAssertEqual(PlaybackDuration.seconds(player: 10_800, source: 7200, item: 7200), 10_800)
+    // 起播前还没有实测值：条目记的是 2 小时的版本，选的是 3 小时的加长版，以所选片源为准。
+    XCTAssertEqual(PlaybackDuration.seconds(player: nil, source: 10_800, item: 7200), 10_800)
+    // 刚入库、Emby 还没分析出片源时长：退回条目的。
+    XCTAssertEqual(PlaybackDuration.seconds(player: nil, source: nil, item: 7200), 7200)
+    // 0、负数、非有限值都跳过（mpv 还没读到时长时报 0）。
+    XCTAssertEqual(PlaybackDuration.seconds(player: 0, source: .infinity, item: 7200), 7200)
+    XCTAssertEqual(PlaybackDuration.seconds(player: .nan, source: -1, item: 0), nil)
+    XCTAssertNil(PlaybackDuration.seconds(player: nil, source: nil, item: nil))
   }
 
   func testEmbySourceKeepsItsOwnRuntime() throws {
@@ -3772,22 +3772,33 @@ extension PlaybackCoordinatorTests {
     XCTAssertFalse(session.watchProgress(at: 7000).completed, "按条目的 2 小时算会误判看完（7000/7200）")
     XCTAssertTrue(session.watchProgress(at: 9800).completed, "按 3 小时的 90%")
 
-    // 信息面板：按播放界面建面板的入口建，再经 `displayedItem` 取显示的条目（面板视图就是这样取的）。
-    // 测试地址 mpv 打不开，它的失败与这里无关，接住免得结束会话。
+    // 信息面板和选集里的当前一集读播放界面建条目时的那份，片长在建条目时就按所选片源；
+    // 起播后 mpv 读出的时长经 `runtime` 给出（测试里 mpv 打不开测试地址，读不到时长，取值顺序见 `PlaybackDuration` 的测试）。
+    // mpv 的失败与这里无关，接住免得结束会话。
     session.onFailure = { _ in }
+    let reporter = coordinator.reporterForTesting
     screen.start()
     let playing = try XCTUnwrap(screen.playbackItem)
+    XCTAssertEqual(playing.baseItem.runtime, .seconds(10_800), "选集里的当前一集按这份显示")
     let info = try XCTUnwrap(
       VideoPlayerSupplementType.info.makeSupplement(for: playing, queue: nil) as? MediaInfoSupplement)
-    XCTAssertEqual(info.item.runtime, .seconds(7200), "面板建好时存的是条目的 2 小时，不能直接显示")
-    XCTAssertEqual(screen.displayedItem(info.item).runtime, .seconds(10_800), "面板显示的片长和结束时间按 3 小时")
-    XCTAssertEqual(
-      screen.displayedItem(BaseItemDto(id: "other")).runtime, nil, "不是正在播的条目时原样显示，不套用当前片长")
+    XCTAssertEqual(info.item.runtime, .seconds(10_800), "按播放界面建面板的入口建出的信息面板")
+    XCTAssertEqual(screen.runtime, .seconds(10_800), "面板的片长、结束时间和跳转上限读这个值")
+    // 选集卡片来自按季取的集列表，条目上记的是 2 小时；正在播的那一集要显示所播文件的 3 小时。
+    let listed = ItemEntry(item: BaseItemDto(item: session.item, metadata: session.item.metadata))
+    XCTAssertEqual(listed.snapshot.runtime, .seconds(7200))
+    XCTAssertEqual(screen.runTimeLabel(for: listed), BaseItemDto.runTimeLabel(seconds: 10_800), "选集里正在播的一集")
+    let other = ItemEntry(item: BaseItemDto(item: ServerMediaItem(id: "m2", kind: .movie, runtimeSeconds: 5400), metadata: PlaybackMetadata()))
+    XCTAssertEqual(screen.runTimeLabel(for: other), BaseItemDto.runTimeLabel(seconds: 5400), "其他集用自己的")
     screen.stop()
     coordinator.endCurrentSession()
+    // 起播上报了开始、退出排进了停止和写回：发完再结束，免得请求落到后面的用例里。
+    await reporter.waitForQueued()
   }
 
   /// 读播放信息先失败了：协调器取消还在查的 MoviePilot 信息。查询本身不响应取消时，也要立即返回，失败提示不被拖住。
+  /// 直接调用 `withinTimeout`：测试替身的请求都会响应取消，从协调器入口造不出“查询不响应取消”。
+  /// 协调器靠 `async let` 在读播放信息失败时隐式取消查询，这一步不在本用例覆盖范围内。
   func testCancelledMetadataLookupReturnsWithoutWaitingForTheQuery() async throws {
     let gate = QueryGate()
     let lookup = Task { @MainActor in

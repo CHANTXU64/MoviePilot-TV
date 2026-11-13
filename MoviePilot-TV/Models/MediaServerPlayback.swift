@@ -543,12 +543,13 @@ nonisolated enum PlaybackEpisodeOrder {
   }
 }
 
-/// 正在播放的那个文件有多长。续播询问、进度条、跳转上限、跳过片头片尾和看完判定都用它，不各取各的。
+/// 正在播放的那个文件有多长。续播询问、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
 nonisolated enum PlaybackDuration {
-  /// 依次取所选片源的时长、播放器读到的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
-  /// 条目的时长只对应其中一个版本，选了长短不同的版本时不准，所以排在播放器实测之后。
-  static func seconds(source: Double?, player: Double?, item: Double?) -> Double? {
-    [source, player, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
+  /// 依次取播放器读到的时长、所选片源的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
+  /// 起播后 mpv 读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
+  /// 起播前（续播询问）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
+  static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
+    [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
   }
 }
 

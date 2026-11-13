@@ -103,7 +103,7 @@ nonisolated struct BaseItemDto: Identifiable {
   init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
     type = BaseItemKind(item.kind)
-    runTimeTicks = item.runtimeSeconds.map { Int($0 * 10_000_000) }
+    runTimeTicks = item.runtimeSeconds.map(Self.ticks(seconds:))
     // 「第 1 集」这类集名没有信息量：信息面板的标题改显示季集号，与续播询问的标题一致。
     if item.kind == .episode, let title = metadata.title,
       PlaybackTitles.isPlaceholderEpisodeName(title, episodeNumber: metadata.episodeNumber)
@@ -128,11 +128,16 @@ nonisolated struct BaseItemDto: Identifiable {
     }
   }
 
-  /// 正在播的条目。
+  /// 正在播的条目。片长按所播文件（所选片源的，见 `PlaybackDuration`），信息面板、选集里的当前一集都读这份；
+  /// 起播后 mpv 读出的时长由 `MediaSession.runtime` 给出。
   @MainActor
   static func playback(_ prepared: PreparedPlayback) -> BaseItemDto {
-    BaseItemDto(item: prepared.item, metadata: prepared.metadata, episode: prepared.episode)
+    var dto = BaseItemDto(item: prepared.item, metadata: prepared.metadata, episode: prepared.episode)
+    dto.runTimeTicks = prepared.durationSeconds(playerSeconds: nil).map(Self.ticks(seconds:))
+    return dto
   }
+
+  nonisolated static func ticks(seconds: Double) -> Int { Int(seconds * 10_000_000) }
 
   /// 选集列表、上一集和下一集里的一集：信息来自集列表，缺的项用服务器条目的。剧照地址按当前的图片设置生成
   /// （开了图片缓存时走 MoviePilot 的图片代理，要带会话加载，见 `PosterImage`）。
@@ -181,13 +186,15 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   var runTimeLabel: String? {
+    runTimeTicks.flatMap { Self.runTimeLabel(seconds: Double($0 / 10_000_000)) }
+  }
+
+  /// 片长文字（如「2小时 5分钟」）。
+  static func runTimeLabel(seconds: Double) -> String? {
     let formatter = DateComponentsFormatter()
     formatter.unitsStyle = .abbreviated
     formatter.allowedUnits = [.hour, .minute]
-    guard let runTimeTicks, let text = formatter.string(from: Double(runTimeTicks / 10_000_000)) else {
-      return nil
-    }
-    return text
+    return formatter.string(from: seconds)
   }
 
   var premiereDateLabel: String? {

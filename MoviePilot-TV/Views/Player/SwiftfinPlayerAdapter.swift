@@ -234,19 +234,23 @@ final class MediaSession {
     return min(max(rate, range.lowerBound), range.upperBound)
   }
 
-  /// 当前条目。片长是所播文件的时长（见 `PlaybackDuration`）：进度条、跳转上限、跳过片头片尾都读这里，
-  /// 与续播询问和看完判定用同一个值。
-  var item: BaseItemDto {
-    var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
-    item.runTimeTicks = session.playback.durationSeconds(playerSeconds: playbackState.duration?.seconds)
-      .map { Int($0 * 10_000_000) }
-    return item
+  /// 所播文件的片长（见 `PlaybackDuration`）：起播后以 mpv 读到的为准，之前用所选片源的。
+  /// 进度条、跳转上限、跳过片头片尾、信息面板的片长和结束时间都读这里，与看完判定同一个值。
+  var runtime: Duration? {
+    session.playback.durationSeconds(playerSeconds: playbackState.duration?.seconds).map { .seconds($0) }
   }
 
-  /// 信息面板等按条目显示的地方读这里：是正在播的条目时用 `item`（片长与进度条同一个值），否则原样。
-  /// 面板是起播时按 `MediaPlayerItem.baseItem` 建的，那份不会随 mpv 读出的时长更新。
-  func displayedItem(_ item: BaseItemDto) -> BaseItemDto {
-    playbackItem?.baseItem.id == item.id ? self.item : item
+  /// 选集卡片上的片长：正在播的那一集用 `runtime`（与进度条一致）；其他集用集列表条目的，那些集还没选版本。
+  func runTimeLabel(for entry: ItemEntry) -> String? {
+    guard entry.itemID == session.item.id, let runtime else { return entry.snapshot.runTimeLabel }
+    return BaseItemDto.runTimeLabel(seconds: runtime.seconds)
+  }
+
+  /// 当前条目，片长换成 `runtime`。
+  var item: BaseItemDto {
+    var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
+    item.runTimeTicks = runtime.map { BaseItemDto.ticks(seconds: $0.seconds) }
+    return item
   }
 
   var state: State {
@@ -511,7 +515,7 @@ final class MediaSession {
   @discardableResult
   func seek(to position: Duration) -> Bool {
     guard canSeek else { return false }
-    let limit = item.runtime
+    let limit = runtime
     let target = max(.zero, limit.map { min(position, $0) } ?? position)
     commandError = nil
     guard target != seconds else { return true }
