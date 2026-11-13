@@ -750,8 +750,10 @@ private struct EpisodeBrowser: View {
     Task { @MainActor in
       let result = await service.start(request)
       startingTrials.remove(request.key)
+      // 创建没确认时卡片上不再显示试看中（服务不跟它），说明可以重新试看。
+      let unconfirmed = service.snapshot(key: request.key, seasonKey: request.seasonKey).isSubmissionUnconfirmed
       guard apiService.isSessionUnchanged(from: session), panelEpisode?.id != episode.id,
-        let message = EpisodeEntry.startFeedback(result)
+        let message = unconfirmed ? EpisodeEntry.unconfirmedSubmissionMessage : EpisodeEntry.startFeedback(result)
       else { return }
       notificationManager.show(message: message, type: .info)
     }

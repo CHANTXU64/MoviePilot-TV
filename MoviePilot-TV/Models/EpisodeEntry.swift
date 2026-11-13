@@ -47,10 +47,15 @@ nonisolated struct EpisodeTrialSnapshot: Equatable, Sendable {
   /// 服务还在跟这一集：有本机的试看订阅，或订阅删掉后还在跟下载。
   var isTracked: Bool { subscriptionID != nil || isFollowingDownload }
 
+  /// 发出了创建试看订阅的请求但没收到回执，订阅列表里也没找到：MoviePilot 可能没收到。服务不为它轮询，
+  /// 等用户再按「试看」（沿用同一个标记，订阅已经落库时认回那一条，不会建出两条）。
+  var isSubmissionUnconfirmed: Bool { !isStarting && progress == .submissionUnconfirmed && !isTracked }
+
   /// 本机这一集的试看还在进行。正在发起也算；服务还在跟这一集、进度却还没写（App 刚启动）或这次没查成
-  /// （稍后接着查）时也算，不能因为一次查询失败就不显示试看中。
+  /// （稍后接着查）时也算，不能因为一次查询失败就不显示试看中。创建没确认、服务也没在跟的不算，可以重新发起。
   var isInProgress: Bool {
     if isStarting { return true }
+    if isSubmissionUnconfirmed { return false }
     if let progress, progress.isInProgress { return true }
     switch progress {
     case nil, .notStarted, .unavailable: return isTracked
@@ -342,6 +347,8 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       return explained(Self.startFeedback(trial.progress), [])
     case .unavailable(let message):
       return explained(message, retry)
+    case .submissionUnconfirmed:
+      return explained(Self.unconfirmedSubmissionMessage, retry)
     default:
       break
     }
@@ -394,6 +401,9 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     default: nil
     }
   }
+
+  /// 创建试看订阅没确认（见 `EpisodeTrialSnapshot.isSubmissionUnconfirmed`）时面板里和按下「试看」后的说明。
+  static let unconfirmedSubmissionMessage = "没能确认 MoviePilot 收到了试看请求，可以重新试看，不会重复创建订阅"
 
   static let trialDescription = "试看会下载这一集，下好的文件会留在媒体库里"
   static let trialIntroduction = "媒体服务器上没有这一集。" + trialDescription

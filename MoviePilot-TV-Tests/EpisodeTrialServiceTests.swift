@@ -162,6 +162,28 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testReadyEpisodeThatIsOnlyFoundByNumbersAfterARecheckIsExplainedBeforePlaying() async throws {
+    // 入库时确定是这一集，后来媒体服务器刷新元数据丢了 TMDB 单集编号，再查只按季号集号找到：以这次的结果为准，
+    // 按下先打开面板说明可能不是这一集，不直接播。
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      let match = UncertainEpisodeMatch(season: 2, episode: 5, episodeGroup: nil, airDate: .matches)
+      let uncertain = EpisodeAvailability.uncertain(server: "测试媒体库", match: match)
+      service.libraryRechecked(
+        [request.key: uncertain], readyBeforeCheck: service.readyEpisodes(among: [request.key]))
+      let entry = EpisodeEntry(
+        availability: uncertain, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+        trialBlock: nil, canCancelTrial: true)
+      XCTAssertFalse(entry.isPlayable)
+      XCTAssertEqual(entry.primaryAction, .openPanel)
+      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库") + "。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+      XCTAssertEqual(entry.panel.buttons, [.play])
+    }
+  }
+
   func testEpisodeFoundOnlyByNumbersCountsAsInTheLibrary() async throws {
     // 入库后服务器上的文件没有 TMDB 单集编号，只按季号集号对上：入库这一步只看服务器上有没有文件，也算入库，但要标明。
     let library = LibraryBox()
@@ -422,6 +444,41 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testDownloadFromElsewhereSeenByOpeningThePanelIsOnlyShown() async throws {
+    // 只是打开了单集面板，看到的是别的入口在下的这一集：照常显示进度，但不替用户催 MoviePilot 整理、叫媒体服务器入库。
+    backend.addDownload(hash: "earlier-hash", progress: 30)
+    let scans = LibraryScanRecorder()
+    try await withService(libraryScan: { context, scope in scans.record(context, scope) }) { _, service, _, request in
+      let page = try await openPage(service, request)
+      page.cancel()
+      await page.value
+      XCTAssertEqual(service.progress[request.key], .downloading(progress: 30))
+
+      backend.finishDownload("earlier-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      backend.organize("earlier-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(backend.scheduledJobs, [], "没按试看，不催整理")
+      XCTAssertTrue(scans.scopes.isEmpty, "也不叫媒体服务器入库")
+    }
+  }
+
+  func testDownloadFromElsewherePickedUpByPressingTrialIsNudged() async throws {
+    // 用户按「试看」时这一集已经在下：接着跟这个下载，算本机发起的试看，下完照样催整理。
+    backend.addDownload(hash: "earlier-hash", progress: 30)
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .downloading(progress: 30))
+      backend.finishDownload("earlier-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      try await waitUntil { backend.scheduledJobs == ["transfer"] }
+    }
+  }
+
   func testUnreachableDownloaderBlocksNewTrialWhenDownloadIsNotFound() async throws {
     backend.addDownload(hash: "earlier-hash", progress: nil, offline: true)
     try await withService { _, service, _, request in
@@ -475,6 +532,39 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let again = await service.start(request)
       XCTAssertEqual(again, .searching)
       XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker])
+    }
+  }
+
+  func testUndeliveredCreateCanBeStartedAgainFromThePanel() async throws {
+    // 创建请求没送到 MoviePilot：服务不为它轮询，卡片不再显示试看中，面板说明后给「重新试看」，按下沿用同一个标记再建。
+    backend.loseCreateReceipt(afterStoring: false)
+    try await withService { _, service, _, request in
+      let lost = await service.start(request)
+      XCTAssertEqual(lost, .submissionUnconfirmed)
+      @MainActor func entry() -> EpisodeEntry {
+        EpisodeEntry(
+          availability: .notOnServer, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+          trialBlock: nil, canCancelTrial: true)
+      }
+      XCTAssertTrue(entry().trial.isSubmissionUnconfirmed)
+      XCTAssertNil(entry().cardStatus, "没人在跟，不显示一直不变的「正在确认进度」")
+      XCTAssertEqual(entry().menuActions, [.startTrial, .details])
+      XCTAssertEqual(entry().panel.message, EpisodeEntry.unconfirmedSubmissionMessage)
+      XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
+
+      // 打开面板时查一次订阅列表，还是没有就停在这里。
+      let page = try await openPage(service, request)
+      page.cancel()
+      await page.value
+      XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
+
+      let marker = try XCTUnwrap(service.credentials.first?.marker)
+      backend.loseCreateReceipt(afterStoring: nil)
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching)
+      XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker])
+      XCTAssertFalse(entry().trial.isSubmissionUnconfirmed)
+      XCTAssertEqual(entry().cancellableSubscriptionID, 81)
     }
   }
 

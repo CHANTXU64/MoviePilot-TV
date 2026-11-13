@@ -84,6 +84,9 @@ final class EpisodeTrialService: ObservableObject {
     let target: EpisodeTrialTarget
     /// 本机试看订阅的 ID；为空表示看的是别的入口已经在下的这一集。
     let subscriptionID: Int?
+    /// 本机发起的试看（本机的试看订阅提交的下载，或用户按「试看」时接上的已有下载）：下完催 MoviePilot 整理、
+    /// 整理好叫媒体服务器入库。只是打开面板时接上的别处下载只显示进度，不替用户叫这些。
+    var isOwnTrial: Bool
     /// 找不到下载记录时显示的说明。
     let missingRecord: EpisodeTrialProgress
     var hash: String?
@@ -246,12 +249,15 @@ final class EpisodeTrialService: ObservableObject {
   }
 
   /// 详情页重新查过播放状态。`results` 是这次查到的每集情况（试看键 → 结果），`readyBeforeCheck` 是开始查之前已经入库的集。
-  /// 其中这次在媒体服务器上没找到的（确认没有，或只剩认不出是哪一集的文件，和试看入口的判断一样；比如文件被删了），
-  /// 不再当作能播：清掉进度，页面再打开这一集时按服务器现状重新推导。读取失败的不动：不知道还在不在。
-  /// 查的途中才入库的也不动：那次结果可能是入库前读的。只用详情页已经读到的结果，不另发请求。
+  /// 其中这次读成功的，以这次的结果为准：清掉进度，不再按之前的入库结果当作能播。没找到的（比如文件被删了）页面再打开时
+  /// 按服务器现状重新推导；只按季号集号找到的（比如媒体服务器刷新元数据后丢了 TMDB 单集编号）要先在面板里说明可能不是这一集。
+  /// 读取失败的不动：不知道还在不在。查的途中才入库的也不动：那次结果可能是入库前读的。只用详情页已经读到的结果，不另发请求。
   func libraryRechecked(_ results: [String: EpisodeAvailability], readyBeforeCheck: Set<String>) {
-    for key in readyBeforeCheck where results[key]?.allowsTrial == true && progress[key]?.isReady == true {
-      progress[key] = nil
+    for key in readyBeforeCheck where progress[key]?.isReady == true {
+      switch results[key] {
+      case nil, .failed: continue
+      default: progress[key] = nil
+      }
     }
   }
 
@@ -541,6 +547,8 @@ final class EpisodeTrialService: ObservableObject {
       return ready
     }
     if observations[key] != nil {
+      // 用户按了「试看」，接上的别处下载也算本机发起的了。
+      if mayCreate { observations[key]?.isOwnTrial = true }
       let observed = try await observe(key, request: request, operation: operation)
       if mayCreate, observed == .submissionUnconfirmed || observed == .waitingForOrganization {
         // 用户重新发起：下载器、整理队列和整理记录都查不到的旧下载不再挡着，按服务器现状重新推导。
@@ -569,7 +577,7 @@ final class EpisodeTrialService: ObservableObject {
     _ request: EpisodeTrialRequest, library: EpisodeAvailability?, mayCreate: Bool, marker: String?,
     operation: Operation
   ) async throws -> EpisodeTrialProgress {
-    if let existing = try await existingDownload(of: request, operation: operation) {
+    if let existing = try await existingDownload(of: request, isOwnTrial: mayCreate, operation: operation) {
       return existing
     }
     let ownMarkers = Set(credentials.map(\.marker))
@@ -604,7 +612,7 @@ final class EpisodeTrialService: ObservableObject {
   /// 这一集是不是已经在下载或整理（不论哪个入口提交的）。尽力而为：只看最近几页下载记录。
   /// 下载器连不上又没在别处找到时抛错，交给调用方按“暂时无法确认”处理，不新建。
   private func existingDownload(
-    of request: EpisodeTrialRequest, operation: Operation
+    of request: EpisodeTrialRequest, isOwnTrial: Bool, operation: Operation
   ) async throws -> EpisodeTrialProgress? {
     let records = try await downloadHistory(operation: operation).filter {
       $0.download_hash != nil && $0.matches(request)
@@ -615,19 +623,21 @@ final class EpisodeTrialService: ObservableObject {
     for record in records {
       guard let hash = record.download_hash else { continue }
       if let downloader = transferDownloaders(in: queue, hash: hash).first {
-        observe(record, downloader: downloader, request: request)
+        observe(record, downloader: downloader, request: request, isOwnTrial: isOwnTrial)
         return .organizing
       }
     }
     guard let active = try await findActiveDownload(in: records, operation: operation) else { return nil }
-    observe(active.record, downloader: active.downloader, request: request)
+    observe(active.record, downloader: active.downloader, request: request, isOwnTrial: isOwnTrial)
     return downloadProgress(request.key, progress: active.progress)
   }
 
-  private func observe(_ record: EpisodeTrialHistoryRecord, downloader: String, request: EpisodeTrialRequest) {
+  private func observe(
+    _ record: EpisodeTrialHistoryRecord, downloader: String, request: EpisodeTrialRequest, isOwnTrial: Bool
+  ) {
     observations[request.key] = Observation(
-      target: request.target, subscriptionID: nil, missingRecord: .notStarted, hash: record.download_hash,
-      downloader: downloader, historyTitle: trimmedNonEmpty([record.title]))
+      target: request.target, subscriptionID: nil, isOwnTrial: isOwnTrial, missingRecord: .notStarted,
+      hash: record.download_hash, downloader: downloader, historyTitle: trimmedNonEmpty([record.title]))
   }
 
   private func create(
@@ -995,15 +1005,17 @@ final class EpisodeTrialService: ObservableObject {
 
   private func startObservation(_ credential: EpisodeTrialCredential, missingRecord: EpisodeTrialProgress) {
     observations[credential.target.episodeKey] = Observation(
-      target: credential.target, subscriptionID: credential.subscriptionID, missingRecord: missingRecord)
+      target: credential.target, subscriptionID: credential.subscriptionID, isOwnTrial: true,
+      missingRecord: missingRecord)
   }
 
   /// 按下载记录找到这次试看提交的下载，再看下载器和整理。找不到下载记录就结束观察；下载、整理队列和整理记录
   /// 都明确查不到时（下载器只列出还在下载的任务，下完到开始整理之间会这样）显示等待整理，照常留着，放慢再看；
   /// 有一处没查成时说不清，显示没确认。
   ///
-  /// 看到下完了，叫 MoviePilot 马上整理；看到整理好了，叫媒体服务器马上入库，过一阵还没入库再叫它刷新整个库
-  /// （要有 `request` 才知道是哪部剧，后台对账没有时等下次刷新再叫）。每件事每次观察只叫一次，失败只记日志，照常等它们自己来。
+  /// 本机发起的试看（见 `Observation.isOwnTrial`）看到下完了，叫 MoviePilot 马上整理；看到整理好了，叫媒体服务器马上入库，
+  /// 过一阵还没入库再叫它刷新整个库（要有 `request` 才知道是哪部剧，后台对账没有时等下次刷新再叫）。
+  /// 每件事每次观察只叫一次，失败只记日志，照常等它们自己来。
   private func observe(
     _ key: String, request: EpisodeTrialRequest?, operation: Operation
   ) async throws -> EpisodeTrialProgress {
@@ -1099,7 +1111,7 @@ final class EpisodeTrialService: ObservableObject {
   /// 下载器里看不到这次下载了，多半是下完了：叫 MoviePilot 马上整理，不等它每 5 分钟一次的定时整理。
   /// 会顺带整理下载器里其他下完还没整理的任务（本来 5 分钟内也会整理）。
   private func requestOrganization(key: String) {
-    guard observations[key]?.organizationRequested == false else { return }
+    guard let observation = observations[key], observation.isOwnTrial, !observation.organizationRequested else { return }
     observations[key]?.organizationRequested = true
     nudge("叫 MoviePilot 马上整理") { api in
       let result = try await api.runDownloadTransfer()
@@ -1112,7 +1124,7 @@ final class EpisodeTrialService: ObservableObject {
   /// 整理好了：叫媒体服务器马上入库，不等它自己发现新文件（Emby 的实时监控要等一分半，网络挂载常常收不到通知）。
   /// 先按整理后的位置刷新；叫过 `libraryScanFallbackDelay` 还没入库（这里只在还没入库时才会走到），再叫每台刷新整个库。
   private func requestLibraryScan(key: String, context: EpisodePlaybackContext, file: TransferredFileLocation) {
-    guard let observation = observations[key] else { return }
+    guard let observation = observations[key], observation.isOwnTrial else { return }
     let scan = libraryScan
     guard let requestedAt = observation.libraryScanRequestedAt else {
       observations[key]?.libraryScanRequestedAt = now()

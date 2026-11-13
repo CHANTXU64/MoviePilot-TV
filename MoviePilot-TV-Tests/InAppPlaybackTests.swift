@@ -2069,6 +2069,48 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(transferHistoryQueries().count, 2, "整理记录这一轮只重读一次，不是每台各一次")
   }
 
+  func testServerThatNeedsTransferRecordsWhileTheForcedRereadIsInFlightWaitsForIt() async throws {
+    // 刚整理好的这一集只在第二台上，文件没有 TMDB 单集编号，要靠整理记录对上。强制重读时第一台先去重读整理记录，
+    // 还没读完第二台也要了：第二台要等这次重读，不能拿缓存里这一轮以前的记录建索引（那样这一集对不上，还会缓存下来）。
+    let second = "lan2.playback-tests.local"
+    configureLibraryWithoutEpisodeIDs(
+      #"{"Id":"e-y","Type":"Episode","Name":"Emby 集名","SeriesName":"长风渡","Path":"/data/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E11 - 第 11 集.mkv"}"#
+    )
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(Self.unnumberedFile)
+      $0.transferHistoryPages = ["长风渡*|1": Self.transferPage([], total: 0)]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let episode = try groupEpisode(0)
+    let before = await coordinator.episodeAvailability(for: [episode], context: context())
+    XCTAssertNotEqual(before, [.playable(server: "emby2")], "整理之前两台都对不上")
+
+    let records = DispatchSemaphore(value: 0)
+    let secondEpisodes = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistoryPages = ["长风渡*|1": Self.transferPage([Self.transferRecord(mediaID: "100")], total: 1)]
+      $0.transferHistoryGate = records
+      $0.episodesGates[second] = secondEpisodes
+    }
+    let queriesBefore = transferHistoryQueries().count
+    let reread = Task { await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true) }
+    for _ in 0..<300 where transferHistoryQueries().count == queriesBefore {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(transferHistoryQueries().count, queriesBefore + 1, "第一台开始重读整理记录")
+    secondEpisodes.signal()
+    // 第二台读完集列表、要整理记录时，第一台的重读还没回来。
+    try await Task.sleep(for: .milliseconds(300))
+    records.signal()
+    records.signal()
+    let after = await reread.value
+    XCTAssertEqual(after, [.playable(server: "emby2")])
+    XCTAssertEqual(transferHistoryQueries().count, queriesBefore + 1, "第二台跟上第一台的重读，不另读")
+  }
+
   func testSpecialsThatTMDBDoesNotHaveDoNotTurnEveryMissingEpisodeIntoAReadFailure() async throws {
     // 服务器上有特别篇（第 0 季，没有 TMDB 单集编号），TMDB 没有第 0 季，MoviePilot 的第 0 季集列表是空的。
     // 季列表里确实没有第 0 季：这个文件按集列表里没有那一集处理，缺的集照常是没有（可以试看），不是整部剧都读取失败。
@@ -3409,6 +3451,10 @@ private final class PlaybackStub: @unchecked Sendable {
     /// 卡住“停止播放”上报
     var reportStoppedGate: DispatchSemaphore?
     var playbackInfoGate: DispatchSemaphore?
+    /// 卡住 MoviePilot 整理记录的查询
+    var transferHistoryGate: DispatchSemaphore?
+    /// host → 卡住这台服务器读集列表
+    var episodesGates: [String: DispatchSemaphore] = [:]
   }
 
   private let lock = NSLock()
@@ -3480,7 +3526,7 @@ private final class PlaybackURLProtocol: URLProtocol {
         let title = query.first { $0.name == "title" }?.value ?? ""
         let page = query.first { $0.name == "page" }?.value ?? ""
         let data = scenario.transferHistoryPages["\(title)|\(page)"] ?? #"{"list":[],"total":0}"#
-        respond(200, #"{"success":true,"data":\#(data)}"#)
+        respond(200, #"{"success":true,"data":\#(data)}"#, after: scenario.transferHistoryGate)
       } else if url.path == "/api/v1/history/transfer", let list = scenario.transferHistory {
         respond(200, #"{"success":true,"data":{"list":\#(list),"total":null}}"#)
       } else if url.path == "/api/v1/media/seasons", let seasons = scenario.mediaSeasons {
@@ -3527,7 +3573,7 @@ private final class PlaybackURLProtocol: URLProtocol {
         respond(status, "{}")
         return
       }
-      respond(200, scenario.episodes["\(host)|\(seriesID)"] ?? #"{"Items":[]}"#)
+      respond(200, scenario.episodes["\(host)|\(seriesID)"] ?? #"{"Items":[]}"#, after: scenario.episodesGates[host])
     } else if path.hasSuffix("/PlaybackInfo") {
       Self.pass(scenario.playbackInfoGate)
       let itemID = url.deletingLastPathComponent().lastPathComponent
@@ -3568,6 +3614,15 @@ private final class PlaybackURLProtocol: URLProtocol {
   /// 等测试放行卡住的请求。所有请求共用替身的同一个线程，漏放行时最多卡 10 秒，只让这个测试自己失败。
   private static func pass(_ gate: DispatchSemaphore?) {
     _ = gate?.wait(timeout: .now() + 10)
+  }
+
+  /// 等 `gate` 放行再回包。在别的队列上等，不卡住其他请求（`pass` 会卡住加载线程上排在后面的请求）。
+  private func respond(_ status: Int, _ body: String, after gate: DispatchSemaphore?) {
+    guard let gate else { return respond(status, body) }
+    DispatchQueue.global().async {
+      _ = gate.wait(timeout: .now() + 10)
+      self.respond(status, body)
+    }
   }
 
   private func respond(_ status: Int, _ body: String) {

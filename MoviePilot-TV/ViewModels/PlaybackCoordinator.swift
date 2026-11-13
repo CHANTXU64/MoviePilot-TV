@@ -568,16 +568,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   /// 一轮强制重读（详情页重试、起播时重读过时的服务器、播完重读当前服务器）。各台服务器的集索引都重读；
   /// 这部剧的整理记录只有第一台用到的那次强制重读，之后各台跟上那次在途的读取或读它刚写进缓存的结果（`CoalescingCache`），
-  /// 不必每台都重发一遍、最后只用上一遍。
+  /// 不必每台都重发一遍、最后只用上一遍。那次重读成功之前缓存里的是这一轮以前的记录，后面的各台不用。
   @MainActor
   private final class RefreshRound {
-    private var transferRecordsRefreshed = false
+    private var transferRecordsClaimed = false
+    private(set) var transferRecordsRefreshed = false
 
-    /// 这一轮第一次要整理记录时为 true（强制重读），之后为 false。
-    func refreshesTransferRecords() -> Bool {
-      defer { transferRecordsRefreshed = true }
-      return !transferRecordsRefreshed
+    /// 这一轮第一次要整理记录时为 true（由它强制重读），之后为 false。
+    func claimsTransferRecordRefresh() -> Bool {
+      defer { transferRecordsClaimed = true }
+      return !transferRecordsClaimed
     }
+
+    func transferRecordRefreshSucceeded() { transferRecordsRefreshed = true }
   }
 
   /// 一台服务器上这部剧的集索引，缓存 `episodeIndexTTL`，见 `loadEpisodeIndex`。`refresh` 不为 nil 时不沿用缓存。
@@ -613,11 +616,27 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         },
         transferRecords: {
           guard let self else { throw CancellationError() }
-          return try await self.seriesTransferRecords(
-            context, forceRefresh: refresh?.refreshesTransferRecords() == true)
+          return try await self.seriesTransferRecords(context, round: refresh)
         })
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
     }
+  }
+
+  /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：
+  /// 同一个 MoviePilot 刚失败，马上再读多半也失败，整轮还要多等一次超时；各台和单台读失败时一样，没有编号的文件只按季号集号对应。
+  /// 那次已经读完才来要的：成功了用它写进缓存的结果，失败了（或第一台中途取消）自己再读。都不用这一轮以前的缓存。
+  /// 不在强制重读时按缓存读。
+  private func seriesTransferRecords(
+    _ context: EpisodePlaybackContext, round: RefreshRound?
+  ) async throws -> [EpisodeTransferRecord] {
+    guard let round else { return try await seriesTransferRecords(context, forceRefresh: false) }
+    guard round.claimsTransferRecordRefresh() else {
+      return try await seriesTransferRecords(
+        context, forceRefresh: false, acceptsCachedValue: { _ in round.transferRecordsRefreshed })
+    }
+    let records = try await seriesTransferRecords(context, forceRefresh: true)
+    round.transferRecordRefreshSucceeded()
+    return records
   }
 
   /// 这部剧在 MoviePilot 的成功整理记录，按 TMDB 编号筛出这部剧的。剧名为空时不查。集索引强制重读时一起重读，
@@ -627,12 +646,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 读到的几页里可能一条这部剧的都没有。带 `*` 或 `?` 时按通配符对整串匹配，所以先用「剧名*」查标题以剧名开头的记录
   /// （路径是绝对路径，不会命中）；筛完一条这部剧的都没有时（记录里存的标题可能和现在的剧名不同），再退回包含匹配。
   private func seriesTransferRecords(
-    _ context: EpisodePlaybackContext, forceRefresh: Bool
+    _ context: EpisodePlaybackContext, forceRefresh: Bool,
+    acceptsCachedValue: ([EpisodeTransferRecord]) -> Bool = { _ in true }
   ) async throws -> [EpisodeTransferRecord] {
     guard let title = context.seriesName else { return [] }
     let tmdbID = context.tmdbID
     return try await transferRecords.value(
-      for: "\(tmdbID)|\(title)", forceRefresh: forceRefresh, validate: validateNotTornDown
+      for: "\(tmdbID)|\(title)", forceRefresh: forceRefresh, acceptsCachedValue: acceptsCachedValue,
+      validate: validateNotTornDown
     ) { [weak self] in
       let fetch: (String, Int) async throws -> (records: [EpisodeTransferRecord], total: Int?) = { query, page in
         guard let apiService = self?.apiService else { throw CancellationError() }
