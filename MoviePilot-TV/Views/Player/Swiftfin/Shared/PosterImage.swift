@@ -10,8 +10,9 @@
 //
 // 修改：原版用 Swiftfin 的 `ImageView`（基于 Nuke，占位图用 BlurHashKit）。这里改用 App 自己的 `PageManagedImage`：
 // 受保护图片（MoviePilot 图片代理等）要带会话的下载器和 Cookie、缓存按会话隔开，App 其他页面也都经它加载。
-// 只取第一个有地址的来源（这里的条目最多给一个），按显示宽度和画幅缩小解码；图片按画幅填满（原版 `transform` 的
-// 自定义图片样式随之去掉）。没有图或加载失败时显示条目的系统图标。`@SharedPoster` 换成普通存储属性。
+// 只取第一个有地址的来源（这里的条目最多给一个），按显示宽度和画幅缩小解码。图片默认按比例填满海报框（原版是拉伸填满），
+// 原版 `transform` 的自定义图片样式只保留章节截图用的那种：`fitsPosterImage` 时在黑底上按比例完整显示。
+// 没有图或加载失败时显示条目的系统图标。`@SharedPoster` 换成普通存储属性。
 //
 
 import Kingfisher
@@ -26,6 +27,10 @@ struct PosterImage<Element: Poster>: View {
     private var element: Element
     private let size: PosterDisplayType.Size
     private let displayType: PosterDisplayType
+
+    /// 已经加载出来的图片地址：按比例完整显示时，图出来以后才铺黑底，盖住下面的图标。
+    @State
+    private var loadedURL: URL?
 
     init(
         item: Element,
@@ -77,12 +82,18 @@ struct PosterImage<Element: Poster>: View {
                     )
 
                     if let imageURL {
+                        if element.fitsPosterImage, loadedURL == imageURL {
+                            Color.black
+                        }
+
                         PageManagedImage(
                             url: imageURL,
                             processor: DownsamplingImageProcessor(size: decodeSize),
                             isEnabled: true,
                             participatesInPageLifecycle: false,
-                            skipsMemoryCache: false
+                            skipsMemoryCache: false,
+                            fitsWholeImage: element.fitsPosterImage,
+                            onSuccess: { loadedURL = imageURL }
                         )
                     }
                 }
