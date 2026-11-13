@@ -3797,7 +3797,7 @@ extension PlaybackCoordinatorTests {
     await reporter.waitForQueued()
   }
 
-  /// 播放界面上的章节：「章节」面板（不显示时为 nil）、进度条刻度读的章节和上一章/下一章按钮是否出现。
+  /// 播放界面上的章节：「章节」面板（不显示时为 nil）和进度条刻度读的章节。
   @MainActor
   private struct ShownChapters {
     let panel: MediaChaptersSupplement?
@@ -3905,7 +3905,7 @@ extension PlaybackCoordinatorTests {
     ])
     let waiting = try XCTUnwrap(embedded.beforeRead.panel, "mpv 读完文件前就显示「章节」，告诉用户会有章节")
     XCTAssertTrue(waiting.isLoading)
-    XCTAssertTrue(waiting.chapters.isEmpty, "转圈时没有章节，上一章/下一章也不出现")
+    XCTAssertTrue(waiting.chapters.isEmpty, "转圈时还没有章节")
     XCTAssertTrue(embedded.beforeRead.slider.isEmpty)
     let fromFile = try XCTUnwrap(embedded.afterRead.panel)
     XCTAssertFalse(fromFile.isLoading)
@@ -3926,12 +3926,19 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(try XCTUnwrap(single.afterRead.panel).chapters.count, 12)
   }
 
-  /// 自动分段的边界：片尾不足 1 分钟并进前一段；只分得出一段、片长离谱时都不分，「章节」随之消失。
+  /// 自动分段的边界：片尾不足 1 分钟并进前一段，恰好 1 分钟的单独成段；只分得出一段、片长离谱时都不分，「章节」随之消失。
   func testGeneratedChaptersMergeAShortTailAndSkipTooShortOrBrokenDurations() async throws {
     // 20 分 30 秒：0、10 分各一段，最后 30 秒并进第 2 段。
     let tailShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":12300000000"#)
     let tail = try XCTUnwrap(tailShown.afterRead.panel)
     XCTAssertEqual(tail.chapters.map(\.startSeconds), [.zero, .seconds(600)])
+
+    // 11 分、21 分：最后一段恰好 1 分钟，不并。
+    let elevenShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":6600000000"#)
+    XCTAssertEqual(try XCTUnwrap(elevenShown.afterRead.panel).chapters.map(\.startSeconds), [.zero, .seconds(600)])
+    let twentyOneShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":12600000000"#)
+    XCTAssertEqual(
+      try XCTUnwrap(twentyOneShown.afterRead.panel).chapters.map(\.startSeconds), [.zero, .seconds(600), .seconds(1200)])
 
     let short = try await movieChapters(sourceRuntime: #","RunTimeTicks":6500000000"#)
     XCTAssertNotNil(short.beforeRead.panel, "读完前不知道文件里有没有章节")

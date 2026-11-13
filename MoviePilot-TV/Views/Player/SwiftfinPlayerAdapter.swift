@@ -255,7 +255,7 @@ final class MediaSession {
     return item
   }
 
-  /// 「章节」面板、进度条刻度和上一章/下一章用的章节（取法见 `PlaybackChapters`），随片长和 mpv 读到的章节变化。
+  /// 「章节」面板和进度条刻度用的章节（取法见 `PlaybackChapters`），随片长和 mpv 读到的章节变化。
   var chapters: PlaybackChapterList {
     guard let playbackItem else { return .chapters([]) }
     switch PlaybackChapters.resolve(

@@ -625,11 +625,13 @@ nonisolated enum PlaybackChapters {
 
   private static func generated(duration: Double?) -> [ServerChapter] {
     guard let duration else { return [] }
-    let end = duration - minimumGeneratedLength
+    // 起点离片尾至少还有 `minimumGeneratedLength` 才成段。
+    let lastStart = duration - minimumGeneratedLength
+    guard lastStart >= 0 else { return [] }
     // 先按浮点数算段数：片长大到离谱时再逐段生成会卡住主线程。
-    let count = (end / generatedInterval).rounded(.up)
+    let count = (lastStart / generatedInterval).rounded(.down) + 1
     guard count > 1, count <= Double(maximumGeneratedCount) else { return [] }
-    return stride(from: 0, to: end, by: generatedInterval).enumerated().map {
+    return stride(from: 0, through: lastStart, by: generatedInterval).enumerated().map {
       ServerChapter(name: name(at: $0.offset), startSeconds: $0.element)
     }
   }
