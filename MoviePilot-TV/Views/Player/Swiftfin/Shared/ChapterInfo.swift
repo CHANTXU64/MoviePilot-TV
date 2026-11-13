@@ -59,7 +59,7 @@ extension ChapterInfo {
         init(
             chapterInfo: ChapterInfo,
             imageSource: ImageSource? = nil,
-            systemImage: String = AppSymbol.movie
+            systemImage: String
         ) {
             self.chapterInfo = chapterInfo
             self.displayTitle = chapterInfo.displayTitle

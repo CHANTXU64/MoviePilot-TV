@@ -113,9 +113,10 @@ struct EmbyServerConnection: MediaServerConnection {
     let streamURL = try await perform(.readPlaybackInfo) {
       try client.directStreamURL(itemID: item.id, selection: selection, playSessionID: info.playSessionID)
     }
+    let fallbackItemID = info.mediaSources.count == 1 ? item.id : nil
     return PreparedStream(
-      item: item, source: selection.source.serverSource(chapterImage: chapterImageURL),
-      sources: info.mediaSources.map { $0.serverSource(chapterImage: chapterImageURL) },
+      item: item, source: selection.source.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL),
+      sources: info.mediaSources.map { $0.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL) },
       playSessionID: info.playSessionID, streamURL: streamURL)
   }
 

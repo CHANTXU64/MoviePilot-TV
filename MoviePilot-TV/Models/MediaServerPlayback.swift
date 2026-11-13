@@ -459,7 +459,7 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let embeddedTrackCount: Int?
   /// 这个版本的片长（秒）；服务器没给时为 nil。同一条目的各版本可能长短不一（如加长版）。
   let runtimeSeconds: Double?
-  /// 这个版本的章节，按起点排序；服务器没有时为空（播放界面按片长自动分段，见 `PlaybackChapters`）。
+  /// 这个版本的章节，服务器没有时为空。播放界面怎么用见 `PlaybackChapters`。
   let chapters: [ServerChapter]
 
   init(
@@ -474,7 +474,7 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
     self.displayModeHint = displayModeHint
     self.embeddedTrackCount = embeddedTrackCount
     self.runtimeSeconds = runtimeSeconds
-    self.chapters = chapters.sorted { $0.startSeconds < $1.startSeconds }
+    self.chapters = chapters
   }
 
   var isDirectlyPlayable: Bool { unsupportedReason == nil }
@@ -572,21 +572,69 @@ nonisolated enum PlaybackDuration {
   }
 }
 
-/// 播放界面的章节：片源有章节就用片源的；没有时按片长每 5 分钟分一段，名字和 Emby 自动分段的一样（「章节 N」），没有截图。
-/// 片长取 `PlaybackDuration`：服务器没分析出时长的文件，起播后按 mpv 读到的时长再分。
+/// 播放界面的章节，依次取：
+/// 1. 媒体服务器给所播片源的章节；
+/// 2. 文件里内嵌、mpv 读到的章节（服务器还没分析出章节时）。要等 mpv 读完文件，之前界面先显示「正在读取」；
+/// 3. 都没有时按片长每 10 分钟分一段，名字和 Emby 自动分段的一样（「章节 N」），没有截图。几个小时的片子只靠进度条很难定位。
+/// 片长取 `PlaybackDuration`：起播后以 mpv 读到的为准，章节随之重算。
 nonisolated enum PlaybackChapters {
-  static let generatedInterval: Double = 300
+  enum Resolution: Equatable {
+    /// 服务器没有章节，mpv 还没读完文件。
+    case waitingForPlayer
+    /// 空表示不显示章节。
+    case chapters([ServerChapter])
+  }
+
+  static let generatedInterval: Double = 600
   /// 最后一段不足这么长时并进前一段，免得片尾多出一个只有几秒的章节。
   static let minimumGeneratedLength: Double = 60
+  /// 片长异常（文件损坏）时分出的段数没有意义，超过就不分。500 段对应 83 小时。
+  static let maximumGeneratedCount = 500
+  /// 起点超过这个值（约 3 年）的章节当作坏数据，片长未知时也能挡住。
+  static let maximumStartSeconds: Double = 100_000_000
 
-  static func chapters(source: [ServerChapter], durationSeconds: Double?) -> [ServerChapter] {
-    guard source.isEmpty else { return source }
-    guard let durationSeconds, durationSeconds.isFinite else { return [] }
-    let starts = Array(stride(from: 0, to: durationSeconds - minimumGeneratedLength, by: generatedInterval))
-    // 只分出一段时没有可跳的章节，不显示章节。
-    guard starts.count > 1 else { return [] }
-    return starts.enumerated().map { ServerChapter(name: "章节 \($0.offset + 1)", startSeconds: $0.element) }
+  /// `embedded` 为 nil 表示 mpv 还没读完文件。
+  static func resolve(
+    server: [ServerChapter], embedded: [ServerChapter]?, durationSeconds: Double?
+  ) -> Resolution {
+    let duration = durationSeconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+    if let chapters = usable(server, duration: duration) { return .chapters(chapters) }
+    guard let embedded else { return .waitingForPlayer }
+    if let chapters = usable(embedded, duration: duration) { return .chapters(chapters) }
+    return .chapters(generated(duration: duration))
   }
+
+  /// 按起点排序，去掉片尾之后的（文件换了更短的版本、服务器还没重新分析时会有）和起点重复的。
+  /// 不足两个时没有可跳的位置，当作没有章节。没有名字的章节按位置叫「章节 N」。
+  private static func usable(_ chapters: [ServerChapter], duration: Double?) -> [ServerChapter]? {
+    let limit = min(duration ?? maximumStartSeconds, maximumStartSeconds)
+    var result: [ServerChapter] = []
+    for chapter in chapters.sorted(by: { $0.startSeconds < $1.startSeconds })
+    where chapter.startSeconds.isFinite && chapter.startSeconds >= 0 && chapter.startSeconds < limit
+      && chapter.startSeconds != result.last?.startSeconds
+    {
+      result.append(chapter)
+    }
+    guard result.count > 1 else { return nil }
+    return result.enumerated().map { index, chapter in
+      chapter.name == nil
+        ? ServerChapter(name: name(at: index), startSeconds: chapter.startSeconds, imageURL: chapter.imageURL)
+        : chapter
+    }
+  }
+
+  private static func generated(duration: Double?) -> [ServerChapter] {
+    guard let duration else { return [] }
+    let end = duration - minimumGeneratedLength
+    // 先按浮点数算段数：片长大到离谱时再逐段生成会卡住主线程。
+    let count = (end / generatedInterval).rounded(.up)
+    guard count > 1, count <= Double(maximumGeneratedCount) else { return [] }
+    return stride(from: 0, to: end, by: generatedInterval).enumerated().map {
+      ServerChapter(name: name(at: $0.offset), startSeconds: $0.element)
+    }
+  }
+
+  private static func name(at index: Int) -> String { "章节 \(index + 1)" }
 }
 
 /// 续播点：太靠前或接近片尾时直接从头播放。时长见 `PlaybackDuration`。

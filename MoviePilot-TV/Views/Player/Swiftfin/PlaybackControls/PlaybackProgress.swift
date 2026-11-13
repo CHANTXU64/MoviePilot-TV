@@ -12,6 +12,7 @@
 // - 去掉 `Defaults`、`JellyfinAPI`；章节刻度开关（Swiftfin 设置项 `chapterSlider`，默认开）换成 `VideoPlayerDefaults.chapterSlider`。
 // - 原版用 Swiftfin 的 `if(_:transform:)`（带 `@ViewBuilder`）套章节遮罩；工程已有同名但不带 `@ViewBuilder` 的扩展，
 //   改为本文件私有的 `ChapterSliderMask` 修饰器，效果相同。
+// - 章节刻度读 `mediaSession.chapters`（条目上不带章节）；片长未知时不画刻度。
 // - 视频宽高比原版取自 `(player as? VideoMediaPlayer)?.videoState.videoSize`，这里取 `mediaSession.videoSize`。
 //
 
@@ -134,7 +135,7 @@ extension VideoPlayer.PlaybackControls {
             .sliderContainerStyle(.capsule(showsProgressWhenUnfocused: false))
             .modifier(ChapterSliderMask(
                 isEnabled: chapterSlider,
-                chapters: mediaSession.item.chapters,
+                chapters: mediaSession.chapters.loaded.map(\.chapterInfo),
                 runtime: mediaSession.item.runtime ?? .zero
             ))
             .frame(height: sliderHeight)
@@ -180,11 +181,12 @@ extension VideoPlayer.PlaybackControls {
 private struct ChapterSliderMask: ViewModifier {
 
     let isEnabled: Bool
-    let chapters: [ChapterInfo]?
+    let chapters: [ChapterInfo]
     let runtime: Duration
 
     func body(content: Content) -> some View {
-        if isEnabled, let chapters, chapters.isNotEmpty {
+        // 片长未知时刻度全落在 0，画不出来，还会让 `ChapterTrackMask` 的 ID 重复。
+        if isEnabled, chapters.isNotEmpty, runtime > .zero {
             content.inverseMask { VideoPlayer.PlaybackControls.PlaybackProgress.ChapterTrackMask(chapters: chapters, runtime: runtime) }
         } else {
             content

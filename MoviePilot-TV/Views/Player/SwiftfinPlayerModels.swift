@@ -76,7 +76,6 @@ nonisolated struct BaseItemDto: Identifiable {
   var mediaType: MediaType?
   var mediaSources: [PlaybackMediaSourceInfo]?
   var people: [BaseItemPerson]?
-  var chapters: [ChapterInfo]?
   /// 竖版海报、横版缩略图地址（不带密钥）。
   var portraitImageURL: URL?
   var landscapeImageURL: URL?
@@ -98,7 +97,7 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   /// 播放界面的条目：标题、季集号、简介、日期、评分和图片都取 `metadata`（MoviePilot 为准，缺的项用媒体服务器的，
-  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员暂不接入；章节按所播片源，由 `MediaPlayerItem` 给出。
+  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员暂不接入；章节不在条目上，见 `MediaSession.chapters`。
   /// 按集播放时带上队列用的剧集、季标识；其他条目不带，播放界面的队列为空。
   init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
@@ -371,17 +370,36 @@ nonisolated struct ChapterInfo: Hashable {
       imageURL: chapter.imageURL)
   }
 
-  /// 与 Swiftfin `fullChapterInfo(using:)` 相同：去掉没有起点的章节、按起点排序，附上章节图。
-  /// 没有截图的章节卡片显示 `placeholderSymbol`。
-  static func fullInfo(_ chapters: [ChapterInfo], placeholderSymbol: String) -> [ChapterInfo.FullInfo] {
+  /// 与 Swiftfin `fullChapterInfo(using:)` 相同：按起点排序，附上章节图。没有截图的章节卡片显示 `placeholderSymbol`。
+  static func fullInfo(_ chapters: [ServerChapter], placeholderSymbol: String) -> [ChapterInfo.FullInfo] {
     chapters
-      .filter { $0.startPositionTicks != nil }
-      .sorted { ($0.startPositionTicks ?? 0) < ($1.startPositionTicks ?? 0) }
+      .sorted { $0.startSeconds < $1.startSeconds }
+      .map(ChapterInfo.init)
       .map {
         ChapterInfo.FullInfo(
           chapterInfo: $0, imageSource: $0.imageURL.map { ImageSource(url: $0) }, systemImage: placeholderSymbol)
       }
   }
+}
+
+/// 播放界面当前的章节（见 `MediaSession.chapters`）。
+enum PlaybackChapterList {
+  /// 服务器没有章节，mpv 还在读文件：「章节」照样显示，先转圈，让用户知道会有章节可跳。
+  case loading
+  /// 空表示不显示「章节」。
+  case chapters([ChapterInfo.FullInfo])
+
+  var loaded: [ChapterInfo.FullInfo] {
+    if case .chapters(let chapters) = self { return chapters }
+    return []
+  }
+
+  var isLoading: Bool {
+    if case .loading = self { return true }
+    return false
+  }
+
+  var isShown: Bool { isLoading || !loaded.isEmpty }
 }
 
 // MARK: - 片源与流
