@@ -1472,7 +1472,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     session.handle(.stateChanged(.failed(.playbackFailed(code: -16, message: "no audio or video data played"))))
 
     XCTAssertEqual(
-      coordinator.failure?.message, "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放")
+      coordinator.failure?.message, "音视频用了 zlib 压缩，无法解码，请用媒体服务器 App")
     XCTAssertNil(coordinator.session, "播放失败后结束会话")
   }
 
@@ -1482,8 +1482,8 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let audio = #"{"Type":"Audio","Codec":"aac"}"#
     let subtitle = #"{"Type":"Subtitle","Codec":"PGSSUB"}"#
     let external = #"{"Type":"Subtitle","Codec":"srt","IsExternal":true}"#
-    let certain = "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放"
-    let possible = "这个文件有轨道用了 zlib 压缩，应用内播放器解不开，可能因此播不了，可以用媒体服务器自己的 App 播放"
+    let certain = "音视频用了 zlib 压缩，无法解码，请用媒体服务器 App"
+    let possible = "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App"
     let cases: [(name: String, streams: String, skipped: [Int], expected: String)] = [
       ("跳过两条，文件里还有一条字幕：可能只是字幕压缩、音视频因别的原因没播出来", [video, audio, subtitle].joined(separator: ","), [1, 2], possible),
       ("跳过三条，文件里一共三条", [video, audio, subtitle].joined(separator: ","), [1, 2, 3], certain),
@@ -1499,6 +1499,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
       for track in item.skipped { recordSkippedTrack(track, in: session) }
       session.handle(.stateChanged(.failed(.playbackFailed(code: -16, message: "no audio or video data played"))))
       XCTAssertEqual(coordinator.failure?.message, item.expected, item.name)
+    }
+    for message in [certain, possible] {
+      XCTAssertLessThanOrEqual(message.count, 30, "提示在全局通知里单行显示：\(message)")
     }
   }
 
