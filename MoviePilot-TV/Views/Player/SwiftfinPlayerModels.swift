@@ -97,39 +97,59 @@ nonisolated struct BaseItemDto: Identifiable {
     self.id = id
   }
 
-  /// 只取播放本身已有的基本字段；其余元数据（简介、海报、演职员、章节、片源详情）暂不接入，保持为空。
-  /// 按集播放时，集名和季集号用 MoviePilot 集列表的（与详情页一致），并带上队列用的剧集、季标识；
-  /// 其他条目不带这两个标识，播放界面的队列为空。播放界面用 `playback(_:episode:)`，它另外补上剧照。
-  init(item: ServerMediaItem, episode: QueuedEpisode? = nil) {
+  /// 播放界面的条目：标题、季集号、简介、日期、评分和图片都取 `metadata`（MoviePilot 为准，缺的项用媒体服务器的，
+  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员、章节暂不接入。
+  /// 按集播放时带上队列用的剧集、季标识；其他条目不带，播放界面的队列为空。
+  init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
     type = BaseItemKind(item.kind)
     runTimeTicks = item.runtimeSeconds.map { Int($0 * 10_000_000) }
+    // 「第 1 集」这类集名没有信息量：信息面板的标题改显示季集号，与续播询问的标题一致。
+    if item.kind == .episode, let title = metadata.title,
+      PlaybackTitles.isPlaceholderEpisodeName(title, episodeNumber: metadata.episodeNumber)
+    {
+      name = metadata.playerTitles(isEpisode: true).primary
+    } else {
+      name = metadata.title
+    }
+    indexNumber = metadata.episodeNumber
+    parentIndexNumber = metadata.seasonNumber
+    seriesName = metadata.seriesName
+    overview = metadata.overview
+    premiereDate = Self.day(metadata.premiereDate)
+    communityRating = metadata.communityRating
+    officialRating = metadata.officialRating
+    portraitImageURL = metadata.posterURL
+    landscapeImageURL = metadata.thumbnailURL
     if let episode {
-      name = episode.episode.name
-      indexNumber = episode.episode.episodeNumber
-      parentIndexNumber = episode.episode.seasonNumber
-      seriesName = episode.context.seriesName ?? item.seriesName
       queuedEpisode = episode
       seriesID = String(episode.context.tmdbID)
       seasonID = UserSession.queueSeasonID(episode.episode.seasonNumber)
-    } else {
-      name = item.name
-      indexNumber = item.episodeNumber
-      parentIndexNumber = item.seasonNumber
-      seriesName = item.seriesName
     }
   }
 
-  /// 播放界面的条目（正在播的、选集列表里的、上一集和下一集）。按集播放时带上这一集的剧照：MoviePilot 集列表里的
-  /// `still_path`，地址和详情页单集卡片相同，按当前的图片设置生成（开了图片缓存时走 MoviePilot 的图片代理，
-  /// 要带会话加载，见 `PosterImage`）。依赖当前设置，所以不放在 `init(item:episode:)` 里。
+  /// 正在播的条目。
   @MainActor
-  static func playback(_ item: ServerMediaItem, episode: QueuedEpisode?) -> BaseItemDto {
-    var dto = BaseItemDto(item: item, episode: episode)
-    dto.landscapeImageURL = episode.flatMap {
-      APIService.shared.getSeasonPosterURL(posterPath: $0.episode.stillPath, mediaPosterPath: nil)
-    }
-    return dto
+  static func playback(_ prepared: PreparedPlayback) -> BaseItemDto {
+    BaseItemDto(item: prepared.item, metadata: prepared.metadata, episode: prepared.episode)
+  }
+
+  /// 选集列表、上一集和下一集里的一集：信息来自集列表，缺的项用服务器条目的。剧照地址按当前的图片设置生成
+  /// （开了图片缓存时走 MoviePilot 的图片代理，要带会话加载，见 `PosterImage`）。
+  @MainActor
+  static func playback(_ item: ServerMediaItem, episode: QueuedEpisode) -> BaseItemDto {
+    BaseItemDto(
+      item: item, metadata: PlaybackMetadataLookup.metadata(for: episode).filling(item.metadata), episode: episode)
+  }
+
+  /// `yyyy-MM-dd` 开头的日期（服务器的带时间，只取日期部分），按本地日历的那一天。
+  static func day(_ value: String?) -> Date? {
+    guard let value, value.count >= 10 else { return nil }
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: String(value.prefix(10)))
   }
 
   // MARK: 与 Swiftfin 的 BaseItemDto 扩展相同的派生值
@@ -180,7 +200,7 @@ nonisolated struct BaseItemDto: Identifiable {
   var premiereDateYear: String? {
     guard let premiereDate else { return nil }
     let formatter = DateFormatter()
-    formatter.dateFormat = "YYYY"
+    formatter.dateFormat = "yyyy"
     return formatter.string(from: premiereDate)
   }
 

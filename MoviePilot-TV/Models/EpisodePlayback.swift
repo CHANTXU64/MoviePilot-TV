@@ -18,10 +18,12 @@ nonisolated struct TmdbEpisode: Decodable, Equatable, Sendable {
   let airDate: String?
   /// 单集时长（分钟）
   let runtime: Int?
+  /// TMDB 评分（0–10），没人打分时是 0。
+  let voteAverage: Double?
 
   init(
     id: Int?, episodeNumber: Int?, seasonNumber: Int? = nil, name: String? = nil, overview: String? = nil,
-    stillPath: String? = nil, airDate: String? = nil, runtime: Int? = nil
+    stillPath: String? = nil, airDate: String? = nil, runtime: Int? = nil, voteAverage: Double? = nil
   ) {
     self.id = id
     self.episodeNumber = episodeNumber
@@ -31,6 +33,7 @@ nonisolated struct TmdbEpisode: Decodable, Equatable, Sendable {
     self.stillPath = stillPath
     self.airDate = airDate
     self.runtime = runtime
+    self.voteAverage = voteAverage
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -41,6 +44,7 @@ nonisolated struct TmdbEpisode: Decodable, Equatable, Sendable {
     case stillPath = "still_path"
     case airDate = "air_date"
     case runtime
+    case voteAverage = "vote_average"
   }
 
   init(from decoder: Decoder) throws {
@@ -54,6 +58,7 @@ nonisolated struct TmdbEpisode: Decodable, Equatable, Sendable {
     stillPath = try? container.decodeIfPresent(String.self, forKey: .stillPath)
     airDate = try? container.decodeIfPresent(String.self, forKey: .airDate)
     runtime = try? container.decodeIfPresent(Int.self, forKey: .runtime)
+    voteAverage = try? container.decodeIfPresent(Double.self, forKey: .voteAverage)
   }
 }
 
@@ -70,6 +75,7 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
   let stillPath: String?
   let airDate: String?
   let runtimeMinutes: Int?
+  let voteAverage: Double?
   /// 在本季列表里的位置
   let index: Int
 
@@ -85,6 +91,7 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
     stillPath = episode.stillPath
     airDate = episode.airDate
     runtimeMinutes = episode.runtime
+    voteAverage = episode.voteAverage
     self.index = index
   }
 
@@ -92,10 +99,11 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
     episodes.enumerated().map { MoviePilotEpisode($1, season: season, index: $0) }
   }
 
-  /// 播放器标题，编号与详情页一致。
-  func playerTitles(seriesName: String?) -> (primary: String, secondary: String?) {
-    PlaybackTitles.episode(
-      name: name, seasonNumber: seasonNumber, episodeNumber: episodeNumber, seriesName: seriesName)
+  /// 播放界面显示的这一集：编号与详情页一致。剧照地址依赖当前图片设置，由调用方换算好传入。
+  func playbackMetadata(seriesName: String?, stillURL: URL?) -> PlaybackMetadata {
+    PlaybackMetadata(
+      title: name, seriesName: seriesName, seasonNumber: seasonNumber, episodeNumber: episodeNumber,
+      overview: overview, premiereDate: airDate, communityRating: voteAverage, thumbnailURL: stillURL)
   }
 }
 
@@ -130,6 +138,8 @@ nonisolated struct EpisodePlaybackContext: Equatable, Sendable {
   /// MoviePilot 入库查询给的整剧条目；按外部编号搜不到时，在它所属的服务器上按这个 ID 再找。
   let libraryItem: MediaServerItemRef?
   let seriesName: String?
+  /// MoviePilot 详情里剧的海报（原样的路径或地址），播放界面的信息面板用。
+  let seriesPosterPath: String?
 
   /// 没有有效 TMDB 编号或不是电视剧时为 nil：集列表接口只认 TMDB。
   init?(media: MediaInfo, episodeGroup: String?, seasons: [Int], libraryItem: MediaServerItemRef?) {
@@ -142,6 +152,7 @@ nonisolated struct EpisodePlaybackContext: Equatable, Sendable {
     expected = LibraryItemExpectation(media: media)
     self.libraryItem = libraryItem
     seriesName = trimmedNonEmpty([media.title])
+    seriesPosterPath = trimmedNonEmpty([media.poster_path])
   }
 
   /// 服务器上这部剧的集索引的缓存键：同样的外部编号和入库条目找到的是同一批整剧条目。

@@ -51,8 +51,9 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(list.map(\.index), [0, 1, 2])
     XCTAssertNil(list[2].name)
     XCTAssertEqual(list[2].overview, "名称类型不对也只丢这个字段")
-    XCTAssertEqual(list[0].playerTitles(seriesName: "长风渡").primary, "第 1 季 第 10 集 · 重逢")
-    XCTAssertEqual(list[0].playerTitles(seriesName: "长风渡").secondary, "长风渡")
+    let titles = list[0].playbackMetadata(seriesName: "长风渡", stillURL: nil).playerTitles(isEpisode: true)
+    XCTAssertEqual(titles.primary, "第 1 季 第 10 集 · 重逢")
+    XCTAssertEqual(titles.secondary, "长风渡")
   }
 
   func testEmbyEpisodeKeepsTMDBEpisodeIDAndFileRange() throws {

@@ -80,7 +80,7 @@ final class MediaSegmentObserver: MediaSessionObserver, VideoPlayerOverlayAction
         guard let mediaSession, let item, mediaSession.playbackItem === item,
               mediaSession.state == .playback, mediaSession.canSeek, !mediaSession.isSeeking else { return [] }
 
-        let duration = mediaSession.playbackState.duration ?? mediaSession.item.runtime
+        let duration = mediaSession.item.runtime
 
         guard let segment = segments.first(where: { $0.skipTarget(at: mediaSession.seconds, duration: duration) != nil }) else { return [] }
 
@@ -92,7 +92,7 @@ final class MediaSegmentObserver: MediaSessionObserver, VideoPlayerOverlayAction
                   mediaSession.playbackItem === item, mediaSession.state == .playback, mediaSession.canSeek, !mediaSession.isSeeking,
                   let target = segment.skipTarget(
                       at: mediaSession.seconds,
-                      duration: mediaSession.playbackState.duration ?? mediaSession.item.runtime
+                      duration: mediaSession.item.runtime
                   ) else { return }
 
             mediaSession.seek(to: target)

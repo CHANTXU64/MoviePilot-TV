@@ -96,6 +96,11 @@ struct EmbyClient {
     return url
   }
 
+  /// 条目图片地址。Emby 的图片接口不需要登录，地址里不带密钥；`tag` 是图片版本，换图后地址跟着变，缓存不会用到旧图。
+  func imageURL(itemID: String, type: String, tag: String) -> URL? {
+    try? url(["Items", itemID, "Images", type], query: ["tag": tag, "maxWidth": "1280", "quality": "90"])
+  }
+
   /// 直接播放原文件的流地址。密钥放在 query 里，此地址不得写入日志。
   func directStreamURL(
     itemID: String, selection: EmbyDirectPlay.Selection, playSessionID: String?
@@ -137,6 +142,7 @@ struct EmbyClient {
 
   /// 按外部编号找条目（`AnyProviderIdEquals`，如 `tmdb.12345`），返回的是这台服务器自己的条目 ID。
   /// 不认识这个参数的服务器会返回不相干的条目，调用方须再核对返回条目的类型和编号。
+  /// 详情页起播时找到的条目直接拿去播，所以和单条读取一样带上简介、首播日期，MoviePilot 缺这些时播放界面用它们。
   func items(
     withAnyProviderID keys: [String], type: String?, userID: String, timeout: TimeInterval? = nil
   ) async throws -> [EmbyItem] {
@@ -147,7 +153,7 @@ struct EmbyClient {
           "Recursive": "true",
           "AnyProviderIdEquals": keys.joined(separator: ","),
           "IncludeItemTypes": type,
-          "Fields": "ProviderIds",
+          "Fields": "ProviderIds,Overview,PremiereDate",
           "Limit": "20",
         ]),
       timeout: timeout)
@@ -160,7 +166,7 @@ struct EmbyClient {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds,Path,PremiereDate"]))
+        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds,Path,PremiereDate,Overview"]))
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 

@@ -69,22 +69,44 @@ enum PlaybackError: LocalizedError, Equatable {
 struct PreparedPlayback {
   let connection: any MediaServerConnection
   let stream: PreparedStream
-  /// 按集播放时有：播放器标题按详情页的编号显示，上一集、下一集从它往前后找。
+  /// 按集播放时有：上一集、下一集从它往前后找。
   var episode: QueuedEpisode?
+  /// MoviePilot 的条目信息（见 `PlaybackMetadataLookup`）；MoviePilot 认不出、查询失败或超时为 nil。
+  var moviePilot: PlaybackMetadata?
+
+  init(
+    connection: any MediaServerConnection, stream: PreparedStream, episode: QueuedEpisode? = nil,
+    moviePilot: PlaybackMetadata? = nil
+  ) {
+    self.connection = connection
+    self.stream = stream
+    self.episode = episode
+    self.moviePilot = moviePilot
+  }
 
   var item: ServerMediaItem { stream.item }
   var streamURL: URL { stream.streamURL }
 
+  /// 播放界面和续播询问显示的信息：MoviePilot 的为准，缺的项用媒体服务器的。
+  var metadata: PlaybackMetadata {
+    (moviePilot ?? PlaybackMetadata()).filling(item.metadata)
+  }
+
   var titles: (primary: String, secondary: String?) {
-    guard let episode else { return item.playerTitles }
-    return episode.episode.playerTitles(seriesName: episode.context.seriesName ?? item.seriesName)
+    metadata.playerTitles(isEpisode: item.kind == .episode)
   }
 
   var title: String { PlaybackTitles.singleLine(titles) }
 
   var resumePosition: Double? {
     PlaybackResumePolicy.resumePosition(
-      positionSeconds: item.resumePositionSeconds, runtimeSeconds: item.runtimeSeconds)
+      positionSeconds: item.resumePositionSeconds, durationSeconds: durationSeconds(playerSeconds: nil))
+  }
+
+  /// 所播文件的时长（秒），见 `PlaybackDuration`。`playerSeconds` 是 mpv 读到的时长，还没读到时传 nil。
+  func durationSeconds(playerSeconds: Double?) -> Double? {
+    PlaybackDuration.seconds(
+      source: stream.source.runtimeSeconds, player: playerSeconds, item: item.runtimeSeconds)
   }
 }
 
@@ -225,7 +247,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     )
   }
 
-  func play(_ target: PlaybackTarget) {
+  /// `media` 是详情页的 MoviePilot 详情（从详情页起播时）：播放界面的信息直接用它，不再按服务器条目查。
+  func play(_ target: PlaybackTarget, media: MediaInfo? = nil) {
     guard !isTornDown, !isBusy, let apiService else { return }
     guard apiService.canRequestSuperUserEndpoints else {
       fail(PlaybackError.notAllowed)
@@ -246,7 +269,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       let outcome: Result<PreparedPlayback, Error>
       do {
         guard let self else { return }
-        outcome = .success(try await self.prepare(target, preferredUserName: userName))
+        outcome = .success(try await self.prepare(target, media: media, preferredUserName: userName))
       } catch {
         outcome = .failure(error)
       }
@@ -1109,7 +1132,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   /// 媒体服务器配置很少变化，平时用会话缓存；解析失败时重新读一次，
   /// 配置确实变了才用新配置重试。遇到证书错误的服务器只尝试用户新配置的连接地址。
-  private func prepare(_ target: PlaybackTarget, preferredUserName: String?) async throws -> PreparedPlayback {
+  private func prepare(
+    _ target: PlaybackTarget, media: MediaInfo?, preferredUserName: String?
+  ) async throws -> PreparedPlayback {
     await reporter.waitForQueued(atMost: Self.pendingReportWait)
     try Task.checkCancellation()
     guard let apiService else { throw CancellationError() }
@@ -1117,18 +1142,20 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     var certificateFailures: [String: MediaServerError] = [:]
     do {
       return try await prepare(
-        target, servers: servers, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
+        target, servers: servers, media: media, preferredUserName: preferredUserName,
+        certificateFailures: &certificateFailures)
     } catch let error where !(error is CancellationError) {
       let fresh = try? await apiService.fetchCachedMediaServers(forceRefresh: true)
       try Task.checkCancellation()
       guard let fresh, fresh != servers else { throw error }
       return try await prepare(
-        target, servers: fresh, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
+        target, servers: fresh, media: media, preferredUserName: preferredUserName,
+        certificateFailures: &certificateFailures)
     }
   }
 
   private func prepare(
-    _ target: PlaybackTarget, servers: [MediaServerConf], preferredUserName: String?,
+    _ target: PlaybackTarget, servers: [MediaServerConf], media: MediaInfo?, preferredUserName: String?,
     certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
     let itemID: String
@@ -1176,7 +1203,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             found = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout)
           }
           guard let item = found else { return nil }
-          return try await Self.preparePlayback(item, on: connection)
+          return try await self.preparePlayback(item, on: connection, media: media)
         }
         if let prepared { return prepared }
       } catch let error where error is CancellationError {
@@ -1188,26 +1215,46 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     throw firstError ?? PlaybackError.notFound
   }
 
-  /// 电影、单集直接播；整部剧从第一集开始（不带集列表上下文，没有上一集、下一集）。
+  /// 不是从详情页集列表起播（详情页的「播放」、首页最近入库）：播放信息和 MoviePilot 的条目信息同时取，
+  /// 后者最多等 `PlaybackMetadataLookup.timeout`，取不到就用媒体服务器的。
+  private func preparePlayback(
+    _ requested: ServerMediaItem, on connection: any MediaServerConnection, media: MediaInfo?
+  ) async throws -> PreparedPlayback {
+    let item = try await Self.playableItem(requested, on: connection)
+    guard let apiService else { throw CancellationError() }
+    async let moviePilot = PlaybackMetadataLookup.metadata(for: item, media: media, on: connection, api: apiService)
+    let stream = try await connection.prepareStream(for: item, preferredSourceID: nil)
+    return PreparedPlayback(connection: connection, stream: stream, moviePilot: await moviePilot)
+  }
+
+  /// 按集播放（`episode` 不为 nil）时条目信息来自集列表；换版本时由调用方沿用原来的。
   private static func preparePlayback(
     _ requested: ServerMediaItem, on connection: any MediaServerConnection, preferredSourceID: String? = nil,
     episode: QueuedEpisode? = nil
   ) async throws -> PreparedPlayback {
-    let item: ServerMediaItem
+    let item = try await playableItem(requested, on: connection)
+    let stream = try await connection.prepareStream(for: item, preferredSourceID: preferredSourceID)
+    return PreparedPlayback(
+      connection: connection, stream: stream, episode: episode,
+      moviePilot: episode.map(PlaybackMetadataLookup.metadata(for:)))
+  }
+
+  /// 电影、单集直接播；整部剧从第一集开始（不带集列表上下文，没有上一集、下一集）。
+  private static func playableItem(
+    _ requested: ServerMediaItem, on connection: any MediaServerConnection
+  ) async throws -> ServerMediaItem {
     switch requested.kind {
     case .movie, .episode:
-      item = requested
+      return requested
     case .series:
       let episodes = try await connection.episodes(seriesID: requested.id)
       guard let first = PlaybackEpisodeOrder.firstEpisode(in: episodes) else {
         throw PlaybackError.noEpisodes
       }
-      item = first
+      return first
     case .other:
       throw PlaybackError.unsupportedItemType
     }
-    let stream = try await connection.prepareStream(for: item, preferredSourceID: preferredSourceID)
-    return PreparedPlayback(connection: connection, stream: stream, episode: episode)
   }
 
   // MARK: - 连接
@@ -1356,7 +1403,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         result = .discarded
       } else {
         switch outcome {
-        case .success(let prepared):
+        case .success(var prepared):
+          // 换版本还是同一个条目，沿用已有的 MoviePilot 信息，不再查一次。
+          if prepared.moviePilot == nil, prepared.item.id == session.item.id {
+            prepared.moviePilot = session.playback.moviePilot
+          }
           session.replaceItem(with: prepared, startPosition: startPosition)
           result = .switched
         case .failure(let error) where error is CancellationError:
@@ -1651,13 +1702,12 @@ final class PlaybackSession: Identifiable {
       server: prepared.connection.reportingServer, userID: prepared.connection.userID, itemID: prepared.item.id)
   }
 
-  private func watchProgress(at position: Double) -> WatchProgress {
-    let playerDuration = mpvPlayer.map { $0.duration.seconds }
+  /// 停在 `position` 时要写回的观看进度（测试也直接调用：测试里 mpv 不会真的播到这个位置）。
+  func watchProgress(at position: Double) -> WatchProgress {
+    let duration = prepared.durationSeconds(playerSeconds: mpvPlayer.map { $0.duration.seconds })
     return WatchProgress(
       itemID: prepared.item.id,
-      completed: PlaybackResumePolicy.isCompleted(
-        positionSeconds: position, runtimeSeconds: prepared.item.runtimeSeconds,
-        playerDurationSeconds: playerDuration),
+      completed: PlaybackResumePolicy.isCompleted(positionSeconds: position, durationSeconds: duration),
       positionSeconds: position,
       playedAt: Date())
   }
@@ -1669,7 +1719,7 @@ final class PlaybackSession: Identifiable {
     mpvEventTask = Task { [weak self] in
       for await event in events {
         guard let self, !self.isStopped else { return }
-        self.handle(event.change)
+        self.handle(event.change, generation: event.generation)
       }
     }
     mpvProgressTask = Task { [weak self] in
@@ -1683,8 +1733,10 @@ final class PlaybackSession: Identifiable {
     }
   }
 
-  /// 处理 mpv 事件（测试也直接调用它模拟 mpv）。
-  func handle(_ change: MPVPlaybackEvent.Change) {
+  /// 处理 mpv 事件（测试也直接调用它模拟 mpv）。`generation` 是事件所属的那次载入（`MPVPlayer.generation`）。
+  /// 事件流会留着还没读的事件，换条目后才读到的上一条目的失败或暂停不能算到新条目头上，直接丢弃。
+  func handle(_ change: MPVPlaybackEvent.Change, generation: UInt64) {
+    guard generation == mpvPlayer?.generation else { return }
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
