@@ -15,6 +15,8 @@
 // - Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
 // - 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
 // - 信息行加上评分（MoviePilot 的 TMDB/豆瓣评分，没有时用媒体服务器的）：MoviePilot 没有分级，原版只显示分级。
+// - 显示的条目经 `MediaSession.displayedItem` 取：正在播的条目片长与进度条同一个值（所选片源的时长，mpv 读出后随之更新），
+//   剩余时间和结束时间也按它算。原版直接用面板创建时的条目。
 //
 
 import SwiftUI
@@ -51,13 +53,17 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
         @Environment(MediaSession.self)
         private var mediaSession
 
-        private var item: BaseItemDto
+        private let base: BaseItemDto
+
+        private var item: BaseItemDto {
+            mediaSession.displayedItem(base)
+        }
 
         @State
         private var endsAtLabel: String?
 
         init(item: BaseItemDto) {
-            self.item = item
+            self.base = item
         }
 
         private var accessoryView: some View {

@@ -104,17 +104,19 @@ enum PlaybackMetadataLookup {
     return detail
   }
 
-  /// 在 `timeout` 内等 `work` 的结果，超时返回 nil 并取消它。不等被取消的查询真正停下（任务组会等），
-  /// 免得某个请求不及时响应取消时又把起播拖住；调用方被取消时也取消查询。
-  private static func withinTimeout<T: Sendable>(
-    _ work: @escaping @MainActor @Sendable () async -> T?
+  /// 在 `limit` 内等 `work` 的结果，超时返回 nil 并取消它。调用方被取消时（比如读播放信息先失败了）也立即返回 nil。
+  /// 两种情况都不等被取消的查询真正停下（任务组会等），免得某个请求不及时响应取消时拖住起播或失败提示。
+  /// 测试也直接调用。
+  static func withinTimeout<T: Sendable>(
+    _ limit: Duration = timeout, _ work: @escaping @MainActor @Sendable () async -> T?
   ) async -> T? {
+    let first = FirstResult<T>()
     let query = Task { @MainActor in await work() }
     return await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
-        let first = FirstResult(continuation)
+        first.wait(continuation)
         let timer = Task { @MainActor in
-          guard (try? await Task.sleep(for: timeout)) != nil else { return }
+          guard (try? await Task.sleep(for: limit)) != nil else { return }
           query.cancel()
           first.finish(nil)
         }
@@ -126,23 +128,41 @@ enum PlaybackMetadataLookup {
       }
     } onCancel: {
       query.cancel()
+      first.finish(nil)
     }
   }
 
-  /// 只认先到的一个结果。
-  private final class FirstResult<T: Sendable> {
-    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
-    nonisolated deinit {}
-
+  /// 只认先到的一个结果。取消回调不在主线程上，可能早于开始等待，所以用锁，先到的结果留到开始等待时再交出。
+  nonisolated private final class FirstResult<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
     private var continuation: CheckedContinuation<T?, Never>?
+    private var isFinished = false
+    private var result: T?
 
-    init(_ continuation: CheckedContinuation<T?, Never>) {
-      self.continuation = continuation
+    func wait(_ continuation: CheckedContinuation<T?, Never>) {
+      lock.lock()
+      guard isFinished else {
+        self.continuation = continuation
+        lock.unlock()
+        return
+      }
+      let result = result
+      lock.unlock()
+      continuation.resume(returning: result)
     }
 
     func finish(_ value: T?) {
+      lock.lock()
+      guard !isFinished else {
+        lock.unlock()
+        return
+      }
+      isFinished = true
+      result = value
+      let continuation = continuation
+      self.continuation = nil
+      lock.unlock()
       continuation?.resume(returning: value)
-      continuation = nil
     }
   }
 }

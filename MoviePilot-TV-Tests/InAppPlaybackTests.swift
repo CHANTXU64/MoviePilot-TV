@@ -3771,8 +3771,47 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(screen.item.runtime, .seconds(10_800), "进度条、剩余时间和跳转上限都读这个值")
     XCTAssertFalse(session.watchProgress(at: 7000).completed, "按条目的 2 小时算会误判看完（7000/7200）")
     XCTAssertTrue(session.watchProgress(at: 9800).completed, "按 3 小时的 90%")
+
+    // 信息面板：按播放界面建面板的入口建，再经 `displayedItem` 取显示的条目（面板视图就是这样取的）。
+    // 测试地址 mpv 打不开，它的失败与这里无关，接住免得结束会话。
+    session.onFailure = { _ in }
+    screen.start()
+    let playing = try XCTUnwrap(screen.playbackItem)
+    let info = try XCTUnwrap(
+      VideoPlayerSupplementType.info.makeSupplement(for: playing, queue: nil) as? MediaInfoSupplement)
+    XCTAssertEqual(info.item.runtime, .seconds(7200), "面板建好时存的是条目的 2 小时，不能直接显示")
+    XCTAssertEqual(screen.displayedItem(info.item).runtime, .seconds(10_800), "面板显示的片长和结束时间按 3 小时")
+    XCTAssertEqual(
+      screen.displayedItem(BaseItemDto(id: "other")).runtime, nil, "不是正在播的条目时原样显示，不套用当前片长")
+    screen.stop()
     coordinator.endCurrentSession()
   }
+
+  /// 读播放信息先失败了：协调器取消还在查的 MoviePilot 信息。查询本身不响应取消时，也要立即返回，失败提示不被拖住。
+  func testCancelledMetadataLookupReturnsWithoutWaitingForTheQuery() async throws {
+    let gate = QueryGate()
+    let lookup = Task { @MainActor in
+      await PlaybackMetadataLookup.withinTimeout(.seconds(5)) { () async -> Int? in
+        await withCheckedContinuation { gate.continuation = $0 }
+        return 1
+      }
+    }
+    while gate.continuation == nil { await Task.yield() }
+    let cancelled = ContinuousClock.now
+    lookup.cancel()
+    let value = await lookup.value
+    XCTAssertNil(value)
+    XCTAssertLessThan(ContinuousClock.now - cancelled, .seconds(1), "不等查询停下，也不等超时")
+    gate.continuation?.resume()
+  }
+}
+
+@MainActor
+private final class QueryGate {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
+  var continuation: CheckedContinuation<Void, Never>?
 }
 
 private extension PlaybackSession {

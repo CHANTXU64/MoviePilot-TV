@@ -243,6 +243,12 @@ final class MediaSession {
     return item
   }
 
+  /// 信息面板等按条目显示的地方读这里：是正在播的条目时用 `item`（片长与进度条同一个值），否则原样。
+  /// 面板是起播时按 `MediaPlayerItem.baseItem` 建的，那份不会随 mpv 读出的时长更新。
+  func displayedItem(_ item: BaseItemDto) -> BaseItemDto {
+    playbackItem?.baseItem.id == item.id ? self.item : item
+  }
+
   var state: State {
     if isStopped { return .stopped }
     guard hasStarted else { return .initial }
