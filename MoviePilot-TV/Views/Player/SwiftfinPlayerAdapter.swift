@@ -394,7 +394,7 @@ final class MediaSession {
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
-    var baseItem = BaseItemDto(item: session.item, episode: session.episode)
+    var baseItem = BaseItemDto.playback(session.item, episode: session.episode)
     baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
       baseItem: baseItem,

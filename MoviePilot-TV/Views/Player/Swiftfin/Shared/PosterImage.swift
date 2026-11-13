@@ -8,10 +8,13 @@
 // 本文件改自 Swiftfin：Shared/Components/PosterImage.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：原版的 `ImageView` 基于 Nuke，占位图用 BlurHashKit；MoviePilot-TV 未引入这两个依赖，
-// 去掉 `pipeline` 及其修饰器，模糊占位改为与无模糊值时相同的系统图标占位；`@SharedPoster` 换成普通存储属性。
+// 修改：原版用 Swiftfin 的 `ImageView`（基于 Nuke，占位图用 BlurHashKit）。这里改用 App 自己的 `PageManagedImage`：
+// 受保护图片（MoviePilot 图片代理等）要带会话的下载器和 Cookie、缓存按会话隔开，App 其他页面也都经它加载。
+// 只取第一个有地址的来源（这里的条目最多给一个），按显示宽度和画幅缩小解码；图片按画幅填满（原版 `transform` 的
+// 自定义图片样式随之去掉）。没有图或加载失败时显示条目的系统图标。`@SharedPoster` 换成普通存储属性。
 //
 
+import Kingfisher
 import SwiftUI
 
 struct PosterImage<Element: Poster>: View {
@@ -19,7 +22,7 @@ struct PosterImage<Element: Poster>: View {
     @Environment(\.self)
     private var environment
 
-    private let contentMode: ContentMode
+    private let contentMode: SwiftUI.ContentMode
     private var element: Element
     private let size: PosterDisplayType.Size
     private let displayType: PosterDisplayType
@@ -28,7 +31,7 @@ struct PosterImage<Element: Poster>: View {
         item: Element,
         type: PosterDisplayType,
         size: PosterDisplayType.Size = .small,
-        contentMode: ContentMode = .fill
+        contentMode: SwiftUI.ContentMode = .fill
     ) {
         self.contentMode = contentMode
         self.displayType = type
@@ -36,12 +39,27 @@ struct PosterImage<Element: Poster>: View {
         self.size = size
     }
 
-    private var imageSources: [ImageSource] {
+    private var imageURL: URL? {
         element.imageSources(
             for: displayType,
             size: size,
             environment: element.resolveEnvironment(environment)
         )
+        .lazy
+        .compactMap(\.url)
+        .first
+    }
+
+    /// 解码尺寸：这个尺寸档位的显示宽度，高度按画幅（与 `posterAspectRatio` 相同）。
+    private var decodeSize: CGSize {
+        let width = size.width(for: displayType) ?? 500
+        let aspectRatio: CGFloat =
+            switch displayType {
+            case .landscape: 1.77
+            case .portrait: 2 / 3
+            case .square: 1
+            }
+        return CGSize(width: width, height: (width / aspectRatio).rounded(.up))
     }
 
     var body: some View {
@@ -52,22 +70,24 @@ struct PosterImage<Element: Poster>: View {
             AlternateLayoutView {
                 Color.clear
             } content: {
-                ImageView(imageSources)
-                    .image { image in
-                        element.transform(image: image, displayType: displayType)
-                    }
-                    .placeholder { _ in
-                        SystemImageContentView(
-                            systemName: element.systemImage
+                ZStack {
+                    // 图片盖在图标上面：加载出来之前、没有图或加载失败时露出图标。
+                    SystemImageContentView(
+                        systemName: element.systemImage
+                    )
+
+                    if let imageURL {
+                        PageManagedImage(
+                            url: imageURL,
+                            processor: DownsamplingImageProcessor(size: decodeSize),
+                            isEnabled: true,
+                            participatesInPageLifecycle: false,
+                            skipsMemoryCache: false
                         )
                     }
-                    .failure {
-                        SystemImageContentView(
-                            systemName: element.systemImage
-                        )
-                    }
-                    .accessibilityRemoveTraits(.isImage)
-                    .accessibilityIgnoresInvertColors()
+                }
+                .accessibilityRemoveTraits(.isImage)
+                .accessibilityIgnoresInvertColors()
             }
         }
         .posterStyle(

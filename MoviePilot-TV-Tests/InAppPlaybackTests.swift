@@ -1877,6 +1877,44 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testEpisodesInThePlayerCarryTheirStillFromTheMoviePilotList() async throws {
+    // 选集列表、上一集下一集的条目带上 MoviePilot 集列表里这一集的剧照，地址和详情页单集卡片的一样；
+    // 集列表里没有剧照的集不带。
+    configureDefaultOrderLibrary()
+    let withStills =
+      #"[{"id":555,"season_number":2,"episode_number":10,"name":"重逢","still_path":"/still-555.jpg"},{"id":556,"season_number":2,"episode_number":11,"name":"离别"},{"id":557,"season_number":2,"episode_number":12,"name":"归来","still_path":"/still-557.jpg"}]"#
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = withStills }
+    let season = MoviePilotEpisode.list(
+      try JSONDecoder().decode([TmdbEpisode].self, from: Data(withStills.utf8)), season: 1)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(QueuedEpisode(context: context(), episode: season[0], seasonEpisodes: season)))
+    let session = try XCTUnwrap(coordinator.session)
+    func still(_ path: String) throws -> URL {
+      try XCTUnwrap(APIService.shared.getSeasonPosterURL(posterPath: path, mediaPosterPath: nil))
+    }
+
+    let user = UserSession(session: session)
+    let items = try await user.seasonEpisodes(seriesID: "100", seasonID: UserSession.queueSeasonID(1))
+    XCTAssertEqual(items.map(\.id), ["e-s2e3", "e-s2e5"])
+    XCTAssertEqual(items.map(\.landscapeImageURL), [try still("/still-555.jpg"), try still("/still-557.jpg")])
+    XCTAssertEqual(
+      items.first?.imageSources(for: .landscape, environment: .default).map(\.url), [try still("/still-555.jpg")],
+      "选集卡片按横版取这张图")
+
+    guard case .episode(let next, _) = try await user.adjacentEpisode(.next, itemID: "e-s2e3") else {
+      return XCTFail("下一集是组内第 12 集")
+    }
+    XCTAssertEqual(next.landscapeImageURL, try still("/still-557.jpg"))
+
+    let noStill = MoviePilotEpisode.list(
+      try JSONDecoder().decode([TmdbEpisode].self, from: Data(Self.groupSeason1.utf8)), season: 1)
+    XCTAssertNil(
+      BaseItemDto.playback(
+        session.item, episode: QueuedEpisode(context: context(), episode: noStill[0], seasonEpisodes: noStill)
+      ).landscapeImageURL, "集列表里没有剧照时不带")
+    coordinator.endCurrentSession()
+  }
+
   func testEpisodeNotOnServerExplainsWithoutPlaying() async throws {
     configureDefaultOrderLibrary()
     let coordinator = makeCoordinator(makeService())
