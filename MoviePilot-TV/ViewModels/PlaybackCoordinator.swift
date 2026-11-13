@@ -1682,20 +1682,19 @@ final class PlaybackSession: Identifiable {
   /// 只说有依据的：mpv 的警告不说跳过的是哪类轨道，跳过的条数不少于文件里音视频和字幕轨的总数
   /// （`embeddedTrackCount`，数不准时为 nil）时，才能确定画面和声音都在里面；否则只说有轨道压缩、可能因此播不了。
   /// 只比音视频条数不够：字幕轨压缩、音视频因别的原因没播出来时条数也可能凑够。
+  /// 其他失败按错误类别说明（见 `PlaybackFailureMessage`）。
   static func failureMessage(
     for error: MPVPlayerError, skippedCompressedTracks: Int, embeddedTrackCount: Int?
   ) -> String {
-    guard skippedCompressedTracks > 0, case .playbackFailed(let code, _) = error, code == nothingToPlay else {
-      return "无法播放该影片，请检查与媒体服务器的网络连接"
+    guard skippedCompressedTracks > 0, case .playbackFailed(let code, _) = error, code == LibmpvError.nothingToPlay
+    else {
+      return PlaybackFailureMessage.message(for: error)
     }
     if let embeddedTrackCount, skippedCompressedTracks >= embeddedTrackCount {
       return "这个文件的画面和声音用了 zlib 压缩，应用内播放器暂时解不开，可以用媒体服务器自己的 App 播放"
     }
     return "这个文件有轨道用了 zlib 压缩，应用内播放器解不开，可能因此播不了，可以用媒体服务器自己的 App 播放"
   }
-
-  /// libmpv 的 `MPV_ERROR_NOTHING_TO_PLAY`：没有任何音频或视频数据被播放出来。
-  private static let nothingToPlay: Int32 = -16
 
   private func handlePauseChange(isPaused: Bool) {
     guard isItemLoaded, isPaused != lastReportedPause else { return }
