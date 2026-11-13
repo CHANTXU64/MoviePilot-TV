@@ -161,6 +161,21 @@ struct EmbyServerConnection: MediaServerConnection {
     nil
   }
 
+  func libraryFolders() async throws -> [MediaLibraryFolder] {
+    try await perform(.readLibraries) { try await client.mediaFolders() }
+      .map { MediaLibraryFolder(id: $0.id, paths: $0.paths) }
+  }
+
+  /// 一部剧和一个媒体库在 Emby 上都是条目，按条目重新扫描；整个库另有接口。
+  func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws {
+    try await perform(.refreshLibrary) {
+      switch scope {
+      case .series(let id), .library(let id): try await client.refreshItem(id: id)
+      case .all: try await client.refreshAllLibraries()
+      }
+    }
+  }
+
   /// 按外部编号搜索用的参数（Emby `AnyProviderIdEquals`，如 `tmdb.12345`），只取 Emby 自带刮削器会写的来源。
   nonisolated static func providerSearchKeys(for expected: LibraryItemExpectation) -> [String] {
     ["tmdb", "imdb", "tvdb"].compactMap { source in expected.externalIDs[source].map { "\(source).\($0)" } }

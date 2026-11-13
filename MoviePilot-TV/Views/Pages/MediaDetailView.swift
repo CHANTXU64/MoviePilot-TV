@@ -132,7 +132,6 @@ struct MediaDetailView: View {
   @State private var unsubscribeConfirmationMessage = ""
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
-  @State private var selectedEpisode: MoviePilotEpisode?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
   /// 之后演员重新加载（如页面重新激活时重试空结果）也不会让这一行消失或被换掉。
   @State private var selectedCreditKind: MediaDetailCreditKind = .cast
@@ -478,11 +477,11 @@ struct MediaDetailView: View {
                   tmdbID: episodeTMDBID,
                   subscriptionSeasons: shouldShowSeasonSubscriptionSection
                     ? preloadTask.seasonViewModel : nil,
+                  playback: viewModel.episodePlayback,
                   allowsRequests: allowsRequests,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",
-                  onExpand: { navigationCoordinator.push($0) },
-                  onSelect: { selectedEpisode = $0 }
+                  onExpand: { navigationCoordinator.push($0) }
                 )
                 .id(episodeTMDBID)
                 .focused($focusedContentRow, equals: "episodes")
@@ -699,7 +698,6 @@ struct MediaDetailView: View {
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
       selectedDoubanDiscussion = nil
-      selectedEpisode = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     // 短评/影评详情：正文长文靠段落焦点停靠点驱动纵向滚动，不用浏览器打开豆瓣链接。
@@ -708,9 +706,6 @@ struct MediaDetailView: View {
         entry: entry,
         avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
       )
-    }
-    .sheet(item: $selectedEpisode) { episode in
-      EpisodeDetailSheet(episode: episode)
     }
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {

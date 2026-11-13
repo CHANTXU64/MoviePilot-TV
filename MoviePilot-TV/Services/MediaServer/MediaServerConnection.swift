@@ -28,6 +28,10 @@ protocol MediaServerConnection: Sendable {
   func saveWatchProgress(_ progress: WatchProgress) async throws
   /// 拖动预览图的图集地址（如 Jellyfin trickplay）；服务器没有时为 nil。
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL?
+  /// 服务器上的媒体库和各自的文件夹：叫服务器入库时按整理后的路径找该刷新哪个媒体库。
+  func libraryFolders() async throws -> [MediaLibraryFolder]
+  /// 叫服务器重新扫描，新整理进来的文件不用等它自己发现。只等服务器受理，不等扫描完成。
+  func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws
 }
 
 /// 按 MoviePilot 的服务器配置建立连接：探测地址、选用户。
@@ -65,6 +69,7 @@ enum MediaServerAdapters {
 nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
   enum Operation: Equatable, Sendable {
     case connect, listUsers, search, readItem, readEpisodes, readPlaybackInfo, report, saveProgress
+    case readLibraries, refreshLibrary
 
     var text: String {
       switch self {
@@ -76,6 +81,8 @@ nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
       case .readPlaybackInfo: "读取播放信息"
       case .report: "上报播放状态"
       case .saveProgress: "保存观看进度"
+      case .readLibraries: "读取媒体库"
+      case .refreshLibrary: "刷新媒体库"
       }
     }
   }

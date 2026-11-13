@@ -2335,6 +2335,16 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([EpisodeTrialTransferJob].self, from: data)
   }
 
+  /// 马上运行 MoviePilot 的「下载文件整理」服务（平时每 5 分钟一次），仅管理员。
+  /// - 对应前端: MoviePilot-Frontend/src/views/system/ServiceView.vue（服务列表里的执行按钮）
+  /// - MoviePilot 扫一遍下载器、把下完还没整理的任务放进整理队列才回复，整理在后台进行；
+  ///   这个服务正在运行时这次跳过，照样回复成功。
+  func runDownloadTransfer() async throws -> (success: Bool, message: String?) {
+    let endpoint = try buildEndpoint(path: "/system/runscheduler", params: ["jobid": "transfer"])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeActionResponseSync(from: data)
+  }
+
   /// 暂停下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/DownloadingCard.vue (toggleDownload)
   /// - 应用场景: 在下载任务列表页暂停指定的下载任务。
@@ -2386,9 +2396,22 @@ class APIService: ObservableObject {
     try await transferHistoryPage(TransferHistoryResponse.self, page: page, count: count, title: title)
   }
 
-  /// 整理历史的一页，按调用方给的类型解码。
+  /// 单集对应按剧名查这部剧的整理记录（`title` 同时匹配标题、源路径和目标路径），只要成功的一页。
+  /// 只解码对应用到的字段，和整理历史页、试看各自按自己的记录类型解码。
+  func fetchEpisodeMatchTransferRecords(title: String, page: Int, count: Int) async throws
+    -> (records: [EpisodeTransferRecord], total: Int?)
+  {
+    struct Page: Decodable {
+      let list: [EpisodeTransferRecord]
+      let total: Int?
+    }
+    let result = try await transferHistoryPage(Page.self, page: page, count: count, title: title, status: true)
+    return (result.list, result.total)
+  }
+
+  /// 整理历史的一页，按调用方给的类型解码。`status` 为 nil 时成功和失败的都要。
   private func transferHistoryPage<Page: Decodable>(
-    _ type: Page.Type, page: Int, count: Int, title: String?
+    _ type: Page.Type, page: Int, count: Int, title: String?, status: Bool? = nil
   ) async throws -> Page {
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
@@ -2396,6 +2419,7 @@ class APIService: ObservableObject {
         "page": String(page),
         "count": String(count),
         "title": title,
+        "status": status.map { $0 ? "true" : "false" },
       ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(type, from: data)

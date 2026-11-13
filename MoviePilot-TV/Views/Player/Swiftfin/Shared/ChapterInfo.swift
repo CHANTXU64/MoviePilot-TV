@@ -12,7 +12,8 @@
 // 选中描边 `PosterSelectionOverlay`（原定义于 Shared/Components/PosterIndicators/PosterIndicatorsOverlay.swift）一并移入本文件，
 // 其主题色（Swiftfin 设置项 `accentColor`）取默认值 `jellyfinPurple`。
 // `FullInfo` 与扩展标为 `nonisolated`（工程默认 MainActor 隔离，海报协议的视图成员仍在主线程）；
-// 章节缺图占位改用 `AppSymbol.movie`。
+// 章节缺图占位改用 `AppSymbol.movie`。章节图原版用 `transform` 在黑底上按比例完整显示，改为 `fitsPosterImage`
+// （见 PosterImage.swift）。
 //
 
 import Foundation
@@ -47,6 +48,7 @@ extension ChapterInfo {
         let imageSource: ImageSource?
         let preferredPosterDisplayType: PosterDisplayType = .landscape
         let systemImage: String = AppSymbol.movie
+        let fitsPosterImage = true
 
         var startSeconds: Duration {
             chapterInfo.startSeconds ?? .zero
@@ -88,15 +90,6 @@ extension ChapterInfo {
 
         func posterOverlay(for displayType: PosterDisplayType) -> some View {
             PosterSelectionOverlay()
-        }
-
-        func transform(image: Image, displayType: PosterDisplayType) -> some View {
-            ZStack {
-                Color.black
-
-                image
-                    .aspectRatio(contentMode: .fit)
-            }
         }
     }
 }

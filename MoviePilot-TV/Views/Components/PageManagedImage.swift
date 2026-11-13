@@ -21,6 +21,8 @@ struct PageManagedImage: View {
   var alignsImageAtTop = false
   var loadsDiskFileSynchronously = false
   var fadeDuration: TimeInterval = 0.25
+  /// 按比例完整显示（留空的地方透明）；默认按比例填满、裁掉多出的部分。
+  var fitsWholeImage = false
   var onSuccess: (() -> Void)?
   var onFailure: (() -> Void)?
 
@@ -36,6 +38,7 @@ struct PageManagedImage: View {
       alignsImageAtTop: alignsImageAtTop,
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
       fadeDuration: fadeDuration,
+      fitsWholeImage: fitsWholeImage,
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: pageImageLifecycle,
@@ -58,6 +61,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   let alignsImageAtTop: Bool
   let loadsDiskFileSynchronously: Bool
   let fadeDuration: TimeInterval
+  let fitsWholeImage: Bool
   let onSuccess: (() -> Void)?
   let onFailure: (() -> Void)?
   let lifecycle: PageImageLifecycle?
@@ -81,6 +85,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
     let backdrop = uiView as? PageBackdropImageContainer
     backdrop?.alignsImageAtTop = alignsImageAtTop
     guard let imageView = backdrop?.imageView ?? (uiView as? PageManagedImageView) else { return }
+    imageView.contentMode = fitsWholeImage ? .scaleAspectFit : .scaleAspectFill
     imageView.configure(
       url: url,
       processor: processor,

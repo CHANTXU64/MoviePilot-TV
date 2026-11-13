@@ -154,13 +154,13 @@ struct EmbyClient {
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 剧集的全部集（按 Emby 顺序，带用户观看数据和外部编号），不含缺失的集。
-  /// 单集条目的 `ProviderIds.Tmdb` 是 TMDB 单集 ID，按集播放靠它对应 MoviePilot 集列表里的集。
+  /// 剧集的全部集（按 Emby 顺序，带用户观看数据、外部编号、文件路径和首播日期），不含缺失的集。
+  /// 单集对应（见 `EpisodeMatching.swift`）先看 `ProviderIds.Tmdb`（TMDB 单集 ID），没有时拿路径对整理记录、按季号集号和首播日期对。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds"]))
+        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds,Path,PremiereDate"]))
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
@@ -222,6 +222,22 @@ struct EmbyClient {
   func updateUserData(userID: String, itemID: String, userData: [String: JSONValue]) async throws {
     _ = try await send(
       url(["Users", userID, "Items", itemID, "UserData"]), method: "POST", body: .object(userData))
+  }
+
+  /// 可选的媒体库和各自的文件夹（MoviePilot 叫 Emby 刷新时也按它找媒体库）。
+  func mediaFolders() async throws -> [EmbyMediaFolder] {
+    let data = try await send(url(["Library", "SelectableMediaFolders"]))
+    return try await Self.decode(EmbyMediaFolderList.self, from: data).folders
+  }
+
+  /// 重新扫描一个条目（一部剧或一个媒体库）下面的文件，参数同 MoviePilot。Emby 受理后在后台扫描。
+  func refreshItem(id: String) async throws {
+    _ = try await send(url(["Items", id, "Refresh"], query: ["Recursive": "true"]), method: "POST")
+  }
+
+  /// 扫描整个库（所有媒体库）。
+  func refreshAllLibraries() async throws {
+    _ = try await send(url(["Library", "Refresh"]), method: "POST")
   }
 
   // MARK: - 传输

@@ -38,7 +38,12 @@ final class SessionScope {
     mediaPreloader = MediaPreloader(apiService: apiService)
     let playback = PlaybackCoordinator(apiService: apiService)
     playbackCoordinator = playback
-    episodeTrial = EpisodeTrialService(api: apiService) { [weak playback] request, fresh in
+    episodeTrial = EpisodeTrialService(
+      api: apiService,
+      libraryScan: { [weak playback] context, scope in
+        await playback?.requestLibraryScan(context: context, scope: scope)
+      }
+    ) { [weak playback] request, fresh in
       await playback?.episodeAvailability(
         for: [request.episode], context: request.playbackContext, forceRefresh: fresh)?.first
     }

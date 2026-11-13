@@ -42,9 +42,9 @@ class MediaDetailViewModel: ObservableObject {
   @Published private(set) var isInLibrary = false
   /// 管理员且条目在（或无法确认不在）可在应用内播放的服务器上时，应用内播放的目标。
   @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
-  /// MoviePilot 入库查询给的条目（含所属服务器），有播放入口时才有。电视剧按集播放用它在服务器上找这部剧，
-  /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。界面不直接显示它，和 `inAppPlaybackTarget` 一起更新，不单独触发重绘。
-  private(set) var mediaServerItemRef: MediaServerItemRef?
+  /// 电视剧集列表的按集播放和试看，应用内播放可用时才有；这部剧不在媒体库里时也有（每集都可以试看）。
+  /// 入库查询结束后才给出，集列表据此查每集能不能播，不会在还不知道入库条目时先把每集都当成不在库。
+  @Published private(set) var episodePlayback: EpisodePlaybackSource?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -204,7 +204,7 @@ class MediaDetailViewModel: ObservableObject {
     let isEnabled = InAppPlaybackAvailability.isEnabled(
       backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: PlaybackPreferences.isInAppPlaybackEnabled)
     if !isEnabled {
-      mediaServerItemRef = nil
+      episodePlayback = nil
       inAppPlaybackTarget = nil
     }
     guard hasAppliedFullDetail else { return }
@@ -537,14 +537,6 @@ class MediaDetailViewModel: ObservableObject {
     preloadTask = nil
   }
 
-  /// 详情页集列表按集播放用的上下文：电视剧有播放入口时才有。`episodeGroup` 是详情页当前选的剧集组（nil 为默认顺序），
-  /// `seasons` 是详情页的季顺序（剧集组下是组内季号）。每集能不能播见 `PlaybackCoordinator.episodeAvailability`。
-  func episodePlaybackContext(episodeGroup: String?, seasons: [Int]) -> EpisodePlaybackContext? {
-    guard inAppPlaybackTarget != nil else { return nil }
-    return EpisodePlaybackContext(
-      media: detail, episodeGroup: episodeGroup, seasons: seasons, libraryItem: mediaServerItemRef)
-  }
-
   private func loadMediaServerExists() async {
     guard detail.identity != nil else { return }
     let isMovie = detail.type == "电影"
@@ -567,16 +559,19 @@ class MediaDetailViewModel: ObservableObject {
     }
     guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
     if showsLibraryState { isInLibrary = itemRef != nil }
-    guard let itemRef, offersPlayback else { return }
+    guard offersPlayback else { return }
     do {
-      // 入库条目可能属于不能在应用内播放的服务器，ID 也可能和别的服务器撞号：需要时在可播放的服务器上按外部编号找到它。
       let servers = try await apiService.fetchCachedMediaServers()
-      guard servers.contains(where: \.supportsInAppPlayback) else { return }
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot),
+        servers.contains(where: \.supportsInAppPlayback)
+      else { return }
+      if detail.type == "电视剧" { episodePlayback = EpisodePlaybackSource(libraryItem: itemRef) }
+      guard let itemRef else { return }
+      // 入库条目可能属于不能在应用内播放的服务器，ID 也可能和别的服务器撞号：需要时在可播放的服务器上按外部编号找到它。
       let expected = LibraryItemExpectation(media: detail)
       let target = await coordinator.locateLibraryItem(
         itemRef.itemID, expected: expected, in: servers, preferredServer: itemRef.server)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-      mediaServerItemRef = target == nil ? nil : itemRef
       inAppPlaybackTarget = target
     } catch is CancellationError {
     } catch {

@@ -37,7 +37,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(searched["state"] as? String, "S")
       XCTAssertEqual(searched["include"] as? String, "WEB")
       XCTAssertEqual(searched["quality"] as? String, "WEB-DL")
-      XCTAssertEqual(searched["best_version"] as? Int, 1)
+      XCTAssertEqual(created["best_version"] as? Int, 0, "普通订阅：按用户的搜索策略，不像洗版那样翻完所有站点才下载")
+      XCTAssertEqual(searched["best_version"] as? Int, 0)
       XCTAssertEqual(searched["best_version_full"] as? Int, 0)
       XCTAssertEqual(service.credentials.count, 1)
       XCTAssertEqual(service.trialState(of: try XCTUnwrap(backend.subscribe(81))), .active)
@@ -49,7 +50,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
       XCTAssertTrue(service.credentials.isEmpty)
 
@@ -61,8 +62,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
   func testUnfinishedSearchesExplainHowTheyEnded() async throws {
     for (state, expected) in [
-      ("failed", EpisodeTrialProgress.unavailable("MoviePilot 没有完成本次试看搜索，可以重新发起")),
-      ("skipped", .unavailable("MoviePilot 跳过了本次试看搜索，可以重新发起")),
+      ("failed", EpisodeTrialProgress.concluded(.searchIncomplete("MoviePilot 没有完成本次试看搜索，可以重新试看"))),
+      ("skipped", .concluded(.searchIncomplete("MoviePilot 跳过了本次试看搜索，可以重新试看"))),
     ] {
       backend.reset()
       try await withService { _, service, _, request in
@@ -99,6 +100,110 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testReadyEpisodeThatTheLibraryNoLongerHasStopsBeingPlayableAfterARecheck() async throws {
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: true)
+      _ = await service.refresh(request)
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      @MainActor func entry() -> EpisodeEntry {
+        EpisodeEntry(
+          availability: .notOnServer, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+          trialBlock: nil, canCancelTrial: true)
+      }
+      XCTAssertTrue(entry().isPlayable, "刚入库、详情页的播放状态还没重查时照样能直接播")
+
+      // 重查途中才入库的不动：那次结果可能是入库前读的。
+      service.libraryRechecked([request.key: .notOnServer], readyBeforeCheck: [])
+      XCTAssertTrue(entry().isPlayable)
+
+      // 重查前就已入库，这次读取失败：不知道还在不在，照样能播。
+      let readyBefore = service.readyEpisodes(among: [request.key])
+      XCTAssertEqual(readyBefore, [request.key])
+      service.libraryRechecked([request.key: .failed("媒体服务器读取失败")], readyBeforeCheck: readyBefore)
+      XCTAssertTrue(entry().isPlayable)
+
+      // 这次查到媒体服务器上确认没有了（文件被删）：不再显示能播，可以重新试看。
+      service.libraryRechecked([request.key: .notOnServer], readyBeforeCheck: readyBefore)
+      XCTAssertNil(service.progress[request.key])
+      XCTAssertFalse(entry().isPlayable)
+      XCTAssertNil(entry().cardStatus)
+      XCTAssertTrue(entry().canStartTrial)
+
+      // 页面再打开这一集时按服务器现状重新推导。
+      library.value = .notOnServer
+      let rederived = await service.refresh(request)
+      XCTAssertEqual(rederived, .notStarted)
+    }
+  }
+
+  func testReadyEpisodeThatIsOnlyAmongUnidentifiedFilesAfterARecheckIsNoLongerPlayable() async throws {
+    // 入库后再查，没找到这一集、服务器上只剩认不出是哪一集的文件：和试看入口一样算没找到，不再显示能播，
+    // 面板先说明这一集可能在那些文件里，再给「试看」。
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      let unmatched = EpisodeAvailability.unmatched(server: "测试媒体库")
+      service.libraryRechecked(
+        [request.key: unmatched], readyBeforeCheck: service.readyEpisodes(among: [request.key]))
+      let entry = EpisodeEntry(
+        availability: unmatched, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+        trialBlock: nil, canCancelTrial: true)
+      XCTAssertFalse(entry.isPlayable)
+      XCTAssertEqual(entry.cardStatus, .attention)
+      XCTAssertEqual(entry.panel.buttons, [.startTrial(isRetry: false), .recheck])
+    }
+  }
+
+  func testReadyEpisodeThatIsOnlyFoundByNumbersAfterARecheckIsExplainedBeforePlaying() async throws {
+    // 入库时确定是这一集，后来媒体服务器刷新元数据丢了 TMDB 单集编号，再查只按季号集号找到：以这次的结果为准，
+    // 按下先打开面板说明可能不是这一集，不直接播。
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      let match = UncertainEpisodeMatch(season: 2, episode: 5, episodeGroup: nil, airDate: .matches)
+      let uncertain = EpisodeAvailability.uncertain(server: "测试媒体库", match: match)
+      service.libraryRechecked(
+        [request.key: uncertain], readyBeforeCheck: service.readyEpisodes(among: [request.key]))
+      let entry = EpisodeEntry(
+        availability: uncertain, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+        trialBlock: nil, canCancelTrial: true)
+      XCTAssertFalse(entry.isPlayable)
+      XCTAssertEqual(entry.primaryAction, .openPanel)
+      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库") + "。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+      XCTAssertEqual(entry.panel.buttons, [.play])
+    }
+  }
+
+  func testEpisodeFoundOnlyByNumbersCountsAsInTheLibrary() async throws {
+    // 入库后服务器上的文件没有 TMDB 单集编号，只按季号集号对上：入库这一步只看服务器上有没有文件，也算入库，但要标明。
+    let library = LibraryBox()
+    let match = UncertainEpisodeMatch(season: 1, episode: 5, episodeGroup: nil, airDate: .unknown)
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.moveToQueue("target-hash")
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+
+      library.value = .uncertain(server: "测试媒体库", match: match)
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库", uncertain: match))
+    }
+  }
+
   func testOrganizationFailureEndsTheTrial() async throws {
     try await withService { _, service, _, request in
       _ = await service.start(request)
@@ -106,10 +211,10 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.organize("target-hash", succeeded: false)
       let failed = await service.refresh(request)
-      XCTAssertEqual(failed, .organizationFailed)
+      XCTAssertEqual(failed, .concluded(.organizationFailed))
 
       let again = await service.start(request)
-      XCTAssertEqual(again, .searching, "整理失败后可以重新发起")
+      XCTAssertEqual(again, .searching, "整理失败后可以重新试看")
     }
   }
 
@@ -139,13 +244,156 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.finishDownload("target-hash")
       let between = await service.refresh(request)
-      XCTAssertEqual(between, .submissionUnconfirmed, "下载器只列出还在下载的任务，暂时三处都找不到")
+      XCTAssertEqual(between, .waitingForOrganization, "下载器只列出还在下载的任务，三处都明确查不到时按等待整理显示")
       backend.moveToQueue("target-hash")
       let organizing = await service.refresh(request)
       XCTAssertEqual(organizing, .organizing)
     }
   }
 
+  func testWhileDownloadingOnlyTheDownloaderIsAsked() async throws {
+    // 下载中页面 3 秒刷新一次：知道是哪个下载器以后，还在下载时只查它，不查整理记录和整理队列。
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      let before = backend.requestLog.count
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertEqual(Array(backend.requestLog.dropFirst(before)), ["GET download"])
+
+      backend.finishDownload("target-hash")
+      let after = backend.requestLog.count
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      XCTAssertTrue(
+        backend.requestLog.dropFirst(after).contains("GET history/transfer"), "下载器里没有了才查整理记录")
+    }
+  }
+
+  func testFinishedDownloadAsksMoviePilotToOrganizeRightAwayOnce() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      XCTAssertEqual(backend.scheduledJobs, [], "还在下载时不催整理")
+
+      backend.finishDownload("target-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      try await waitUntil { backend.scheduledJobs == ["transfer"] }
+
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(backend.scheduledJobs, ["transfer"], "每次试看只催一次，之后等定时整理")
+    }
+  }
+
+  func testRemainingDownloadTimeIsEstimatedFromTheAverageSpeedNotMoviePilotsLeftTime() async throws {
+    // MoviePilot 的 left_time 把整季包里没选的集也算进去、按这一刻的速度算，快下完时反而变长：不用它。
+    let clock = ClockBox()
+    try await withService(now: { clock.now }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.setLeftTime("target-hash", "3时0分0秒")
+      let first = await service.refresh(request)
+      XCTAssertEqual(first, .downloading(progress: 42), "第一次看到时只记下起点")
+
+      clock.advance(by: 20)
+      backend.setProgress("target-hash", 45)
+      let early = await service.refresh(request)
+      XCTAssertEqual(early, .downloading(progress: 45), "看了不到半分钟，先不估")
+
+      clock.advance(by: 40)
+      backend.setProgress("target-hash", 52)
+      let estimated = await service.refresh(request)
+      // 60 秒下了 10%，还剩 48%：288 秒。
+      XCTAssertEqual(estimated, .downloading(progress: 52, remainingSeconds: 288))
+
+      clock.advance(by: 60)
+      backend.setProgress("target-hash", 30)
+      let rechecked = await service.refresh(request)
+      XCTAssertEqual(rechecked, .downloading(progress: 30), "进度倒退（下载器重新校验）时从这里重新算起")
+
+      clock.advance(by: 60)
+      backend.setProgress("target-hash", 40)
+      let resumed = await service.refresh(request)
+      // 从倒退那一刻算：60 秒下了 10%，还剩 60%：360 秒。
+      XCTAssertEqual(resumed, .downloading(progress: 40, remainingSeconds: 360))
+    }
+  }
+
+  func testOrganizedEpisodeAsksTheMediaServerToScanAndFallsBackToTheWholeLibrary() async throws {
+    let scans = LibraryScanRecorder()
+    let clock = ClockBox()
+    let library = LibraryBox()
+    try await withService(
+      libraryScan: { context, scope in scans.record(context, scope) }, availability: { _, _ in library.value },
+      now: { clock.now }
+    ) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.moveToQueue("target-hash")
+      _ = await service.refresh(request)
+      XCTAssertTrue(scans.scopes.isEmpty, "整理好之前不叫媒体服务器")
+
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      let located = LibraryScanRequest.located(
+        TransferredFileLocation(path: FakeMoviePilot.organizedPath, category: "国产剧"))
+      try await waitUntil { scans.scopes.count == 1 }
+      XCTAssertEqual(scans.scopes, [located], "按整理记录里整理后的路径找媒体库，`dest_fileitem` 优先")
+      XCTAssertEqual(scans.tmdbIDs, [91])
+
+      clock.advance(by: EpisodeTrialService.libraryScanFallbackDelay - 1)
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes, [located], "还没到兜底的时候不再叫")
+
+      clock.advance(by: 2)
+      _ = await service.refresh(request)
+      try await waitUntil { scans.scopes.count == 2 }
+      XCTAssertEqual(scans.scopes, [located, .everything], "叫过还没入库，可能刷错了地方：每台刷新整个库")
+
+      clock.advance(by: 600)
+      _ = await service.refresh(request)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes.count, 2, "整个库也只刷一次，之后等媒体服务器自己入库")
+      XCTAssertEqual(backend.scheduledJobs, [], "直接进了整理队列，没有等整理这一步，不用催 MoviePilot")
+
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+    }
+  }
+
+  func testEpisodeThatLandsSoonNeedsNoWholeLibraryScan() async throws {
+    let scans = LibraryScanRecorder()
+    let clock = ClockBox()
+    let library = LibraryBox()
+    try await withService(
+      libraryScan: { context, scope in scans.record(context, scope) }, availability: { _, _ in library.value },
+      now: { clock.now }
+    ) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: true)
+      _ = await service.refresh(request)
+      try await waitUntil { scans.scopes.count == 1 }
+
+      library.value = .playable(server: "测试媒体库")
+      clock.advance(by: EpisodeTrialService.libraryScanFallbackDelay + 1)
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(scans.scopes.count, 1, "按位置刷新就入库了，不刷整个库")
+    }
+  }
+
+  // MARK: - 别处已有的东西
   // MARK: - 别处已有的东西
 
   func testExistingSubscriptionIsShownAndNeverTouched() async throws {
@@ -196,12 +444,56 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testDownloadFromElsewhereSeenByOpeningThePanelIsOnlyShown() async throws {
+    // 只是打开了单集面板，看到的是别的入口在下的这一集：照常显示进度，但不替用户催 MoviePilot 整理、叫媒体服务器入库。
+    backend.addDownload(hash: "earlier-hash", progress: 30)
+    let scans = LibraryScanRecorder()
+    try await withService(libraryScan: { context, scope in scans.record(context, scope) }) { _, service, _, request in
+      let page = try await openPage(service, request)
+      page.cancel()
+      await page.value
+      XCTAssertEqual(service.progress[request.key], .downloading(progress: 30))
+
+      backend.finishDownload("earlier-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      backend.organize("earlier-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(backend.scheduledJobs, [], "没按试看，不催整理")
+      XCTAssertTrue(scans.scopes.isEmpty, "也不叫媒体服务器入库")
+    }
+  }
+
+  func testDownloadFromElsewherePickedUpByPressingTrialIsNudged() async throws {
+    // 用户按「试看」时这一集已经在下：接着跟这个下载，算本机发起的试看，下完照样催整理。
+    backend.addDownload(hash: "earlier-hash", progress: 30)
+    try await withService { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .downloading(progress: 30))
+      backend.finishDownload("earlier-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization)
+      try await waitUntil { backend.scheduledJobs == ["transfer"] }
+    }
+  }
+
   func testUnreachableDownloaderBlocksNewTrialWhenDownloadIsNotFound() async throws {
     backend.addDownload(hash: "earlier-hash", progress: nil, offline: true)
     try await withService { _, service, _, request in
       let start = await service.start(request)
       XCTAssertEqual(start, .unavailable("有下载器暂时无法连接，无法确认这一集是否正在下载"), "具体原因显示在进度上")
       XCTAssertFalse(backend.mutations.contains("POST subscribe"))
+    }
+  }
+
+  func testEpisodeThatMayBeAmongUnidentifiedFilesCanStillBeTrialled() async throws {
+    // 服务器上有认不出是哪一集的文件：详情页说明这一集可能已经在里面后给了「试看」，服务照常发起。
+    try await withService(library: .unmatched(server: "测试媒体库")) { _, service, _, request in
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      XCTAssertTrue(backend.mutations.contains("POST subscribe"))
     }
   }
 
@@ -243,6 +535,39 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testUndeliveredCreateCanBeStartedAgainFromThePanel() async throws {
+    // 创建请求没送到 MoviePilot：服务不为它轮询，卡片不再显示试看中，面板说明后给「重新试看」，按下沿用同一个标记再建。
+    backend.loseCreateReceipt(afterStoring: false)
+    try await withService { _, service, _, request in
+      let lost = await service.start(request)
+      XCTAssertEqual(lost, .submissionUnconfirmed)
+      @MainActor func entry() -> EpisodeEntry {
+        EpisodeEntry(
+          availability: .notOnServer, trial: service.snapshot(key: request.key, seasonKey: request.seasonKey),
+          trialBlock: nil, canCancelTrial: true)
+      }
+      XCTAssertTrue(entry().trial.isSubmissionUnconfirmed)
+      XCTAssertNil(entry().cardStatus, "没人在跟，不显示一直不变的「正在确认进度」")
+      XCTAssertEqual(entry().menuActions, [.startTrial, .details])
+      XCTAssertEqual(entry().panel.message, EpisodeEntry.unconfirmedSubmissionMessage)
+      XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
+
+      // 打开面板时查一次订阅列表，还是没有就停在这里。
+      let page = try await openPage(service, request)
+      page.cancel()
+      await page.value
+      XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
+
+      let marker = try XCTUnwrap(service.credentials.first?.marker)
+      backend.loseCreateReceipt(afterStoring: nil)
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching)
+      XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker])
+      XCTAssertFalse(entry().trial.isSubmissionUnconfirmed)
+      XCTAssertEqual(entry().cancellableSubscriptionID, 81)
+    }
+  }
+
   func testUnconfirmedCreateIsNotPolled() async throws {
     backend.loseCreateReceipt(afterStoring: false)
     let sleeper = ScriptedSleeper()
@@ -270,7 +595,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
       // E03 的创建在服务器上排在后面才处理，E05 的创建按季去重拿回的是 E03 的占位。
       let mismatched = await service.start(e05)
-      XCTAssertEqual(mismatched, .unavailable("试看订阅的集数和要试看的这一集对不上，已停止试看"))
+      XCTAssertEqual(mismatched, .concluded(.failed("试看订阅的集数和要试看的这一集对不上，已停止试看")))
       XCTAssertEqual(backend.created.compactMap { $0["filter"] as? String }, [marker, marker], "同季换集沿用标记")
       XCTAssertTrue(backend.mutations.contains("DELETE subscribe/81"), "E03 的占位核对后删掉")
       XCTAssertNil(backend.subscribe(81))
@@ -316,7 +641,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     backend.rejectSearch()
     try await withService { _, service, _, request in
       let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("MoviePilot 拒绝试看补搜"))
+      XCTAssertEqual(start, .concluded(.searchIncomplete("MoviePilot 拒绝试看补搜")))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
       XCTAssertTrue(service.credentials.isEmpty)
     }
@@ -363,7 +688,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       backend.edit(81, "year", "2024")
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
     }
   }
@@ -396,6 +721,70 @@ final class EpisodeTrialServiceTests: XCTestCase {
       backend.deleteElsewhere(81)
       let downloading = await service.refresh(request)
       XCTAssertEqual(downloading, .downloading(progress: 42))
+    }
+  }
+
+  func testMoviePilotCompletingTheTrialAfterSubmittingKeepsFollowingTheDownload() async throws {
+    // 普通订阅提交下载后，MoviePilot 自己把订阅标成完成并删掉：不当成在别处被删，接着跟踪下载、整理和入库。
+    let library = LibraryBox()
+    try await withService(availability: { _, _ in library.value }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.deleteElsewhere(81)
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertFalse(backend.mutations.contains("DELETE subscribe/81"), "订阅已经没了，不再删")
+      XCTAssertTrue(service.credentials.isEmpty)
+
+      backend.moveToQueue("target-hash")
+      let organizing = await service.refresh(request)
+      XCTAssertEqual(organizing, .organizing)
+      backend.organize("target-hash", succeeded: true)
+      let organized = await service.refresh(request)
+      XCTAssertEqual(organized, .waitingForLibrary)
+      library.value = .playable(server: "测试媒体库")
+      let ready = await service.refresh(request)
+      XCTAssertEqual(ready, .ready(server: "测试媒体库"))
+    }
+  }
+
+  func testMoviePilotCompletingTheTrialWithoutADownloadRecordStopsTrackingInsteadOfSayingDeleted() async throws {
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true, recordsHistory: false)
+      backend.deleteElsewhere(81)
+      let ended = await service.refresh(request)
+      XCTAssertEqual(ended, EpisodeTrialService.untrackable, "批次说提交过下载：是 MoviePilot 结束的订阅，不是被删")
+    }
+  }
+
+  func testDownloaderFailureAfterMoviePilotDeletedTheTrialKeepsShowingTheTrialInProgress() async throws {
+    // MoviePilot 提交下载后删了订阅，服务只剩跟下载。这时下载器查一次失败：卡片照样是试看中、集列表照常刷新，
+    // 不出现「重新试看」，面板说明这次没确认到进度；不把上一次的百分比当成现在的。下载器恢复后接着显示下载进度。
+    try await withService { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(submitted: true)
+      backend.deleteElsewhere(81)
+      let downloading = await service.refresh(request)
+      XCTAssertEqual(downloading, .downloading(progress: 42))
+      XCTAssertTrue(service.credentials.isEmpty, "订阅已经没了，只剩跟下载")
+
+      backend.failDownloader(true)
+      let failed = await service.refresh(request)
+      XCTAssertEqual(failed, EpisodeTrialService.unconfirmedQuery)
+      let snapshot = service.snapshot(key: request.key, seasonKey: request.seasonKey)
+      XCTAssertTrue(snapshot.isInProgress, "集列表据此接着刷新这一集")
+      let entry = EpisodeEntry(availability: .notOnServer, trial: snapshot, trialBlock: nil, canCancelTrial: true)
+      XCTAssertEqual(
+        entry.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
+      XCTAssertFalse(entry.canStartTrial)
+      XCTAssertEqual(entry.menuActions, [.details])
+      XCTAssertEqual(entry.panel.message, "暂时无法确认试看进度")
+      XCTAssertEqual(entry.panel.buttons, [])
+
+      backend.failDownloader(false)
+      let recovered = await service.refresh(request)
+      XCTAssertEqual(recovered, .downloading(progress: 42))
     }
   }
 
@@ -492,7 +881,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       defer { resumed.tearDown() }
       try await waitUntil { resumed.credentials.isEmpty }
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81")
-      XCTAssertEqual(resumed.progress[request.key], .noEligibleResource)
+      XCTAssertEqual(resumed.progress[request.key], .concluded(.noEligibleResource))
     }
   }
 
@@ -513,10 +902,10 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       let later = await service.refresh(request)
-      XCTAssertEqual(later, .noEligibleResource, "刷新不把结局改回可以试看")
-      XCTAssertEqual(service.progress[request.key], .noEligibleResource)
+      XCTAssertEqual(later, .concluded(.noEligibleResource), "刷新不把结局改回可以试看")
+      XCTAssertEqual(service.progress[request.key], .concluded(.noEligibleResource))
 
       let again = await service.start(request)
       XCTAssertEqual(again, .searching, "再次发起时才换掉结局")
@@ -529,12 +918,15 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.start(request)
       backend.finishSearch(submitted: false)
       let finished = await service.refresh(request)
-      XCTAssertEqual(finished, .noEligibleResource)
+      XCTAssertEqual(finished, .concluded(.noEligibleResource))
       service.tearDown()
 
       let restarted = EpisodeTrialService(api: api, defaults: defaults) { _, _ in library.value }
+      XCTAssertTrue(restarted.progress.isEmpty)
+      XCTAssertEqual(
+        restarted.endings.map(\.key), [request.key], "卡片不刷新进度，重启后直接读保存的结局")
       let afterRestart = await restarted.refresh(request)
-      XCTAssertEqual(afterRestart, .noEligibleResource, "重启后结局还在")
+      XCTAssertEqual(afterRestart, .concluded(.noEligibleResource), "重启后结局还在")
 
       // 再次发起就清掉结局，即使这次因为媒体库读不出没有新建。
       library.value = .failed("媒体服务器读取失败")
@@ -635,7 +1027,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       _ = await service.refresh(request)
       backend.finishDownload("target-hash")
       let missing = await service.refresh(request)
-      XCTAssertEqual(missing, .submissionUnconfirmed, "整理前的空档照常等")
+      XCTAssertEqual(missing, .waitingForOrganization, "整理前的空档照常等")
 
       clock.advance(by: EpisodeTrialService.missingDownloadLimit)
       let gone = await service.refresh(request)
@@ -666,7 +1058,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
 
   func testPermanentFailureCleansUpInsteadOfRetrying() async throws {
     let scenarios: [(String, () -> Void, String)] = [
-      ("洗版保护", { FakeMoviePilot.shared.overrideOnCreate("best_version", 0) }, "试看订阅的洗版保护没有生效，已停止试看"),
+      ("普通订阅", { FakeMoviePilot.shared.overrideOnCreate("best_version", 1) }, "试看订阅没有按普通订阅创建，已停止试看"),
       ("集数", { FakeMoviePilot.shared.overrideOnCreate("start_episode", 4) }, "试看订阅的集数和要试看的这一集对不上，已停止试看"),
     ]
     for (name, scenario, message) in scenarios {
@@ -675,12 +1067,12 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let sleeper = ScriptedSleeper(drive: [.proceed])
       try await withService(sleep: sleeper.sleep) { _, service, _, request in
         let start = await service.start(request)
-        XCTAssertEqual(start, .unavailable(message), name)
+        XCTAssertEqual(start, .concluded(.failed(message)), name)
         XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", name)
         XCTAssertFalse(backend.mutations.contains("POST subscribe/search/81"), name)
         XCTAssertTrue(service.credentials.isEmpty, "\(name)：不留下凭据定时重试")
         let later = await service.refresh(request)
-        XCTAssertEqual(later, .unavailable(message), name)
+        XCTAssertEqual(later, .concluded(.failed(message)), name)
       }
     }
   }
@@ -689,7 +1081,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     backend.dropOnWrite("custom_words")
     try await withService { _, service, _, request in
       let start = await service.start(request)
-      XCTAssertEqual(start, .unavailable("MoviePilot 没有按试看规则保存这条订阅，已停止试看"))
+      XCTAssertEqual(start, .concluded(.failed("MoviePilot 没有按试看规则保存这条订阅，已停止试看")))
       XCTAssertFalse(backend.mutations.contains("POST subscribe/search/81"))
       XCTAssertEqual(backend.mutations.last, "DELETE subscribe/81", "认得出是自己写过的订阅，删掉而不是留下带规则的暂停订阅")
       XCTAssertTrue(service.credentials.isEmpty)
@@ -959,6 +1351,31 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
+  func testVisiblePageFollowsTheDownloadEveryFewSecondsAndTheBackgroundSlower() async throws {
+    // 页面在看：搜索 10 秒、下载中 3 秒、等整理 10 秒；离开页面后后台跟踪等整理 60 秒。
+    let sleeper = ScriptedSleeper(polls: [
+      .run { FakeMoviePilot.shared.finishSearch(submitted: true) },
+      .run { FakeMoviePilot.shared.finishDownload("target-hash") },
+      .suspend, .suspend,
+    ])
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let page = try await openPage(service, request)
+      _ = await service.start(request)
+      try await waitUntil { sleeper.delays.count == 3 }
+      XCTAssertEqual(service.progress[request.key], .waitingForOrganization)
+      XCTAssertEqual(
+        sleeper.delays,
+        [
+          EpisodeTrialService.activePollInterval, EpisodeTrialService.downloadPollInterval,
+          EpisodeTrialService.activePollInterval,
+        ])
+      page.cancel()
+      await page.value
+      try await waitUntil { sleeper.delays.count == 4 }
+      XCTAssertEqual(sleeper.delays.last, EpisodeTrialService.slowPollInterval, "后台跟踪只为入库后发通知，放慢")
+    }
+  }
+
   func testLeavingThePageHandsOverAndAnnouncesWhenReady() async throws {
     let library = LibraryBox()
     // 第 1 次等待属于页面；页面离开后第 2 次属于后台跟踪，这时这一集已经入库。
@@ -1074,6 +1491,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
     rule: EpisodeTrialRule? = EpisodeTrialRule(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"),
     superUser: Bool = true,
     sleep: EpisodeTrialService.Sleep? = nil,
+    libraryScan: EpisodeTrialService.LibraryScan? = nil,
     availability: EpisodeTrialService.Availability? = nil,
     now: @escaping @MainActor () -> Date = { Date() },
     media: MediaInfo = MediaInfo(tmdb_id: 91, title: "试看测试", type: "电视剧"),
@@ -1093,7 +1511,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
     api.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
     let availability = availability ?? { _, _ in library }
     let service = EpisodeTrialService(
-      api: api, defaults: defaults, now: now, sleep: sleep ?? ScriptedSleeper().sleep, availability: availability)
+      api: api, defaults: defaults, now: now, sleep: sleep ?? ScriptedSleeper().sleep,
+      libraryScan: libraryScan ?? { _, _ in }, availability: availability)
     defer { service.tearDown() }
     if let rule { try service.saveRule(rule) }
     let request = try XCTUnwrap(EpisodeTrialRequest(
@@ -1166,6 +1585,18 @@ nonisolated private final class ClockBox: @unchecked Sendable {
 
   var now: Date { lock.withLock { stored } }
   func advance(by interval: TimeInterval) { lock.withLock { stored.addTimeInterval(interval) } }
+}
+
+/// 记下试看服务叫媒体服务器入库的次数和范围。
+@MainActor
+private final class LibraryScanRecorder {
+  private(set) var scopes: [LibraryScanRequest] = []
+  private(set) var tmdbIDs: [Int] = []
+
+  func record(_ context: EpisodePlaybackContext, _ scope: LibraryScanRequest) {
+    scopes.append(scope)
+    tmdbIDs.append(context.tmdbID)
+  }
 }
 
 private final class FreshReads {
@@ -1243,6 +1674,8 @@ nonisolated private struct FakeHTTPStatus: Error {
 nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   static let shared = FakeMoviePilot()
   static let batchID = "0123456789abcdef0123456789abcdef"
+  /// 整理记录里整理后的文件路径。
+  static let organizedPath = "/media/电视剧/国产剧/试看测试 (2025)/Season 2/试看测试 - S02E05.mkv"
   private static let finishedStates: Set<String> = ["completed", "failed", "cancelled", "skipped"]
 
   private let lock = NSLock()
@@ -1253,10 +1686,16 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private var history: [[String: Any]] = []
   private var historyOnSecondPage = false
   private var downloading: [String: Double?] = [:]
+  /// 下载器按当前速度估的剩余时间（MoviePilot 的 `left_time`）。
+  private var leftTimes: [String: String] = [:]
   private var offlineClient = false
+  /// 下载器暂时连不上（查下载中的任务失败）。
+  private var downloaderFails = false
   private var queue: Set<String> = []
   private var transfers: [String: Bool] = [:]
   private var requests: [String] = []
+  private var allRequests: [String] = []
+  private var scheduled: [String] = []
   private var totalRequests = 0
   private var listReads = 0
   private var createdBodies: [[String: Any]] = []
@@ -1290,6 +1729,10 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private let holdRelease = DispatchSemaphore(value: 0)
 
   var mutations: [String] { lock.withLock { requests } }
+  /// 收到的全部请求（含读），按先后排列。
+  var requestLog: [String] { lock.withLock { allRequests } }
+  /// 叫 MoviePilot 马上运行过的服务（`system/runscheduler` 的 `jobid`）。
+  var scheduledJobs: [String] { lock.withLock { scheduled } }
   /// 读和写都算，用来证明某条路径完全没有访问服务器。
   var requestCount: Int { lock.withLock { totalRequests } }
   /// 读整份订阅列表的次数。
@@ -1307,10 +1750,14 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       history = []
       historyOnSecondPage = false
       downloading = [:]
+      leftTimes = [:]
       offlineClient = false
+      downloaderFails = false
       queue = []
       transfers = [:]
       requests = []
+      allRequests = []
+      scheduled = []
       totalRequests = 0
       listReads = 0
       createdBodies = []
@@ -1421,7 +1868,10 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   }
 
   func pushHistoryToSecondPage() { lock.withLock { historyOnSecondPage = true } }
+  func failDownloader(_ fails: Bool) { lock.withLock { downloaderFails = fails } }
   func finishDownload(_ hash: String) { lock.withLock { _ = downloading.removeValue(forKey: hash) } }
+  func setLeftTime(_ hash: String, _ text: String) { lock.withLock { leftTimes[hash] = text } }
+  func setProgress(_ hash: String, _ progress: Double) { lock.withLock { downloading[hash] = progress } }
 
   func moveToQueue(_ hash: String) {
     lock.withLock {
@@ -1457,6 +1907,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       let items = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
       let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
       totalRequests += 1
+      allRequests.append("\(method) \(path)")
       if method != "GET" { requests.append("\(method) \(path)") }
       let value = try respond(method: method, path: path, query: query, request: request)
       return try JSONSerialization.data(withJSONObject: value)
@@ -1525,19 +1976,24 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
     case ("GET", "download/clients"):
       return [["name": offlineClient ? "offline-client" : "fixture-client", "type": "qbittorrent"]]
     case ("GET", "download"):
-      if query["name"] == "offline-client" { throw URLError(.cannotConnectToHost) }
+      if query["name"] == "offline-client" || downloaderFails { throw URLError(.cannotConnectToHost) }
       return downloading.map { hash, progress -> [String: Any] in
         var task: [String: Any] = ["hash": hash]
         if let progress { task["progress"] = progress }
+        if let left = leftTimes[hash] { task["left_time"] = left }
         return task
       }
+    case ("GET", "system/runscheduler"):
+      scheduled.append(query["jobid"] ?? "")
+      return accepted
     case ("GET", "transfer/queue"):
       return queue.isEmpty ? [] : [["tasks": queue.map { ["downloader": "fixture-client", "download_hash": $0] }]]
     case ("GET", "history/transfer"):
       let list = transfers.map { hash, status -> [String: Any] in
         [
           "id": 9, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02",
-          "episodes": "E05", "download_hash": hash, "status": status,
+          "episodes": "E05", "download_hash": hash, "status": status, "category": "国产剧",
+          "dest": "/media/旧字段/E05.mkv", "dest_fileitem": ["path": Self.organizedPath],
         ]
       }
       return ["success": true, "data": ["list": list]] as [String: Any]

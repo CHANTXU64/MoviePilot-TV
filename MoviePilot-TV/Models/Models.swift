@@ -2466,6 +2466,8 @@ struct MediaEpisodeGridRequest: Hashable, Codable {
   let initialSeason: Int?
   let initialEpisodeGroup: String?
   let initialEpisodeOffset: Int?
+  /// 详情页打开展开页时的按集播放和试看；没有应用内播放时为 nil。
+  var playback: EpisodePlaybackSource? = nil
 }
 
 // MARK: - Transfer History Models

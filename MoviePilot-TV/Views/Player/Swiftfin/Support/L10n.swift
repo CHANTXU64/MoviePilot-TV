@@ -80,7 +80,7 @@ nonisolated enum L10n {
     static let previousChapter = "上一章节"
     static let primarySubtitles = "首选字幕"
     static let `protocol` = "协议"
-    static let queue = "队列"
+    static let queue = "选集"
     static let reset = "重置"
     static let resolution = "分辨率"
     static let retry = "重试"

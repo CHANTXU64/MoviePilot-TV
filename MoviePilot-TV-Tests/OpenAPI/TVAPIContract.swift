@@ -954,6 +954,12 @@ enum TVAPIContractCatalog {
         coverage: mutationUnit
       ),
       TVAPIOperationBuilder.get("/transfer/queue", coverage: mutationUnit),
+      // 本机发起的试看下完后叫 MoviePilot 马上整理（`jobid=transfer`，同 Web 服务页的「执行」）；运行时从 v3.2.6 起才调用。
+      TVAPIOperationBuilder.get(
+        "/system/runscheduler",
+        query: [TVAPIParam.query("jobid", alwaysSent: true)],
+        coverage: mutationUnit
+      ),
       TVAPIOperationBuilder.get(
         "/history/transfer",
         query: [

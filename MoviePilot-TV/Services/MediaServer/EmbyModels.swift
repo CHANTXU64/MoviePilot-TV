@@ -71,6 +71,9 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let locationType: String?
   /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它；单集条目上的 `Tmdb` 是 TMDB 单集 ID。
   let providerIDs: [String: String]?
+  /// 服务器上的文件路径。列表接口要在 `Fields` 里点名才给。
+  let path: String?
+  let premiereDate: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
@@ -84,6 +87,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     case seriesName = "SeriesName"
     case locationType = "LocationType"
     case providerIDs = "ProviderIds"
+    case path = "Path"
+    case premiereDate = "PremiereDate"
   }
 
   init(from decoder: Decoder) throws {
@@ -99,6 +104,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
     locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
     providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
+    path = try? container.decodeIfPresent(String.self, forKey: .path)
+    premiereDate = try? container.decodeIfPresent(String.self, forKey: .premiereDate)
   }
 
   var playbackPositionTicks: Int64 {
@@ -130,7 +137,9 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
       hasFile: locationType?.lowercased() != "virtual",
-      externalIDs: ExternalMediaID.normalizedTable(providerIDs))
+      externalIDs: ExternalMediaID.normalizedTable(providerIDs),
+      path: path,
+      premiereDate: premiereDate)
   }
 }
 
@@ -138,6 +147,8 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
+  /// 文件外的流（外挂字幕等），不是文件里的轨道。
+  var isExternal: Bool?
   /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
   var width: Int?
   var height: Int?
@@ -150,16 +161,18 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
   var extendedVideoSubType: String?
 
-  init(type: String?, codec: String?, isDefault: Bool? = nil) {
+  init(type: String?, codec: String?, isDefault: Bool? = nil, isExternal: Bool? = nil) {
     self.type = type
     self.codec = codec
     self.isDefault = isDefault
+    self.isExternal = isExternal
   }
 
   private enum CodingKeys: String, CodingKey {
     case type = "Type"
     case codec = "Codec"
     case isDefault = "IsDefault"
+    case isExternal = "IsExternal"
     case width = "Width"
     case height = "Height"
     case realFrameRate = "RealFrameRate"
@@ -174,6 +187,7 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     type = try? container.decodeIfPresent(String.self, forKey: .type)
     codec = try? container.decodeIfPresent(String.self, forKey: .codec)
     isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
+    isExternal = try? container.decodeIfPresent(Bool.self, forKey: .isExternal)
     width = try? container.decodeIfPresent(Int.self, forKey: .width)
     height = try? container.decodeIfPresent(Int.self, forKey: .height)
     frameRate =
@@ -192,6 +206,8 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
+  /// `MediaStreams` 里有读不出的条目：数不准文件里有几条轨道。
+  let hasUnreadableStreams: Bool
   init(
     id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
   ) {
@@ -200,6 +216,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.container = container
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
+    hasUnreadableStreams = false
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -216,9 +233,31 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     name = try? container.decodeIfPresent(String.self, forKey: .name)
     self.container = try? container.decodeIfPresent(String.self, forKey: .container)
     self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
-    mediaStreams =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams))?
-      .compactMap(\.value) ?? []
+    let streams = try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams)
+    mediaStreams = streams?.compactMap(\.value) ?? []
+    hasUnreadableStreams = streams?.contains { $0.value == nil } ?? false
+  }
+
+  /// 文件里音视频和字幕轨的条数（不含外挂字幕等文件外的流）。没有流信息、有条目读不出或类型认不出、
+  /// 或一条音视频流都没有时为 nil：数不准。封面图、字体等附件不是轨道，不算。
+  var embeddedTrackCount: Int? {
+    guard !hasUnreadableStreams else { return nil }
+    var count = 0
+    var hasAudioOrVideo = false
+    for stream in mediaStreams where stream.isExternal != true {
+      switch stream.type?.lowercased() {
+      case "video", "audio":
+        count += 1
+        hasAudioOrVideo = true
+      case "subtitle":
+        count += 1
+      case "embeddedimage", "attachment":
+        continue
+      default:
+        return nil
+      }
+    }
+    return hasAudioOrVideo ? count : nil
   }
 
   /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
@@ -230,7 +269,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
-      displayModeHint: DisplayModeHint(source: self))
+      displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount)
   }
 }
 
@@ -296,6 +335,58 @@ nonisolated struct EmbyItemsPage: Decodable, Sendable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     items = try LossyDecodable<EmbyItem>.decodeArray(in: container, forKey: .items)
+  }
+}
+
+/// `Library/SelectableMediaFolders` 里的一个媒体库：`Id` 用来刷新这个媒体库，`SubFolders` 的 `Path` 是 Emby 看到的文件夹。
+/// MoviePilot 叫 Emby 刷新时按这个接口找媒体库。
+nonisolated struct EmbyMediaFolder: Decodable, Sendable {
+  let id: String
+  let paths: [String]
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case subFolders = "SubFolders"
+  }
+
+  private struct SubFolder: Decodable, Sendable {
+    let path: String?
+    private enum CodingKeys: String, CodingKey { case path = "Path" }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    guard let id = trimmedNonEmpty([try container.decode(String.self, forKey: .id)]) else {
+      throw DecodingError.dataCorruptedError(forKey: .id, in: container, debugDescription: "媒体库没有 ID")
+    }
+    self.id = id
+    // 文件夹读不出时这个媒体库还能整库刷新，只是按路径找不到它。
+    let subFolders = (try? container.decodeIfPresent([LossyDecodable<SubFolder>].self, forKey: .subFolders)) ?? nil
+    paths = (subFolders ?? []).compactMap { $0.value?.path.flatMap { trimmedNonEmpty([$0]) } }
+  }
+
+  /// 整份列表：个别媒体库读不出时丢掉它，其余照常用。
+  static func list(from decoder: Decoder) throws -> [EmbyMediaFolder] {
+    var container = try decoder.unkeyedContainer()
+    var folders: [EmbyMediaFolder] = []
+    var count = 0
+    while !container.isAtEnd {
+      count += 1
+      if let folder = try container.decode(LossyDecodable<EmbyMediaFolder>.self).value { folders.append(folder) }
+    }
+    guard count == 0 || !folders.isEmpty else {
+      throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "媒体库全部无法解码"))
+    }
+    return folders
+  }
+}
+
+/// `Library/SelectableMediaFolders` 的回包（顶层是数组）。
+nonisolated struct EmbyMediaFolderList: Decodable, Sendable {
+  let folders: [EmbyMediaFolder]
+
+  init(from decoder: Decoder) throws {
+    folders = try EmbyMediaFolder.list(from: decoder)
   }
 }
 

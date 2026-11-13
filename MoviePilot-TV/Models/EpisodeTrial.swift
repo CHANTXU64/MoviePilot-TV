@@ -123,8 +123,28 @@ nonisolated struct EpisodeTrialRequest: Sendable {
 
   var season: Int { episode.seasonNumber }
   var episodeGroup: String? { playbackContext.episodeGroup }
-  var seasonKey: String { "\(playbackContext.tmdbID)|\(season)|\(episodeGroup ?? "")" }
-  var key: String { "\(seasonKey)|\(episodeID)|\(episodeNumber)" }
+  var seasonKey: String { Self.seasonKey(tmdbID: playbackContext.tmdbID, season: season, episodeGroup: episodeGroup) }
+  var key: String { Self.key(seasonKey: seasonKey, episodeID: episodeID, episodeNumber: episodeNumber) }
+
+  static func seasonKey(tmdbID: Int, season: Int, episodeGroup: String?) -> String {
+    "\(tmdbID)|\(season)|\(trimmedNonEmpty([episodeGroup]) ?? "")"
+  }
+
+  static func key(seasonKey: String, episodeID: Int, episodeNumber: Int) -> String {
+    "\(seasonKey)|\(episodeID)|\(episodeNumber)"
+  }
+
+  /// 集列表里一集的试看键，与按它建的请求的 `key` 相同；建不出请求（缺 TMDB 单集 ID、集号）时为 nil。
+  /// 卡片只用它查进度，不必为每张卡建完整的请求。
+  static func key(tmdbID: Int, episode: MoviePilotEpisode, episodeGroup: String?) -> String? {
+    guard let episodeID = MediaIdentifier.validNumericIdentifier(episode.tmdbEpisodeID),
+      let episodeNumber = MediaIdentifier.validNumericIdentifier(episode.episodeNumber), episodeNumber < Int.max,
+      episode.seasonNumber >= 0
+    else { return nil }
+    return key(
+      seasonKey: seasonKey(tmdbID: tmdbID, season: episode.seasonNumber, episodeGroup: episodeGroup),
+      episodeID: episodeID, episodeNumber: episodeNumber)
+  }
 
   var target: EpisodeTrialTarget {
     EpisodeTrialTarget(
@@ -193,43 +213,143 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case seasonTrialInProgress
   case searching
   case cancelling
-  case noEligibleResource
-  /// 发出的请求没拿到回执，或下载暂时找不到，状态说不清。
+  /// 发出的请求没拿到回执，或有一处没查成，状态说不清。
   case submissionUnconfirmed
-  case downloading(progress: Double?)
+  /// `progress` 是下载器报的百分比（0–100），`remainingSeconds` 是 TV 按平均速度估的还要多久（见 `EpisodeTrialDownloadETA`）。
+  case downloading(progress: Double?, remainingSeconds: Int? = nil)
+  /// 下载器、整理队列和整理记录都明确查不到这个下载：下载器只列出还在下载的任务，通常是已经下完、等 MoviePilot 整理。
+  /// 一直查不到时按 `EpisodeTrialService.missingDownloadLimit` 结束。
+  case waitingForOrganization
   case organizing
-  case organizationFailed
+  /// 整理完成，等媒体服务器把这一集入库。
   case waitingForLibrary
-  case ready(server: String)
+  /// 已经入库。`uncertain` 不为 nil 时只是按季号集号在 `server` 上找到了文件，可能不是这一集，播放前要说明。
+  case ready(server: String, uncertain: UncertainEpisodeMatch? = nil)
+  /// 试看结束了，没能看成（含用户取消）。
+  case concluded(EpisodeTrialEnding)
+  /// 现在不能试看，或这次没查成（不满足条件、已有相关订阅、请求失败、查询中断等）。不是结局，不保存。
   case unavailable(String)
 
   var isReady: Bool {
     if case .ready = self { return true }
     return false
   }
-}
 
-/// 能保存下来的试看结局，只覆盖试看结束时会出现的几种进度。
-nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
-  case noEligibleResource
-  case organizationFailed
-  case unavailable(String)
-
-  /// 不是结局的进度（还在进行、可以试看等）为 nil。
-  init?(_ progress: EpisodeTrialProgress) {
-    switch progress {
-    case .noEligibleResource: self = .noEligibleResource
-    case .organizationFailed: self = .organizationFailed
-    case .unavailable(let message): self = .unavailable(message)
-    default: return nil
+  /// 试看在进行中的哪一步。没在进行（可以试看、已结束、不能试看）或说不清是哪一步时为 nil。
+  var stage: EpisodeTrialStage? {
+    switch self {
+    case .searching: .search
+    case .downloading: .download
+    case .waitingForOrganization, .organizing: .organize
+    case .waitingForLibrary: .library
+    default: nil
     }
   }
 
-  var progress: EpisodeTrialProgress {
+  /// 本机的试看还在进行：搜索、下载、整理、入库、取消中，或请求还没确认。
+  var isInProgress: Bool {
     switch self {
-    case .noEligibleResource: .noEligibleResource
-    case .organizationFailed: .organizationFailed
-    case .unavailable(let message): .unavailable(message)
+    case .searching, .cancelling, .submissionUnconfirmed, .downloading, .waitingForOrganization, .organizing,
+      .waitingForLibrary:
+      true
+    default: false
+    }
+  }
+}
+
+/// 试看的下载还要多久，按 TV 开始看到这个下载以来的平均速度估：已经下了多久 ÷ 这段时间下完的进度 × 还剩的进度。
+/// 不用 MoviePilot 下载器接口的 `left_time`：qBittorrent 那边拿种子全部文件的大小（含整季包里没选的集）减已下载量，
+/// 再除以这一刻的速度，快下完时反而越来越长。起点不用下载记录的时间：那是 MoviePilot 服务器的本地时间，不带时区。
+nonisolated struct EpisodeTrialDownloadETA: Equatable, Sendable {
+  /// 看了这么久才估：刚开始的样本太少，估出来跳得厉害。
+  static let minimumSampleSeconds: TimeInterval = 30
+
+  /// 开始看的时间和当时的进度（0–100）。
+  let since: Date
+  let startProgress: Double
+
+  /// 还要多少秒；看得还不够久、这段时间进度没动或已经下完时为 nil，不显示剩余时间。
+  func remainingSeconds(progress: Double, now: Date) -> Int? {
+    let elapsed = now.timeIntervalSince(since)
+    let done = progress - startProgress
+    guard elapsed >= Self.minimumSampleSeconds, done > 0, progress < 100 else { return nil }
+    return Int((elapsed * (100 - progress) / done).rounded(.up))
+  }
+
+  /// 按分钟向上取整：「不到 1 分钟」「约 13 分钟」「约 1 小时 5 分钟」。
+  static func text(seconds: Int) -> String {
+    guard seconds >= 60 else { return "不到 1 分钟" }
+    let minutes = (seconds + 59) / 60
+    guard minutes >= 60 else { return "约 \(minutes) 分钟" }
+    let hours = minutes / 60
+    let rest = minutes % 60
+    return rest == 0 ? "约 \(hours) 小时" : "约 \(hours) 小时 \(rest) 分钟"
+  }
+}
+
+/// 试看从发起到能播放要经过的几步，卡片上画成几个进度点。第一次用的人多半以为下载完就能播，后面的整理和入库也要算进去。
+nonisolated enum EpisodeTrialStage: Int, CaseIterable, Comparable, Sendable {
+  case search, download, organize, library
+
+  static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// 试看没能看成的结局，按原因分类：卡片上显示短字，单集面板里显示完整说明。随账号保存。
+nonisolated enum EpisodeTrialEnding: Codable, Equatable, Sendable {
+  /// 用户取消了试看，或这次搜索在 MoviePilot 上被停掉了。
+  case cancelled
+  /// 搜索完成，没有符合条件的资源。
+  case noEligibleResource
+  /// MoviePilot 跳过或没做完这次搜索，说明写明是哪种。
+  case searchIncomplete(String)
+  case organizationFailed
+  /// 跟不下去了：找不到下载记录、搜索记录，或下载任务不见了。说明写明是哪种。
+  case lostTrack(String)
+  /// 试看订阅在别处被删掉了。
+  case removedElsewhere
+  /// 试看订阅在别处被改过，TV 不再自动处理。
+  case modifiedElsewhere
+  /// 试看订阅没按要求生效（不是普通订阅、集数、规则没保存上），已停止。说明写明原因。
+  case failed(String)
+
+  init?(_ progress: EpisodeTrialProgress) {
+    guard case .concluded(let ending) = progress else { return nil }
+    self = ending
+  }
+
+  var progress: EpisodeTrialProgress { .concluded(self) }
+
+  /// 单集面板里的完整说明。
+  var message: String {
+    switch self {
+    case .cancelled: "已取消试看，可以重新试看"
+    case .noEligibleResource: "没有找到符合试看规则的资源，可以在设置里调整试看订阅规则后重新试看"
+    case .searchIncomplete(let message), .lostTrack(let message), .failed(let message): message
+    case .organizationFailed: "下载完成了，但 MoviePilot 整理失败，可以在整理记录里查看原因"
+    case .removedElsewhere: "试看订阅在别处被删除了，可以重新试看"
+    case .modifiedElsewhere: "试看订阅已在别处修改，不再自动处理"
+    }
+  }
+
+  /// 卡片正中的短字。用户自己取消是预期的结果，卡片上不提示，为 nil。
+  var shortLabel: String? {
+    switch self {
+    case .cancelled: nil
+    case .noEligibleResource: "没找到资源"
+    case .searchIncomplete: "搜索失败"
+    case .organizationFailed: "整理失败"
+    case .lostTrack: "无法跟踪"
+    case .removedElsewhere: "订阅已删"
+    case .modifiedElsewhere: "订阅已改"
+    case .failed: "试看失败"
+    }
+  }
+
+  /// 不是这次试看出了问题，是别处处理了这条订阅：卡片上用提示图标，不用警告。
+  var isHandledElsewhere: Bool {
+    switch self {
+    case .removedElsewhere, .modifiedElsewhere: true
+    default: false
     }
   }
 }
@@ -318,12 +438,15 @@ nonisolated enum EpisodeTrialTemporarySubscription {
     return Data(SHA256.hash(data: try encoder.encode(settings))).base64EncodedString()
   }
 
-  /// 写入后读回的订阅是否保留了这次的季集锁定、洗版开关和试看规则。
+  /// 写入后读回的订阅是否保留了这次的季集锁定、普通订阅（不洗版）和试看规则。
   static func preservesSettings(of draft: Subscribe, in row: Subscribe) -> Bool {
     (try? fingerprint(draft)) == (try? fingerprint(row))
   }
 }
 
+/// 试看订阅固定是普通订阅，试看规则里不提供改成洗版。洗版订阅在 MoviePilot 上固定完整搜索，要把所有站点的所有页翻完
+/// 才挑资源下载；普通订阅按用户设的搜索策略（默认智能，各站第一页到齐就先提交）。普通订阅提交下载后，MoviePilot
+/// 会自己把订阅标成完成并删掉（记一条订阅历史、发完成通知），试看服务按下载记录接着跟踪。
 nonisolated struct EpisodeTrialCreateSubscription: Encodable {
   let name: String?
   let type = "电视剧"
@@ -334,7 +457,7 @@ nonisolated struct EpisodeTrialCreateSubscription: Encodable {
   let episode_group: String?
   let start_episode: Int
   let total_episode: Int
-  let best_version = 1
+  let best_version = 0
   let best_version_full = 0
   let include = EpisodeTrialTemporarySubscription.blockedInclude
   // 当前 MoviePilot 保留旧 filter 字段，实际筛选读取 include、exclude 和 filter_groups。
@@ -411,10 +534,12 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let downloader: String?
   let status: Bool?
   let note: Note?
+  /// 整理后的位置（只有整理记录有）：叫媒体服务器入库时按它找媒体库。
+  let location: TransferredFileLocation
 
   private enum CodingKeys: String, CodingKey {
     case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
-    case note
+    case note, dest, dest_fileitem, category
   }
 
   init(from decoder: Decoder) throws {
@@ -430,6 +555,11 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     downloader = try? values.decodeIfPresent(String.self, forKey: .downloader)
     status = try? values.decodeIfPresent(Bool.self, forKey: .status)
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
+    let fileItem = (try? values.decodeIfPresent(MoviePilotFileItem.self, forKey: .dest_fileitem)) ?? nil
+    let dest = (try? values.decodeIfPresent(String.self, forKey: .dest)) ?? nil
+    location = TransferredFileLocation(
+      path: trimmedNonEmpty([fileItem?.path, dest]),
+      category: trimmedNonEmpty([(try? values.decodeIfPresent(String.self, forKey: .category)) ?? nil]))
   }
 
   var subscriptionID: Int? { note?.subscription_download?.subscription_id }
@@ -456,25 +586,9 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     return true
   }
 
+  /// 有一段格式不对就整条不认。
   private static func contains(_ number: Int, in value: String, prefix: String, single: Bool) -> Bool {
-    let parts = value.uppercased().split(
-      omittingEmptySubsequences: false, whereSeparator: { $0 == "," || $0 == "、" })
-    if single && parts.count != 1 { return false }
-    var matched = false
-    for part in parts {
-      let bounds = part.split(separator: "-", omittingEmptySubsequences: false)
-      let numbers = bounds.compactMap { component -> Int? in
-        let token = component.trimmingCharacters(in: .whitespaces)
-        let digits = token.hasPrefix(prefix) ? String(token.dropFirst()) : token
-        guard !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
-        return Int(digits)
-      }
-      guard numbers.count == bounds.count, let first = numbers.first, let last = numbers.last,
-        first <= last, (1...2).contains(numbers.count), !single || numbers.count == 1
-      else { return false }
-      matched = matched || (first...last).contains(number)
-    }
-    return matched
+    EpisodeNumberText.ranges(in: value, prefix: prefix, single: single)?.contains { $0.contains(number) } == true
   }
 }
 

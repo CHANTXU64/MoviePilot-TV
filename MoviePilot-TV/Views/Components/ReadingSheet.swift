@@ -281,14 +281,15 @@ nonisolated enum ReadingSheetLayout {
 /// 统一的阅读型 Sheet：1500×900，内边距 72/64，标题 `.title3` 不限行数，正文 `.body` 默认行距。
 ///
 /// 单栏是「标题 + 正文」；传入左栏时变成两栏，标题与正文在右栏。正文按
-/// `ReadingSheetLayout.chunks` 分成焦点停靠块（关闭焦点高亮），默认焦点在第一块，
-/// 遥控器返回键关闭。
+/// `ReadingSheetLayout.chunks` 分成焦点停靠块（关闭焦点高亮），默认焦点在第一块；左栏有主操作按钮时
+/// 传 `focusesBodyByDefault: false`，由左栏自己指定默认焦点。遥控器返回键关闭。
 struct ReadingSheet<Sidebar: View>: View {
   let title: String?
   var titleColor: Color = .primary
   /// 正文焦点块。只在初始化时拆一次：焦点在块之间移动会重算 body，不能每次都对全文重新拆块。
   private let chunks: [[ReadingBlock]]
   let sidebar: Sidebar?
+  private var focusesBodyByDefault = true
 
   @FocusState private var focusedChunkIndex: Int?
 
@@ -296,11 +297,13 @@ struct ReadingSheet<Sidebar: View>: View {
     title: String?,
     titleColor: Color = .primary,
     blocks: [ReadingBlock],
+    focusesBodyByDefault: Bool = true,
     @ViewBuilder sidebar: () -> Sidebar
   ) {
     self.title = title
     self.titleColor = titleColor
     self.chunks = Self.chunks(for: blocks, hasSidebar: true)
+    self.focusesBodyByDefault = focusesBodyByDefault
     self.sidebar = sidebar()
   }
 
@@ -321,7 +324,9 @@ struct ReadingSheet<Sidebar: View>: View {
       height: ReadingSheetLayout.sheetHeight,
       alignment: .topLeading
     )
-    .defaultFocus($focusedChunkIndex, 0)
+    // 修饰符一直挂着、只换默认值：左栏按钮在面板开着时出现或消失，内容不重建，正在读的滚动位置和焦点不丢。
+    // 不由正文接默认焦点时给 nil（不偏向任何一块），交给左栏自己指定。
+    .defaultFocus($focusedChunkIndex, focusesBodyByDefault ? 0 : nil)
   }
 
   private var reading: some View {

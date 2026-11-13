@@ -99,7 +99,7 @@ nonisolated struct BaseItemDto: Identifiable {
 
   /// 只取播放本身已有的基本字段；其余元数据（简介、海报、演职员、章节、片源详情）暂不接入，保持为空。
   /// 按集播放时，集名和季集号用 MoviePilot 集列表的（与详情页一致），并带上队列用的剧集、季标识；
-  /// 其他条目不带这两个标识，播放界面的队列为空。
+  /// 其他条目不带这两个标识，播放界面的队列为空。播放界面用 `playback(_:episode:)`，它另外补上剧照。
   init(item: ServerMediaItem, episode: QueuedEpisode? = nil) {
     id = item.id
     type = BaseItemKind(item.kind)
@@ -118,6 +118,18 @@ nonisolated struct BaseItemDto: Identifiable {
       parentIndexNumber = item.seasonNumber
       seriesName = item.seriesName
     }
+  }
+
+  /// 播放界面的条目（正在播的、选集列表里的、上一集和下一集）。按集播放时带上这一集的剧照：MoviePilot 集列表里的
+  /// `still_path`，地址和详情页单集卡片相同，按当前的图片设置生成（开了图片缓存时走 MoviePilot 的图片代理，
+  /// 要带会话加载，见 `PosterImage`）。依赖当前设置，所以不放在 `init(item:episode:)` 里。
+  @MainActor
+  static func playback(_ item: ServerMediaItem, episode: QueuedEpisode?) -> BaseItemDto {
+    var dto = BaseItemDto(item: item, episode: episode)
+    dto.landscapeImageURL = episode.flatMap {
+      APIService.shared.getSeasonPosterURL(posterPath: $0.episode.stillPath, mediaPosterPath: nil)
+    }
+    return dto
   }
 
   // MARK: 与 Swiftfin 的 BaseItemDto 扩展相同的派生值
@@ -544,9 +556,8 @@ final class UserSession {
       let season = Self.season(fromQueueSeasonID: seasonID)
     else { return [] }
     return try await queue.playableEpisodes(inSeason: season, from: session.playback).map {
-      BaseItemDto(
-        item: $0.item,
-        episode: QueuedEpisode(context: context, episode: $0.episode, seasonEpisodes: $0.seasonEpisodes))
+      BaseItemDto.playback(
+        $0.item, episode: QueuedEpisode(context: context, episode: $0.episode, seasonEpisodes: $0.seasonEpisodes))
     }
   }
 
@@ -561,8 +572,8 @@ final class UserSession {
     switch try await queue.adjacentEpisode(direction, from: session.playback, refresh: refresh) {
     case .play(let entry, let skippedMissing):
       return .episode(
-        BaseItemDto(
-          item: entry.item,
+        BaseItemDto.playback(
+          entry.item,
           episode: QueuedEpisode(context: context, episode: entry.episode, seasonEpisodes: entry.seasonEpisodes)),
         skippedMissing: skippedMissing)
     case .stop(let reason):
