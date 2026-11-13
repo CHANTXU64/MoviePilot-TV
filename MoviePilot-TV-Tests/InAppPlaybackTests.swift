@@ -2350,6 +2350,29 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testTransferPathsLearnTheDirectoryFromOtherIdentifiedEpisodes() async throws {
+    configureLibraryWithoutEpisodeIDs(
+      #"{"Id":"anchor-a","Type":"Episode","ParentIndexNumber":2,"IndexNumber":2,"ProviderIds":{"Tmdb":"554"},"Path":"/emby/第二季/02.mkv"}"#,
+      #"{"Id":"anchor-b","Type":"Episode","ParentIndexNumber":2,"IndexNumber":4,"ProviderIds":{"Tmdb":"556"},"Path":"/emby/第二季/04.mkv"}"#,
+      #"{"Id":"right","Type":"Episode","Path":"/emby/第二季/03.mkv"}"#,
+      #"{"Id":"wrong","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Path":"/emby/另一份/03.mkv"}"#)
+    PlaybackURLProtocol.stub.configure {
+      $0.transferHistory = """
+        [{"id":1,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E02","dest":"/mp/Season 2/02.mkv","status":true},
+         {"id":2,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E04","dest":"/mp/Season 2/04.mkv","status":true},
+         {"id":3,"media_source":"themoviedb","media_id":"100","type":"电视剧","seasons":"S02","episodes":"E03","dest":"/mp/Season 2/03.mkv","status":true}]
+        """
+    }
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertEqual(availability, [.playable(server: "emby")])
+
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "right")
+    coordinator.endCurrentSession()
+  }
+
   func testNextEpisodeMatchedOnlyByNumbersPlaysWithoutStopping() async throws {
     // 第 2 季第 3 集带编号，第 4 集没有：下一集照样接着播第 4 集的文件。
     configureLibraryWithoutEpisodeIDs(

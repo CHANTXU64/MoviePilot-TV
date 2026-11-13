@@ -83,15 +83,18 @@ final class EpisodeMatchingTests: XCTestCase {
       "特别篇是第 0 季")
   }
 
-  func testFilePathKeyIgnoresMountPointsCaseAndExtension() {
-    let moviePilot = FilePathKey(path: "/media/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv")
-    XCTAssertNotNil(moviePilot)
-    XCTAssertEqual(FilePathKey(path: "/data/tv/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv"), moviePilot, "挂载点不同")
-    XCTAssertEqual(FilePathKey(path: #"\\nas\video\season 1\长风渡 - s01e05.MKV"#), moviePilot, "Windows 路径、大小写不同")
-    XCTAssertEqual(FilePathKey(path: "/strm/长风渡/Season 1/长风渡 - S01E05.strm"), moviePilot, "STRM 只是扩展名不同")
-    XCTAssertNotEqual(FilePathKey(path: "/data/Season 2/长风渡 - S01E05.mkv"), moviePilot, "上一级目录不同")
-    XCTAssertNil(FilePathKey(path: "长风渡 - S01E05.mkv"), "只有文件名不够比")
-    XCTAssertNil(FilePathKey(path: nil))
+  func testTransferPathMatchingIgnoresMountPointsCaseAndExtension() {
+    let record = record("/media/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv", episodes: "E05")
+    for path in [
+      "/data/tv/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv",
+      #"\\nas\video\season 1\长风渡 - s01e05.MKV"#,
+      "/strm/长风渡/Season 1/长风渡 - S01E05.strm",
+    ] {
+      XCTAssertEqual(index([file("e5", episode: 5, path: path)], records: [record]).availability(of: 105), .playable(server: "emby"))
+    }
+    for path in ["/data/Season 2/长风渡 - S01E05.mkv", "长风渡 - S01E05.mkv", nil] {
+      XCTAssertTrue(index([file("e5", episode: 5, path: path)], records: [record]).confirmedEpisodes(tmdbEpisodeID: 105).isEmpty)
+    }
   }
 
   // MARK: 播出日期
@@ -134,6 +137,57 @@ final class EpisodeMatchingTests: XCTestCase {
       records: [record(path, episodes: "E02"), record(path, episodes: "E03")])
     XCTAssertEqual(index.confirmedEpisodes(tmdbEpisodeID: 102), [])
     XCTAssertEqual(index.uncertainEpisodes(tmdbEpisodeID: 102).map(\.item.id), ["e1"])
+  }
+
+  func testLongerPathSuffixSeparatesCopiesWithTheSameFilenameAndSeasonFolder() {
+    let files = [
+      file("a", episode: 1, path: "/emby/A剧/Season 1/E01.mkv"),
+      file("b", episode: 1, path: "/emby/A剧第一季/Season 1/E01.mkv"),
+    ]
+    let records = [
+      record("/mp/A剧/Season 1/E01.mkv", episodes: "E01"),
+      record("/mp/A剧第一季/Season 1/E01.mkv", episodes: "E02"),
+    ]
+    let matched = index(files, records: records)
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["a"])
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 102).map(\.id), ["b"])
+    let oneRecord = index(files, records: [records[0]])
+    XCTAssertEqual(oneRecord.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["a"])
+    XCTAssertEqual(oneRecord.summary.byTransferRecord, 1)
+  }
+
+  func testFullPathWinsButEquallyStrongCompetingCopiesNeedConfirmation() {
+    let files = [
+      file("a", episode: 1, path: "/a/Show/Season 1/E01.mkv"),
+      file("b", episode: 1, path: "/b/Show/Season 1/E01.mkv"),
+    ]
+    let exact = record("/b/Show/Season 1/E01.mkv", episodes: "E02")
+    let tied = record("/mp/Show/Season 1/E01.mkv", episodes: "E01")
+    let matched = index(files, records: [tied, exact])
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 102).map(\.id), ["b"])
+    XCTAssertEqual(matched.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["a"])
+    let ambiguous = index(files, records: [tied])
+    XCTAssertEqual(ambiguous.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["a", "b"])
+  }
+
+  func testDirectoryMappingNeedsTwoDistinctEpisodeIDsAndRejectsConflictingEvidence() {
+    let first = file("a", episode: 1, tmdb: 101, path: "/emby/Season One/01.mkv")
+    let second = file("b", episode: 2, tmdb: 102, path: "/emby/Season One/02.mkv")
+    let third = file("c", episode: 3, path: "/emby/Season One/03.mkv")
+    let records = [
+      record("/mp/S01/01.mkv", episodes: "E01"),
+      record("/mp/S01/02.mkv", episodes: "E02"),
+      record("/mp/S01/03.mkv", episodes: "E03"),
+    ]
+    XCTAssertEqual(index([first, second, third], records: records).confirmedEpisodes(tmdbEpisodeID: 103).map(\.id), ["c"])
+    XCTAssertTrue(index([first, third], records: records + [records[0]]).confirmedEpisodes(tmdbEpisodeID: 103).isEmpty)
+    let conflict = record("/mp/S01/02.mkv", episodes: "E04")
+    XCTAssertTrue(index([first, second, third], records: records + [conflict]).confirmedEpisodes(tmdbEpisodeID: 103).isEmpty)
+    let secondCopy = [
+      file("a2", episode: 1, tmdb: 101, path: "/emby/另一份/01.mkv"),
+      file("b2", episode: 2, tmdb: 102, path: "/emby/另一份/02.mkv"),
+    ]
+    XCTAssertTrue(index([first, second, third] + secondCopy, records: records).confirmedEpisodes(tmdbEpisodeID: 103).isEmpty)
   }
 
   func testNumbersFollowTheEpisodeGroupTheSeriesWasOrganizedWith() {

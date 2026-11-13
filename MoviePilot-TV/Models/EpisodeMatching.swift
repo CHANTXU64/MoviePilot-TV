@@ -7,7 +7,7 @@ import Foundation
 // 服务器上的季号集号来自整理时写进的文件名或 NFO：按默认顺序，或按订阅时选的剧集组，和详情页现在选的剧集组无关。
 // 按可信程度依次对应：
 // 1. 文件带 TMDB 单集编号：确定。一个文件包含多集、只记了第一集的编号时，按默认顺序核对后覆盖后几集。
-// 2. 文件对上 MoviePilot 的整理记录：按记录里的剧集组、季、集换算成 TMDB 单集，确定。
+// 2. 文件对上 MoviePilot 的整理记录：比较完整路径、由多集核实的目录对应或共同路径尾部，再按记录换算成 TMDB 单集。
 // 3. 都没有：按文件的季号集号，在这部剧整理记录用过的剧集组（没有记录就是默认顺序）里找同季同集，再比播出日期。
 //    不确定，播放前要说明可能不是这一集。MoviePilot 自己判断入库也只看季号集号，这一步和它的判断一致。
 // 以编号为准：某一集有确定的文件时只用确定的；带 TMDB 单集编号的文件只按编号对应。
@@ -147,28 +147,34 @@ nonisolated struct EpisodeTransferRecord: Decodable, Equatable, Sendable {
   }
 }
 
-/// 比对文件用的路径尾部：上一级目录名和文件名（不含扩展名），不分大小写。
-/// MoviePilot 和媒体服务器常跑在不同容器里，挂载点不同，完整路径对不上；网盘 STRM 的扩展名也和原文件不同。
-nonisolated struct FilePathKey: Hashable, Sendable {
-  let parent: String
-  let name: String
+/// 整理路径和媒体库路径可能有不同挂载前缀，STRM 也可能改了扩展名。
+nonisolated struct EpisodeFilePath: Sendable {
+  private let fullPath: String
+  private let tail: [String]
+  let parent: ArraySlice<String>
+
+  var filename: String { tail[tail.count - 1] }
 
   init?(path: String?) {
     guard let path else { return nil }
-    let components = path.replacingOccurrences(of: "\\", with: "/").split(separator: "/").map(String.init)
+    let fullPath = path.replacingOccurrences(of: "\\", with: "/")
+    var components = fullPath.split(separator: "/").map(String.init)
     guard components.count >= 2 else { return nil }
-    let file = components[components.count - 1]
-    var name = file
+    let file = components.removeLast()
+    parent = components[...]
     if let dot = file.lastIndex(of: "."), dot != file.startIndex, file.distance(from: dot, to: file.endIndex) <= 6 {
-      name = String(file[..<dot])
+      components.append(String(file[..<dot]))
+    } else {
+      components.append(file)
     }
-    guard !name.isEmpty else { return nil }
-    parent = Self.normalized(components[components.count - 2])
-    self.name = Self.normalized(name)
+    self.fullPath = fullPath
+    tail = components.map { $0.precomposedStringWithCanonicalMapping.lowercased() }
   }
 
-  private static func normalized(_ value: String) -> String {
-    value.precomposedStringWithCanonicalMapping.lowercased()
+  /// 完整路径优先，其余按从文件名往上连续对上的段数排序。
+  func commonSuffixRank(with other: Self) -> Int {
+    if fullPath == other.fullPath { return .max }
+    return zip(tail.reversed(), other.tail.reversed()).prefix(while: { $0.0 == $0.1 }).count
   }
 }
 
@@ -295,7 +301,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     self.serverName = serverName
     self.hasSeries = hasSeries
     self.incompleteReason = incompleteReason
-    let plan = Plan(episodes: episodes, records: records)
+    let plan = Plan(episodes: episodes, records: records, lists: lists)
     var confirmed: [Int: [ServerMediaItem]] = [:]
     var uncertain: [Int: [UncertainFile]] = [:]
     var summary = Summary()
@@ -371,7 +377,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     self.summary = summary
   }
 
-  /// 建对应表要读的 MoviePilot 集列表：包含多集的带编号文件所在季的默认顺序列表，没有编号的文件按整理记录或季号集号要用的列表。
+  /// 建对应表要读的 MoviePilot 集列表：多集文件、整理记录、季集号兜底和目录样本需要的列表。
   static func requiredLists(for episodes: [ServerMediaItem], records: [EpisodeTransferRecord]) -> Set<EpisodeListKey> {
     let plan = Plan(episodes: episodes, records: records)
     var keys = Set(
@@ -385,7 +391,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       case .unidentified: break
       }
     }
-    return keys
+    return keys.union(plan.directoryEvidence.flatMap { $0.value.map(\.placement.list) })
   }
 
   /// 没有对上整理记录的文件按哪套编号比季号集号：这部剧最近一条整理记录用的剧集组；没有记录时按默认顺序。
@@ -407,27 +413,132 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 每个没有编号的文件走哪一步。`requiredLists` 和建表共用，读的列表和用的列表一致。
   private struct Plan {
     let files: [ServerMediaItem]
-    /// 文件 → 整理记录里的位置。同一个文件有几条记录且位置不同时不用（不知道哪条对）。
-    let placements: [FilePathKey: EpisodePlacement]
+    /// 服务器条目 ID → 整理记录里的位置。
+    let placements: [String: EpisodePlacement]
     let numberingGroup: String?
+    let directoryEvidence: [DirectoryPair: [DirectoryAnchor]]
 
-    init(episodes: [ServerMediaItem], records: [EpisodeTransferRecord]) {
+    init(episodes: [ServerMediaItem], records: [EpisodeTransferRecord], lists: [EpisodeListKey: [TmdbEpisode]] = [:]) {
       files = episodes.filter(\.hasFile)
-      var found: [FilePathKey: EpisodePlacement?] = [:]
-      for record in records {
-        guard let key = FilePathKey(path: record.path), let placement = record.placement else { continue }
-        if let existing = found[key] {
-          if existing != placement { found[key] = .some(nil) }
-        } else {
-          found[key] = placement
-        }
+      let paths = files.compactMap { file in
+        EpisodeFilePath(path: file.path).map { File(item: file, path: $0) }
       }
-      placements = found.compactMapValues { $0 }
+      let recordsWithPaths = records.compactMap { record -> Record? in
+        guard let path = EpisodeFilePath(path: record.path), let placement = record.placement else { return nil }
+        return Record(path: path, placement: placement)
+      }
+      let byFilename = Dictionary(grouping: paths, by: \.path.filename)
+      directoryEvidence = Self.findDirectoryEvidence(byFilename: byFilename, records: recordsWithPaths)
+      let mappedDirectories = Self.confirmDirectories(directoryEvidence, lists: lists)
+      placements = Self.matchRecords(recordsWithPaths, byFilename: byFilename, mappedDirectories: mappedDirectories)
       numberingGroup = ServerEpisodeIndex.numberingGroup(records)
     }
 
+    private struct File {
+      let item: ServerMediaItem
+      let path: EpisodeFilePath
+    }
+
+    private struct Record {
+      let path: EpisodeFilePath
+      let placement: EpisodePlacement
+    }
+
+    struct DirectoryPair: Hashable {
+      let record: ArraySlice<String>
+      let server: ArraySlice<String>
+    }
+
+    struct DirectoryAnchor {
+      let episodeID: Int
+      let filename: String
+      let placement: EpisodePlacement
+    }
+
+    /// 先按文件名找可能的目录对应。至少需要两个不同的单集 ID，合并集不能作为样本。
+    private static func findDirectoryEvidence(
+      byFilename: [String: [File]], records: [Record]
+    ) -> [DirectoryPair: [DirectoryAnchor]] {
+      var evidence: [DirectoryPair: [DirectoryAnchor]] = [:]
+      for record in records where record.placement.episodes.count == 1 {
+        for file in byFilename[record.path.filename] ?? [] {
+          guard let id = file.item.tmdbEpisodeID,
+            (file.item.episodeNumberEnd ?? file.item.episodeNumber) == file.item.episodeNumber,
+            file.path.parent != record.path.parent
+          else { continue }
+          let pair = DirectoryPair(record: record.path.parent, server: file.path.parent)
+          evidence[pair, default: []].append(
+            DirectoryAnchor(episodeID: id, filename: file.path.filename, placement: record.placement))
+        }
+      }
+      return evidence.filter { Set($0.value.map(\.episodeID)).count >= 2 }
+    }
+
+    /// 同一季和编号下至少两份文件经单集 ID 核对一致，才用这对目录。同一侧指向多个目录时不猜。
+    private static func confirmDirectories(
+      _ evidence: [DirectoryPair: [DirectoryAnchor]], lists: [EpisodeListKey: [TmdbEpisode]]
+    ) -> [DirectoryPair: Set<EpisodeListKey>] {
+      let verified = evidence.compactMapValues { anchors -> Set<EpisodeListKey>? in
+        let supported = Dictionary(grouping: anchors, by: \.placement.list).compactMap { key, group -> EpisodeListKey? in
+          let checked = group.compactMap { anchor -> (anchor: DirectoryAnchor, expected: Int)? in
+            guard let number = anchor.placement.episodes.first,
+              let id = episodeID(number: number, in: lists[key])
+            else { return nil }
+            return (anchor: anchor, expected: id)
+          }
+          guard checked.allSatisfy({ $0.anchor.episodeID == $0.expected }),
+            Set(checked.map(\.anchor.episodeID)).count >= 2,
+            Set(checked.map(\.anchor.filename)).count >= 2
+          else { return nil }
+          return key
+        }
+        return supported.isEmpty ? nil : Set(supported)
+      }
+      let byRecord = Dictionary(grouping: verified.keys, by: \.record)
+      let byServer = Dictionary(grouping: verified.keys, by: \.server)
+      return verified.filter { byRecord[$0.key.record]?.count == 1 && byServer[$0.key.server]?.count == 1 }
+    }
+
+    private struct RecordMatch {
+      let rank: Int
+      let placement: EpisodePlacement?
+    }
+
+    /// 只用文件最匹配的整理记录。该记录也必须唯一最匹配这个文件，避免两个副本借用同一条记录。
+    /// 强匹配有冲突时保留冲突，不退回更短的路径；同一位置的重复历史可以一起印证。
+    private static func matchRecords(
+      _ records: [Record], byFilename: [String: [File]], mappedDirectories: [DirectoryPair: Set<EpisodeListKey>]
+    ) -> [String: EpisodePlacement] {
+      var bestByFile: [String: RecordMatch] = [:]
+      for record in records {
+        var ranks: [String: Int] = [:]
+        for file in byFilename[record.path.filename] ?? [] {
+          let suffix = file.path.commonSuffixRank(with: record.path)
+          let pair = DirectoryPair(record: record.path.parent, server: file.path.parent)
+          // 推断出的目录优先于普通尾部，完整路径仍然最强。
+          let mapped = mappedDirectories[pair]?.contains(record.placement.list) == true
+          let rank = suffix == .max || !mapped ? suffix : Int.max - 1
+          guard rank >= 2 else { continue }
+          ranks[file.item.id] = max(ranks[file.item.id] ?? 0, rank)
+        }
+        guard let strongest = ranks.values.max() else { continue }
+        let winnerCount = ranks.values.filter { $0 == strongest }.count
+        for (id, rank) in ranks {
+          let proposed = rank == strongest && winnerCount == 1 ? record.placement : nil
+          if let current = bestByFile[id], current.rank >= rank {
+            if current.rank == rank, current.placement != proposed {
+              bestByFile[id] = RecordMatch(rank: rank, placement: nil)
+            }
+          } else {
+            bestByFile[id] = RecordMatch(rank: rank, placement: proposed)
+          }
+        }
+      }
+      return bestByFile.compactMapValues(\.placement)
+    }
+
     func step(for file: ServerMediaItem) -> Step {
-      if let key = FilePathKey(path: file.path), let placement = placements[key] { return .recorded(placement) }
+      if let placement = placements[file.id] { return .recorded(placement) }
       guard let season = file.seasonNumber, let first = file.episodeNumber else { return .unidentified }
       let last = max(file.episodeNumberEnd ?? first, first)
       guard last - first < EpisodeTransferRecord.maximumEpisodesPerFile else { return .unidentified }
