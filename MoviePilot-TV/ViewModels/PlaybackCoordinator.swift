@@ -203,8 +203,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private var lookupRounds: [String: LookupRound] = [:]
   /// 各部剧上一轮补查的开始时间：没查全的过一阵才再查，不随每次打开详情页重开一轮。
   private var lastLookupRound: [String: (startedAt: Date, files: Set<String>)] = [:]
-  /// 各部剧在补查里核对过的文件（一轮结束时记上）。没核对过的文件没查清时，没找到的集先显示正在核对、不能试看；
-  /// 核对过但没查清的，之后在后台重查，不挡试看。
+  /// 各部剧在补查里核对过的文件（一轮结束时记上，按 `Candidate.lookupKey`：条目 ID 加核对用的编号）。没核对过的文件
+  /// 没查清时，没找到的集先显示正在核对、不能试看；核对过但没查清的，之后在后台重查，不挡试看。条目还是那个、编号换了，
+  /// 按没核对过算。
   private var checkedLookupFiles: [String: Set<String>] = [:]
   /// 一轮到点结束后，等已经发出的请求回来再通知一次（它们的结果会写进缓存，到点时还没回来）。
   private var lateLookupNotices: [String: Task<Void, Never>] = [:]
@@ -712,10 +713,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private func episodeEvidence(
     episodes: [ServerMediaItem], local: ServerEpisodeIndex, tmdbID: Int, on connection: any MediaServerConnection
   ) async -> EpisodeEvidence {
-    let roundKey = "\(connection.serverName)|\(tmdbID)"
+    // 按连接身份分：服务器改了地址、换了用户或两台同名时，不沿用另一个连接的核对状态。
+    let roundKey = "\(Self.profileKey(connection))|\(tmdbID)"
     var evidence = EpisodeEvidence()
     var needsRound = false
-    var candidates: Set<String> = []
+    var candidates: [ExternalEvidenceRequest.Candidate] = []
     if let stored = storedLibraryProfiles(for: connection) {
       evidence.independentFiles = MediaLibraryProfile.independentFiles(episodes, in: stored.profiles)
       if let request = ExternalEvidenceRequest(
@@ -726,7 +728,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         evidence.lookups = cached.lookups
         evidence.translatedSeasons = cached.translatedSeasons
         needsRound = !cached.isComplete
-        candidates = Set(request.candidates.map(\.itemID))
+        candidates = request.candidates
       }
       needsRound = needsRound || !stored.isFresh
     } else if let pending = ExternalEvidenceRequest(
@@ -734,18 +736,20 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     {
       // 还没读到媒体库配置（这一轮里先读；或读失败了）：带编号的文件都没法核对，没找到的集不能直接说没有。
       needsRound = true
-      candidates = Set(pending.candidates.map(\.itemID))
-      for id in candidates { evidence.lookups[id] = .unresolved }
+      candidates = pending.candidates
+      for candidate in candidates { evidence.lookups[candidate.itemID] = .unresolved }
       evidence.librarySettingsUnknown = true
     }
     if needsRound {
-      startLookupRound(roundKey, tmdbID: tmdbID, episodes: episodes, local: local, files: candidates, on: connection)
+      startLookupRound(
+        roundKey, tmdbID: tmdbID, episodes: episodes, local: local, files: Set(candidates.map(\.lookupKey)),
+        on: connection)
     }
     // 只算还没有答案的：缓存里已经有答案（包括有歧义）的新文件不用等。没有答案就是没查全，一定会补查：
-    // 不是正在这一轮里查，就是等这一轮结束后马上查（出现新文件时不等重查间隔），不会一直挂着。
-    evidence.checkingFiles = candidates.subtracting(checkedLookupFiles[roundKey] ?? []).filter {
-      evidence.lookups[$0] == .unresolved
-    }
+    // 不是正在这一轮里查，就是等这一轮结束后马上查（出现新文件、条目换了编号时不等重查间隔），不会一直挂着。
+    let checked = checkedLookupFiles[roundKey] ?? []
+    evidence.checkingFiles = Set(
+      candidates.filter { !checked.contains($0.lookupKey) && evidence.lookups[$0.itemID] == .unresolved }.map(\.itemID))
     return evidence
   }
 
@@ -909,13 +913,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let tmdbID = context.tmdbID
     let key = "\(tmdbID)|\(title)"
     rememberTransferRecordRequest(key, files: files)
-    return try await transferRecords.value(
-      for: key, forceRefresh: forceRefresh,
-      acceptsCachedValue: { files.isSubset(of: $0.files) && acceptsCachedValue($0) },
-      validate: validateNotTornDown
-    ) { [weak self] in
+    // 这次调用要是发起了读取，读到的就算覆盖了此刻已经要过记录的文件（含这次的）。
+    let requested = transferRecordHistory[key]?.requestedFiles ?? files
+    let load: @MainActor () async throws -> SeriesTransferRecords = { [weak self] in
       let history = self?.transferRecordHistory[key]
-      let requested = history?.requestedFiles ?? []
       let fetch: (String, Int) async throws -> TransferRecordQuery.Page = { query, page in
         guard let apiService = self?.apiService else { throw CancellationError() }
         return try await apiService.fetchEpisodeMatchTransferRecords(
@@ -933,7 +934,17 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       let result = SeriesTransferRecords(prefixed: prefixed, containing: containing, files: requested)
       self?.rememberTransferRecords(result, for: key)
       return result
-    }.records
+    }
+    let value = try await transferRecords.value(
+      for: key, forceRefresh: forceRefresh,
+      acceptsCachedValue: { files.isSubset(of: $0.files) && acceptsCachedValue($0) },
+      validate: validateNotTornDown, load: load)
+    if files.isSubset(of: value.files) { return value.records }
+    // 跟上的在途读取开始时还没要过这些文件（比如另一台服务器上刚入库的一集）：那次读到的可能还没有它们的记录，
+    // 再增量读一次。这次开始前已经记下了这些文件，不会再来一遍。
+    return try await transferRecords.value(
+      for: key, forceRefresh: true, validate: validateNotTornDown, load: load
+    ).records
   }
 
   /// 记下要过这部剧记录的文件。读之前记：在途的那次读取开始前要过的，读完都算读过。

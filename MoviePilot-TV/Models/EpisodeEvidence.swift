@@ -30,7 +30,7 @@ nonisolated struct MediaLibraryProfile: Equatable, Sendable {
   /// 单集资料不是从 TMDB 取的文件（服务器条目 ID）。服务器在线刮削单集时按季号集号去问来源，来源是 TMDB 时，
   /// 服务器上的标题和外部编号就是 TMDB 按同一组季号集号给的，拿来和 TMDB 核对证明不了什么。
   /// 文件要落在至少一个媒体库的文件夹里；同一个文件夹可以加进几个媒体库，这时每个库的单集来源都不能含 TMDB。
-  /// 路径缺失或哪个库都不在时按来源不明处理，不放进来。
+  /// 路径缺失或哪个库都不在时按来源不明处理，不放进来。Windows 路径（盘符或反斜杠）不分大小写比较。
   static func independentFiles(_ files: [ServerMediaItem], in libraries: [MediaLibraryProfile]) -> Set<String> {
     let roots = libraries.map { library in
       (prefixes: library.paths.map(components).filter { !$0.isEmpty }, usesTmdb: library.mayUseTmdbForEpisodes)
@@ -45,8 +45,16 @@ nonisolated struct MediaLibraryProfile: Equatable, Sendable {
     return result
   }
 
-  private static func components(_ path: String) -> [Substring] {
-    path.split(whereSeparator: { $0 == "/" || $0 == "\\" })
+  private static func components(_ path: String) -> [String] {
+    let parts = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
+    return isWindowsPath(path) ? parts.map { $0.lowercased() } : parts
+  }
+
+  /// 盘符开头（`D:`）或带反斜杠的路径：Windows 文件系统，大小写不同也是同一个位置。
+  private static func isWindowsPath(_ path: String) -> Bool {
+    if path.contains("\\") { return true }
+    let chars = Array(path.prefix(2))
+    return chars.count == 2 && chars[0].isASCII && chars[0].isLetter && chars[1] == ":"
   }
 }
 
@@ -137,6 +145,11 @@ nonisolated struct ExternalEvidenceRequest: Equatable, Sendable {
     let externalIDs: [(source: String, value: String)]
     /// 编号查空后要核对其他语言标题时的默认顺序季号；文件没有具体标题、没有 TVDB 单集编号或按剧集组编号时为 nil。
     let titleSeason: Int?
+
+    /// 补查记账用的身份：条目 ID 加核对用的编号。同一个条目换了文件或重新刮削后编号变了，要当作没核对过的新文件。
+    var lookupKey: String {
+      ([itemID] + externalIDs.map { "\($0.source):\($0.value)" }).joined(separator: "|")
+    }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
       lhs.itemID == rhs.itemID && lhs.titleSeason == rhs.titleSeason

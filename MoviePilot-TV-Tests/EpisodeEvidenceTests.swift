@@ -51,6 +51,19 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertTrue(MediaLibraryProfile(paths: [], episodeFetchers: ["TMDb"]).mayUseTmdbForEpisodes)
   }
 
+  func testWindowsLibraryPathsCompareWithoutCase() {
+    // Windows 上大小写不同也是同一个位置；Linux 上区分大小写。
+    let windows = MediaLibraryProfile(paths: ["D:\\Media\\TV"], episodeFetchers: ["TheTVDB"])
+    let forwardSlashes = MediaLibraryProfile(paths: ["E:/Anime"], episodeFetchers: ["TheTVDB"])
+    let linux = MediaLibraryProfile(paths: ["/Media/TV"], episodeFetchers: ["TheTVDB"])
+    let files = [
+      file("win", episode: 1, path: "d:\\media\\tv\\Show\\E01.mkv"),
+      file("winSlashes", episode: 1, path: "e:/anime/Show/E01.mkv"),
+      file("linux", episode: 1, path: "/media/tv/Show/E01.mkv"),
+    ]
+    XCTAssertEqual(MediaLibraryProfile.independentFiles(files, in: [windows, forwardSlashes, linux]), ["win", "winSlashes"])
+  }
+
   func testEmbyVirtualFoldersKeepPathsAndEpisodeSources() throws {
     let json = """
       [
