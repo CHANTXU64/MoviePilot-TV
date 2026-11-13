@@ -101,6 +101,11 @@ struct EmbyClient {
     try? url(["Items", itemID, "Images", type], query: ["tag": tag, "maxWidth": "1280", "quality": "90"])
   }
 
+  /// 章节截图地址，规则同 `imageURL`。
+  func chapterImageURL(itemID: String, index: Int, tag: String) -> URL? {
+    try? url(["Items", itemID, "Images", "Chapter", String(index)], query: ["tag": tag, "maxWidth": "640", "quality": "90"])
+  }
+
   /// 直接播放原文件的流地址。密钥放在 query 里，此地址不得写入日志。
   func directStreamURL(
     itemID: String, selection: EmbyDirectPlay.Selection, playSessionID: String?

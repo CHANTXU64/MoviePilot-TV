@@ -4,7 +4,7 @@ import SwiftUI
 
 // 移植自 Swiftfin 的播放界面读取的是 Jellyfin SDK 的数据类型（BaseItemDto、ChapterInfo、BaseItemPerson、MediaStream…）。
 // 这里按同名提供只含界面用到成员的适配类型，移植文件不用改类型名；数据来自与服务器无关的 `ServerMediaItem`、`ServerMediaSource`。
-// 目前只填播放本身已有的数据（标题、季集号、片长、mpv 的音轨字幕、可选的版本）。简介、章节、演职员、海报、片源详情、
+// 目前只填播放本身已有的数据（标题、季集号、片长、章节、mpv 的音轨字幕、可选的版本）。演职员、片源详情、
 // 片头片尾等元数据暂不接入，保持为空，界面大多按 Swiftfin 原逻辑自然隐藏。
 // 从详情页按集播放时，标题、季集号用 MoviePilot 集列表的，上一集/下一集和同季列表也按它走（见 `UserSession`）；
 // 其他入口（首页“最近添加”、整剧从第一集播）没有集列表，队列为空。
@@ -98,7 +98,7 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   /// 播放界面的条目：标题、季集号、简介、日期、评分和图片都取 `metadata`（MoviePilot 为准，缺的项用媒体服务器的，
-  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员、章节暂不接入。
+  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员暂不接入；章节按所播片源，由 `MediaPlayerItem` 给出。
   /// 按集播放时带上队列用的剧集、季标识；其他条目不带，播放界面的队列为空。
   init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
@@ -357,18 +357,30 @@ extension BaseItemPerson: Poster {
 nonisolated struct ChapterInfo: Hashable {
   var name: String?
   var startPositionTicks: Int?
-  var imageTag: String?
   var imageURL: URL?
-}
 
-extension BaseItemDto {
+  init(name: String?, startPositionTicks: Int?, imageURL: URL? = nil) {
+    self.name = name
+    self.startPositionTicks = startPositionTicks
+    self.imageURL = imageURL
+  }
+
+  init(_ chapter: ServerChapter) {
+    self.init(
+      name: chapter.name, startPositionTicks: BaseItemDto.ticks(seconds: chapter.startSeconds),
+      imageURL: chapter.imageURL)
+  }
 
   /// 与 Swiftfin `fullChapterInfo(using:)` 相同：去掉没有起点的章节、按起点排序，附上章节图。
-  var fullChapterInfo: [ChapterInfo.FullInfo] {
-    (chapters ?? [])
+  /// 没有截图的章节卡片显示 `placeholderSymbol`。
+  static func fullInfo(_ chapters: [ChapterInfo], placeholderSymbol: String) -> [ChapterInfo.FullInfo] {
+    chapters
       .filter { $0.startPositionTicks != nil }
       .sorted { ($0.startPositionTicks ?? 0) < ($1.startPositionTicks ?? 0) }
-      .map { ChapterInfo.FullInfo(chapterInfo: $0, imageSource: $0.imageURL.map { ImageSource(url: $0) }) }
+      .map {
+        ChapterInfo.FullInfo(
+          chapterInfo: $0, imageSource: $0.imageURL.map { ImageSource(url: $0) }, systemImage: placeholderSymbol)
+      }
   }
 }
 

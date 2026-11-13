@@ -459,10 +459,13 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let embeddedTrackCount: Int?
   /// 这个版本的片长（秒）；服务器没给时为 nil。同一条目的各版本可能长短不一（如加长版）。
   let runtimeSeconds: Double?
+  /// 这个版本的章节，按起点排序；服务器没有时为空（播放界面按片长自动分段，见 `PlaybackChapters`）。
+  let chapters: [ServerChapter]
 
   init(
     id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
-    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil, runtimeSeconds: Double? = nil
+    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil, runtimeSeconds: Double? = nil,
+    chapters: [ServerChapter] = []
   ) {
     self.id = id
     self.name = name
@@ -471,9 +474,25 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
     self.displayModeHint = displayModeHint
     self.embeddedTrackCount = embeddedTrackCount
     self.runtimeSeconds = runtimeSeconds
+    self.chapters = chapters.sorted { $0.startSeconds < $1.startSeconds }
   }
 
   var isDirectlyPlayable: Bool { unsupportedReason == nil }
+}
+
+/// 片源里的一个章节。
+nonisolated struct ServerChapter: Equatable, Sendable {
+  let name: String?
+  /// 起点（秒）
+  let startSeconds: Double
+  /// 章节截图；服务器没生成时为 nil，播放界面显示占位图标。图片地址不带密钥。
+  let imageURL: URL?
+
+  init(name: String?, startSeconds: Double, imageURL: URL? = nil) {
+    self.name = trimmedNonEmpty([name])
+    self.startSeconds = startSeconds
+    self.imageURL = imageURL
+  }
 }
 
 /// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
@@ -550,6 +569,23 @@ nonisolated enum PlaybackDuration {
   /// 起播前（续播询问）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
   static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
     [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
+  }
+}
+
+/// 播放界面的章节：片源有章节就用片源的；没有时按片长每 5 分钟分一段，名字和 Emby 自动分段的一样（「章节 N」），没有截图。
+/// 片长取 `PlaybackDuration`：服务器没分析出时长的文件，起播后按 mpv 读到的时长再分。
+nonisolated enum PlaybackChapters {
+  static let generatedInterval: Double = 300
+  /// 最后一段不足这么长时并进前一段，免得片尾多出一个只有几秒的章节。
+  static let minimumGeneratedLength: Double = 60
+
+  static func chapters(source: [ServerChapter], durationSeconds: Double?) -> [ServerChapter] {
+    guard source.isEmpty else { return source }
+    guard let durationSeconds, durationSeconds.isFinite else { return [] }
+    let starts = Array(stride(from: 0, to: durationSeconds - minimumGeneratedLength, by: generatedInterval))
+    // 只分出一段时没有可跳的章节，不显示章节。
+    guard starts.count > 1 else { return [] }
+    return starts.enumerated().map { ServerChapter(name: "章节 \($0.offset + 1)", startSeconds: $0.element) }
   }
 }
 

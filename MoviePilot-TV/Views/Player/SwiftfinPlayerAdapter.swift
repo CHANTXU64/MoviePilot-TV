@@ -246,10 +246,11 @@ final class MediaSession {
     return BaseItemDto.runTimeLabel(seconds: runtime.seconds)
   }
 
-  /// 当前条目，片长换成 `runtime`。
+  /// 当前条目，片长换成 `runtime`，章节与章节面板同一份。
   var item: BaseItemDto {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
     item.runTimeTicks = runtime.map { BaseItemDto.ticks(seconds: $0.seconds) }
+    item.chapters = playbackItem?.chapters.map(\.chapterInfo)
     return item
   }
 
@@ -667,7 +668,11 @@ final class MediaSession {
       isBuffering: mpvPlayer.bufferStatus.isBuffering,
       duration: mpvPlayer.duration > .zero ? mpvPlayer.duration : nil)
     if playbackState != next {
+      let durationChanged = playbackState.duration != next.duration
       playbackState = next
+      if durationChanged {
+        playbackItem?.updateChapters(durationSeconds: runtime?.seconds)
+      }
     }
   }
 
@@ -704,12 +709,16 @@ final class MediaPlayerItem {
 
   let baseItem: BaseItemDto
   let mediaSource: PlaybackMediaSourceInfo
-  let chapters: [ChapterInfo.FullInfo]
+  /// 所播片源的章节，没有时按片长自动分段（见 `PlaybackChapters`）。
+  private(set) var chapters: [ChapterInfo.FullInfo] = []
   let segments: MediaSegmentObserver? = MediaSegmentObserver()
   @ObservationIgnored let previewImageProvider: PreviewImageProvider?
   var configuration = MediaPlaybackConfiguration()
 
   @ObservationIgnored private let player: MPVPlayer
+  @ObservationIgnored private let sourceChapters: [ServerChapter]
+  /// 没有截图的章节卡片显示的图标：剧集用电视，其他用电影。
+  @ObservationIgnored private let chapterPlaceholderSymbol: String
   /// 字幕关闭时记住的轨道；nil 表示还没选过，打开时用默认轨道。
   private var disabledSubtitleTrackIndex: Int?
 
@@ -731,7 +740,12 @@ final class MediaPlayerItem {
     self.baseItem = baseItem
     mediaSource = PlaybackMediaSourceInfo(source: source)
     self.player = player
-    chapters = baseItem.fullChapterInfo
+    sourceChapters = source.chapters
+    let placeholderSymbol = baseItem.type == .episode ? AppSymbol.tv : AppSymbol.movie
+    chapterPlaceholderSymbol = placeholderSymbol
+    let chapters = Self.chapters(
+      source: source.chapters, durationSeconds: baseItem.runtime?.seconds, placeholderSymbol: placeholderSymbol)
+    self.chapters = chapters
     var configuration = MediaPlaybackConfiguration()
     configuration.startSeconds = .milliseconds(Int64(startSeconds * 1000))
     configuration.selectMediaSource(id: source.id)
@@ -745,6 +759,23 @@ final class MediaPlayerItem {
       resolveImage: { await images.image(for: $0) })
     self.configuration = configuration
     images.provider = previewImageProvider
+  }
+
+  /// 片长变了（起播后 mpv 读出时长）时重新算章节；片源自带章节时结果不变。
+  func updateChapters(durationSeconds: Double?) {
+    let next = Self.chapters(
+      source: sourceChapters, durationSeconds: durationSeconds, placeholderSymbol: chapterPlaceholderSymbol)
+    if next.map(\.chapterInfo) != chapters.map(\.chapterInfo) {
+      chapters = next
+    }
+  }
+
+  private static func chapters(
+    source: [ServerChapter], durationSeconds: Double?, placeholderSymbol: String
+  ) -> [ChapterInfo.FullInfo] {
+    ChapterInfo.fullInfo(
+      PlaybackChapters.chapters(source: source, durationSeconds: durationSeconds).map(ChapterInfo.init),
+      placeholderSymbol: placeholderSymbol)
   }
 
   private var canSelectTracks: Bool { player.isPlaybackReady }
