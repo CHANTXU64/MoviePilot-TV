@@ -70,7 +70,7 @@ final class InAppPlaybackModelTests: XCTestCase {
     let info = try decode(
       EmbyPlaybackInfo.self,
       #"{"MediaSources":[{"Id":"a","Name":"4K HDR","Container":"mkv","Protocol":"File","MediaStreams":[]},{"Id":"b","Name":"远程","Protocol":"Http","MediaStreams":[]},{"Id":"c","Name":"1080p","Container":"mp4","Protocol":"File","MediaStreams":[]}]}"#)
-    let versions = MediaSession.versions(of: info.mediaSources.map(\.serverSource))
+    let versions = MediaSession.versions(of: info.mediaSources.map { $0.serverSource() })
     XCTAssertEqual(versions.map(\.id), ["a", "c"], "远程片源不能直连，不列出")
     XCTAssertEqual(versions.map(\.displayTitle), ["4K HDR", "1080p"])
   }
@@ -273,7 +273,7 @@ final class InAppPlaybackModelTests: XCTestCase {
     let info = try decode(
       EmbyPlaybackInfo.self,
       #"{"MediaSources":[{"Id":"a","Container":"mkv","Protocol":"File","RunTimeTicks":108000000000,"MediaStreams":[]},{"Id":"b","Container":"mkv","Protocol":"File","MediaStreams":[]},{"Id":"c","Container":"mkv","Protocol":"File","RunTimeTicks":"bad","MediaStreams":[]}]}"#)
-    let sources = info.mediaSources.map(\.serverSource)
+    let sources = info.mediaSources.map { $0.serverSource() }
     XCTAssertEqual(sources.map(\.id), ["a", "b", "c"], "时长读不出不影响片源本身")
     XCTAssertEqual(sources.map(\.runtimeSeconds), [10_800, nil, nil])
   }
@@ -3781,7 +3781,8 @@ extension PlaybackCoordinatorTests {
     let playing = try XCTUnwrap(screen.playbackItem)
     XCTAssertEqual(playing.baseItem.runtime, .seconds(10_800), "选集里的当前一集按这份显示")
     let info = try XCTUnwrap(
-      VideoPlayerSupplementType.info.makeSupplement(for: playing, queue: nil) as? MediaInfoSupplement)
+      VideoPlayerSupplementType.info.makeSupplement(for: playing, queue: nil, chapters: screen.chapters)
+        as? MediaInfoSupplement)
     XCTAssertEqual(info.item.runtime, .seconds(10_800), "按播放界面建面板的入口建出的信息面板")
     XCTAssertEqual(screen.runtime, .seconds(10_800), "面板的片长、结束时间和跳转上限读这个值")
     // 选集卡片来自按季取的集列表，条目上记的是 2 小时；正在播的那一集要显示所播文件的 3 小时。
@@ -3794,6 +3795,173 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
     // 起播上报了开始、退出排进了停止和写回：发完再结束，免得请求落到后面的用例里。
     await reporter.waitForQueued()
+  }
+
+  /// 播放界面上的章节：「章节」面板（不显示时为 nil）和进度条刻度读的章节。
+  @MainActor
+  private struct ShownChapters {
+    let panel: MediaChaptersSupplement?
+    let slider: [ChapterInfo]
+
+    init(_ screen: MediaSession) throws {
+      let playing = try XCTUnwrap(screen.playbackItem)
+      panel = VideoPlayerSupplementType.chapters.makeSupplement(for: playing, queue: nil, chapters: screen.chapters)
+        as? MediaChaptersSupplement
+      slider = screen.chapters.loaded.map(\.chapterInfo)
+    }
+  }
+
+  /// 按播放界面的入口起播，读出 mpv 读完文件前、后（交来 `embedded`）的章节。
+  /// 测试里 mpv 打不开测试地址、读不到文件，由测试交来它读到的内嵌章节；片长按片源或条目的。
+  private func playerChapters(
+    _ coordinator: PlaybackCoordinator, _ session: PlaybackSession, embedded: [ServerChapter] = []
+  ) async throws -> (beforeRead: ShownChapters, afterRead: ShownChapters) {
+    session.onFailure = { _ in }
+    let reporter = coordinator.reporterForTesting
+    let screen = MediaSession(session: session, onExit: { _ in }, onSwitchItem: { _, _, _, _, completion in completion(.discarded) })
+    screen.start()
+    let before = try ShownChapters(screen)
+    screen.embeddedChaptersDidLoad(embedded)
+    let after = try ShownChapters(screen)
+    screen.stop()
+    coordinator.endCurrentSession()
+    await reporter.waitForQueued()
+    return (before, after)
+  }
+
+  private func configureMovie(playbackInfo: String) {
+    PlaybackURLProtocol.stub.reset()
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = playbackInfo
+    }
+  }
+
+  private func movieChapters(
+    sourceRuntime: String = "", chapters: String = "[]", embedded: [ServerChapter] = []
+  ) async throws -> (beforeRead: ShownChapters, afterRead: ShownChapters) {
+    configureMovie(
+      playbackInfo:
+        #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","ItemId":"m1","Container":"mkv","Protocol":"File"\#(sourceRuntime),"MediaStreams":[],"Chapters":\#(chapters)}]}"#
+    )
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    return try await playerChapters(coordinator, try XCTUnwrap(coordinator.session), embedded: embedded)
+  }
+
+  /// Emby 的章节在所播版本的片源里：一起播就有，不等 mpv。按起点排好，片头片尾检测的标记不算章节，
+  /// 起点在片尾之后的（文件换了更短的版本、Emby 还没重新分析）不列，有截图的带上截图地址。
+  func testEmbyChaptersOfThePlayedSourceShowInThePlayer() async throws {
+    let shown = try await movieChapters(
+      chapters: #"""
+        [
+          {"StartPositionTicks":13200000000,"Name":"片尾","MarkerType":"Chapter","ChapterIndex":3},
+          {"StartPositionTicks":0,"Name":"片头","MarkerType":"Chapter","ChapterIndex":0},
+          {"StartPositionTicks":900000000,"Name":"","MarkerType":"IntroEnd","ChapterIndex":1},
+          {"StartPositionTicks":890000000,"Name":"正片","MarkerType":"Chapter","ChapterIndex":2,"ImageTag":"t2"},
+          {"StartPositionTicks":108000000000,"Name":"旧版片尾","MarkerType":"Chapter","ChapterIndex":4}]
+        """#)
+
+    let chapters = try XCTUnwrap(shown.beforeRead.panel, "服务器有章节时一开始就显示").chapters
+    XCTAssertFalse(try XCTUnwrap(shown.beforeRead.panel).isLoading)
+    XCTAssertEqual(chapters.map(\.displayTitle), ["片头", "正片", "片尾"], "按起点排序；片头结束标记、2 小时片长之后的章节都不列")
+    XCTAssertEqual(chapters.map(\.startSeconds), [.zero, .seconds(89), .seconds(1320)])
+    let image = try XCTUnwrap(chapters[1].imageSource?.url)
+    XCTAssertEqual(image.path, "/Items/m1/Images/Chapter/2", "截图按 Emby 给的章节序号取")
+    XCTAssertEqual(URLComponents(url: image, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "tag" }?.value, "t2")
+    XCTAssertNil(image.query?.range(of: "api_key"), "图片地址不带密钥")
+    XCTAssertNil(chapters[0].imageSource, "没有截图的章节不带地址，卡片显示占位图标")
+    XCTAssertEqual(chapters[0].systemImage, AppSymbol.movie)
+    XCTAssertEqual(shown.beforeRead.slider.map(\.name), ["片头", "正片", "片尾"], "进度条的章节刻度和面板同一份")
+    XCTAssertEqual(
+      shown.afterRead.panel?.chapters.map(\.displayTitle), ["片头", "正片", "片尾"],
+      "mpv 读到的内嵌章节不替换服务器的")
+  }
+
+  /// 老版本 Emby 不给 `ChapterIndex`、片源也不给 `ItemId`：截图序号按章节在服务器列表里的位置（读不出的条目也占位），
+  /// 只有一个版本时截图挂在正在播的条目上。
+  func testChapterImagesWithoutIndexOrItemIDFallBackToListPositionAndPlayedItem() async throws {
+    configureMovie(
+      playbackInfo: #"""
+        {"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"mkv","Protocol":"File","MediaStreams":[],"Chapters":[
+          {"StartPositionTicks":0,"Name":"一"},null,
+          {"StartPositionTicks":6000000000,"Name":"二","ImageTag":"t"}]}]}
+        """#)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let shown = try await playerChapters(coordinator, try XCTUnwrap(coordinator.session))
+    let chapters = try XCTUnwrap(shown.beforeRead.panel).chapters
+    XCTAssertEqual(chapters.map(\.displayTitle), ["一", "二"])
+    XCTAssertEqual(chapters[1].imageSource?.url?.path, "/Items/m1/Images/Chapter/2")
+  }
+
+  /// 服务器没有章节：「章节」先转圈，等 mpv 读完文件。文件里有章节就用，没有就按片长每 10 分钟分一段。
+  func testWithoutServerChaptersThePlayerWaitsForEmbeddedChaptersThenSplitsEveryTenMinutes() async throws {
+    let embedded = try await movieChapters(embedded: [
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: nil, startSeconds: 1800),
+      ServerChapter(name: "终章", startSeconds: 5400),
+    ])
+    let waiting = try XCTUnwrap(embedded.beforeRead.panel, "mpv 读完文件前就显示「章节」，告诉用户会有章节")
+    XCTAssertTrue(waiting.isLoading)
+    XCTAssertTrue(waiting.chapters.isEmpty, "转圈时还没有章节")
+    XCTAssertTrue(embedded.beforeRead.slider.isEmpty)
+    let fromFile = try XCTUnwrap(embedded.afterRead.panel)
+    XCTAssertFalse(fromFile.isLoading)
+    XCTAssertEqual(fromFile.chapters.map(\.displayTitle), ["序幕", "章节 2", "终章"], "文件里没写名字的按位置命名")
+    XCTAssertEqual(embedded.afterRead.slider.count, 3)
+
+    // 文件里也没有：2 小时按 10 分钟分 12 段，没有截图。
+    let none = try await movieChapters()
+    let split = try XCTUnwrap(none.afterRead.panel).chapters
+    XCTAssertEqual(split.count, 12)
+    XCTAssertEqual(split.prefix(3).map(\.displayTitle), ["章节 1", "章节 2", "章节 3"])
+    XCTAssertEqual(split.last?.startSeconds, .seconds(6600))
+    XCTAssertTrue(split.allSatisfy { $0.imageSource == nil && $0.systemImage == AppSymbol.movie }, "没有截图，显示电影图标")
+
+    // 服务器只给了一个章节：没有可跳的位置，按没有章节处理。
+    let single = try await movieChapters(chapters: #"[{"StartPositionTicks":0,"Name":"Chapter 1","MarkerType":"Chapter"}]"#)
+    XCTAssertTrue(try XCTUnwrap(single.beforeRead.panel).isLoading, "一个章节不算有章节，等 mpv")
+    XCTAssertEqual(try XCTUnwrap(single.afterRead.panel).chapters.count, 12)
+  }
+
+  /// 自动分段的边界：片尾不足 1 分钟并进前一段，恰好 1 分钟的单独成段；只分得出一段、片长离谱时都不分，「章节」随之消失。
+  func testGeneratedChaptersMergeAShortTailAndSkipTooShortOrBrokenDurations() async throws {
+    // 20 分 30 秒：0、10 分各一段，最后 30 秒并进第 2 段。
+    let tailShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":12300000000"#)
+    let tail = try XCTUnwrap(tailShown.afterRead.panel)
+    XCTAssertEqual(tail.chapters.map(\.startSeconds), [.zero, .seconds(600)])
+
+    // 11 分、21 分：最后一段恰好 1 分钟，不并。
+    let elevenShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":6600000000"#)
+    XCTAssertEqual(try XCTUnwrap(elevenShown.afterRead.panel).chapters.map(\.startSeconds), [.zero, .seconds(600)])
+    let twentyOneShown = try await movieChapters(sourceRuntime: #","RunTimeTicks":12600000000"#)
+    XCTAssertEqual(
+      try XCTUnwrap(twentyOneShown.afterRead.panel).chapters.map(\.startSeconds), [.zero, .seconds(600), .seconds(1200)])
+
+    let short = try await movieChapters(sourceRuntime: #","RunTimeTicks":6500000000"#)
+    XCTAssertNotNil(short.beforeRead.panel, "读完前不知道文件里有没有章节")
+    XCTAssertNil(short.afterRead.panel, "10 分 50 秒只分得出一段，不显示「章节」")
+    XCTAssertTrue(short.afterRead.slider.isEmpty, "进度条也不画刻度")
+
+    // 1 万小时：超过 500 段的上限，当作坏片长。
+    let broken = try await movieChapters(sourceRuntime: #","RunTimeTicks":360000000000000"#)
+    XCTAssertNil(broken.afterRead.panel)
+  }
+
+  /// 没有截图的章节：剧集显示电视图标（电影的见上面的用例）。
+  func testEpisodeChaptersWithoutImagesUseTheTVSymbol() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSession(
+      coordinator,
+      playbackInfo:
+        #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"mkv","Protocol":"File","RunTimeTicks":15000000000,"MediaStreams":[]}]}"#
+    )
+    let episode = try await playerChapters(coordinator, session)
+    let episodeChapters = try XCTUnwrap(episode.afterRead.panel).chapters
+    XCTAssertEqual(episodeChapters.count, 3)
+    XCTAssertTrue(episodeChapters.allSatisfy { $0.systemImage == AppSymbol.tv })
   }
 
   /// 读播放信息先失败了：协调器取消还在查的 MoviePilot 信息。查询本身不响应取消时，也要立即返回，失败提示不被拖住。

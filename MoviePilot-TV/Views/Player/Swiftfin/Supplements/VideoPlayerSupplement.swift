@@ -9,6 +9,7 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：去掉 `import JellyfinAPI`；条目、章节、演职员来自 MoviePilot-TV 的 Emby 适配类型（同名）。
+// 章节不在条目上，由调用方传入 `MediaSession.chapters`；mpv 还在读文件时也显示「章节」（转圈）。
 //
 
 import SwiftUI
@@ -42,15 +43,23 @@ extension VideoPlayerSupplement {
 @MainActor
 extension VideoPlayerSupplementType {
 
-    func makeSupplement(for item: MediaPlayerItem, queue: any MediaPlayerQueue?) -> (any VideoPlayerSupplement)? {
+    func makeSupplement(
+        for item: MediaPlayerItem,
+        queue: any MediaPlayerQueue?,
+        chapters: PlaybackChapterList
+    ) -> (any VideoPlayerSupplement)? {
         switch self {
         case .info:
             return MediaInfoSupplement(item: item.baseItem)
 
         case .chapters:
-            guard item.chapters.isNotEmpty else { return nil }
+            guard chapters.isShown else { return nil }
 
-            return MediaChaptersSupplement(id: "Chapters-\(item.baseItem.id ?? "any")", chapters: item.chapters)
+            return MediaChaptersSupplement(
+                id: "Chapters-\(item.baseItem.id ?? "any")",
+                chapters: chapters.loaded,
+                isLoading: chapters.isLoading
+            )
 
         case .queue:
             guard let queue else { return nil }

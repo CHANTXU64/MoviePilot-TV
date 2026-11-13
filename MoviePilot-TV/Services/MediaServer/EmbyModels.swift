@@ -267,6 +267,10 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let hasUnreadableStreams: Bool
   /// 这个版本的片长。条目上的 `RunTimeTicks` 只对应其中一个版本。
   let runTimeTicks: Int64?
+  /// 这个版本对应的条目（多版本时各版本是不同条目），章节截图挂在它上面。
+  let itemID: String?
+  let chapters: [EmbyChapter]
+
   init(
     id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream],
     runTimeTicks: Int64? = nil
@@ -278,6 +282,8 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.mediaStreams = mediaStreams
     hasUnreadableStreams = false
     self.runTimeTicks = runTimeTicks
+    itemID = nil
+    chapters = []
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -287,6 +293,8 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     case `protocol` = "Protocol"
     case mediaStreams = "MediaStreams"
     case runTimeTicks = "RunTimeTicks"
+    case itemID = "ItemId"
+    case chapters = "Chapters"
   }
 
   init(from decoder: Decoder) throws {
@@ -299,6 +307,16 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     mediaStreams = streams?.compactMap(\.value) ?? []
     hasUnreadableStreams = streams?.contains { $0.value == nil } ?? false
     runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
+    itemID = try? container.decodeIfPresent(String.self, forKey: .itemID)
+    // 没有 `ChapterIndex` 时截图序号按服务器列表里的位置，要在丢掉读不出的条目之前记下。
+    let chapters = try? container.decodeIfPresent([LossyDecodable<EmbyChapter>].self, forKey: .chapters)
+    self.chapters = (chapters ?? []).enumerated().compactMap { offset, entry in
+      entry.value.map { chapter in
+        var chapter = chapter
+        chapter.chapterIndex = chapter.chapterIndex ?? offset
+        return chapter
+      }
+    }
   }
 
   /// 文件里音视频和字幕轨的条数（不含外挂字幕等文件外的流）。没有流信息、有条目读不出或类型认不出、
@@ -324,7 +342,11 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   }
 
   /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
-  var serverSource: ServerMediaSource {
+  /// `chapterImage` 按条目 ID、章节序号和版本标签给出章节截图地址；不传时章节不带截图。
+  /// 片源没给 `ItemId` 时截图挂在 `fallbackItemID` 上：只有一个版本时它就是正在播的条目。
+  func serverSource(
+    fallbackItemID: String? = nil, chapterImage: ((_ itemID: String, _ index: Int, _ tag: String) -> URL?)? = nil
+  ) -> ServerMediaSource {
     let unsupported: PlaybackUnsupported?
     switch EmbyDirectPlay.evaluate(self) {
     case .success: unsupported = nil
@@ -333,7 +355,48 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
       displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount,
-      runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds))
+      runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
+      chapters: serverChapters(itemID: trimmedNonEmpty([itemID, fallbackItemID]), image: chapterImage))
+  }
+
+  /// 只取普通章节。Emby 把片头、片尾检测的标记（`IntroStart`、`CreditsStart` 等）也放在章节列表里，它们不是章节。
+  private func serverChapters(itemID: String?, image: ((String, Int, String) -> URL?)?) -> [ServerChapter] {
+    chapters.compactMap { chapter in
+      guard chapter.markerType == nil || chapter.markerType == "Chapter", let ticks = chapter.startPositionTicks
+      else { return nil }
+      let imageURL = trimmedNonEmpty([chapter.imageTag]).flatMap { tag in
+        itemID.flatMap { id in chapter.chapterIndex.flatMap { image?(id, $0, tag) } }
+      }
+      return ServerChapter(name: chapter.name, startSeconds: EmbyTicks.seconds(ticks), imageURL: imageURL)
+    }
+  }
+}
+
+nonisolated struct EmbyChapter: Decodable, Sendable, Equatable {
+  let name: String?
+  let startPositionTicks: Int64?
+  /// `Chapter` 是普通章节；Emby 4.8 起片头片尾检测的结果也以 `IntroStart`、`IntroEnd`、`CreditsStart` 放在这里。
+  let markerType: String?
+  /// 章节截图的序号；老版本 Emby 不给，这时按在列表里的位置（解码片源时补上）。
+  var chapterIndex: Int?
+  /// 章节截图的版本标签；媒体库没开「提取章节图片」时没有。
+  let imageTag: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case name = "Name"
+    case startPositionTicks = "StartPositionTicks"
+    case markerType = "MarkerType"
+    case chapterIndex = "ChapterIndex"
+    case imageTag = "ImageTag"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
+    startPositionTicks = try? container.decodeIfPresent(Int64.self, forKey: .startPositionTicks)
+    markerType = try? container.decodeIfPresent(String.self, forKey: .markerType)
+    chapterIndex = try? container.decodeIfPresent(Int.self, forKey: .chapterIndex)
+    imageTag = try? container.decodeIfPresent(String.self, forKey: .imageTag)
   }
 }
 

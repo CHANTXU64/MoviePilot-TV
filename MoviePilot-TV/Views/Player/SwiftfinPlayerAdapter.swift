@@ -183,6 +183,8 @@ final class MediaSession {
 
   /// 就绪、可跳转、缓冲与时长，值变化时才更新。
   private(set) var playbackState = PlaybackState()
+  /// mpv 读到的当前条目内嵌章节；还没读完文件时为 nil。
+  private var embeddedChapters: [ServerChapter]?
   /// mpv 报告的播放位置，变化满 `positionPublishStep` 才更新（见 `publishPosition`）。只有进度条和时间读它。
   private var observedPosition: Duration = .zero
   /// 界面显示的跳转目标；mpv 完成跳转后清空。
@@ -251,6 +253,27 @@ final class MediaSession {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
     item.runTimeTicks = runtime.map { BaseItemDto.ticks(seconds: $0.seconds) }
     return item
+  }
+
+  /// 「章节」面板和进度条刻度用的章节（取法见 `PlaybackChapters`），随片长和 mpv 读到的章节变化。
+  var chapters: PlaybackChapterList {
+    guard let playbackItem else { return .chapters([]) }
+    switch PlaybackChapters.resolve(
+      server: playbackItem.serverChapters, embedded: embeddedChapters, durationSeconds: runtime?.seconds)
+    {
+    case .waitingForPlayer:
+      return .loading
+    case .chapters(let chapters):
+      return .chapters(
+        ChapterInfo.fullInfo(chapters, placeholderSymbol: playbackItem.chapterPlaceholderSymbol))
+    }
+  }
+
+  /// mpv 读完文件后交来文件里内嵌的章节（测试也直接调用它模拟 mpv）。
+  func embeddedChaptersDidLoad(_ chapters: [ServerChapter]) {
+    if embeddedChapters != chapters {
+      embeddedChapters = chapters
+    }
   }
 
   var state: State {
@@ -403,6 +426,7 @@ final class MediaSession {
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
+    embeddedChapters = nil
     var baseItem = BaseItemDto.playback(session.playback)
     baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
@@ -669,6 +693,11 @@ final class MediaSession {
     if playbackState != next {
       playbackState = next
     }
+    // 就绪时 mpv 已读完文件信息（轨道和章节一起读出）。
+    if next.isReady, embeddedChapters == nil {
+      embeddedChaptersDidLoad(
+        mpvPlayer.mediaInformation.chapters.map { ServerChapter(name: $0.title, startSeconds: $0.startTime.seconds) })
+    }
   }
 
   private func syncPlaybackRequestStatus() {
@@ -704,7 +733,11 @@ final class MediaPlayerItem {
 
   let baseItem: BaseItemDto
   let mediaSource: PlaybackMediaSourceInfo
-  let chapters: [ChapterInfo.FullInfo]
+  /// 服务器给所播片源的章节。播放界面显示的章节由 `MediaSession.chapters` 按片长和 mpv 读到的章节算出。
+  let serverChapters: [ServerChapter]
+  /// 没有截图的章节卡片显示的图标：电影、剧集各用自己的。其他类型现在不会起播（见 `PlaybackError.unsupportedItemType`），
+  /// 万一有也用中性的图片图标，不装成电影。
+  let chapterPlaceholderSymbol: String
   let segments: MediaSegmentObserver? = MediaSegmentObserver()
   @ObservationIgnored let previewImageProvider: PreviewImageProvider?
   var configuration = MediaPlaybackConfiguration()
@@ -731,7 +764,14 @@ final class MediaPlayerItem {
     self.baseItem = baseItem
     mediaSource = PlaybackMediaSourceInfo(source: source)
     self.player = player
-    chapters = baseItem.fullChapterInfo
+    serverChapters = source.chapters
+    let placeholderSymbol: String
+    switch baseItem.type {
+    case .movie: placeholderSymbol = AppSymbol.movie
+    case .episode: placeholderSymbol = AppSymbol.tv
+    default: placeholderSymbol = AppSymbol.imagePlaceholder
+    }
+    chapterPlaceholderSymbol = placeholderSymbol
     var configuration = MediaPlaybackConfiguration()
     configuration.startSeconds = .milliseconds(Int64(startSeconds * 1000))
     configuration.selectMediaSource(id: source.id)
@@ -740,7 +780,7 @@ final class MediaPlayerItem {
       option: VideoPlayerDefaults.previewImageScrubbing,
       item: baseItem,
       mediaSourceID: source.id,
-      chapters: chapters,
+      chapters: ChapterInfo.fullInfo(source.chapters, placeholderSymbol: placeholderSymbol),
       client: JellyfinClient(connection: connection),
       resolveImage: { await images.image(for: $0) })
     self.configuration = configuration

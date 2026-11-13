@@ -13,6 +13,8 @@
 // - 补充面板列表的 Swiftfin 设置项换成 `VideoPlayerDefaults.supplements`（取 Swiftfin 默认值）。
 // - 直播节目单（EPGSupplement）只在直播条目且开启实验设置时出现，依赖整个 Jellyfin 直播电视模块，未移植：去掉追加它的分支。
 // - Swiftfin 的 `isolated deinit` 改为 `nonisolated deinit`：tvOS 18 上隔离析构的回部署会崩溃（工程约定）。
+// - 章节不在条目上，取 `MediaSession.chapters` 传给面板；章节有无变化时与换条目一样检查选中的面板还在不在
+//   （检查抽成 `supplementsDidChange`）。
 //
 
 import Combine
@@ -219,8 +221,9 @@ extension VideoPlayer {
 
             guard let mediaSession, let item = mediaSession.playbackItem else { return [] }
 
+            let chapters = mediaSession.chapters
             let selected = VideoPlayerDefaults.supplements.compactMap {
-                $0.makeSupplement(for: item, queue: mediaSession.queue)
+                $0.makeSupplement(for: item, queue: mediaSession.queue, chapters: chapters)
             }
 
             return selected
@@ -453,6 +456,21 @@ extension VideoPlayer {
 
         nonisolated deinit {}
 
+        /// 面板列表变了：选中的面板还在就保持，不在了就回到控制条。
+        private func supplementsDidChange() {
+            if let selectedSupplementID {
+                if supplements.contains(where: { $0.id == selectedSupplementID }) {
+                    transition(to: presentation)
+                } else {
+                    self.selectedSupplementID = nil
+                }
+            }
+
+            if supplements.isEmpty {
+                containerView?.cancelSupplementPan()
+            }
+        }
+
         func connect(mediaSession: MediaSession) {
             sessionObservations.removeAll()
             self.mediaSession = mediaSession
@@ -466,17 +484,7 @@ extension VideoPlayer {
                 } onChange: { [weak self] _ in
                     guard let self else { return }
 
-                    if let selectedSupplementID {
-                        if supplements.contains(where: { $0.id == selectedSupplementID }) {
-                            transition(to: presentation)
-                        } else {
-                            self.selectedSupplementID = nil
-                        }
-                    }
-
-                    if supplements.isEmpty {
-                        containerView?.cancelSupplementPan()
-                    }
+                    supplementsDidChange()
 
                     cancelScrub()
                     freezePlaybackTimeIfHidden()
@@ -490,6 +498,12 @@ extension VideoPlayer {
 
 
                     fitVideo()
+                },
+                // 章节可能在播放中途从有变成没有（mpv 读出的片长更短、读完发现文件里也没有章节），「章节」面板随之消失。
+                ObservationToken { [weak mediaSession] in
+                    mediaSession?.chapters.isShown
+                } onChange: { [weak self] _ in
+                    self?.supplementsDidChange()
                 },
                 ObservationToken { [weak mediaSession] in
                     mediaSession?.playbackRequestStatus

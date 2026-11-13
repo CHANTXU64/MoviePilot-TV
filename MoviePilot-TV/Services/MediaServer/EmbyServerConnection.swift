@@ -94,6 +94,10 @@ struct EmbyServerConnection: MediaServerConnection {
     { [client] itemID, type, tag in client.imageURL(itemID: itemID, type: type, tag: tag) }
   }
 
+  private var chapterImageURL: (String, Int, String) -> URL? {
+    { [client] itemID, index, tag in client.chapterImageURL(itemID: itemID, index: index, tag: tag) }
+  }
+
   /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。
   func prepareStream(for item: ServerMediaItem, preferredSourceID: String?) async throws -> PreparedStream {
     let info = try await perform(.readPlaybackInfo) { try await client.playbackInfo(itemID: item.id, userID: userID) }
@@ -109,8 +113,10 @@ struct EmbyServerConnection: MediaServerConnection {
     let streamURL = try await perform(.readPlaybackInfo) {
       try client.directStreamURL(itemID: item.id, selection: selection, playSessionID: info.playSessionID)
     }
+    let fallbackItemID = info.mediaSources.count == 1 ? item.id : nil
     return PreparedStream(
-      item: item, source: selection.source.serverSource, sources: info.mediaSources.map(\.serverSource),
+      item: item, source: selection.source.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL),
+      sources: info.mediaSources.map { $0.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL) },
       playSessionID: info.playSessionID, streamURL: streamURL)
   }
 
