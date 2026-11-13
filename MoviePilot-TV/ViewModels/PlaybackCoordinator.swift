@@ -13,7 +13,7 @@ enum PlaybackTarget: Equatable {
   /// 已知服务器名称和这台服务器自己的条目 ID（首页“最近添加”，或详情页已在服务器上找到）。
   case serverItem(serverName: String, itemID: String)
   /// 详情页集列表里的一集，带着它所在那一季的集列表：在各台可播放的服务器上找这一集的文件，见 `EpisodeMatching.swift`。
-  case episode(QueuedEpisode)
+  case episode(QueuedEpisode, allowsUncertain: Bool = true)
 }
 
 enum PlaybackError: LocalizedError, Equatable {
@@ -174,6 +174,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 弱引用：`APIService` → `SessionScope` → 本对象，强引用会让整个会话在登出后无法释放。
   private weak var apiService: APIService?
   private let mediaServerSession: URLSession
+  private let externalEpisodeMapping: ExternalEpisodeMapping?
   /// 所有播放会话共用的上报队列：上一次播放的写回不会晚于下一次播放的上报和写回。
   private let reporter = PlaybackReporter()
   private var switchTask: Task<Void, Never>?
@@ -195,10 +196,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   init(
     apiService: APIService, mediaServerSession: URLSession = MediaServerHTTP.sharedSession,
     isEnabledInSettings: @escaping () -> Bool = { PlaybackPreferences.isInAppPlaybackEnabled },
-    now: @escaping () -> Date = Date.init
+    now: @escaping () -> Date = Date.init,
+    externalEpisodeMapping: ExternalEpisodeMapping? = .shared
   ) {
     self.apiService = apiService
     self.mediaServerSession = mediaServerSession
+    self.externalEpisodeMapping = externalEpisodeMapping
     self.isEnabledInSettings = isEnabledInSettings
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
@@ -617,7 +620,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     ].joined(separator: "|")
     return try await episodeIndexes.value(for: key, forceRefresh: refresh != nil, validate: validateNotTornDown) {
       [weak self] in
-      let sources = EpisodeMatchingSources(
+      var sources = EpisodeMatchingSources(
         seasonList: { list in
           guard let apiService = self?.apiService else { throw CancellationError() }
           return try await apiService.fetchTmdbEpisodes(
@@ -641,12 +644,15 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           guard let self else { throw CancellationError() }
           return try await self.seriesTransferRecords(context, round: refresh)
         })
+      if let mapping = self?.externalEpisodeMapping {
+        sources.externalPlacements = { try await mapping.placements(for: context.tmdbID) }
+      }
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
     }
   }
 
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：
-  /// 同一个 MoviePilot 刚失败，马上再读多半也失败，整轮还要多等一次超时；各台和单台读失败时一样，没有编号的文件只按季号集号对应。
+  /// 同一个 MoviePilot 刚失败时，这一轮的各台服务器沿用相同结果，让单集匹配继续使用其他依据。
   /// 那次已经读完才来要的：成功了用它写进缓存的结果，失败了（或第一台中途取消）自己再读。都不用这一轮以前的缓存。
   /// 不在强制重读时按缓存读。
   private func seriesTransferRecords(
@@ -779,7 +785,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 以编号为准：先只试确定的文件，各台都没有确定能播的，才按服务器顺序试只按季号集号对上的。
   /// 每台服务器的读取和起播都在 `withConnection` 里，缓存的地址连不上时换地址重试。
   private func prepareEpisode(
-    _ queued: QueuedEpisode, servers: [MediaServerConf], preferredUserName: String?,
+    _ queued: QueuedEpisode, allowsUncertain: Bool, servers: [MediaServerConf], preferredUserName: String?,
     certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
     guard let tmdbEpisodeID = queued.episode.tmdbEpisodeID else {
@@ -801,7 +807,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         switch pass {
         case .cached: candidates
         case .refreshed: outdated
-        case .uncertain: candidates.filter { server in uncertain.contains { $0.name == server.name } }
+        case .uncertain: allowsUncertain ? candidates.filter { server in uncertain.contains { $0.name == server.name } } : []
         }
       for server in servers {
         do {
@@ -816,7 +822,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
               ? index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).map(\.item)
               : index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID)
             let attempt = try await Self.prepareFirstPlayable(
-              files, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID)
+              files, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
+              externalMatches: index.externalMatches)
             return (index, attempt)
           }
           if let prepared = attempt.prepared { return prepared }
@@ -883,7 +890,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// `fromIndex` 为 false 时候选只是条目 ID（播放中换集），条目上没有编号时留给调用方按集索引核对。
   private static func prepareFirstPlayable(
     _ candidates: [ServerMediaItem], on connection: any MediaServerConnection, episode: QueuedEpisode,
-    tmdbEpisodeID: Int, fromIndex: Bool = true
+    tmdbEpisodeID: Int, fromIndex: Bool = true, externalMatches: [String: ServerEpisodeIndex.ExternalMatch] = [:]
   ) async throws -> EpisodeAttempt {
     var attempt = EpisodeAttempt()
     for candidate in candidates {
@@ -891,7 +898,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         guard let fresh = try await connection.item(id: candidate.id, timeout: nil), fresh.kind == .episode
         else { return .stale }
         switch ServerEpisodeIndex.recheck(
-          fresh, recorded: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID)
+          fresh, recorded: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID,
+          external: externalMatches[candidate.id])
         {
         case .same: return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
         case .changed: return .stale
@@ -950,7 +958,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         requested.needsIndex || $0.id != itemID || $0.tmdbEpisodeID != tmdbEpisodeID
       }
       alternate = try await Self.prepareFirstPlayable(
-        alternates, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID)
+        alternates, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
+        externalMatches: index.externalMatches)
       if let prepared = alternate.prepared { return prepared }
       guard !refreshed, alternate.foundStale else { break }
       refreshed = true
@@ -1180,9 +1189,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           ? PlaybackError.noPlayableServer : PlaybackError.serverNotSupported(server.name)
       }
       candidates = [server]
-    case .episode(let queued):
+    case .episode(let queued, let allowsUncertain):
       return try await prepareEpisode(
-        queued, servers: servers, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
+        queued, allowsUncertain: allowsUncertain, servers: servers, preferredUserName: preferredUserName,
+        certificateFailures: &certificateFailures)
     }
 
     // 媒体库条目逐台找（所属服务器在前），第一台找到的为准。MoviePilot `/mediaserver/play` 只拿 ID 逐台试、

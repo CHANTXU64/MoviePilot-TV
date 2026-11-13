@@ -2,7 +2,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// 单集对应模块：服务器文件 ↔ TMDB 单集的三步对应。纯逻辑，读取流程用替身数据源。
+/// 单集对应模块：服务器文件 ↔ TMDB 单集。读取流程用替身数据源。
 final class EpisodeMatchingTests: XCTestCase {
   // MARK: 替身
 
@@ -353,6 +353,49 @@ final class EpisodeMatchingTests: XCTestCase {
       unidentified.availability(of: 102), .failed("MoviePilot 返回的第 2 季集列表是空的，无法对应这一季的文件"),
       "第 2 季的列表是空的、季列表里却有第 2 季：多半是没读到，那一季的文件无法对应，不能说没有")
     XCTAssertEqual(seasonReads, [nil], "遇到空集列表才读默认顺序的季列表")
+  }
+
+  @MainActor
+  func testPathBatchSkipsExternalLookupForConfirmedFiles() async throws {
+    var files: [ServerMediaItem] = []
+    var records: [EpisodeTransferRecord] = []
+    var seasonLists: [Int: [TmdbEpisode]] = [:]
+    for season in 1...10 {
+      for episode in 1...100 {
+        let id = season * 1_000 + episode
+        let suffix = "剧名/Season \(season)/E\(episode).mkv"
+        files.append(file(String(id), season: season, episode: episode, path: "/emby/\(suffix)"))
+        records.append(record("/moviepilot/\(suffix)", season: "S\(season)", episodes: "E\(episode)"))
+        seasonLists[season, default: []].append(TmdbEpisode(id: id, episodeNumber: episode, seasonNumber: season))
+      }
+    }
+    let lists = seasonLists
+    let index = try await EpisodeMatchLoader.index(
+      serverName: "路径批量测试", hasSeries: true, episodes: files, incompleteReason: nil,
+      sources: EpisodeMatchingSources(
+        seasonList: { lists[$0.season] ?? [] }, seasons: { _ in [] }, transferRecords: { records },
+        externalPlacements: {
+          XCTFail("已由整理路径确认的文件不应触发外部查询")
+          return [:]
+        }),
+      describe: { $0.localizedDescription })
+    XCTAssertEqual(index.summary.byTransferRecord, 1_000)
+  }
+
+  @MainActor
+  func testExternalLookupTimeoutKeepsTheNumberedFallback() async throws {
+    let index = try await EpisodeMatchLoader.index(
+      serverName: "外部查询超时测试", hasSeries: true, episodes: [file("1", episode: 1)], incompleteReason: nil,
+      sources: EpisodeMatchingSources(
+        seasonList: { _ in self.defaultSeason1 }, seasons: { _ in [1] }, transferRecords: { [] },
+        externalPlacements: {
+          try await Task.sleep(for: .seconds(3))
+          return [91: ExternalEpisodePlacement(season: 1, episode: 1, airDate: "2025-01-01")]
+        }),
+      describe: { $0.localizedDescription })
+    guard case .uncertain = index.availability(of: 101) else {
+      return XCTFail("外部查询超时后应保留已有的季集号候选")
+    }
   }
 
   // MARK: 集列表是空的

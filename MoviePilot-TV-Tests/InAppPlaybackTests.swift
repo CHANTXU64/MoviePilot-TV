@@ -714,13 +714,13 @@ final class PlaybackCoordinatorTests: XCTestCase {
   private var enabledInSettings = true
 
   private func makeCoordinator(
-    _ service: APIService, now: @escaping () -> Date = Date.init
+    _ service: APIService, now: @escaping () -> Date = Date.init, externalMapping: ExternalEpisodeMapping? = nil
   ) -> PlaybackCoordinator {
     services.append(service)
     let enabled = enabledInSettings
     return PlaybackCoordinator(
       apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
-      now: now)
+      now: now, externalEpisodeMapping: externalMapping)
   }
 
   private static func movie(
@@ -2373,6 +2373,58 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testTVDBEpisodeMappingUsesTheSameFileDespiteDifferentNumbering() async throws {
+    let item = #"{"Id":"e-38","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"ProviderIds":{"Tvdb":"10861306"},"PremiereDate":"2025-10-03T16:00:00Z"}"#
+    configureLibraryWithoutEpisodeIDs(item)
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] =
+        #"[{"id":555,"episode_number":3,"season_number":2,"air_date":"2025-10-04"}]"#
+      $0.externalCatalog =
+        #"[{"anidb_id":18677,"tvdb_id":405920,"themoviedb_id":{"tv":100},"season":{"tmdb":2,"tvdb":3},"episode_offset":{"tmdb":2}}]"#
+      $0.externalSegments[18677] =
+        #"{"mappings":{"anidb_id":18677,"thetvdb_id":405920,"themoviedb_id":"100"},"episodes":{"1":{"tvdbId":10861306,"tvdbShowId":405920,"seasonNumber":3,"episodeNumber":1,"airDate":"2025-10-04"}}}"#
+    }
+    let mapping = ExternalEpisodeMapping(session: PlaybackURLProtocol.session)
+    let coordinator = makeCoordinator(makeService(), externalMapping: mapping)
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertEqual(availability, [.playable(server: "emby")])
+    XCTAssertEqual(EpisodeEntry(availability: availability?.first).primaryAction, .play)
+
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-38")
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == "api.ani.zip" }.count, 1)
+    coordinator.endCurrentSession()
+
+    PlaybackURLProtocol.stub.configure {
+      let changed = item.replacingOccurrences(of: "10861306", with: "10861307")
+        .replacingOccurrences(of: #""IndexNumber":38"#, with: #""IndexNumber":3"#)
+      $0.items["\(Self.lan)|e-38"] = changed
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(changed)
+    }
+    await run(coordinator, .episode(try queued(0), allowsUncertain: false))
+    XCTAssertNil(coordinator.session, "播放前 TVDB 单集 ID 变化时，旧映射不能放行")
+  }
+
+  func testTVDBMappingDiskCacheSurvivesAnotherCoordinatorWithoutNetworking() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    PlaybackURLProtocol.stub.configure {
+      $0.externalCatalog =
+        #"[{"anidb_id":18677,"tvdb_id":405920,"themoviedb_id":{"tv":120089},"season":{"tmdb":3,"tvdb":3}}]"#
+      $0.externalSegments[18677] =
+        #"{"mappings":{"anidb_id":18677,"thetvdb_id":405920,"themoviedb_id":"120089"},"episodes":{"1":{"tvdbId":10861306,"tvdbShowId":405920,"seasonNumber":3,"episodeNumber":1,"airDate":"2025-10-04"}}}"#
+    }
+    let first = ExternalEpisodeMapping(session: PlaybackURLProtocol.session, directory: directory)
+    let loaded = try await first.placements(for: 120089)
+    XCTAssertEqual(loaded[10861306], ExternalEpisodePlacement(season: 3, episode: 1, airDate: "2025-10-04"))
+    PlaybackURLProtocol.stub.reset()
+    let second = ExternalEpisodeMapping(session: PlaybackURLProtocol.session, directory: directory)
+    let cached = try await second.placements(for: 120089)
+    XCTAssertEqual(cached, loaded)
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty)
+  }
+
   func testNextEpisodeMatchedOnlyByNumbersPlaysWithoutStopping() async throws {
     // 第 2 季第 3 集带编号，第 4 集没有：下一集照样接着播第 4 集的文件。
     configureLibraryWithoutEpisodeIDs(
@@ -3905,6 +3957,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var transferHistory: String?
     /// 按查询回整理记录：`title|page` → `data`（`{"list":[…],"total":…}`）。不为空时优先，没列出的查询回空的一页。
     var transferHistoryPages: [String: String] = [:]
+    var externalCatalog = "[]"
+    var externalSegments: [Int: String] = [:]
     /// MoviePilot `/api/v1/media/seasons`（默认顺序的季列表）；nil 时回 404。
     var mediaSeasons: String?
     /// MoviePilot 媒体详情（`/api/v1/media/{id}`）：路径 → 详情 JSON；没列出的回 404。
@@ -3969,7 +4023,8 @@ private final class PlaybackURLProtocol: URLProtocol {
   }()
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host?.hasSuffix("playback-tests.local") == true
+    guard let host = request.url?.host else { return false }
+    return host.hasSuffix("playback-tests.local") || host == "api.ani.zip" || host == "raw.githubusercontent.com"
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -3984,6 +4039,20 @@ private final class PlaybackURLProtocol: URLProtocol {
       headers: request.allHTTPHeaderFields ?? [:], body: Self.body(of: request))
     let scenario = Self.stub.record(recorded)
 
+    if host == "raw.githubusercontent.com" {
+      respond(200, scenario.externalCatalog)
+      return
+    }
+    if host == "api.ani.zip" {
+      let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+        .first { $0.name == "anidb_id" }?.value.flatMap(Int.init)
+      if let data = id.flatMap({ scenario.externalSegments[$0] }) {
+        respond(200, data)
+      } else {
+        respond(404, "{}")
+      }
+      return
+    }
     if host == "mp.playback-tests.local" {
       if url.path == "/api/v1/system/setting/MediaServers" {
         respond(200, #"{"value":\#(scenario.mediaServers)}"#)

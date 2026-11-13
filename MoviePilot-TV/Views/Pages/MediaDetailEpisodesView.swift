@@ -715,7 +715,8 @@ private struct EpisodeBrowser: View {
   private func performPanelAction(_ button: EpisodeEntry.PanelButton, on episode: MoviePilotEpisode) {
     switch button {
     case .play:
-      afterPanelDismiss = { play(episode) }
+      let allowsUncertain = entry(for: episode)?.uncertainMatch != nil
+      afterPanelDismiss = { play(episode, allowsUncertain: allowsUncertain) }
       panelEpisode = nil
     case .startTrial:
       // 进度显示在卡片正中，不用开着面板等：关掉面板，焦点回到这张卡。
@@ -733,12 +734,12 @@ private struct EpisodeBrowser: View {
   }
 
   /// 按集起播：带上这一集所在那一季的集列表，播放器里能接着播上一集、下一集。
-  private func play(_ episode: MoviePilotEpisode) {
+  private func play(_ episode: MoviePilotEpisode, allowsUncertain: Bool = false) {
     guard let playback, let context = playbackContext(playback),
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }
     apiService.sessionScope.playbackCoordinator.play(
-      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list)))
+      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), allowsUncertain: allowsUncertain))
   }
 
   /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）
