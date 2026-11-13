@@ -185,6 +185,12 @@ final class EpisodeMatchingTests: XCTestCase {
     let key = EpisodeListKey(episodeGroup: nil, season: 1)
     func confirmed(_ files: [ServerMediaItem], _ titles: [String], independent: Bool = true) -> [String] {
       let season = titles.enumerated().map { TmdbEpisode(id: 101 + $0.offset, episodeNumber: 1 + $0.offset, name: $0.element) }
+      // 经过 TVDB 刮削的条目带着 TVDB 单集编号。
+      let files = files.map {
+        ServerMediaItem(
+          id: $0.id, kind: .episode, name: $0.name, seasonNumber: $0.seasonNumber, episodeNumber: $0.episodeNumber,
+          externalIDs: ["tvdb": "9\($0.id)"])
+      }
       let evidence = EpisodeEvidence(independentFiles: independent ? Set(files.map(\.id)) : [])
       return ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: files, lists: [key: season], evidence: evidence)
         .confirmedEpisodes(tmdbEpisodeID: 101).map(\.id)

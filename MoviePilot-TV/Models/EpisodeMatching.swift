@@ -418,7 +418,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         }
         let first = season.episodes[range.lowerBound]
         let copy = SeasonCopy(file)
-        if independent, range.count == 1, let first, let id = first.id,
+        if evidence.titleCanVerify(file), range.count == 1, let first, let id = first.id,
           let title = EpisodeTitle.normalized(file.name), title != EpisodeTitle.normalized(file.seriesName),
           titlesBySeason[copy]?[title] == [file.episodeNumber]
         {
@@ -463,7 +463,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         case .unknown: break
         }
       case .unidentified:
-        summary.unidentified += 1
+        // 认不出季号集号，但编号在 TMDB 反查到了这部剧的一集。
+        if evidence.independentFiles.contains(file.id), let found = evidence.lookedUp[file.id] {
+          lateMatches.append((file, found.tmdbEpisodeID, .externalID(source: found.source, value: found.value)))
+          summary.byLookup += 1
+        } else {
+          summary.unidentified += 1
+        }
       }
     }
     for (file, id, _) in lateMatches { confirm(file, as: id) }
@@ -761,7 +767,8 @@ struct EpisodeMatchingSources {
   let transferRecords: () async throws -> [EpisodeTransferRecord]
   /// 这台服务器各媒体库的文件夹和单集元数据来源；没有时按来源不明处理（见 `EpisodeEvidence.independentFiles`）。
   var libraryProfiles: (() async throws -> [MediaLibraryProfile])?
-  /// 去 TMDB 补查还只按季号集号对上的文件。查不到、查不了或超时都返回已查到的部分，不抛错。
+  /// 去 TMDB 补查还没确定对应的文件：只读本机缓存，马上返回；缓存里没有的由提供方在后台去查，查到后自己通知刷新。
+  /// 不抛错。
   var externalEvidence: ((ExternalEvidenceRequest) async -> ExternalEvidenceResult)?
   /// 这部剧的 TMDB 编号，补查时用。
   var tmdbID: Int?
@@ -785,7 +792,8 @@ struct EpisodeMatchingSources {
 enum EpisodeMatchLoader {
   /// 一台服务器上这部剧的对应表。`episodes` 是从服务器读到的这部剧的全部集，`incompleteReason` 是读服务器时没读全的说明。
   /// 有文件没带 TMDB 单集编号时才读整理记录和媒体库配置。未确认的文件按季集号查找，并用标题和日期核对；
-  /// 还只按季号集号对上、单集资料又不是从 TMDB 取的文件，再去 TMDB 补查外部编号和其他语言的标题，查到的重新建表。
+  /// 还没确定对应、单集资料又不是从 TMDB 取的文件，再用 TMDB 补查过的外部编号和其他语言的标题（只读本机缓存，
+  /// 不等网络），有结果就重新建表。
   /// 集列表读不到时那一季的文件无法对应，记为没读全。集列表是空的有两种可能：MoviePilot 读 TMDB 失败（过一会儿可能就好），
   /// 或那套编号里根本没有这一季（比如 TMDB 没有第 0 季而服务器上有特别篇，或服务器按 TVDB 分季）。这时再读那套编号的季列表：
   /// 季列表里确实没有这一季，这一季的文件按集列表里没有那一集处理，不影响别的集；季列表里有这一季或也读不到，才算没读全。
@@ -856,7 +864,7 @@ enum EpisodeMatchLoader {
       serverName: serverName, hasSeries: hasSeries, episodes: episodes,
       incompleteReason: incompleteReason ?? listFailure, lists: lists, records: records, evidence: evidence)
     if let lookup = sources.externalEvidence, let tmdbID = sources.tmdbID,
-      let request = ExternalEvidenceRequest(tmdbID: tmdbID, index: index, evidence: evidence)
+      let request = ExternalEvidenceRequest(tmdbID: tmdbID, episodes: episodes, index: index, evidence: evidence)
     {
       let found = await lookup(request)
       try Task.checkCancellation()

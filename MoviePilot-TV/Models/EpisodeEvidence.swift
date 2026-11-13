@@ -64,6 +64,7 @@ nonisolated struct ExternalEpisodeMatch: Equatable, Sendable {
 nonisolated struct EpisodeEvidence: Equatable, Sendable {
   /// 单集资料不是从 TMDB 取的文件（见 `MediaLibraryProfile.independentFiles`）。只有这些文件的标题和外部编号
   /// 能拿来和 TMDB 核对；来源含 TMDB 或读不到媒体库配置时，只按季号集号对应，播放前说明。
+  /// 按标题核实还要条目带着 TVDB 单集编号（见 `titleCanVerify`）。
   var independentFiles: Set<String> = []
   /// 按单集外部编号在 TMDB 反查到的：服务器条目 ID → 这部剧的一集。
   var lookedUp: [String: ExternalEpisodeMatch] = [:]
@@ -77,6 +78,13 @@ nonisolated struct EpisodeEvidence: Equatable, Sendable {
     self.independentFiles = independentFiles
     self.lookedUp = lookedUp
     self.translatedSeasons = translatedSeasons
+  }
+
+  /// 这个文件的标题能拿来核实：单集资料不是从 TMDB 取的，而且条目带着 TVDB 单集编号。媒体库现在的设置只说明
+  /// 现在不从 TMDB 刮；以前开着 TMDB 刮的旧条目、第三方工具按 TMDB 写的 NFO，标题仍可能是 TMDB 按同一组季号集号给的。
+  /// 带着 TVDB 单集编号说明这个条目确实经过 TVDB 刮削。
+  func titleCanVerify(_ file: ServerMediaItem) -> Bool {
+    independentFiles.contains(file.id) && file.externalIDs["tvdb"] != nil
   }
 }
 
@@ -113,22 +121,29 @@ nonisolated struct ExternalEvidenceRequest: Equatable, Sendable {
   /// 能反查的外部编号来源，按优先顺序。TVDB 的单集编号最常见；IMDb 的少，TMDB 也常没收录。
   static let lookupSources = ["tvdb", "imdb"]
 
-  /// 只挑单集资料不是从 TMDB 取的、只含一集的文件。没有可补查的时为 nil。
-  init?(tmdbID: Int, index: ServerEpisodeIndex, evidence: EpisodeEvidence) {
+  /// 还没确定对应的文件都挑，包括季号集号对不上任何一集、认不出是哪一集的：季号集号差得越远越要靠编号反查。
+  /// 只挑单集资料不是从 TMDB 取的、只含一集的文件。按标题核对只给按季号集号对上了一集（默认顺序）的文件。
+  /// 没有可补查的时为 nil。
+  init?(tmdbID: Int, episodes: [ServerMediaItem], index: ServerEpisodeIndex, evidence: EpisodeEvidence) {
+    let confirmedFiles = Set(index.confirmed.values.flatMap { $0.map(\.id) })
+    var titleSeasons: [String: Int] = [:]
+    for files in index.uncertain.values {
+      for uncertain in files where uncertain.match.episodeGroup == nil {
+        titleSeasons[uncertain.item.id] = uncertain.match.season
+      }
+    }
     var seen: Set<String> = []
     var candidates: [Candidate] = []
-    for (_, files) in index.uncertain.sorted(by: { $0.key < $1.key }) {
-      for uncertain in files {
-        let file = uncertain.item
-        guard evidence.independentFiles.contains(file.id), seen.insert(file.id).inserted,
-          file.episodeNumberEnd == nil || file.episodeNumberEnd == file.episodeNumber
-        else { continue }
-        let ids = Self.lookupSources.compactMap { source in file.externalIDs[source].map { (source, $0) } }
-        let titleSeason =
-          uncertain.match.episodeGroup == nil && EpisodeTitle.normalized(file.name) != nil ? uncertain.match.season : nil
-        guard !ids.isEmpty || titleSeason != nil else { continue }
-        candidates.append(Candidate(itemID: file.id, externalIDs: ids, titleSeason: titleSeason))
-      }
+    for file in episodes {
+      guard file.hasFile, file.tmdbEpisodeID == nil, !confirmedFiles.contains(file.id),
+        evidence.independentFiles.contains(file.id), seen.insert(file.id).inserted,
+        file.episodeNumberEnd == nil || file.episodeNumberEnd == file.episodeNumber
+      else { continue }
+      let ids = Self.lookupSources.compactMap { source in file.externalIDs[source].map { (source, $0) } }
+      let titleSeason =
+        evidence.titleCanVerify(file) && EpisodeTitle.normalized(file.name) != nil ? titleSeasons[file.id] : nil
+      guard !ids.isEmpty || titleSeason != nil else { continue }
+      candidates.append(Candidate(itemID: file.id, externalIDs: ids, titleSeason: titleSeason))
     }
     guard !candidates.isEmpty else { return nil }
     self.tmdbID = tmdbID
@@ -145,6 +160,14 @@ nonisolated struct ExternalEvidenceRequest: Equatable, Sendable {
 nonisolated struct ExternalEvidenceResult: Equatable, Sendable {
   var lookedUp: [String: ExternalEpisodeMatch] = [:]
   var translatedSeasons: [Int: [[TmdbEpisode]]] = [:]
+  /// 该查的都有了答案（查到或确定查不到）。只读缓存时没查过的、请求失败、限流或到时间没查的都算没查全。
+  var isComplete = true
 
   var isEmpty: Bool { lookedUp.isEmpty && translatedSeasons.isEmpty }
+
+  /// 比 `other` 多查到了东西：多反查到文件，或多取到了季列表。
+  func adds(to other: Self) -> Bool {
+    func lists(_ result: Self) -> Int { result.translatedSeasons.values.reduce(0) { $0 + $1.count } }
+    return lookedUp.count > other.lookedUp.count || lists(self) > lists(other)
+  }
 }

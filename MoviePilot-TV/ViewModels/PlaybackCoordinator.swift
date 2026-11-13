@@ -193,6 +193,15 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private let libraryProfiles: CoalescingCache<String, [MediaLibraryProfile]>
   /// 单集对应直接请求 TMDB 补查（带本机缓存和限速）。
   private let tmdbDirectory: any TmdbEpisodeDirectory
+  /// 后台补查：键是“服务器|TMDB 编号”，同一部剧在同一台服务器上同时只查一轮。
+  private var backgroundLookups: [String: Task<Void, Never>] = [:]
+  /// 各部剧上一轮后台补查的开始时间：没查全（请求失败、到时间）的过一阵才再查，不随每次打开详情页重发。
+  private var lastBackgroundLookup: [String: Date] = [:]
+  private let now: () -> Date
+  /// 后台补查查到新结果时发出这部剧的 TMDB 编号，详情页据此重读播放状态（集索引已作废，补查结果在本机缓存里）。
+  let evidenceUpdates = PassthroughSubject<Int, Never>()
+  /// 没查全的剧过这么久才再在后台查一轮。
+  static let backgroundLookupRetryInterval: TimeInterval = 600
   /// 设置页「播放」里的应用内播放开关。
   private let isEnabledInSettings: () -> Bool
   private var isTornDown = false
@@ -207,6 +216,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     self.mediaServerSession = mediaServerSession
     self.isEnabledInSettings = isEnabledInSettings
     self.tmdbDirectory = tmdbDirectory
+    self.now = now
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
     episodeIndexes = CoalescingCache(
@@ -350,6 +360,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     episodeIndexes.invalidateAll()
     transferRecords.invalidateAll()
     libraryProfiles.invalidateAll()
+    backgroundLookups.values.forEach { $0.cancel() }
+    backgroundLookups = [:]
     knownSeasons = nil
   }
 
@@ -656,7 +668,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           return try await self.libraryProfiles(on: connection)
         },
         externalEvidence: { [weak self] request in
-          await self?.externalEvidence(request) ?? ExternalEvidenceResult()
+          await self?.externalEvidence(request, server: connection.serverName) ?? ExternalEvidenceResult()
         },
         tmdbID: context.tmdbID)
       return try await Self.loadEpisodeIndex(context, on: connection, strict: strict, sources: sources)
@@ -672,8 +684,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     }
   }
 
-  /// 去 TMDB 补查。读不到 MoviePilot 的 TMDB 配置（不是管理员、没配 key、代理 TV 用不了）时不查。
-  private func externalEvidence(_ request: ExternalEvidenceRequest) async -> ExternalEvidenceResult {
+  /// 建对应表时的 TMDB 补查：只读本机缓存，马上返回，不让已确定的集和起播等网络。缓存里没查全的交给后台查，
+  /// 查到新结果后作废集索引、通知详情页重读。读不到 MoviePilot 的 TMDB 配置（不是管理员、没配 key、代理 TV 用不了）时不查。
+  private func externalEvidence(_ request: ExternalEvidenceRequest, server: String) async -> ExternalEvidenceResult {
     guard let apiService else { return ExternalEvidenceResult() }
     let access: TmdbAccess
     do {
@@ -685,7 +698,29 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
       return ExternalEvidenceResult()
     }
-    return await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory)
+    let cached = await TmdbEpisodeEvidence.collect(request, access: access, directory: tmdbDirectory, cachedOnly: true)
+    if !cached.isComplete { lookUpInBackground(request, access: access, server: server, known: cached) }
+    return cached
+  }
+
+  /// 后台去 TMDB 查一轮。同一部剧在同一台服务器上同时只查一轮，没查全的过 `backgroundLookupRetryInterval` 才再查；
+  /// 只有比缓存里多查到东西时才通知刷新，查不到不会让详情页反复重读。
+  private func lookUpInBackground(
+    _ request: ExternalEvidenceRequest, access: TmdbAccess, server: String, known: ExternalEvidenceResult
+  ) {
+    let key = "\(server)|\(request.tmdbID)"
+    guard !isTornDown, backgroundLookups[key] == nil else { return }
+    if let last = lastBackgroundLookup[key], now().timeIntervalSince(last) < Self.backgroundLookupRetryInterval { return }
+    lastBackgroundLookup[key] = now()
+    let directory = tmdbDirectory
+    backgroundLookups[key] = Task { [weak self] in
+      let found = await TmdbEpisodeEvidence.collect(request, access: access, directory: directory, cachedOnly: false)
+      guard let self, !Task.isCancelled, !self.isTornDown else { return }
+      self.backgroundLookups[key] = nil
+      guard found.adds(to: known) else { return }
+      self.episodeIndexes.invalidateAll()
+      self.evidenceUpdates.send(request.tmdbID)
+    }
   }
 
   /// 强制重读这一轮里各台服务器要的整理记录：第一台强制重读，其余的跟上那次在途的读取，成功失败都和它一样。失败时不替跟上的各台重试：

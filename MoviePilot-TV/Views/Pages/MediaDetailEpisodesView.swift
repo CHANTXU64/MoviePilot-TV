@@ -174,6 +174,8 @@ private struct EpisodeBrowser: View {
     var episodePageOffsets: [Int: Int] = [:]
     var availability: [Int: SeasonAvailability] = [:]
     var availabilityRetries: [Int: Int] = [:]
+    /// 后台补查查到新结果的次数：变了就重读播放状态，不强制重读服务器。
+    var availabilityUpdates = 0
   }
 
   /// 一季每集能不能播。`source` 变了（入库条目、应用内播放开关）就作废重查。
@@ -214,6 +216,7 @@ private struct EpisodeBrowser: View {
     let episodeCount: Int
     let episodeRetry: Int
     let retry: Int
+    let update: Int
     let source: EpisodePlaybackSource
     let session: APIServiceSessionSnapshot
   }
@@ -379,6 +382,10 @@ private struct EpisodeBrowser: View {
     }
     .sheet(item: $panelEpisode, onDismiss: runAfterPanelDismiss) { episode in
       panel(for: episode)
+    }
+    .onReceive(apiService.sessionScope.playbackCoordinator.evidenceUpdates) { updated in
+      guard updated == tmdbID else { return }
+      group.availabilityUpdates += 1
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       afterPanelDismiss = nil
@@ -841,7 +848,8 @@ private struct EpisodeBrowser: View {
     return AvailabilityRequest(
       groupID: groupID, season: seasonNumber, episodeCount: episodes.count,
       episodeRetry: group.episodeRetries[seasonNumber, default: 0],
-      retry: group.availabilityRetries[seasonNumber, default: 0], source: playback, session: session)
+      retry: group.availabilityRetries[seasonNumber, default: 0], update: group.availabilityUpdates, source: playback,
+      session: session)
   }
 
   /// 查这一季每集能不能播：一季一次，在各台能播放的服务器上读这部剧的集（协调器缓存一分钟）。
