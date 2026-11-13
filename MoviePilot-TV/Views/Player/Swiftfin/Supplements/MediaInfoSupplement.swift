@@ -14,6 +14,9 @@
 //   原版只在直播或可录制条目上显示，Emby 直连播放的条目不会走到这些分支。
 // - Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
 // - 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// - 信息行加上评分（MoviePilot 的 TMDB/豆瓣评分，没有时用媒体服务器的）：MoviePilot 没有分级，原版只显示分级。
+// - 片长和结束时间读 `MediaSession.runtime`（所播文件的片长，起播后以 mpv 读到的为准），与进度条同一个值；原版读条目的片长。
+//   结束时间在播放位置、片长、倍速任一变化时重算（原版只跟播放位置），暂停时 mpv 读出片长或改了倍速也会更新。
 //
 
 import SwiftUI
@@ -74,7 +77,7 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                         Text(premiereYear)
                     }
 
-                    if let runtime = item.runTimeLabel {
+                    if let runtime = mediaSession.runtime.flatMap({ BaseItemDto.runTimeLabel(seconds: $0.seconds) }) {
                         Text(runtime)
                     }
 
@@ -82,18 +85,18 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                         Text(officialRating)
                     }
 
+                    if let communityRating = item.communityRating {
+                        Label(communityRating.formatted(.number.precision(.fractionLength(1))), systemImage: AppSymbol.rating)
+                    }
+
                     if let endsAtLabel {
                         Text(endsAtLabel)
                     }
                 }
             }
-            .onChange(of: mediaSession.seconds, initial: true) { _, seconds in
-                let newLabel = makeEndsAtLabel(seconds: seconds)
-
-                if newLabel != endsAtLabel {
-                    endsAtLabel = newLabel
-                }
-            }
+            .onChange(of: mediaSession.seconds, initial: true) { updateEndsAtLabel() }
+            .onChange(of: mediaSession.runtime) { updateEndsAtLabel() }
+            .onChange(of: mediaSession.rate) { updateEndsAtLabel() }
         }
 
         private var fromBeginningButton: some View {
@@ -231,10 +234,18 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                 .focusSection()
         }
 
+        private func updateEndsAtLabel() {
+            let newLabel = makeEndsAtLabel(seconds: mediaSession.seconds)
+
+            if newLabel != endsAtLabel {
+                endsAtLabel = newLabel
+            }
+        }
+
         private func makeEndsAtLabel(seconds: Duration) -> String? {
             guard !item.isLiveStream,
                   item.type != .recording,
-                  let runtime = item.runtime,
+                  let runtime = mediaSession.runtime,
                   runtime > .zero,
                   mediaSession.rate > 0
             else { return nil }

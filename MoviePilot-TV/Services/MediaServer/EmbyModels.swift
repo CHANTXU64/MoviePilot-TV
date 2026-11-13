@@ -74,6 +74,16 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   /// 服务器上的文件路径。列表接口要在 `Fields` 里点名才给。
   let path: String?
   let premiereDate: String?
+  /// 单集所属的剧。
+  let seriesID: String?
+  /// 以下是播放界面的展示信息，MoviePilot 没有时才用（见 `PlaybackMetadata`）。简介在列表接口里要点名才给。
+  let overview: String?
+  let communityRating: Double?
+  let officialRating: String?
+  /// 图片类型（`Primary`、`Thumb` 等）→ 图片版本标签。
+  let imageTags: [String: String]?
+  let backdropImageTags: [String]?
+  let seriesPrimaryImageTag: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
@@ -89,6 +99,13 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     case providerIDs = "ProviderIds"
     case path = "Path"
     case premiereDate = "PremiereDate"
+    case seriesID = "SeriesId"
+    case overview = "Overview"
+    case communityRating = "CommunityRating"
+    case officialRating = "OfficialRating"
+    case imageTags = "ImageTags"
+    case backdropImageTags = "BackdropImageTags"
+    case seriesPrimaryImageTag = "SeriesPrimaryImageTag"
   }
 
   init(from decoder: Decoder) throws {
@@ -106,6 +123,13 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
     path = try? container.decodeIfPresent(String.self, forKey: .path)
     premiereDate = try? container.decodeIfPresent(String.self, forKey: .premiereDate)
+    seriesID = try? container.decodeIfPresent(String.self, forKey: .seriesID)
+    overview = try? container.decodeIfPresent(String.self, forKey: .overview)
+    communityRating = try? container.decodeIfPresent(Double.self, forKey: .communityRating)
+    officialRating = try? container.decodeIfPresent(String.self, forKey: .officialRating)
+    imageTags = try? container.decodeIfPresent([String: String].self, forKey: .imageTags)
+    backdropImageTags = try? container.decodeIfPresent([String].self, forKey: .backdropImageTags)
+    seriesPrimaryImageTag = try? container.decodeIfPresent(String.self, forKey: .seriesPrimaryImageTag)
   }
 
   var playbackPositionTicks: Int64 {
@@ -117,7 +141,10 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   }
 
   /// 转成与服务器无关的条目。没有 `Type` 时按 `defaultKind`（剧集列表里的都是单集）。
-  func serverItem(defaultKind: ServerMediaItem.Kind = .other) -> ServerMediaItem {
+  /// `image` 按条目 ID、图片类型和版本标签给出图片地址；不传时条目不带图片。
+  func serverItem(
+    defaultKind: ServerMediaItem.Kind = .other, image: ((_ itemID: String, _ type: String, _ tag: String) -> URL?)? = nil
+  ) -> ServerMediaItem {
     let kind: ServerMediaItem.Kind
     switch type {
     case "Movie": kind = .movie
@@ -139,7 +166,37 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       hasFile: locationType?.lowercased() != "virtual",
       externalIDs: ExternalMediaID.normalizedTable(providerIDs),
       path: path,
-      premiereDate: premiereDate)
+      premiereDate: premiereDate,
+      seriesID: seriesID,
+      overview: overview,
+      communityRating: communityRating,
+      officialRating: officialRating,
+      posterURL: posterURL(kind: kind, image: image),
+      thumbnailURL: thumbnailURL(kind: kind, image: image))
+  }
+
+  /// 竖版海报：单集用所属剧的主图，其他用自己的主图。
+  private func posterURL(
+    kind: ServerMediaItem.Kind, image: ((String, String, String) -> URL?)?
+  ) -> URL? {
+    guard let image else { return nil }
+    if kind == .episode {
+      guard let seriesID, let tag = trimmedNonEmpty([seriesPrimaryImageTag]) else { return nil }
+      return image(seriesID, "Primary", tag)
+    }
+    return trimmedNonEmpty([imageTags?["Primary"]]).flatMap { image(id, "Primary", $0) }
+  }
+
+  /// 横版图：单集的主图就是这一集的截图；电影用横版缩略图，没有时用第一张背景图。
+  private func thumbnailURL(
+    kind: ServerMediaItem.Kind, image: ((String, String, String) -> URL?)?
+  ) -> URL? {
+    guard let image else { return nil }
+    if kind == .episode {
+      return trimmedNonEmpty([imageTags?["Primary"]]).flatMap { image(id, "Primary", $0) }
+    }
+    if let tag = trimmedNonEmpty([imageTags?["Thumb"]]) { return image(id, "Thumb", tag) }
+    return trimmedNonEmpty([backdropImageTags?.first]).flatMap { image(id, "Backdrop", $0) }
   }
 }
 
@@ -208,8 +265,11 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let mediaStreams: [EmbyMediaStream]
   /// `MediaStreams` 里有读不出的条目：数不准文件里有几条轨道。
   let hasUnreadableStreams: Bool
+  /// 这个版本的片长。条目上的 `RunTimeTicks` 只对应其中一个版本。
+  let runTimeTicks: Int64?
   init(
-    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
+    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream],
+    runTimeTicks: Int64? = nil
   ) {
     self.id = id
     self.name = name
@@ -217,6 +277,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
     hasUnreadableStreams = false
+    self.runTimeTicks = runTimeTicks
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -225,6 +286,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     case container = "Container"
     case `protocol` = "Protocol"
     case mediaStreams = "MediaStreams"
+    case runTimeTicks = "RunTimeTicks"
   }
 
   init(from decoder: Decoder) throws {
@@ -236,6 +298,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     let streams = try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams)
     mediaStreams = streams?.compactMap(\.value) ?? []
     hasUnreadableStreams = streams?.contains { $0.value == nil } ?? false
+    runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
   }
 
   /// 文件里音视频和字幕轨的条数（不含外挂字幕等文件外的流）。没有流信息、有条目读不出或类型认不出、
@@ -269,7 +332,8 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
-      displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount)
+      displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount,
+      runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds))
   }
 }
 

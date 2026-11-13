@@ -67,7 +67,8 @@ struct EmbyServerConnection: MediaServerConnection {
   }
 
   func item(id: String, timeout: TimeInterval?) async throws -> ServerMediaItem? {
-    try await perform(.readItem) { try await client.item(id: id, userID: userID, timeout: timeout) }?.serverItem()
+    try await perform(.readItem) { try await client.item(id: id, userID: userID, timeout: timeout) }?
+      .serverItem(image: imageURL)
   }
 
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem] {
@@ -76,17 +77,21 @@ struct EmbyServerConnection: MediaServerConnection {
     return try await perform(.search) {
       try await client.items(
         withAnyProviderID: keys, type: Self.itemType(expected.kind), userID: userID, timeout: EmbyClient.quickTimeout)
-    }.map { $0.serverItem() }
+    }.map { $0.serverItem(image: imageURL) }
   }
 
   /// 这一份剧已经删了（HTTP 404）时当作没有集；其他错误照常抛出。
   func episodes(seriesID: String) async throws -> [ServerMediaItem] {
     do {
       return try await perform(.readEpisodes) { try await client.episodes(seriesID: seriesID, userID: userID) }
-        .map { $0.serverItem(defaultKind: .episode) }
+        .map { $0.serverItem(defaultKind: .episode, image: imageURL) }
     } catch let error as MediaServerError where error.reason == .notFound {
       return []
     }
+  }
+
+  private var imageURL: (String, String, String) -> URL? {
+    { [client] itemID, type, tag in client.imageURL(itemID: itemID, type: type, tag: tag) }
   }
 
   /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。

@@ -263,12 +263,26 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   let path: String?
   /// 首播日期，服务器给的原样（如 `2025-01-05T00:00:00.0000000Z`）；单集对应按季号集号对上时用来核对。
   let premiereDate: String?
+  /// 单集所属剧在这台服务器上的条目 ID；按剧的外部编号去 MoviePilot 取信息时用。
+  let seriesID: String?
+  /// 以下是服务器自己的展示信息。播放界面以 MoviePilot 的为准，MoviePilot 没有这个条目（如手动下载、认不出的资源）
+  /// 或缺某一项时才用这里的（见 `PlaybackMetadata`）。
+  let overview: String?
+  /// 评分（0–10）
+  let communityRating: Double?
+  /// 分级（如 `PG-13`）
+  let officialRating: String?
+  /// 竖版海报；单集是所属剧的海报。图片地址不带密钥。
+  let posterURL: URL?
+  /// 横版图；单集是这一集的截图。
+  let thumbnailURL: URL?
 
   init(
     id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
     episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
     resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:],
-    path: String? = nil, premiereDate: String? = nil
+    path: String? = nil, premiereDate: String? = nil, seriesID: String? = nil, overview: String? = nil,
+    communityRating: Double? = nil, officialRating: String? = nil, posterURL: URL? = nil, thumbnailURL: URL? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -283,6 +297,20 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     self.externalIDs = externalIDs
     self.path = trimmedNonEmpty([path])
     self.premiereDate = trimmedNonEmpty([premiereDate])
+    self.seriesID = trimmedNonEmpty([seriesID])
+    self.overview = trimmedNonEmpty([overview])
+    self.communityRating = communityRating.flatMap(PlaybackMetadata.validRating)
+    self.officialRating = trimmedNonEmpty([officialRating])
+    self.posterURL = posterURL
+    self.thumbnailURL = thumbnailURL
+  }
+
+  /// 服务器上的展示信息，MoviePilot 没有的项用它补（见 `PlaybackMetadata.filling(_:)`）。
+  var metadata: PlaybackMetadata {
+    PlaybackMetadata(
+      title: name, seriesName: seriesName, seasonNumber: seasonNumber, episodeNumber: episodeNumber,
+      overview: overview, premiereDate: premiereDate, communityRating: communityRating, officialRating: officialRating,
+      posterURL: posterURL, thumbnailURL: thumbnailURL)
   }
 
   /// 指定来源的外部编号，没有或无效时为 nil。
@@ -295,16 +323,68 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     guard kind == .episode else { return nil }
     return externalIDs["tmdb"].flatMap(Int.init)
   }
+}
 
-  /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
-  var playerTitles: (primary: String, secondary: String?) {
-    guard kind == .episode else { return (name ?? "", nil) }
-    return PlaybackTitles.episode(
-      name: name, seasonNumber: seasonNumber, episodeNumber: episodeNumber, seriesName: seriesName)
+/// 播放界面、续播询问显示的条目信息：标题、季集号、简介、日期、评分和图片。
+/// 以 MoviePilot 的为准（详情页、集列表，或按服务器条目的外部编号查到的 MoviePilot 详情）；MoviePilot 没有这个条目，
+/// 或缺某一项时，用媒体服务器适配器给的（`ServerMediaItem.metadata`），不限于哪一类服务器。
+nonisolated struct PlaybackMetadata: Equatable, Sendable {
+  /// 电影是片名，单集是集名。
+  var title: String?
+  var seriesName: String?
+  var seasonNumber: Int?
+  var episodeNumber: Int?
+  var overview: String?
+  /// 电影的上映日期或单集的播出日期，以 `yyyy-MM-dd` 开头。
+  var premiereDate: String?
+  /// 评分（0–10）。
+  var communityRating: Double?
+  /// 分级，只有媒体服务器有。
+  var officialRating: String?
+  /// 竖版海报；单集是剧的海报。
+  var posterURL: URL?
+  /// 横版图；单集是这一集的剧照或截图。
+  var thumbnailURL: URL?
+
+  init(
+    title: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil, episodeNumber: Int? = nil,
+    overview: String? = nil, premiereDate: String? = nil, communityRating: Double? = nil,
+    officialRating: String? = nil, posterURL: URL? = nil, thumbnailURL: URL? = nil
+  ) {
+    self.title = trimmedNonEmpty([title])
+    self.seriesName = trimmedNonEmpty([seriesName])
+    self.seasonNumber = seasonNumber
+    self.episodeNumber = episodeNumber
+    self.overview = trimmedNonEmpty([overview])
+    self.premiereDate = trimmedNonEmpty([premiereDate])
+    self.communityRating = communityRating.flatMap(Self.validRating)
+    self.officialRating = trimmedNonEmpty([officialRating])
+    self.posterURL = posterURL
+    self.thumbnailURL = thumbnailURL
   }
 
-  /// 续播询问等单行场景用的完整标题。
-  var displayTitle: String { PlaybackTitles.singleLine(playerTitles) }
+  /// 0 分是“没有评分”（TMDB 没人打分时就是 0），不显示。
+  static func validRating(_ value: Double) -> Double? {
+    value.isFinite && value > 0 && value <= 10 ? value : nil
+  }
+
+  /// 逐项补齐：自己没有的项用 `fallback` 的。
+  func filling(_ fallback: PlaybackMetadata) -> PlaybackMetadata {
+    PlaybackMetadata(
+      title: title ?? fallback.title, seriesName: seriesName ?? fallback.seriesName,
+      seasonNumber: seasonNumber ?? fallback.seasonNumber, episodeNumber: episodeNumber ?? fallback.episodeNumber,
+      overview: overview ?? fallback.overview, premiereDate: premiereDate ?? fallback.premiereDate,
+      communityRating: communityRating ?? fallback.communityRating,
+      officialRating: officialRating ?? fallback.officialRating, posterURL: posterURL ?? fallback.posterURL,
+      thumbnailURL: thumbnailURL ?? fallback.thumbnailURL)
+  }
+
+  /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
+  func playerTitles(isEpisode: Bool) -> (primary: String, secondary: String?) {
+    guard isEpisode else { return (title ?? "", nil) }
+    return PlaybackTitles.episode(
+      name: title, seasonNumber: seasonNumber, episodeNumber: episodeNumber, seriesName: seriesName)
+  }
 }
 
 /// 剧集标题的拼法，服务器条目和 MoviePilot 集列表共用。
@@ -377,10 +457,12 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   /// 文件里音视频和字幕轨的条数（不含外挂字幕），取自起播时已经读到的片源信息；数不准时为 nil。
   /// 播放失败时据此判断 mpv 跳过的 zlib 压缩轨道是不是包括了全部画面和声音（见 `PlaybackSession.failureMessage`）。
   let embeddedTrackCount: Int?
+  /// 这个版本的片长（秒）；服务器没给时为 nil。同一条目的各版本可能长短不一（如加长版）。
+  let runtimeSeconds: Double?
 
   init(
     id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
-    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil
+    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil, runtimeSeconds: Double? = nil
   ) {
     self.id = id
     self.name = name
@@ -388,6 +470,7 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
     self.unsupportedReason = unsupportedReason
     self.displayModeHint = displayModeHint
     self.embeddedTrackCount = embeddedTrackCount
+    self.runtimeSeconds = runtimeSeconds
   }
 
   var isDirectlyPlayable: Bool { unsupportedReason == nil }
@@ -460,30 +543,32 @@ nonisolated enum PlaybackEpisodeOrder {
   }
 }
 
-/// 续播点：太靠前或接近片尾时直接从头播放。
+/// 正在播放的那个文件有多长。续播询问、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
+nonisolated enum PlaybackDuration {
+  /// 依次取播放器读到的时长、所选片源的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
+  /// 起播后 mpv 读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
+  /// 起播前（续播询问）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
+  static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
+    [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
+  }
+}
+
+/// 续播点：太靠前或接近片尾时直接从头播放。时长见 `PlaybackDuration`。
 nonisolated enum PlaybackResumePolicy {
   static let minimumSeconds: Double = 60
   static let maximumProgress: Double = 0.9
 
-  static func resumePosition(positionSeconds: Double, runtimeSeconds: Double?) -> Double? {
+  static func resumePosition(positionSeconds: Double, durationSeconds: Double?) -> Double? {
     guard positionSeconds >= minimumSeconds else { return nil }
-    if let runtimeSeconds, runtimeSeconds > 0, positionSeconds / runtimeSeconds >= maximumProgress {
+    if let durationSeconds, durationSeconds > 0, positionSeconds / durationSeconds >= maximumProgress {
       return nil
     }
     return positionSeconds
   }
 
-  /// 播放结束位置达到时长的 90% 视为看完。时长以服务器记录为准；服务器还没有（刚入库、未分析完）时用播放器读到的时长，
-  /// 两者都没有就不算看完。
-  static func isCompleted(positionSeconds: Double, runtimeSeconds: Double?, playerDurationSeconds: Double?) -> Bool {
-    let duration: Double
-    if let runtimeSeconds, runtimeSeconds > 0 {
-      duration = runtimeSeconds
-    } else if let playerDurationSeconds, playerDurationSeconds.isFinite, playerDurationSeconds > 0 {
-      duration = playerDurationSeconds
-    } else {
-      return false
-    }
-    return positionSeconds / duration >= maximumProgress
+  /// 播放结束位置达到时长的 90% 视为看完；没有时长就不算看完。
+  static func isCompleted(positionSeconds: Double, durationSeconds: Double?) -> Bool {
+    guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return false }
+    return positionSeconds / durationSeconds >= maximumProgress
   }
 }

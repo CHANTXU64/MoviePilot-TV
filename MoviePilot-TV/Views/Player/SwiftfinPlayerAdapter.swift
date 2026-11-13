@@ -229,19 +229,27 @@ final class MediaSession {
 
   var player: (any MediaPlayer)? { playerAdapter }
 
-  var titles: (primary: String, secondary: String?) { session.titles }
-
   var effectiveRate: Double {
     let range = playerAdapter.supportedRates
     return min(max(rate, range.lowerBound), range.upperBound)
   }
 
-  /// 当前条目。片长以服务器记录为准，服务器没有时用 mpv 读到的时长。
+  /// 所播文件的片长（见 `PlaybackDuration`）：起播后以 mpv 读到的为准，之前用所选片源的。
+  /// 进度条、跳转上限、跳过片头片尾、信息面板的片长和结束时间都读这里，与看完判定同一个值。
+  var runtime: Duration? {
+    session.playback.durationSeconds(playerSeconds: playbackState.duration?.seconds).map { .seconds($0) }
+  }
+
+  /// 选集卡片上的片长：正在播的那一集用 `runtime`（与进度条一致）；其他集用集列表条目的，那些集还没选版本。
+  func runTimeLabel(for entry: ItemEntry) -> String? {
+    guard entry.itemID == session.item.id, let runtime else { return entry.snapshot.runTimeLabel }
+    return BaseItemDto.runTimeLabel(seconds: runtime.seconds)
+  }
+
+  /// 当前条目，片长换成 `runtime`。
   var item: BaseItemDto {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
-    if item.runtime == nil, let duration = playbackState.duration {
-      item.runTimeTicks = Int(duration.microseconds * 10)
-    }
+    item.runTimeTicks = runtime.map { BaseItemDto.ticks(seconds: $0.seconds) }
     return item
   }
 
@@ -291,13 +299,8 @@ final class MediaSession {
   func start() {
     guard !hasStarted, !isStopped else { return }
     hasStarted = true
-    prepareItem()
-    textSubtitles.start(mpvPlayer)
     observeEvents()
-    let requested = requestDisplayMode()
-    session.start()
-    coverUntilDisplaySettles(afterRequest: requested)
-    refreshPlaybackState()
+    loadCurrentItem()
   }
 
   /// 会话已换成新条目（播放中换集、换版本后），上一条目已由会话上报停止：重建条目状态并起播。
@@ -310,6 +313,12 @@ final class MediaSession {
     pendingPlaybackStatus = nil
     playbackRequestStatus = .playing
     guard hasStarted else { return }
+    loadCurrentItem()
+  }
+
+  /// 起播会话里的当前条目，首次起播和换集、换版本共用。文字字幕拦截、倍速和显示模式都要在交给 mpv 之前设好：
+  /// 字幕拦截从载入起生效，显示模式提前申请才能和载入同时进行。
+  private func loadCurrentItem() {
     prepareItem()
     textSubtitles.start(mpvPlayer)
     mpvPlayer.setPlaybackRate(effectiveRate)
@@ -394,7 +403,7 @@ final class MediaSession {
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
-    var baseItem = BaseItemDto.playback(session.item, episode: session.episode)
+    var baseItem = BaseItemDto.playback(session.playback)
     baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
       baseItem: baseItem,
@@ -506,7 +515,7 @@ final class MediaSession {
   @discardableResult
   func seek(to position: Duration) -> Bool {
     guard canSeek else { return false }
-    let limit = playbackState.duration ?? item.runtime
+    let limit = runtime
     let target = max(.zero, limit.map { min(position, $0) } ?? position)
     commandError = nil
     guard target != seconds else { return true }
@@ -605,27 +614,36 @@ final class MediaSession {
     eventTask = Task { [weak self] in
       for await event in events {
         guard let self, !Task.isCancelled, !self.isStopped else { return }
-        switch event.change {
-        case .stateChanged(.ended):
-          self.ended()
-          guard !self.isStopped else { return }
-          self.refreshPlaybackState()
-          self.syncPlaybackRequestStatus()
-        case .snapshot, .pauseChanged, .readinessChanged, .stateChanged:
-          self.refreshPlaybackState()
-          self.syncPlaybackRequestStatus()
-        default:
-          break
-        }
+        self.handlePlayerEvent(event.change, generation: event.generation)
       }
     }
     let timing = mpvPlayer.makeTimingStream()
     timingTask = Task { [weak self] in
       for await value in timing {
         guard let self, !Task.isCancelled, !self.isStopped else { return }
+        // 上一条目的位置同样丢弃，见 `handlePlayerEvent`。
+        guard value.generation == self.mpvPlayer.generation else { continue }
         self.publishPosition(value.position)
         self.refreshPlaybackState()
       }
+    }
+  }
+
+  /// 处理一条 mpv 事件（测试也直接调用它模拟 mpv）。`generation` 是事件所属的那次载入（`MPVPlayer.generation`）：
+  /// 事件流会留着还没读的事件，换条目后才读到的上一条目的事件（比如播完）不能算到新条目头上，直接丢弃。
+  func handlePlayerEvent(_ change: MPVPlaybackEvent.Change, generation: UInt64) {
+    guard !isStopped, generation == mpvPlayer.generation else { return }
+    switch change {
+    case .stateChanged(.ended):
+      ended()
+      guard !isStopped else { return }
+      refreshPlaybackState()
+      syncPlaybackRequestStatus()
+    case .snapshot, .pauseChanged, .readinessChanged, .stateChanged:
+      refreshPlaybackState()
+      syncPlaybackRequestStatus()
+    default:
+      break
     }
   }
 

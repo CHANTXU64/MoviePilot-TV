@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Queue/MediaQueueView.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：卡片上的片长经 `MediaSession.runTimeLabel(for:)` 取，正在播的那一集与进度条同一个值（所播文件的片长）。
 //
 
 import SwiftUI
@@ -15,6 +18,8 @@ struct MediaQueueView: @MainActor VideoPlayerSupplement {
 
     @Environment(VideoPlayer.ViewState.self)
     private var viewState
+    @Environment(MediaSession.self)
+    private var mediaSession
 
     let queue: any MediaPlayerQueue
     var displayType: PosterDisplayType = .landscape
@@ -50,7 +55,7 @@ struct MediaQueueView: @MainActor VideoPlayerSupplement {
                             Text(subtitle)
                         }
 
-                        if let runtime = item.snapshot.runTimeLabel {
+                        if let runtime = mediaSession.runTimeLabel(for: item) {
                             Text(runtime)
                         }
                     }

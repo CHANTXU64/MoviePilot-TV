@@ -12,6 +12,7 @@
 // （MoviePilot-TV 的适配：取 Emby 章节里的片头/片尾标记）。
 // 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
 // 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
+// 判断能否跳过时的片长读 `MediaSession.runtime`（所播文件的片长，见 `PlaybackDuration`），原版是播放器时长优先、再用条目时长。
 //
 
 import Combine
@@ -80,7 +81,7 @@ final class MediaSegmentObserver: MediaSessionObserver, VideoPlayerOverlayAction
         guard let mediaSession, let item, mediaSession.playbackItem === item,
               mediaSession.state == .playback, mediaSession.canSeek, !mediaSession.isSeeking else { return [] }
 
-        let duration = mediaSession.playbackState.duration ?? mediaSession.item.runtime
+        let duration = mediaSession.runtime
 
         guard let segment = segments.first(where: { $0.skipTarget(at: mediaSession.seconds, duration: duration) != nil }) else { return [] }
 
@@ -92,7 +93,7 @@ final class MediaSegmentObserver: MediaSessionObserver, VideoPlayerOverlayAction
                   mediaSession.playbackItem === item, mediaSession.state == .playback, mediaSession.canSeek, !mediaSession.isSeeking,
                   let target = segment.skipTarget(
                       at: mediaSession.seconds,
-                      duration: mediaSession.playbackState.duration ?? mediaSession.item.runtime
+                      duration: mediaSession.runtime
                   ) else { return }
 
             mediaSession.seek(to: target)
