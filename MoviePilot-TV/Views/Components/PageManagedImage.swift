@@ -400,27 +400,40 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     didFail = false
     guard shouldLoadImage else { return }
     decodedImage = image
+    // 返回时垫着的模糊缩略图换成原图时淡入，不是突然一跳。
+    let preview = role.providesBackdropPreview ? lifecycle?.backdropPreview(for: key) : nil
     prepareBackdropPreviewIfNeeded(from: image)
     let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
-      surface.install(image, fadeDuration: imageFadeDuration)
+      if let preview, surface.image === preview {
+        surface.install(image, fadeDuration: Self.backdropPreviewCrossfadeDuration, replacesCurrentImage: true)
+      } else {
+        surface.install(image, fadeDuration: imageFadeDuration)
+      }
       surface.notifySuccess(for: key)
     }
   }
+
+  /// 返回详情页时先垫上的背景缩略图：长边 320 像素并模糊过，放大到全屏也只是柔和的模糊背景，不会像马赛克。
+  /// 模糊半径约合第二页背景在缩略图尺寸上的半径，回到第二页时看起来一致。
+  private static let backdropPreviewLongEdge: CGFloat = 320
+  private static let backdropPreviewBlurRadius: CGFloat = 10
+  private static let backdropPreviewCrossfadeDuration: TimeInterval = 0.25
 
   private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
     guard role.providesBackdropPreview else { return }
     lifecycle?.prepareBackdropPreview(for: key, role: role) {
       let longEdge = max(image.size.width, image.size.height)
       guard longEdge > 0 else { return nil }
-      let ratio = min(1, 160 / longEdge)
+      let ratio = min(1, Self.backdropPreviewLongEdge / longEdge)
       let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
       format.preferredRange = .standard
-      return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      let thumbnail = UIGraphicsImageRenderer(size: size, format: format).image { _ in
         image.draw(in: CGRect(origin: .zero, size: size))
       }
+      return thumbnail.kf.blurred(withRadius: Self.backdropPreviewBlurRadius)
     }
   }
 
@@ -608,9 +621,10 @@ final class PageManagedImageView: UIImageView {
     clearRenderedImage()
   }
 
-  fileprivate func install(_ image: UIImage, fadeDuration: TimeInterval) {
+  /// `replacesCurrentImage` 为 true 时，已有画面也淡入替换（缩略图换原图）；否则只有空白时才淡入。
+  fileprivate func install(_ image: UIImage, fadeDuration: TimeInterval, replacesCurrentImage: Bool = false) {
     layer.removeAllAnimations()
-    guard fadeDuration > 0, self.image == nil else {
+    guard fadeDuration > 0, self.image == nil || replacesCurrentImage else {
       self.image = image
       (superview as? PageBackdropImageContainer)?.setNeedsLayout()
       return

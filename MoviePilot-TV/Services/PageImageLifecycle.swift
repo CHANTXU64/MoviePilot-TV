@@ -31,6 +31,16 @@ enum PageImageRole: String {
   }
 }
 
+/// 返回详情页时，父页的全屏背景是否等子页背景释放后再加载。
+///
+/// 内存优化开启时等：两张全屏大图不同时在内存里，等待期间先垫父页的模糊缩略图。
+/// 关闭时不等：按下返回就开始加载，缩略图只是一闪；代价是转场那一两秒里两张大图同时在内存。
+/// 由 `ContentView` 跟随内存优化设置更新；默认等，与开启优化时一致。
+@MainActor
+enum DetailBackdropReturnPolicy {
+  static var waitsForRemovedPageBackdrop = true
+}
+
 /// 页面图片的实际渲染资源。生命周期直接驱动 surface，不依赖隐藏的 SwiftUI 页面重算 body。
 @MainActor
 protocol PageImageResource: AnyObject {
@@ -727,8 +737,9 @@ final class ImageNavigationCoordinator: ObservableObject {
 
   private func reconcileLifecycles() {
     let topIndex = entries.count
-    // Pop 先保留源页面的背景供转场使用，释放后再允许目标页解码。
-    let isDetailBackdropBlocked = lifecycles.values.contains { $0.isRemoved && $0.keepsDetailBackdrop }
+    // Pop 先保留源页面的背景供转场使用；按设置决定目标页是否等它释放后再解码。
+    let isDetailBackdropBlocked = DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop
+      && lifecycles.values.contains { $0.isRemoved && $0.keepsDetailBackdrop }
     rootLifecycle.update(
       phase: phase(for: 0, topIndex: topIndex),
       isStackForeground: isStackForeground,
