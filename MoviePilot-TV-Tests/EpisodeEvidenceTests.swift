@@ -126,7 +126,7 @@ final class EpisodeEvidenceTests: XCTestCase {
       XCTAssertTrue(held.confirmedEpisodes(tmdbEpisodeID: 101).isEmpty, "编号没明确查空（\(String(describing: outcome))）不用标题确认")
       let match = try XCTUnwrap(held.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
       XCTAssertTrue(match.titleMatches)
-      XCTAssertTrue(match.message(server: "emby").contains("只能作参考"), "集名相同放在面板里供参考")
+      XCTAssertFalse(match.message(server: "emby").contains("集名"), "集名只作参考，不写进面板")
     }
 
     let mismatchedIDs = english.map { TmdbEpisode(id: ($0.id ?? 0) + 50, episodeNumber: $0.episodeNumber, name: $0.name) }
@@ -144,7 +144,7 @@ final class EpisodeEvidenceTests: XCTestCase {
     let bare = index([file("e1", episode: 1, name: "剧名 - S01E01 - 第 1 集 - 1080p")], evidence: EpisodeEvidence())
     let match = try XCTUnwrap(bare.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
     XCTAssertTrue(match.serverHasNoMetadata)
-    XCTAssertTrue(match.message(server: "emby").contains("刷新这部剧的元数据"))
+    XCTAssertTrue(match.message(server: "emby").contains("刷新元数据"))
     let scraped = index([file("e1", episode: 1, ids: ["tvdb": "1"])], evidence: EpisodeEvidence())
     XCTAssertFalse(try XCTUnwrap(scraped.uncertainEpisodes(tmdbEpisodeID: 101).first?.match).serverHasNoMetadata)
   }
@@ -606,20 +606,20 @@ final class EpisodeEvidenceTests: XCTestCase {
   func testCheckingAndUnverifiedStatesExplainTheirOwnCause() throws {
     let checking = EpisodeEntry(availability: .checking(server: "emby", files: 2), trialBlock: nil)
     XCTAssertEqual(checking.panel.buttons, [], "核对完会自动更新，不给试看也不用重试")
-    XCTAssertTrue(try XCTUnwrap(checking.panel.message).contains("正在向 TMDB 核对"))
+    XCTAssertTrue(try XCTUnwrap(checking.panel.message).contains("正在和 TMDB 核对"))
     XCTAssertNil(checking.cardStatus, "核对中不是读取失败，不在卡片上警告")
     XCTAssertFalse(try XCTUnwrap(checking.notPlayableMessage).contains("读取失败"))
 
     let failedLookup = EpisodeEntry(availability: .unverified(server: "emby", reason: .lookupIncomplete), trialBlock: nil)
     let message = try XCTUnwrap(failedLookup.panel.message)
-    XCTAssertTrue(message.contains("没能在 TMDB 核对"), "说清是 TMDB 没查成")
+    XCTAssertTrue(message.contains("还没和 TMDB 核对上"), "说清是 TMDB 没查成")
     XCTAssertFalse(message.contains("刷新元数据"), "不是刷新元数据能解决的")
     XCTAssertEqual(failedLookup.panel.buttons, [.startTrial(isRetry: false), .recheck], "可以选择仍要试看")
     XCTAssertEqual(failedLookup.cardStatus, .attention)
     XCTAssertEqual(failedLookup.menuActions, [.details], "要先看面板里的说明")
 
     let unreadable = EpisodeAvailability.unverified(server: "emby", reason: .librarySettingsUnreadable)
-    XCTAssertTrue(try XCTUnwrap(unreadable.message).contains("媒体库配置"))
+    XCTAssertTrue(try XCTUnwrap(unreadable.message).contains("媒体库设置"))
   }
 
   func testQueueDoesNotSkipAnEpisodeThatIsStillBeingChecked() {

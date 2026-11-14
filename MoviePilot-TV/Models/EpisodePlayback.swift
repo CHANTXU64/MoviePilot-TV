@@ -196,6 +196,19 @@ nonisolated enum ServerEpisodeLookup: Equatable, Sendable {
   }
 }
 
+/// 给用户的说明分两层：一句结论（先说结果），和原因或下一步。单集面板分两层显示，只能显示一句话的地方拼成一句。
+nonisolated struct StatusText: Equatable, Sendable {
+  let headline: String
+  let detail: String?
+
+  init(headline: String, detail: String? = nil) {
+    self.headline = headline
+    self.detail = detail
+  }
+
+  var joined: String { detail.map { "\(headline)。\($0)" } ?? headline }
+}
+
 /// 详情页每一集能不能播。
 nonisolated enum EpisodeAvailability: Equatable, Sendable {
   /// 确定能播（文件带 TMDB 单集编号，或对上了整理记录）；`server` 是第一台有这一集的服务器。
@@ -236,48 +249,47 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
         return "MoviePilot 没有提供这一集的 TMDB 编号，无法确认媒体服务器上对应哪一集"
       }
     }
+
+    /// 单集面板里结论下面的原因。
+    var detail: String {
+      switch self {
+      case .missingEpisodeID: "MoviePilot 没有提供这一集的 TMDB 编号"
+      }
+    }
   }
 
-  static let notOnServerMessage = "没有在媒体服务器上找到这一集"
+  static let notOnServerMessage = "服务器上没有这一集"
 
-  /// 没找到 `noun`（“这一集”“下一集”）、服务器上又有认不出是哪一集的文件时的提示。
+  /// 没找到 `noun`（“这一集”“下一集”）、服务器上又有认不出是哪一集的文件时的说明。
+  static func unmatchedText(server: String, noun: String = "这一集") -> StatusText {
+    StatusText(headline: "\(noun)可能已经入库", detail: "有文件认不出是哪一集，刷新元数据后再检查")
+  }
+
   static func unmatchedMessage(server: String, noun: String = "这一集") -> String {
-    "没有找到\(noun)，但媒体服务器“\(server)”上有文件认不出是哪一集（没有 TMDB 编号，季号集号缺失或认不出，"
-      + "也对不上 MoviePilot 的整理记录），\(noun)可能就在其中。可以在媒体服务器上刷新元数据后重试"
+    unmatchedText(server: server, noun: noun).joined
   }
 
-  /// 单集面板里提供试看前的一句说明。
-  static func unidentifiedFilesNote(server: String) -> String {
-    "媒体服务器“\(server)”上有文件认不出是哪一集，这一集可能已经在里面"
+  /// 没找到 `noun`、服务器上又有带编号的文件没核对成时的说明。
+  static func unverifiedText(server: String, reason: UnverifiedReason, noun: String = "这一集") -> StatusText {
+    let detail =
+      switch reason {
+      case .lookupIncomplete: "有文件还没和 TMDB 核对上，稍后自动重试"
+      case .librarySettingsUnreadable: "读不到服务器的媒体库设置，无法核对"
+      }
+    return StatusText(headline: "\(noun)可能已经入库", detail: detail)
   }
 
-  /// 没找到 `noun`、服务器上又有带编号的文件没核对成时的提示。
   static func unverifiedMessage(server: String, reason: UnverifiedReason, noun: String = "这一集") -> String {
-    switch reason {
-    case .lookupIncomplete:
-      "没有找到\(noun)，但媒体服务器“\(server)”上有文件没能在 TMDB 核对是哪一集（连不上 TMDB、被限流，"
-        + "或 TMDB 的对应关系有歧义），\(noun)可能就在其中。稍后会再核对"
-    case .librarySettingsUnreadable:
-      "没有找到\(noun)，但没能读取媒体服务器“\(server)”的媒体库配置，带外部编号的文件没法核对是哪一集，"
-        + "\(noun)可能就在其中"
-    }
+    unverifiedText(server: server, reason: reason, noun: noun).joined
   }
 
-  /// 单集面板里提供试看前的一句说明。
-  static func unverifiedFilesNote(server: String, reason: UnverifiedReason) -> String {
-    switch reason {
-    case .lookupIncomplete: "媒体服务器“\(server)”上有文件没能在 TMDB 核对是哪一集，这一集可能已经在里面"
-    case .librarySettingsUnreadable: "没能读取媒体服务器“\(server)”的媒体库配置，有文件没法核对是哪一集，这一集可能已经在里面"
-    }
-  }
-
-  static func checkingMessage(server: String, files: Int) -> String {
-    "媒体服务器“\(server)”上有 \(files) 个文件正在向 TMDB 核对是哪一集，这一集可能就在其中，核对完会自动更新"
+  static func checkingText(server: String, files: Int) -> StatusText {
+    StatusText(headline: "正在和 TMDB 核对", detail: "完成后自动更新")
   }
 
   /// 播放器里找上一集、下一集时：不会自动更新，请用户稍后再试。
   static func checkingQueueMessage(server: String) -> String {
-    "媒体服务器“\(server)”上还有文件正在向 TMDB 核对是哪一集，稍后再试"
+    "还有文件在和 TMDB 核对，稍后再试"
   }
 
   /// 确定能播。
@@ -294,17 +306,27 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     }
   }
 
-  /// 不能确定能播时给用户的说明（不确定时说明为什么可能不是这一集）；确定能播时为 nil。
-  var message: String? {
+  /// 不能确定能播时给用户的说明：一句结论和原因或下一步（单集面板分两层显示）；确定能播时为 nil。
+  var statusText: StatusText? {
     switch self {
     case .playable: return nil
-    case .uncertain(let server, let match): return match.message(server: server)
-    case .notOnServer: return Self.notOnServerMessage
-    case .unmatched(let server): return Self.unmatchedMessage(server: server)
-    case .unverified(let server, let reason): return Self.unverifiedMessage(server: server, reason: reason)
-    case .checking(let server, let files): return Self.checkingMessage(server: server, files: files)
-    case .unidentifiable(let reason): return reason.message
-    case .failed(let message): return message
+    case .uncertain(let server, let match): return match.statusText(server: server)
+    case .notOnServer: return StatusText(headline: Self.notOnServerMessage)
+    case .unmatched(let server): return Self.unmatchedText(server: server)
+    case .unverified(let server, let reason): return Self.unverifiedText(server: server, reason: reason)
+    case .checking(let server, let files): return Self.checkingText(server: server, files: files)
+    case .unidentifiable(let reason): return StatusText(headline: "无法确认是哪一集", detail: reason.detail)
+    case .failed(let message): return StatusText(headline: "检查失败", detail: message)
+    }
+  }
+
+  /// 只能显示一句话的地方（播放键提示、读屏、播放器、试看）用的说明，由 `statusText` 两层拼成；
+  /// 读取失败和缺编号本来就是一句完整的话，原样用。
+  var message: String? {
+    switch self {
+    case .unidentifiable(let reason): reason.message
+    case .failed(let message): message
+    default: statusText?.joined
     }
   }
 

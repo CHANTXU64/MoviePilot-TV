@@ -275,30 +275,27 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   var hasConsistentSeasonOffset = false
   /// 服务器上这个文件没有资料：没有任何外部编号，也没有首播日期。多半没刮削到，标题就是文件名。
   var serverHasNoMetadata = false
-  /// 服务器上的集名和这一集同季唯一的具体标题相同，但不够确认（集名来源不清楚，或编号还没在 TMDB 查空），在面板里供参考。
+  /// 服务器上的集名和这一集同季唯一的具体标题相同，但不够确认（集名来源不清楚，或编号还没在 TMDB 查空）。只作参考，面板里不写，免得说明太长。
   var titleMatches = false
 
-  /// 给用户的说明，`server` 是这个文件所在的服务器。
-  func message(server: String, allowsSeasonDateOffset: Bool = false) -> String {
-    let numbering = episodeGroup == nil ? "季号集号" : "整理时所用剧集组的季号集号"
-    let base = "“\(server)”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按\(numbering)找到的第 \(season) 季第 \(episode) 集"
-    let titleNote = titleMatches ? "。服务器上的集名和这一集相同，但集名也可能是按季号集号填的，只能作参考" : ""
-    return main(base, allowsSeasonDateOffset: allowsSeasonDateOffset) + titleNote
+  /// 给用户的说明，`server` 是这个文件所在的服务器。先说结论（可能不是这一集），再用一句话说按什么找到的、哪里对不上；
+  /// 具体日期、集名这些细节写日志，不放进面板。
+  func statusText(server: String, allowsSeasonDateOffset: Bool = false) -> StatusText {
+    let found = "按第 \(season) 季第 \(episode) 集找到"
+    if allowsSeasonDateOffset && hasConsistentSeasonOffset {
+      return StatusText(headline: "可能不是这一集", detail: found + "，整季日期差两三天")
+    }
+    switch airDate {
+    case .matches: return StatusText(headline: "可能不是这一集", detail: found + "，播出日期一致")
+    case .differs: return StatusText(headline: "很可能不是这一集", detail: found + "，播出日期不同")
+    case .unknown where serverHasNoMetadata:
+      return StatusText(headline: "可能不是这一集", detail: "服务器上没有它的资料，刷新元数据后再检查")
+    case .unknown: return StatusText(headline: "可能不是这一集", detail: found + "，无法核对播出日期")
+    }
   }
 
-  private func main(_ base: String, allowsSeasonDateOffset: Bool) -> String {
-    if allowsSeasonDateOffset && hasConsistentSeasonOffset { return base + "，仍可能不是这一集" }
-    switch airDate {
-    case .matches:
-      return base + "，播出日期也对得上，但仍可能不是这一集"
-    case .differs(let serverDate, let moviePilotDate):
-      return base + "，但播出日期对不上（服务器上是 \(serverDate)，这一集是 \(moviePilotDate)），很可能不是这一集"
-    case .unknown where serverHasNoMetadata:
-      return base + "，可能不是这一集。服务器上这个文件没有刮削到资料（没有外部编号和播出日期），"
-        + "在媒体服务器上刷新这部剧的元数据后可能就能确认"
-    case .unknown:
-      return base + "，没有播出日期可以核对，可能不是这一集"
-    }
+  func message(server: String, allowsSeasonDateOffset: Bool = false) -> String {
+    statusText(server: server, allowsSeasonDateOffset: allowsSeasonDateOffset).joined
   }
 }
 

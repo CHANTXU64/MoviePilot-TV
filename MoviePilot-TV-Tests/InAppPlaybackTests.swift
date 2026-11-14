@@ -2132,7 +2132,7 @@ extension PlaybackCoordinatorTests {
     await run(coordinator, .episode(try queued(1), allowsUncertain: true))
 
     XCTAssertNil(coordinator.session)
-    XCTAssertEqual(coordinator.failure?.message, "没有在媒体服务器上找到这一集")
+    XCTAssertEqual(coordinator.failure?.message, "服务器上没有这一集")
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/PlaybackInfo") })
   }
 
@@ -3482,8 +3482,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(afterLast, .stop(EpisodeAvailability.unmatchedMessage(server: "emby", noun: "下一集")))
     XCTAssertEqual(
       EpisodeAvailability.unmatchedMessage(server: "emby", noun: "下一集"),
-      "没有找到下一集，但媒体服务器“emby”上有文件认不出是哪一集（没有 TMDB 编号，季号集号缺失或认不出，"
-        + "也对不上 MoviePilot 的整理记录），下一集可能就在其中。可以在媒体服务器上刷新元数据后重试")
+      "下一集可能已经入库。有文件认不出是哪一集，刷新元数据后再检查")
     coordinator.endCurrentSession()
 
     await run(coordinator, .episode(try queued(1), allowsUncertain: true))

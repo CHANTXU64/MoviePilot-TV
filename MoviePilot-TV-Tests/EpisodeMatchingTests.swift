@@ -228,8 +228,9 @@ final class EpisodeMatchingTests: XCTestCase {
     let availability = EpisodeAvailability.uncertain(server: "emby", match: matched)
     let entry = EpisodeEntry(availability: availability, allowsSeasonDateOffset: true)
     XCTAssertEqual(entry.primaryAction, .openPanel)
-    XCTAssertFalse(try XCTUnwrap(entry.panel.message).contains("日期对不上"))
-    XCTAssertTrue(try XCTUnwrap(EpisodeEntry(availability: availability).panel.message).contains("日期对不上"))
+    XCTAssertFalse(try XCTUnwrap(entry.panel.message).contains("播出日期不同"))
+    XCTAssertTrue(try XCTUnwrap(entry.panel.message).contains("整季日期差两三天"))
+    XCTAssertTrue(try XCTUnwrap(EpisodeEntry(availability: availability).panel.message).contains("播出日期不同"))
     XCTAssertFalse(try match(Array(files.prefix(2)) + [files[0]]).hasConsistentSeasonOffset, "副本不能凑成三集")
     XCTAssertFalse(try match(files + [file("e4", episode: 4, premiere: "2025-01-25", seriesID: "s1")]).hasConsistentSeasonOffset)
     XCTAssertFalse(try match(files + [file("e4", episode: 4, name: "另一个标题", seriesID: "s1")]).hasConsistentSeasonOffset)
@@ -275,8 +276,7 @@ final class EpisodeMatchingTests: XCTestCase {
     XCTAssertEqual(index.summary.airDateDiffers, 1)
     XCTAssertEqual(
       index.availability(of: 102).message,
-      "“emby”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按季号集号找到的第 1 季第 2 集，"
-        + "但播出日期对不上（服务器上是 2025-03-01，这一集是 2025-01-02），很可能不是这一集")
+      "很可能不是这一集。按第 1 季第 2 集找到，播出日期不同")
     XCTAssertEqual(
       index.summary.logText,
       "按 TMDB 单集编号对上 0 个文件，按整理记录对上 0 个，按季号集号对上 3 个（播出日期对上 1 个、对不上 1 个），"

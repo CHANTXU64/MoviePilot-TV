@@ -182,7 +182,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
         trialBlock: nil, canCancelTrial: true)
       XCTAssertFalse(entry.isPlayable)
       XCTAssertEqual(entry.primaryAction, .openPanel)
-      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库") + "。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库"))
       XCTAssertEqual(entry.panel.buttons, [.play])
     }
   }
@@ -552,7 +552,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertTrue(entry().trial.isSubmissionUnconfirmed)
       XCTAssertNil(entry().cardStatus, "没人在跟，不显示一直不变的「正在确认进度」")
       XCTAssertEqual(entry().menuActions, [.startTrial, .details])
-      XCTAssertEqual(entry().panel.message, EpisodeEntry.unconfirmedSubmissionMessage)
+      XCTAssertEqual(entry().panel.detail, EpisodeEntry.unconfirmedSubmissionMessage)
       XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
 
       // 打开面板时查一次订阅列表，还是没有就停在这里。
@@ -782,7 +782,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
         entry.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
       XCTAssertFalse(entry.canStartTrial)
       XCTAssertEqual(entry.menuActions, [.details])
-      XCTAssertEqual(entry.panel.message, "暂时无法确认试看进度")
+      XCTAssertEqual(entry.panel.detail, "暂时无法确认试看进度")
       XCTAssertEqual(entry.panel.buttons, [])
 
       backend.failDownloader(false)
