@@ -136,6 +136,7 @@ struct SubscribeSeasonContentView: View {
             shelf
           }
         }
+        .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
       case .grid(let imageLifecycle):
         expandedGrid(imageLifecycle: imageLifecycle)
       }
@@ -285,6 +286,7 @@ struct SubscribeSeasonContentView: View {
           .font(.callout)
           .bold()
           .foregroundStyle(.secondary)
+          .focusLiftHeaderPart()
 
         Spacer()
 
@@ -294,6 +296,7 @@ struct SubscribeSeasonContentView: View {
             Button("展开") { onMoreTapped?() }
           }
         }
+        .focusLiftHeaderPart()
       }
       .padding(.horizontal, 89)
 
@@ -347,10 +350,12 @@ struct SubscribeSeasonContentView: View {
         ForEach(viewModel.seasonInfos.prefix(displayCount), id: \.self) { season in
           seasonCard(season)
             .focused($focusedSeasonId, equals: season.season_number)
+            .focusLiftCard(isFocused: focusedSeasonId == season.season_number)
         }
         if viewModel.seasonInfos.count > 10 {
           viewAllCard(nextSeason: viewModel.seasonInfos[displayCount])
             .focused($focusedSeasonId, equals: -1)
+            .focusLiftCard(isFocused: focusedSeasonId == -1)
         }
       }
       .padding(.horizontal, 81)

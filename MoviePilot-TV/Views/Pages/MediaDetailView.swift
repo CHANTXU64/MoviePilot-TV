@@ -1285,6 +1285,7 @@ struct MediaDetailView: View {
                 .font(.callout)
                 .bold()
                 .foregroundStyle(.secondary)
+                .focusLiftHeaderPart()
                 .padding(.leading, 89)
             }
           }
@@ -1341,6 +1342,7 @@ struct MediaDetailView: View {
         // 否则实心胶囊会在滑动途中挡住头像；纯文字标题本来就画在卡片下面，效果与之一致。
         .zIndex(2)
       }
+      .focusLiftRow(cardImageSize: PersonCard.imageSize)
     }
   }
 
@@ -1362,6 +1364,7 @@ struct MediaDetailView: View {
         navigateFromSecondPage(to: actor)
       }
       .focused($focusedActorId, equals: actor.id)
+      .focusLiftCard(isFocused: focusedActorId == actor.id)
       .compositingGroup()
       .contextMenu {
         Button {
@@ -1395,6 +1398,7 @@ struct MediaDetailView: View {
         navigateFromSecondPage(to: director)
       }
       .focused($focusedDirectorId, equals: director.id)
+      .focusLiftCard(isFocused: focusedDirectorId == director.id)
       .compositingGroup()
       .contextMenu {
         Button {
@@ -1530,6 +1534,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1557,6 +1562,7 @@ struct MediaDetailView: View {
               )
               .equatable()
               .focused($focusedRecommendId, equals: media.id)
+              .focusLiftCard(isFocused: focusedRecommendId == media.id)
               .mediaContextMenu(item: media)
             }
             if viewModel.recommendPaginator.isLoadingMore {
@@ -1596,6 +1602,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 
@@ -1608,6 +1615,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1635,6 +1643,7 @@ struct MediaDetailView: View {
               )
               .equatable()
               .focused($focusedSimilarId, equals: media.id)
+              .focusLiftCard(isFocused: focusedSimilarId == media.id)
               .mediaContextMenu(item: media)
             }
             if viewModel.similarPaginator.isLoadingMore {
@@ -1674,6 +1683,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 

@@ -198,6 +198,7 @@ private struct MediaSectionView: View {
           .font(.callout)
           .bold()
           .foregroundStyle(.secondary)
+          .focusLiftHeaderPart()
 
         Spacer()
 
@@ -208,6 +209,7 @@ private struct MediaSectionView: View {
             }
           }
           .pickerStyle(.menu)
+          .focusLiftHeaderPart()
         }
       }
       .padding(.horizontal, 8)
@@ -263,6 +265,7 @@ private struct MediaSectionView: View {
                   : nil
               )
               .focused($focusedItemId, equals: item.id)
+              .focusLiftCard(isFocused: focusedItemId == item.id)
               .compositingGroup()
               .contextMenu {
                 if canPlayInApp(item) {
@@ -376,6 +379,7 @@ private struct MediaSectionView: View {
         .focusSection()
       }
     }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 
   private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
@@ -432,6 +436,7 @@ private struct SubscribeSectionView: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       if isFirstRow {
@@ -472,6 +477,7 @@ private struct SubscribeSectionView: View {
               onViewDetail: { onViewDetail(item) }
             )
             .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
+            .focusLiftCard(isFocused: focusedItemId == HomeSubscribeFocusID.value(for: item.id))
           }
         }
         .padding(.top, 25)
@@ -503,6 +509,7 @@ private struct SubscribeSectionView: View {
       .scrollClipDisabled()
       .focusSection()
     }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 }
 

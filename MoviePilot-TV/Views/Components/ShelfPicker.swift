@@ -40,6 +40,8 @@ struct ShelfPicker<Item: Identifiable>: View {
             .focused($focusedShelfId, equals: shelf.id)
           }
         }
+        // 放在横向卡片行的页头时，按胶囊实际占到的宽度判断页头是否上移。
+        .focusLiftHeaderPart()
       }
       .scrollClipDisabled()
 

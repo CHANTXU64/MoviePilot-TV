@@ -357,6 +357,7 @@ private struct EpisodeBrowser: View {
             // 同演员行：翻页时行头从卡片位置往上滑入，卡片盖在它上面，不被胶囊挡住。
             .zIndex(2)
         }
+        .focusLiftRow(cardImageSize: EpisodeCardLayout.stillSize)
       }
     }
     .task(id: allowsRequests && needsSeasonLookup
@@ -403,20 +404,24 @@ private struct EpisodeBrowser: View {
   private var shelfHeader: some View {
     HStack(spacing: 20) {
       shelfSeasonSelector
+        .focusLiftHeaderPart()
       Spacer(minLength: 0)
-      episodePagePicker
-      supplementalSeasonRetry
-      availabilityRetry
-      groupMenu?.control(defaultSeasons: defaultMenuSeasons)
-      if case .shelf(_, let onExpand) = layout, showsExpandButton {
-        Button("展开") {
-          onExpand(MediaEpisodeGridRequest(
-            mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
-            initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
-          ))
+      HStack(spacing: 20) {
+        episodePagePicker
+        supplementalSeasonRetry
+        availabilityRetry
+        groupMenu?.control(defaultSeasons: defaultMenuSeasons)
+        if case .shelf(_, let onExpand) = layout, showsExpandButton {
+          Button("展开") {
+            onExpand(MediaEpisodeGridRequest(
+              mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
+              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
+            ))
+          }
+          .accessibilityLabel("展开剧集")
         }
-        .accessibilityLabel("展开剧集")
       }
+      .focusLiftHeaderPart()
     }
     .font(.callout)
     .padding(.horizontal, 81)
@@ -1026,6 +1031,7 @@ private struct EpisodeShelfRow<Card: View>: View {
             at: offset, itemCount: episodes.count, anchorIndex: anchorIndex, cardKind: .episode,
             usesFocusWindow: memoryOptimization.isEnabled
           ))
+          .focusLiftCard(isFocused: focusedEpisodeID == episode.id)
         }
       }
       .padding(.horizontal, 81)

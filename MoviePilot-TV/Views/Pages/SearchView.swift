@@ -436,6 +436,7 @@ private struct ResultRow: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -472,6 +473,7 @@ private struct ResultRow: View {
               }
             )
             .focused($focusedItemId, equals: item.id)
+            .focusLiftCard(isFocused: focusedItemId == item.id)
             .mediaContextMenu(
               item: item
             )
@@ -510,6 +512,7 @@ private struct ResultRow: View {
       .scrollClipDisabled()
       .focusSection()
     }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 
   private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
@@ -543,6 +546,7 @@ private struct PersonResultRow: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -566,6 +570,7 @@ private struct PersonResultRow: View {
               navigationCoordinator.push(item)
             }
             .focused($focusedItemId, equals: item.id)
+            .focusLiftCard(isFocused: focusedItemId == item.id)
             .compositingGroup()
             .contextMenu {
               Button {
@@ -597,6 +602,7 @@ private struct PersonResultRow: View {
       .scrollClipDisabled()
       .focusSection()
     }
+    .focusLiftRow(cardImageSize: PersonCard.imageSize)
   }
 
   private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
