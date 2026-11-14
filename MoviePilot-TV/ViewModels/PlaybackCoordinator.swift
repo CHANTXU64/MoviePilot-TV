@@ -945,9 +945,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       return try await seriesTransferRecords(
         context, files: files, forceRefresh: false, acceptsCachedValue: { _ in round.transferRecordsRefreshed })
     }
-    let records = try await seriesTransferRecords(context, files: files, forceRefresh: true)
-    round.transferRecordRefreshSucceeded()
-    return records
+    // 读到就记成功，在结果写进缓存之前：等这里接着往下跑时，别的服务器可能已经来要了，那时缓存里的已经是这一轮的。
+    return try await seriesTransferRecords(
+      context, files: files, forceRefresh: true, onRead: { round.transferRecordRefreshSucceeded() })
   }
 
   /// 一部剧读到的整理记录：两种查法各自的结果，和读的时候已经要过记录的文件。
@@ -977,7 +977,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// （路径是绝对路径，不会命中）；筛完一条这部剧的都没有时（记录里存的标题可能和现在的剧名不同），再退回包含匹配。
   private func seriesTransferRecords(
     _ context: EpisodePlaybackContext, files: Set<String>, forceRefresh: Bool,
-    acceptsCachedValue: @escaping (SeriesTransferRecords) -> Bool = { _ in true }
+    acceptsCachedValue: @escaping (SeriesTransferRecords) -> Bool = { _ in true },
+    onRead: @escaping @MainActor () -> Void = {}
   ) async throws -> [EpisodeTransferRecord] {
     guard let title = context.seriesName else { return [] }
     let tmdbID = context.tmdbID
@@ -1003,6 +1004,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         ? try await read(Self.containingQuery(for: title), after: history?.last?.containing) : nil
       let result = SeriesTransferRecords(prefixed: prefixed, containing: containing, files: requested)
       self?.rememberTransferRecords(result, for: key)
+      onRead()
       return result
     }
     let value = try await transferRecords.value(
