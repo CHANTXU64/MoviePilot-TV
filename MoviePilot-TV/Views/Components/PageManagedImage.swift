@@ -561,13 +561,11 @@ final class PageManagedImageView: UIImageView {
       return
     }
 
-    let service = APIService.shared
-    let source = service.imageSource(for: url)
-    let gridKey = managedGridContext.map {
-      "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
-    } ?? "grid:none"
-    let scaleKey = scaleFactor.map { "\($0)" } ?? "default"
-    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(role.rawValue)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)|scale:\(scaleKey)"
+    let key = Self.slotKey(
+      url: url, processor: processor, role: role, gridImageDemandContext: managedGridContext,
+      loadsDiskFileSynchronously: loadsDiskFileSynchronously, skipsMemoryCache: skipsMemoryCache,
+      fadeDuration: fadeDuration, scaleFactor: scaleFactor
+    )
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
       slot?.setGridImageDemandContext(managedGridContext)
@@ -609,6 +607,27 @@ final class PageManagedImageView: UIImageView {
       demandLease: demandLease,
       isEnabled: isEnabled
     )
+  }
+
+  /// 图片 slot 的身份：图片配置、来源、处理方式和显示参数都相同才是同一张图。
+  /// 详情页第二页按它取当前背景的缩略图，图片配置刷新或换了背景后不会用到旧图。
+  static func slotKey(
+    url: URL,
+    processor: any ImageProcessor,
+    role: PageImageRole,
+    gridImageDemandContext: GridImageDemandContext? = nil,
+    loadsDiskFileSynchronously: Bool = false,
+    skipsMemoryCache: Bool,
+    fadeDuration: TimeInterval,
+    scaleFactor: CGFloat?
+  ) -> String {
+    let service = APIService.shared
+    let source = service.imageSource(for: url)
+    let gridKey = gridImageDemandContext.map {
+      "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
+    } ?? "grid:none"
+    let scaleKey = scaleFactor.map { "\($0)" } ?? "default"
+    return "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(role.rawValue)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)|scale:\(scaleKey)"
   }
 
   func detach() {

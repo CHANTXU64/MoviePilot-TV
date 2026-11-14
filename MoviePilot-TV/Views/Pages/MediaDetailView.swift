@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 
 /// 详情页「演员 / 职员」合并行当前展示的分类。
@@ -48,8 +49,9 @@ private struct MediaDetailBackgroundLayer: View {
   let hidesContentPageBackground: Bool
   /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色。
   let providesBlurredContentPage: Bool
-  /// 这一页背景的模糊缩略图（`PageImageLifecycle.backdropPreviewImage`），第二页直接用它作模糊背景。
-  let blurredBackdrop: UIImage?
+  /// 这一页背景的模糊缩略图（`PageImageLifecycle.currentBackdropPreview`）。
+  /// 只有属于当前背景图片 slot 的才用作第二页模糊背景。
+  let backdropPreview: PageImageLifecycle.BackdropPreview?
   var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
@@ -57,9 +59,12 @@ private struct MediaDetailBackgroundLayer: View {
     // 海报当背景时主背景本身就是模糊图，不用再叠一张。
     let usesBlurredLayer = providesBlurredContentPage && !usingPosterAsBackdrop && url != nil
     let showsBlurredLayer = usesBlurredLayer && showingContentPage && !hidesContentPageBackground
+    let blurredBackdrop = usesBlurredLayer ? currentBlurredBackdrop : nil
     ZStack {
       image
-      if usesBlurredLayer, let blurredBackdrop {
+        // 第二页还没有当前背景的模糊图（新背景未就绪或加载失败）时，不露出清晰背景，只留底色。
+        .opacity(showsBlurredLayer && blurredBackdrop == nil ? 0 : 1)
+      if let blurredBackdrop {
         // 缩略图在主背景解码时就已生成并模糊过：首屏就挂着、透明度为 0，切到第二页时淡入。
         // 不另外下载、解码，也不在每帧实时模糊。
         let size = UIScreen.main.bounds.size
@@ -78,26 +83,40 @@ private struct MediaDetailBackgroundLayer: View {
     .accessibilityHidden(true)
   }
 
+  private var heroProcessor: any ImageProcessor {
+    MediaDetailBackgroundImage.heroProcessor(
+      for: UIScreen.main.bounds.size,
+      usingPosterAsBackdrop: usingPosterAsBackdrop,
+      screenScale: UIScreen.main.scale
+    )
+  }
+
+  private var heroScaleFactor: CGFloat {
+    MediaDetailBackgroundImage.downsampleScale(for: UIScreen.main.bounds.size, screenScale: UIScreen.main.scale)
+  }
+
+  /// 属于当前背景图片 slot 的模糊缩略图；key 和下面 `PageManagedImage` 的参数一致。
+  private var currentBlurredBackdrop: UIImage? {
+    guard let url, let backdropPreview else { return nil }
+    let key = PageManagedImageView.slotKey(
+      url: url, processor: heroProcessor, role: role,
+      skipsMemoryCache: true, fadeDuration: 0, scaleFactor: heroScaleFactor
+    )
+    return backdropPreview.key == key ? backdropPreview.image : nil
+  }
+
   @ViewBuilder
   private var image: some View {
     if let url {
       let size = UIScreen.main.bounds.size
-      let screenScale = UIScreen.main.scale
       PageManagedImage(
         url: url,
-        processor: MediaDetailBackgroundImage.heroProcessor(
-          for: size,
-          usingPosterAsBackdrop: usingPosterAsBackdrop,
-          screenScale: screenScale
-        ),
+        processor: heroProcessor,
         isEnabled: true,
         role: role,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
-        scaleFactor: MediaDetailBackgroundImage.downsampleScale(
-          for: size,
-          screenScale: screenScale
-        ),
+        scaleFactor: heroScaleFactor,
         alignsImageAtTop: usingPosterAsBackdrop,
         fadeDuration: 0,
         onFailure: { onFailure?(url) }
@@ -395,7 +414,7 @@ struct MediaDetailView: View {
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
           providesBlurredContentPage: !memoryOptimization.isEnabled,
-          blurredBackdrop: imageLifecycle.backdropPreviewImage,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
@@ -410,7 +429,7 @@ struct MediaDetailView: View {
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
           providesBlurredContentPage: !memoryOptimization.isEnabled,
-          blurredBackdrop: imageLifecycle.backdropPreviewImage,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
           }

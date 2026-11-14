@@ -183,6 +183,8 @@ private struct EpisodeBrowser: View {
     let source: EpisodePlaybackSource
     /// nil 表示第一次查、还没有结果。
     var results: [MoviePilotEpisode.ID: EpisodeAvailability]?
+    /// 能播的集在服务器上的文件时长（秒），TMDB 没给时长时用来补上。
+    var serverRuntimes: [MoviePilotEpisode.ID: Double] = [:]
     /// 应用内播放不可用（不是管理员、版本不支持、设置里关了、没有能播放的服务器）：不显示播放和试看。
     var isOffered = true
     /// 重查期间沿用上次的结果，按钮显示加载中，焦点不跳。
@@ -627,7 +629,7 @@ private struct EpisodeBrowser: View {
   ) -> some View {
     let entry = entry(for: episode)
     return EpisodeCard(
-      episode: episode,
+      episode: displayed(episode),
       stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
       stillSize: stillSize,
       loadsImage: loadsImage,
@@ -644,6 +646,12 @@ private struct EpisodeBrowser: View {
   }
 
   // MARK: 播放与试看
+
+  /// 显示用的这一集：TMDB 没给时长时，用服务器上这一集文件的时长补上。只用于卡片和单集面板的显示，
+  /// 播放、试看等操作仍用原来的这一集。
+  private func displayed(_ episode: MoviePilotEpisode) -> MoviePilotEpisode {
+    episode.fillingRuntime(serverSeconds: currentAvailability(season: episode.seasonNumber)?.serverRuntimes[episode.id])
+  }
 
   private func currentAvailability(season: Int) -> SeasonAvailability? {
     guard let playback, let state = group.availability[season], state.source == playback else { return nil }
@@ -801,7 +809,7 @@ private struct EpisodeBrowser: View {
     let pollsTrial = request != nil && !entry.offersPlayback
       && (entry.availability?.allowsTrial == true || entry.trial.isTracked || entry.trial.progress != nil)
     EpisodeActionSheet(
-      episode: episode,
+      episode: displayed(episode),
       seriesTitle: media.cleanedTitle ?? media.title,
       entry: entry,
       isCancellingTrial: entry.trial.subscriptionID.map(cancellingTrials.contains) ?? false,
@@ -873,12 +881,16 @@ private struct EpisodeBrowser: View {
     pending.isRefreshing = previous?.results != nil
     group.availability[request.season] = pending
     let readyBeforeCheck = trial.readyEpisodes(among: episodes.compactMap(trialKey(for:)))
-    let results = await apiService.sessionScope.playbackCoordinator.episodeAvailability(
+    let lookup = await apiService.sessionScope.playbackCoordinator.episodePlaybackLookup(
       for: episodes, context: context, forceRefresh: forceRefresh)
     guard canPublish(request.session) else { return }
     var state = SeasonAvailability(source: request.source, retry: request.retry)
-    if let results {
+    if let lookup {
+      let results = lookup.availability
       state.results = Dictionary(zip(episodes.map(\.id), results), uniquingKeysWith: { first, _ in first })
+      state.serverRuntimes = Dictionary(
+        zip(episodes.map(\.id), lookup.serverRuntimeSeconds).compactMap { id, seconds in seconds.map { (id, $0) } },
+        uniquingKeysWith: { first, _ in first })
       let rechecked = zip(episodes, results).compactMap { episode, availability in
         trialKey(for: episode).map { ($0, availability) }
       }

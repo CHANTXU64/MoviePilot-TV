@@ -772,6 +772,35 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertTrue(parentSurface.image === image)
   }
 
+  /// 第二页按 key 取当前背景的缩略图：换了背景（例如图片配置刷新后新 slot）且新图未到时，旧缩略图不能冒充。
+  func testCurrentBackdropPreviewCarriesOwningSlotKey() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let lifecycle = coordinator.lifecycle(for: coordinator.push(resourceRequest("detail")))
+    lifecycle.setDetailBackdropVisible(true)
+    let old = makeSlot(key: "old", lifecycle: lifecycle, role: .detailBackdrop)
+    let oldSurface = PageManagedImageView()
+    let oldDemand = PageImageDemandLease()
+    old.attach(oldSurface, demandID: oldDemand.id)
+    oldDemand.bind(to: old, isEnabled: true)
+    old.acceptRetrievedImage(try XCTUnwrap(UIImage(systemName: "film")))
+    XCTAssertEqual(lifecycle.currentBackdropPreview?.key, "old")
+
+    oldDemand.cancel()
+    old.detach(oldSurface)
+    let new = makeSlot(key: "new", lifecycle: lifecycle, role: .detailBackdrop)
+    let newSurface = PageManagedImageView()
+    let newDemand = PageImageDemandLease()
+    new.attach(newSurface, demandID: newDemand.id)
+    newDemand.bind(to: new, isEnabled: true)
+    XCTAssertNotEqual(lifecycle.currentBackdropPreview?.key, "new", "新背景还没解码时没有属于它的缩略图")
+
+    new.acceptRetrievedImage(try XCTUnwrap(UIImage(systemName: "tv")))
+    XCTAssertEqual(lifecycle.currentBackdropPreview?.key, "new")
+    lifecycle.setDetailBackdropVisible(false)
+    XCTAssertNil(lifecycle.currentBackdropPreview)
+  }
+
   func testDetailBackdropCardCanProvidePreviewAfterPrimaryIsRemoved() throws {
     let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
     coordinator.setStackForeground(true)

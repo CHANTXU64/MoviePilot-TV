@@ -516,6 +516,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   func episodeAvailability(
     for episodes: [MoviePilotEpisode], context: EpisodePlaybackContext, forceRefresh: Bool = false
   ) async -> [EpisodeAvailability]? {
+    await episodePlaybackLookup(for: episodes, context: context, forceRefresh: forceRefresh)?.availability
+  }
+
+  /// 同 `episodeAvailability`，另外带回能播的集在服务器上的文件时长（读集索引时一起拿到，不多发请求）。
+  /// 详情页在 TMDB 没给时长时用它补上。
+  func episodePlaybackLookup(
+    for episodes: [MoviePilotEpisode], context: EpisodePlaybackContext, forceRefresh: Bool = false
+  ) async -> EpisodePlaybackLookup? {
     guard !isTornDown, allowsPlayback, let apiService else { return nil }
     let servers: [MediaServerConf]
     do {
@@ -523,13 +531,17 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     } catch {
       if error is CancellationError || Task.isCancelled { return nil }
       let failure = EpisodeAvailability.failed("没能从 MoviePilot 读取媒体服务器配置：\(Self.message(for: error))")
-      return episodes.map { _ in failure }
+      return EpisodePlaybackLookup(
+        availability: episodes.map { _ in failure }, serverRuntimeSeconds: episodes.map { _ in nil })
     }
     guard servers.contains(where: \.supportsInAppPlayback) else { return nil }
     let lookups = await episodeLookups(
       context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, forceRefresh: forceRefresh)
     guard !Task.isCancelled else { return nil }
-    return episodes.map { EpisodeAvailability.resolve($0, lookups: lookups) }
+    return EpisodePlaybackLookup(
+      availability: episodes.map { EpisodeAvailability.resolve($0, lookups: lookups) },
+      serverRuntimeSeconds: episodes.map { EpisodeAvailability.serverRuntimeSeconds($0, lookups: lookups) }
+    )
   }
 
   /// 在每台可播放的服务器上读这部剧的集索引，单台失败只记在它自己的结果里。各台互不依赖，同时读；

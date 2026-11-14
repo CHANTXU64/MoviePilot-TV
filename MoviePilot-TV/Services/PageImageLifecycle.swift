@@ -85,13 +85,21 @@ final class PageImageLifecycle: ObservableObject {
   private var imageResources: [String: any PageImageResource] = [:]
   private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)? {
     didSet {
-      if backdropPreviewImage !== detailBackdropPreview?.image {
-        backdropPreviewImage = detailBackdropPreview?.image
+      if currentBackdropPreview?.key != detailBackdropPreview?.key
+        || currentBackdropPreview?.image !== detailBackdropPreview?.image
+      {
+        currentBackdropPreview = detailBackdropPreview.map { BackdropPreview(key: $0.key, image: $0.image) }
       }
     }
   }
-  /// 这一页背景的模糊缩略图：返回时先垫上，也直接用作第二页的模糊背景（不再另外下载、解码一张）。
-  @Published private(set) var backdropPreviewImage: UIImage?
+  /// 这一页背景的模糊缩略图和它所属图片 slot 的 key：返回时先垫上，也用作第二页的模糊背景。
+  /// 使用方要按当前背景的 key 核对，图片配置刷新或换了背景后旧缩略图不能再用。
+  @Published private(set) var currentBackdropPreview: BackdropPreview?
+
+  struct BackdropPreview {
+    let key: String
+    let image: UIImage
+  }
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
