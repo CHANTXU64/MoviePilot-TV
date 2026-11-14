@@ -35,6 +35,23 @@ enum MediaDetailBackgroundImage {
       |> BlurImageProcessor(blurRadius: blurRadius)
   }
 
+  /// 第二页预模糊背景按主背景的四分之一解码：模糊后的图不需要细节，内存约为主背景的 1/16。
+  /// 模糊半径按 scaleFactor 换成像素，同一个 `blurRadius` 在小图上的观感与整张图一致。
+  nonisolated static let contentPageDownsampleDivisor: CGFloat = 4
+
+  nonisolated static func contentPageScale(for size: CGSize, screenScale: CGFloat) -> CGFloat {
+    downsampleScale(for: size, screenScale: screenScale) / contentPageDownsampleDivisor
+  }
+
+  /// 第二页背景：Kingfisher 解码时模糊一次，显示时只是一张静态图，不在每帧实时模糊。
+  nonisolated static func contentPageProcessor(
+    for size: CGSize,
+    screenScale: CGFloat
+  ) -> any ImageProcessor {
+    MediaDetailHeroDownsamplingProcessor(size: size, scale: contentPageScale(for: size, screenScale: screenScale))
+      |> BlurImageProcessor(blurRadius: blurRadius)
+  }
+
   nonisolated static func heroDownsamplingProcessor(
     for size: CGSize,
     screenScale: CGFloat

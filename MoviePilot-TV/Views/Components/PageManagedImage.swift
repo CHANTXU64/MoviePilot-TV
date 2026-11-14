@@ -409,7 +409,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   }
 
   private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
-    guard role.isDetailBackdrop else { return }
+    guard role.providesBackdropPreview else { return }
     lifecycle?.prepareBackdropPreview(for: key, role: role) {
       let longEdge = max(image.size.width, image.size.height)
       guard longEdge > 0 else { return nil }

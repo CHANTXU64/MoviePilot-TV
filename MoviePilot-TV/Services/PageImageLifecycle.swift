@@ -18,8 +18,15 @@ enum PageImageRole: String {
   case activePage
   case detailBackdrop
   case detailBackdropFallback
+  /// 详情第二页的预模糊背景：跟主背景一起保留和释放，但不作为返回转场的小图。
+  case detailBackdropBlur
 
   var isDetailBackdrop: Bool {
+    self == .detailBackdrop || self == .detailBackdropFallback || self == .detailBackdropBlur
+  }
+
+  /// 能否作为返回详情页时先垫上的背景小图。
+  var providesBackdropPreview: Bool {
     self == .detailBackdrop || self == .detailBackdropFallback
   }
 }
@@ -249,7 +256,7 @@ final class PageImageLifecycle: ObservableObject {
     let isAllowed = switch resource.role {
     case .content: keepsContentImages
     case .activePage: keepsActivePageImages
-    case .detailBackdrop, .detailBackdropFallback: keepsDetailBackdrop
+    case .detailBackdrop, .detailBackdropFallback, .detailBackdropBlur: keepsDetailBackdrop
     }
     resource.setPageImageAllowed(isAllowed)
   }

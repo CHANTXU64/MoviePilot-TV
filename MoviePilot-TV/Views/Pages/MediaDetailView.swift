@@ -46,20 +46,28 @@ private struct MediaDetailBackgroundLayer: View {
   let usingPosterAsBackdrop: Bool
   let showingContentPage: Bool
   let hidesContentPageBackground: Bool
+  /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色，不准备模糊图。
+  let providesBlurredContentPage: Bool
   var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
   var body: some View {
-    let showsBlurredBackground = showingContentPage && !hidesContentPageBackground
-    image
-      .blur(
-        radius: showsBlurredBackground && !usingPosterAsBackdrop ? MediaDetailBackgroundImage.blurRadius : 0,
-        opaque: true
-      )
-      .opacity(hidesContentPageBackground ? 0 : 1)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
-      .accessibilityHidden(true)
+    // 海报当背景时主背景本身就是模糊图，不用再叠一张。
+    let usesBlurredLayer = providesBlurredContentPage && !usingPosterAsBackdrop && url != nil
+    let showsBlurredLayer = usesBlurredLayer && showingContentPage && !hidesContentPageBackground
+    ZStack {
+      image
+      if usesBlurredLayer, let url {
+        // 预模糊图在首屏就挂着、透明度为 0，切到第二页时直接淡入，不在每帧实时模糊。
+        blurredImage(url)
+          .opacity(showsBlurredLayer ? 1 : 0)
+      }
+    }
+    .opacity(hidesContentPageBackground ? 0 : 1)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
+    .ignoresSafeArea()
+    .accessibilityHidden(true)
   }
 
   @ViewBuilder
@@ -92,6 +100,23 @@ private struct MediaDetailBackgroundLayer: View {
       Color.gray.opacity(0.3)
         .ignoresSafeArea()
     }
+  }
+
+  private func blurredImage(_ url: URL) -> some View {
+    let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
+    return PageManagedImage(
+      url: url,
+      processor: MediaDetailBackgroundImage.contentPageProcessor(for: size, screenScale: screenScale),
+      isEnabled: true,
+      role: .detailBackdropBlur,
+      participatesInPageLifecycle: true,
+      skipsMemoryCache: true,
+      scaleFactor: MediaDetailBackgroundImage.contentPageScale(for: size, screenScale: screenScale),
+      fadeDuration: 0
+    )
+    .frame(width: size.width, height: size.height)
+    .ignoresSafeArea()
   }
 }
 
@@ -378,6 +403,7 @@ struct MediaDetailView: View {
           url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
           role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
@@ -391,6 +417,7 @@ struct MediaDetailView: View {
           usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
           }
