@@ -573,12 +573,6 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
     self.init(mediaType: media.type, externalIDs: ids, primarySource: primary)
   }
 
-  /// 缓存键：类型、主身份来源和全部外部编号都一样，找到的是同一个条目。
-  var cacheKey: String {
-    let ids = externalIDs.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
-    return "\(kind.map { "\($0)" } ?? "")|\(primarySource ?? "")|\(ids)"
-  }
-
   /// 条目是不是要播的那一个。类型不符的不是。条目带着主身份来源的编号时只看它：服务器常把次要来源刮错
   /// （比如 TVDB 匹配到了别的条目，TMDB 和 IMDb 却是对的），MoviePilot 判断入库也只比主身份。
   /// 没带主身份时，带着同来源编号却对不上的都不是；`strict`（启用了多台服务器）时还须至少有一个外部编号对得上：
@@ -627,9 +621,15 @@ nonisolated enum PlaybackEpisodeProgress {
   static func upNext(in items: [ServerMediaItem]) -> UpNext? {
     let ordered = orderedEpisodes(items)
     guard let last = ordered.lastIndex(where: { isWatched($0) || resumePosition($0) != nil }) else { return nil }
-    if !isWatched(ordered[last]) { return UpNext(episode: ordered[last], resumes: true) }
-    let next = ordered.index(after: last)
-    return ordered.indices.contains(next) ? UpNext(episode: ordered[next], resumes: false) : nil
+    let watched = ordered[last]
+    if !isWatched(watched) { return UpNext(episode: watched, resumes: true) }
+    // 看完的是一个含多集的文件（如 E01–E02）时，跳过它已经包含的集（同库里单独的 E02）。
+    let covered = watched.episodeNumberEnd ?? watched.episodeNumber
+    let next = ordered[(last + 1)...].first { item in
+      guard let covered, item.seasonNumber == watched.seasonNumber, let number = item.episodeNumber else { return true }
+      return number > covered
+    }
+    return next.map { UpNext(episode: $0, resumes: false) }
   }
 
   /// 看完了的最靠后一集（详情页按 MoviePilot 集列表找它紧接着的下一集，核对服务器上的 `upNext` 是不是它）。

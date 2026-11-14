@@ -97,27 +97,13 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     validate: () throws -> Void,
     load: @escaping @MainActor () async throws -> Value
   ) async throws -> Value {
-    try await lookup(
-      for: key, forceRefresh: forceRefresh, acceptsCachedValue: acceptsCachedValue, validate: validate, load: load
-    ).value
-  }
-
-  /// 同 `value(for:)`，另外告诉调用方值是不是缓存里存着的（`isCached`）：加入的在途加载和新发起的加载都算刚读的。
-  /// 调用方据此决定要不要核对缓存值是否已经过时。
-  func lookup(
-    for key: Key,
-    forceRefresh: Bool = false,
-    acceptsCachedValue: (Value) -> Bool = { _ in true },
-    validate: () throws -> Void,
-    load: @escaping @MainActor () async throws -> Value
-  ) async throws -> (value: Value, isCached: Bool) {
     activeCallers[key, default: 0] += 1
     defer { endCall(for: key) }
     var startsNewLoad = forceRefresh
     while true {
       try validate()
       if !startsNewLoad, let cached = cachedValue(for: key), acceptsCachedValue(cached) {
-        return (cached, true)
+        return cached
       }
 
       var flight: Flight
@@ -138,7 +124,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       case .success(let value):
         try validate()
         guard flight.generation == generation else { continue }
-        return (value, false)
+        return value
       case .failure(let error):
         // 共享加载不随单个等待者取消；已取消的等待者只收到取消，不收到共享加载的业务错误。
         try Task.checkCancellation()

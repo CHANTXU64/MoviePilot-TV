@@ -36,6 +36,8 @@ class HomeViewModel: ObservableObject {
   private var libraryLinksTask: Task<Void, Never>?
   /// 「最近添加」里海报读不出来的条目改用的 TMDB 海报，键见 `itemKey`。
   @Published private(set) var posterFallbacks: [String: URL] = [:]
+  /// 海报读不出来时还不知道 TMDB 编号（批量读还没回来）、只能按标题找的卡片：读到编号后按编号重新找一次。
+  private var postersAwaitingIdentity: [String: (item: MediaServerPlayItem, server: String)] = [:]
 
   private let apiService: APIService
   private var latestMediaSelectedServerKey: String? {
@@ -433,6 +435,7 @@ class HomeViewModel: ObservableObject {
         var next = self.libraryLinks.filter { !$0.key.hasPrefix("\(request.server)|") }
         for (id, link) in links { next[Self.itemKey(server: request.server, itemID: id)] = link }
         self.libraryLinks = next
+        self.retryPostersAwaitingIdentity(on: request.server)
       }
     }
   }
@@ -498,7 +501,10 @@ class HomeViewModel: ObservableObject {
       switch link {
       case .detail(let tmdbID, let mediaType):
         let typed = MediaInfo(title: item.title, type: mediaType, year: item.subtitle)
-        return .detail(MediaActionHandler.tmdbJumpTarget(for: typed, tmdbId: tmdbID))
+        var target = MediaActionHandler.tmdbJumpTarget(for: typed, tmdbId: tmdbID)
+        // 带上这份文件：MoviePilot 还没同步到它时，详情页仍能播放。
+        target.libraryItemHint = MediaServerItemRef(itemID: itemID, server: server)
+        return .detail(target)
       case .libraryOnly:
         return .play(.serverItem(serverName: server, itemID: itemID))
       case nil:
@@ -517,20 +523,40 @@ class HomeViewModel: ObservableObject {
   /// （见 `libraryLinks`），不知道时按标题、年份识别；确认没有 TMDB 编号的不找。识别结果和海报路径都在会话里记住
   /// （`APIService.cachedRecognizedTmdbId`、`cachedTmdbPosterPath`），请求失败的下次再找。
   /// `server` 是卡片所在的服务器（建卡片时取），不用回调到达时选中的：条目 ID 只在它自己的服务器上有意义。
-  func loadPosterFallback(for item: MediaServerPlayItem, server: String) {
+  /// `replacing`：已有的回退海报是按标题找的，按读到的编号重新找、替换。
+  func loadPosterFallback(for item: MediaServerPlayItem, server: String, replacing: Bool = false) {
     let key = Self.itemKey(server: server, itemID: item.id)
-    guard posterFallbacks[key] == nil else { return }
-    let snapshot = apiService.sessionSnapshot()
-    let link = Self.inAppPlaybackItemID(
+    let inAppItemID = Self.inAppPlaybackItemID(
       item, server: server, playableServers: inAppPlayableServers,
       canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
-      backendVersion: apiService.settings?.BACKEND_VERSION
-    ).flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+    let link = inAppItemID.flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
+    // 还不知道编号时先按标题找（找到的也可能不准），编号读到后再按编号找一次、替换掉。
+    if link == nil, inAppItemID != nil { postersAwaitingIdentity[key] = (item, server) }
+    // 已经有了就不再找（卡片滚回来会再报一次）；按编号替换按标题找到的走 `replacing`。
+    if posterFallbacks[key] != nil, !replacing { return }
+    let snapshot = apiService.sessionSnapshot()
     Task { [weak self] in
       guard let self, let url = await self.tmdbPosterURL(for: item, link: link),
         self.apiService.isSessionUnchanged(from: snapshot)
       else { return }
+      // 按标题找的晚回来时编号已经读到：以按编号找的为准，不覆盖。
+      if link == nil, let inAppItemID, self.libraryLinks[Self.itemKey(server: server, itemID: inAppItemID)] != nil {
+        return
+      }
       self.posterFallbacks[key] = url
+    }
+  }
+
+  /// 读到 `server` 上条目的编号后，对还在等编号的缺图卡片按编号重新找海报。
+  private func retryPostersAwaitingIdentity(on server: String) {
+    let waiting = postersAwaitingIdentity.filter { $0.value.server == server }
+    for (key, entry) in waiting {
+      guard let itemID = trimmedNonEmpty([entry.item.item_id?.value]),
+        libraryLinks[Self.itemKey(server: server, itemID: itemID)] != nil
+      else { continue }
+      postersAwaitingIdentity[key] = nil
+      loadPosterFallback(for: entry.item, server: server, replacing: true)
     }
   }
 

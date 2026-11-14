@@ -377,6 +377,7 @@ struct MediaDetailView: View {
 
   init(
     detail: MediaInfo,
+    libraryItemHint: MediaServerItemRef? = nil,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
@@ -385,6 +386,7 @@ struct MediaDetailView: View {
     allowsRequests: Bool = true
   ) {
     let vm = MediaDetailViewModel(detail: detail)
+    vm.libraryItemHint = libraryItemHint
     vm.preloadTask = preloadTask
     _viewModel = StateObject(wrappedValue: vm)
     self.preloadTask = preloadTask

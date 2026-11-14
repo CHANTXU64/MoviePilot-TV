@@ -179,6 +179,15 @@ nonisolated struct QueuedEpisode: Equatable, Sendable {
   let episode: MoviePilotEpisode
   /// `episode` 所在季的 MoviePilot 集列表
   let seasonEpisodes: [MoviePilotEpisode]
+  /// 先试的文件：「继续播放」接着看到一半的那一份（同一集在几个媒体库各有一份时，续播点只在那一份上）。
+  /// 它不在这一集确定的文件里时照常按顺序试别的。
+  var preferredFile: ServerFileRef? = nil
+}
+
+/// 某台服务器上的一个文件（条目）。
+nonisolated struct ServerFileRef: Equatable, Sendable {
+  let server: String
+  let itemID: String
 }
 
 // MARK: - 每集的情况（对应规则见 EpisodeMatching.swift）

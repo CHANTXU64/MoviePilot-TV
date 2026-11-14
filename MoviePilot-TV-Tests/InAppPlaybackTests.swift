@@ -450,6 +450,13 @@ final class InAppPlaybackModelTests: XCTestCase {
         episode("e3", season: 1, episode: 3),
       ])?.0, "e3")
     XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1, played: true)]), "全看完了")
+    // 看完含两集的文件（E01–E02），同库里还有单独的 E02：接着看 E03，不重播 E02。
+    XCTAssertEqual(
+      try upNext([
+        #"{"Id":"e1-2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":2,"RunTimeTicks":72000000000,"UserData":{"Played":true}}"#,
+        episode("e2", season: 1, episode: 2),
+        episode("e3", season: 1, episode: 3),
+      ])?.0, "e3")
     // 同一部剧在两个媒体库各有一份：同一集在哪份上看完都算，接着看下一集，不会落到另一份的同一集上。
     XCTAssertEqual(
       try upNext([
@@ -1218,7 +1225,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endCurrentSession()
   }
 
-  func testFoundLibraryItemIsReusedButWatchStateIsReadFresh() async throws {
+  func testLibraryItemWatchStateIsReadFresh() async throws {
     let host = "lan.playback-tests.local"
     func movie(positionSeconds: Int64) -> String {
       #"{"Id":"731","Name":"测试电影","Type":"Movie","ProviderIds":{"Tmdb":"222"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":\#(positionSeconds * 10_000_000)}}"#
@@ -1230,29 +1237,48 @@ final class PlaybackCoordinatorTests: XCTestCase {
       $0.items = ["\(host)|731": movie(positionSeconds: 1800)]
       $0.playbackInfo = Self.playbackInfo()
     }
-    func searches() -> Int {
-      PlaybackURLProtocol.stub.requests().filter { ($0.url.query ?? "").contains("AnyProviderIdEquals") }.count
-    }
     let coordinator = makeCoordinator(makeService())
     let target = PlaybackTarget.libraryItem(itemID: "42", expected: expectation(tmdb: "222"))
     let first = await coordinator.movieProgress(for: target)
     XCTAssertEqual(first, 0.25)
-    XCTAssertEqual(searches(), 1)
 
-    // 别处又看了一段：缓存里的条目带的是旧续播点，用到时要重新读。
-    PlaybackURLProtocol.stub.configure { $0.items["\(host)|731"] = movie(positionSeconds: 3600) }
+    // 别处又看了一段：每次都按编号重新找，读到的是此刻的续播点。
+    PlaybackURLProtocol.stub.configure { $0.providerSearch["\(host)|tmdb.222"] = movie(positionSeconds: 3600) }
     let second = await coordinator.movieProgress(for: target)
-    XCTAssertEqual(second, 0.5, "续播点以此刻服务器上的为准")
-    XCTAssertEqual(searches(), 1, "找到过的条目不再按外部编号搜")
-
+    XCTAssertEqual(second, 0.5)
     await run(coordinator, target)
     let session = try XCTUnwrap(coordinator.session)
-    XCTAssertEqual(session.startSeconds, 3600, "起播也按此刻的续播点")
-    XCTAssertEqual(searches(), 1)
+    XCTAssertEqual(session.startSeconds, 3600)
     coordinator.endCurrentSession()
   }
 
-  func testCachedMovieReidentifiedOnServerIsFoundAgain() async throws {
+  func testLocatedTargetIsVerifiedAgainWhenPlaying() async throws {
+    // 两台服务器，详情页定位到 a 上的 731；之后 731 在服务器上被改认成别的片，真正的 222 是 800。
+    let a = Self.embyServer(name: "a", host: "lan.playback-tests.local")
+    let b = Self.embyServer(name: "b", host: "wan.playback-tests.local")
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(a),\(b)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["lan.playback-tests.local|tmdb.222": Self.movie(id: "731", tmdb: "222")]
+      $0.items = ["lan.playback-tests.local|731": Self.movie(id: "731", tmdb: "222")]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    let located = await coordinator.locateLibraryItem("42", expected: expectation(tmdb: "222"), in: try servers(a, b))
+    let target = try XCTUnwrap(located)
+    PlaybackURLProtocol.stub.configure {
+      $0.items = [
+        "lan.playback-tests.local|731": Self.movie(id: "731", tmdb: "999"),
+        "lan.playback-tests.local|800": Self.movie(id: "800", tmdb: "222"),
+      ]
+      $0.providerSearch = ["lan.playback-tests.local|tmdb.222": Self.movie(id: "800", tmdb: "222")]
+    }
+    await run(coordinator, target)
+    XCTAssertEqual(streamURL(coordinator)?.path, "/Videos/800/stream.mp4", "起播时按编号重新核对，不播改认后的 731")
+    coordinator.endCurrentSession()
+  }
+
+  func testReidentifiedMovieIsFoundAgain() async throws {
     let host = "lan.playback-tests.local"
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
@@ -1300,7 +1326,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(progress?.upNext?.episode.episodeNumber, 2, "在 4K 那份上看完了第 1 集，接着看第 2 集")
   }
 
-  func testCachedItemFailingWithServerErrorIsFoundAgain() async throws {
+  func testReaddedMovieWithNewIDIsFoundAgain() async throws {
     let host = "lan.playback-tests.local"
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
@@ -1324,6 +1350,18 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endCurrentSession()
   }
 
+  func testPreferredFileIsTriedFirstOnItsServer() {
+    let files = [ServerMediaItem(id: "hd5", kind: .episode), ServerMediaItem(id: "uhd5", kind: .episode)]
+    let preferred = ServerFileRef(server: "a", itemID: "uhd5")
+    XCTAssertEqual(
+      PlaybackCoordinator.preferringFile(preferred, in: files, on: "a").map(\.id), ["uhd5", "hd5"],
+      "有续播点的那一份先试")
+    XCTAssertEqual(PlaybackCoordinator.preferringFile(preferred, in: files, on: "b").map(\.id), ["hd5", "uhd5"])
+    XCTAssertEqual(
+      PlaybackCoordinator.preferringFile(ServerFileRef(server: "a", itemID: "gone"), in: files, on: "a").map(\.id),
+      ["hd5", "uhd5"], "不在确定的文件里时照常按顺序")
+  }
+
   func testWatchStateChangeOnlyConcernsThePlayedMedia() {
     let episode = ServerMediaItem(id: "e1", kind: .episode, seriesID: "s1")
     let fromLibrary = WatchStateChange(episode, episode: nil)
@@ -1336,7 +1374,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertFalse(known.concerns(tmdbID: 333, itemID: "s9"), "别的片的详情页不重读")
   }
 
-  func testCachedSeriesThatWasReaddedIsFoundAgain() async {
+  func testReaddedSeriesWithNewIDIsFoundAgain() async {
     let host = "lan.playback-tests.local"
     func series(_ id: String) -> String { #"{"Id":"\#(id)","Name":"某剧","Type":"Series","ProviderIds":{"Tmdb":"222"}}"# }
     let watched = #"{"Items":[{"Id":"e1","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"UserData":{"Played":true}},{"Id":"e2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2}]}"#
@@ -1543,9 +1581,10 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
 
     let second = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
-    XCTAssertEqual(second, .serverItem(serverName: "b", itemID: "7"), "a 上同号的电影外部编号对不上，不能选它")
+    XCTAssertEqual(
+      second, .libraryItem(itemID: "7", expected: expectation(tmdb: "222"), owner: "b"), "a 上同号的电影外部编号对不上，不能选它")
     let first = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "111"), in: servers)
-    XCTAssertEqual(first, .serverItem(serverName: "a", itemID: "7"))
+    XCTAssertEqual(first, .libraryItem(itemID: "7", expected: expectation(tmdb: "111"), owner: "a"))
     let neither = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "333"), in: servers)
     XCTAssertNil(neither, "两台都对不上就不显示播放")
   }
@@ -1564,7 +1603,8 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
     let target = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
-    XCTAssertEqual(target, .serverItem(serverName: "b", itemID: "7"), "多台服务器时只有类型相符不算找到")
+    XCTAssertEqual(
+      target, .libraryItem(itemID: "7", expected: expectation(tmdb: "222"), owner: "b"), "多台服务器时只有类型相符不算找到")
 
     PlaybackURLProtocol.stub.configure { $0.items = ["lan.playback-tests.local|7": Self.movie(id: "7")] }
     let unconfirmed = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
@@ -1580,7 +1620,8 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
     let target = await coordinator.locateLibraryItem("42", expected: expectation(tmdb: "222"), in: servers)
-    XCTAssertEqual(target, .serverItem(serverName: "a", itemID: "731"), "用 Emby 自己的条目 ID")
+    XCTAssertEqual(
+      target, .libraryItem(itemID: "731", expected: expectation(tmdb: "222"), owner: "a"), "用 Emby 自己的条目 ID，带着身份条件")
     let search = try XCTUnwrap(PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/Items") })
     let query = URLComponents(url: search.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
     XCTAssertTrue(query.contains(URLQueryItem(name: "AnyProviderIdEquals", value: "tmdb.222")))
@@ -1610,7 +1651,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
     let media = MediaInfo(tmdb_id: 0, imdb_id: "tt123456", type: "电影")
     let target = await coordinator.locateLibraryItem("42", expected: LibraryItemExpectation(media: media), in: servers)
-    XCTAssertEqual(target, .serverItem(serverName: "a", itemID: "731"))
+    XCTAssertEqual(target, .libraryItem(itemID: "731", expected: LibraryItemExpectation(media: media), owner: "a"))
     let search = try XCTUnwrap(PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/Items") })
     let query = URLComponents(url: search.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
     XCTAssertTrue(query.contains(URLQueryItem(name: "AnyProviderIdEquals", value: "imdb.tt123456")))
@@ -1641,9 +1682,10 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
 
     let movie = await coordinator.locateLibraryItem("7", expected: expectation(), in: servers)
-    XCTAssertEqual(movie, .serverItem(serverName: "b", itemID: "7"), "全是 Emby 也要逐台核对，不能播 a 上同号的剧集")
+    XCTAssertEqual(
+      movie, .libraryItem(itemID: "7", expected: expectation(), owner: "b"), "全是 Emby 也要逐台核对，不能播 a 上同号的剧集")
     let series = await coordinator.locateLibraryItem("7", expected: expectation("电视剧"), in: servers)
-    XCTAssertEqual(series, .serverItem(serverName: "a", itemID: "7"))
+    XCTAssertEqual(series, .libraryItem(itemID: "7", expected: expectation("电视剧"), owner: "a"))
   }
 
   func testDetailPageLocatesLibraryItemOnEmbyWhenOtherServersAreEnabled() async throws {
@@ -1661,7 +1703,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
 
     let found = await coordinator.locateLibraryItem("m1", expected: expectation(), in: servers)
-    XCTAssertEqual(found, .serverItem(serverName: "b", itemID: "m1"))
+    XCTAssertEqual(found, .libraryItem(itemID: "m1", expected: expectation(), owner: "b"))
     // 只在 Plex 上的条目：所有 Emby 都确认没有，不显示播放。
     let missing = await coordinator.locateLibraryItem("plex-only", expected: expectation(), in: servers)
     XCTAssertNil(missing)
