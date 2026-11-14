@@ -82,17 +82,19 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   let trialBlock: EpisodeTrialBlock?
   /// 能不能取消试看（管理员）。
   let canCancelTrial: Bool
+  let allowsSeasonDateOffset: Bool
 
   init(
     availability: EpisodeAvailability?, isCheckingAvailability: Bool = false,
     trial: EpisodeTrialSnapshot = EpisodeTrialSnapshot(), trialBlock: EpisodeTrialBlock? = .unsupported,
-    canCancelTrial: Bool = false
+    canCancelTrial: Bool = false, allowsSeasonDateOffset: Bool = false
   ) {
     self.availability = availability
     self.isCheckingAvailability = isCheckingAvailability
     self.trial = trial
     self.trialBlock = trialBlock
     self.canCancelTrial = canCancelTrial
+    self.allowsSeasonDateOffset = allowsSeasonDateOffset
   }
 
   // MARK: 播放
@@ -117,6 +119,12 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
 
   /// 卡片上显示播放角标、面板里有「播放」：确定能播，或按季号集号找到了文件。
   var offersPlayback: Bool { isPlayable || uncertainMatch != nil }
+
+  /// 在单集面板按「播放」「仍要播放」时给起播的许可：按此刻面板显示的说明。
+  var panelPlaybackAcceptance: EpisodeMatchAcceptance {
+    guard let uncertain = uncertainMatch else { return .confirmedOnly }
+    return uncertain.match.identityConflict ? .identityConflicts : .numberMatches
+  }
 
   /// 遥控器播放键在不能播的集上提示的原因；能播（含按季号集号找到了文件）时为 nil。
   var notPlayableMessage: String? {
@@ -147,10 +155,12 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     trialBlock == nil && availability?.allowsTrial == true && !trial.isInProgress && !isSeasonOccupied
   }
 
-  /// 有认不出是哪一集的文件、这一集可能已经在里面时，那台服务器的名字。
-  private var unidentifiedFilesServer: String? {
-    guard case .unmatched(let server) = availability else { return nil }
-    return server
+  /// 有认不出或没核对成的文件、这一集可能已经在里面时，面板里先说的结论和原因。
+  private var possiblyPresentNote: StatusText? {
+    switch availability {
+    case .unmatched, .unverified: availability?.statusText
+    default: nil
+    }
   }
 
   /// 可以取消的试看订阅；没在试看、已在取消或不能取消时为 nil。
@@ -188,7 +198,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     if trial.isInProgress, let indicator = Self.trialIndicator(trial) { return .trialInProgress(indicator) }
     if let stoppedEnding { return .trialStopped(stoppedEnding) }
     switch availability {
-    case .unmatched, .unidentifiable: return .attention
+    case .unmatched, .unverified, .unidentifiable: return .attention
     default: return nil
     }
   }
@@ -266,7 +276,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       actions.append(.play)
     } else if trial.isInProgress, let id = cancellableSubscriptionID {
       actions.append(.cancelTrial(subscriptionID: id))
-    } else if canStartTrial, unidentifiedFilesServer == nil {
+    } else if canStartTrial, possiblyPresentNote == nil {
       actions.append(.startTrial)
     }
     actions.append(.details)
@@ -285,70 +295,106 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   }
 
   struct Panel: Equatable, Sendable {
-    /// 状态说明；nil 时面板只有简介（没有应用内播放）。
-    let message: String?
+    /// 结论前的状态图标。
+    enum Tone: Equatable, Sendable {
+      case ready
+      /// 可能不是这一集、这一集可能已经入库、检查失败：按下去之前要先看说明。
+      case caution
+      case working
+      case info
+    }
+
+    let tone: Tone
+    /// 一句结论；nil 时面板只有简介（没有应用内播放）。
+    let headline: String?
+    /// 原因或下一步。
+    let detail: String?
     let buttons: [PanelButton]
+    /// 说明里提醒了风险（可能不是这一集、这一集可能已经入库）：按钮写「仍要播放」「仍要试看」。
+    let proceedsDespiteWarning: Bool
+
+    init(
+      _ tone: Tone, _ headline: String?, _ detail: String? = nil, buttons: [PanelButton],
+      proceedsDespiteWarning: Bool = false
+    ) {
+      self.tone = tone
+      self.headline = headline
+      self.detail = detail
+      self.buttons = buttons
+      self.proceedsDespiteWarning = proceedsDespiteWarning
+    }
+
+    init(_ tone: Tone, _ text: StatusText, buttons: [PanelButton], proceedsDespiteWarning: Bool = false) {
+      self.init(tone, text.headline, text.detail, buttons: buttons, proceedsDespiteWarning: proceedsDespiteWarning)
+    }
+
+    /// 拼成一句的说明（读屏、测试用）。
+    var message: String? { headline.map { StatusText(headline: $0, detail: detail).joined } }
   }
 
   var panel: Panel {
     if let server = playableServer {
-      return Panel(message: "在“\(server)”上可以播放", buttons: [.play])
+      return Panel(.ready, "可以播放", "在“\(server)”上", buttons: [.play])
     }
     if let uncertain = uncertainMatch {
-      var message = uncertain.match.message(server: uncertain.server)
-      if trial.progress?.isReady == true {
-        message = "试看的这一集已经整理入库。" + message
-      } else if trialBlock == nil {
-        message += "。按季号集号算这一集已经在媒体服务器上，所以不提供试看"
-      }
-      return Panel(message: message, buttons: [.play])
+      let text = uncertain.match.statusText(server: uncertain.server, allowsSeasonDateOffset: allowsSeasonDateOffset)
+      let detail = trial.progress?.isReady == true ? "试看的这一集已经入库。" + (text.detail ?? "") : text.detail
+      // 服务器上没有资料的，刷新元数据后要能在这里重新检查。
+      let buttons: [PanelButton] = uncertain.match.serverHasNoMetadata ? [.play, .recheck] : [.play]
+      return Panel(.caution, text.headline, detail, buttons: buttons, proceedsDespiteWarning: true)
     }
     if trial.isStarting {
       // 按「试看」后面板就关了，进度看卡片；发起期间再打开时留着「试看」按钮（显示加载中），
       // 结果到了同一个位置换成「取消试看」，焦点不跳。
-      return Panel(message: "正在发起试看", buttons: [.startTrial(isRetry: false)])
+      return Panel(.working, "正在发起试看", buttons: [.startTrial(isRetry: false)])
     }
     if trial.isInProgress {
       let buttons: [PanelButton] = cancellableSubscriptionID.map { [.cancelTrial(subscriptionID: $0)] } ?? []
-      return Panel(message: Self.inProgressMessage(trial), buttons: buttons)
+      return Panel(.working, "试看中", Self.inProgressMessage(trial), buttons: buttons)
     }
-    // 有认不出是哪一集的文件：先说这一集可能已经在里面，再给能做的操作，保留「重新检查」。
-    let unidentified = unidentifiedFilesServer
-    func explained(_ message: String?, _ buttons: [PanelButton]) -> Panel {
-      guard let unidentified else { return Panel(message: message, buttons: buttons) }
-      let note = EpisodeAvailability.unidentifiedFilesNote(server: unidentified)
-      return Panel(message: message.map { "\(note)。\($0)" } ?? note, buttons: buttons + [.recheck])
+    // 有认不出或没核对成的文件：结论是这一集可能已经入库，原因后面接上这一步的说明，保留「重新检查」。
+    let unidentified = possiblyPresentNote
+    func explained(_ tone: Panel.Tone, _ headline: String, _ detail: String?, _ buttons: [PanelButton]) -> Panel {
+      guard let note = unidentified else { return Panel(tone, headline, detail, buttons: buttons) }
+      let combined = [note.detail, detail].compactMap { $0 }.joined(separator: "。")
+      return Panel(
+        .caution, note.headline, combined.isEmpty ? nil : combined, buttons: buttons + [.recheck],
+        proceedsDespiteWarning: true)
     }
     let retry: [PanelButton] = canStartTrial ? [.startTrial(isRetry: true)] : []
     if case .concluded(let ending) = trial.progress {
-      return explained(ending.message, retry)
+      return explained(.info, "试看结束", ending.message, retry)
     }
     if isCheckingAvailability {
-      return Panel(message: "正在检查这一集能不能播放", buttons: [])
+      return Panel(.working, "正在检查", buttons: [])
     }
     guard let availability else {
       // 没有应用内播放：只看简介。
-      return Panel(message: nil, buttons: [])
+      return Panel(.info, nil, buttons: [])
     }
     switch availability {
     case .playable, .uncertain:
-      return Panel(message: nil, buttons: [.play])
+      return Panel(.ready, nil, buttons: [.play])
     case .failed, .unidentifiable:
       // 读取失败、这一集缺编号：都不能确认服务器上没有，不提供试看。
-      return Panel(message: availability.message, buttons: [.recheck])
-    case .notOnServer, .unmatched:
+      return Panel(.caution, availability.statusText ?? StatusText(headline: "检查失败"), buttons: [.recheck])
+    case .checking:
+      // 正在核对：核对完自动更新，不用重试。
+      return Panel(.working, availability.statusText ?? StatusText(headline: "正在核对"), buttons: [])
+    case .notOnServer, .unmatched, .unverified:
       break
     }
     if let other = trial.otherEpisodeInSeason {
-      return explained("这一季的第 \(other) 集正在试看，结束后才能试看这一集", [])
+      return explained(.info, "暂时不能试看", "这一季的第 \(other) 集正在试看，结束后才能试看这一集", [])
     }
     switch trial.progress {
     case .seasonTrialInProgress, .waitingForSubscription, .subscriptionPaused:
-      return explained(Self.startFeedback(trial.progress), [])
+      let text = Self.seasonOccupiedText(trial.progress)
+      return explained(.info, text.headline, text.detail, [])
     case .unavailable(let message):
-      return explained(message, retry)
+      return explained(.caution, "没能发起试看", message, retry)
     case .submissionUnconfirmed:
-      return explained(Self.unconfirmedSubmissionMessage, retry)
+      return explained(.caution, "没能确认试看已发起", Self.unconfirmedSubmissionMessage, retry)
     default:
       break
     }
@@ -356,13 +402,24 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
     case .notAired(let date):
       let aired = "这一集 \(date) 播出，播出后才能试看"
       return unidentified == nil
-        ? Panel(message: "媒体服务器上没有这一集。\(aired)", buttons: []) : explained(aired, [])
+        ? Panel(.info, EpisodeAvailability.notOnServerMessage, aired, buttons: []) : explained(.info, "", aired, [])
     case .unsupported:
-      return Panel(message: availability.message, buttons: unidentified == nil ? [] : [.recheck])
+      if let unidentified { return Panel(.caution, unidentified, buttons: [.recheck]) }
+      return Panel(.info, availability.statusText ?? StatusText(headline: EpisodeAvailability.notOnServerMessage), buttons: [])
     case nil:
-      return unidentified == nil
-        ? Panel(message: Self.trialIntroduction, buttons: [.startTrial(isRetry: false)])
-        : explained(Self.trialDescription, [.startTrial(isRetry: false)])
+      // 可能已经入库时只说原因，按钮「仍要试看」已经够清楚。
+      return explained(
+        .info, EpisodeAvailability.notOnServerMessage, unidentified == nil ? Self.trialDescription : nil,
+        [.startTrial(isRetry: false)])
+    }
+  }
+
+  /// 这一季已有订阅或另一集在试看时面板里的说明。
+  private static func seasonOccupiedText(_ result: EpisodeTrialProgress?) -> StatusText {
+    switch result {
+    case .waitingForSubscription: StatusText(headline: "这一季已经有订阅", detail: "等订阅下载这一集")
+    case .subscriptionPaused: StatusText(headline: "这一季已经有订阅", detail: "订阅已暂停，不会下载这一集")
+    default: StatusText(headline: "暂时不能试看", detail: "这一季的另一集正在试看，结束后才能试看这一集")
     }
   }
 
@@ -405,8 +462,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   /// 创建试看订阅没确认（见 `EpisodeTrialSnapshot.isSubmissionUnconfirmed`）时面板里和按下「试看」后的说明。
   static let unconfirmedSubmissionMessage = "没能确认 MoviePilot 收到了试看请求，可以重新试看，不会重复创建订阅"
 
-  static let trialDescription = "试看会下载这一集，下好的文件会留在媒体库里"
-  static let trialIntroduction = "媒体服务器上没有这一集。" + trialDescription
+  static let trialDescription = "试看下载的文件会留在媒体库里"
 
   // MARK: 播出日期
 

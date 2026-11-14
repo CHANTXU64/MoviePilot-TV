@@ -174,6 +174,8 @@ private struct EpisodeBrowser: View {
     var episodePageOffsets: [Int: Int] = [:]
     var availability: [Int: SeasonAvailability] = [:]
     var availabilityRetries: [Int: Int] = [:]
+    /// 后台补查查到新结果的次数：变了就重读播放状态，不强制重读服务器。
+    var availabilityUpdates = 0
   }
 
   /// 一季每集能不能播。`source` 变了（入库条目、应用内播放开关）就作废重查。
@@ -214,6 +216,7 @@ private struct EpisodeBrowser: View {
     let episodeCount: Int
     let episodeRetry: Int
     let retry: Int
+    let update: Int
     let source: EpisodePlaybackSource
     let session: APIServiceSessionSnapshot
   }
@@ -379,6 +382,10 @@ private struct EpisodeBrowser: View {
     }
     .sheet(item: $panelEpisode, onDismiss: runAfterPanelDismiss) { episode in
       panel(for: episode)
+    }
+    .onReceive(apiService.sessionScope.playbackCoordinator.evidenceUpdates) { updated in
+      guard updated == tmdbID else { return }
+      group.availabilityUpdates += 1
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       afterPanelDismiss = nil
@@ -682,12 +689,13 @@ private struct EpisodeBrowser: View {
     }
     return EpisodeEntry(
       availability: state?.results?[episode.id], isCheckingAvailability: state?.results == nil,
-      trial: snapshot, trialBlock: block, canCancelTrial: trial.canCancelTrial)
+      trial: snapshot, trialBlock: block, canCancelTrial: trial.canCancelTrial,
+      allowsSeasonDateOffset: groupID == nil && catalog.hasOnlyDefaultOrder)
   }
 
   private func select(_ episode: MoviePilotEpisode) {
     if entry(for: episode)?.primaryAction == .play {
-      play(episode)
+      play(episode, accepting: .confirmedOnly)
     } else {
       panelEpisode = episode
     }
@@ -696,7 +704,7 @@ private struct EpisodeBrowser: View {
   /// 遥控器播放键（见 `EpisodeEntry.playPauseAction`）。没有应用内播放时不响应。
   private func playPause(_ episode: MoviePilotEpisode) {
     switch entry(for: episode)?.playPauseAction {
-    case .play: play(episode)
+    case .play: play(episode, accepting: .confirmedOnly)
     case .openPanel: panelEpisode = episode
     case .explain(let message): notificationManager.show(message: message, type: .info)
     case nil: break
@@ -705,7 +713,7 @@ private struct EpisodeBrowser: View {
 
   private func perform(_ action: EpisodeEntry.MenuAction, on episode: MoviePilotEpisode) {
     switch action {
-    case .play: play(episode)
+    case .play: play(episode, accepting: .confirmedOnly)
     case .startTrial: startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .details: panelEpisode = episode
@@ -715,7 +723,9 @@ private struct EpisodeBrowser: View {
   private func performPanelAction(_ button: EpisodeEntry.PanelButton, on episode: MoviePilotEpisode) {
     switch button {
     case .play:
-      afterPanelDismiss = { play(episode) }
+      // 按此刻面板上的说明给许可，关掉面板后原样交给起播。
+      let acceptance = entry(for: episode)?.panelPlaybackAcceptance ?? .confirmedOnly
+      afterPanelDismiss = { play(episode, accepting: acceptance) }
       panelEpisode = nil
     case .startTrial:
       // 进度显示在卡片正中，不用开着面板等：关掉面板，焦点回到这张卡。
@@ -733,12 +743,12 @@ private struct EpisodeBrowser: View {
   }
 
   /// 按集起播：带上这一集所在那一季的集列表，播放器里能接着播上一集、下一集。
-  private func play(_ episode: MoviePilotEpisode) {
+  private func play(_ episode: MoviePilotEpisode, accepting acceptance: EpisodeMatchAcceptance) {
     guard let playback, let context = playbackContext(playback),
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }
     apiService.sessionScope.playbackCoordinator.play(
-      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list)))
+      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), accepting: acceptance))
   }
 
   /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）
@@ -839,7 +849,8 @@ private struct EpisodeBrowser: View {
     return AvailabilityRequest(
       groupID: groupID, season: seasonNumber, episodeCount: episodes.count,
       episodeRetry: group.episodeRetries[seasonNumber, default: 0],
-      retry: group.availabilityRetries[seasonNumber, default: 0], source: playback, session: session)
+      retry: group.availabilityRetries[seasonNumber, default: 0], update: group.availabilityUpdates, source: playback,
+      session: session)
   }
 
   /// 查这一季每集能不能播：一季一次，在各台能播放的服务器上读这部剧的集（协调器缓存一分钟）。

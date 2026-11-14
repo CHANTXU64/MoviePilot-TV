@@ -508,6 +508,87 @@ nonisolated struct EmbyMediaFolder: Decodable, Sendable {
   }
 }
 
+/// `Library/VirtualFolders` 里的一个媒体库：文件夹和单集的元数据来源（要管理员权限的密钥）。
+/// 单集对应据此判断服务器上的单集资料是不是从 TMDB 来的（见 `MediaLibraryProfile`）。
+nonisolated struct EmbyVirtualFolder: Decodable, Sendable {
+  let profile: MediaLibraryProfile
+
+  private enum CodingKeys: String, CodingKey {
+    case locations = "Locations"
+    case libraryOptions = "LibraryOptions"
+  }
+
+  private struct Options: Decodable, Sendable {
+    let paths: [String]
+    let episodeFetchers: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+      case pathInfos = "PathInfos"
+      case typeOptions = "TypeOptions"
+    }
+
+    private struct PathInfo: Decodable, Sendable {
+      let path: String?
+      private enum CodingKeys: String, CodingKey { case path = "Path" }
+    }
+
+    private struct TypeOption: Decodable, Sendable {
+      let type: String?
+      let fetchers: [String]?
+      private enum CodingKeys: String, CodingKey {
+        case type = "Type"
+        case fetchers = "MetadataFetchers"
+      }
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let infos = (try? container.decodeIfPresent([LossyDecodable<PathInfo>].self, forKey: .pathInfos)) ?? nil
+      paths = (infos ?? []).compactMap { $0.value?.path.flatMap { trimmedNonEmpty([$0]) } }
+      let types = (try? container.decodeIfPresent([LossyDecodable<TypeOption>].self, forKey: .typeOptions)) ?? nil
+      // 单集这一项读不出时按没有处理：服务器用默认来源，含 TMDB。
+      episodeFetchers = (types ?? []).compactMap(\.value).first { $0.type == "Episode" }?.fetchers
+    }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let locations = (try? container.decodeIfPresent([LossyDecodable<String>].self, forKey: .locations)) ?? nil
+    let options = (try? container.decodeIfPresent(Options.self, forKey: .libraryOptions)) ?? nil
+    var paths: [String] = []
+    for path in (locations ?? []).compactMap({ $0.value.flatMap { trimmedNonEmpty([$0]) } }) + (options?.paths ?? [])
+    where !paths.contains(path) {
+      paths.append(path)
+    }
+    profile = MediaLibraryProfile(paths: paths, episodeFetchers: options?.episodeFetchers)
+  }
+}
+
+/// `Library/VirtualFolders` 的回包（顶层是数组）。个别媒体库读不出时丢掉它：它的文件找不到所属的库，按来源不明处理。
+nonisolated struct EmbyVirtualFolderList: Decodable, Sendable {
+  let profiles: [MediaLibraryProfile]
+
+  private enum CodingKeys: String, CodingKey { case items = "Items" }
+
+  /// `Library/VirtualFolders/Query` 回 `{"Items": [...]}`，`Library/VirtualFolders` 回顶层数组，两种都认。
+  init(from decoder: Decoder) throws {
+    if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
+      try self.init(items: keyed.superDecoder(forKey: .items))
+    } else {
+      try self.init(items: decoder)
+    }
+  }
+
+  private init(items decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    var profiles: [MediaLibraryProfile] = []
+    while !container.isAtEnd {
+      if let folder = try container.decode(LossyDecodable<EmbyVirtualFolder>.self).value { profiles.append(folder.profile) }
+    }
+    self.profiles = profiles
+  }
+}
+
 /// `Library/SelectableMediaFolders` 的回包（顶层是数组）。
 nonisolated struct EmbyMediaFolderList: Decodable, Sendable {
   let folders: [EmbyMediaFolder]

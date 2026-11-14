@@ -11,6 +11,7 @@ final class EpisodeGroupCatalog {
   let uiIdentity: String
   private var loadedGroups: [EpisodeGroup]?
   var groups: [EpisodeGroup] { loadedGroups ?? [] }
+  var hasOnlyDefaultOrder: Bool { loadedGroups?.allSatisfy { $0.episode_count == 0 } == true }
   private(set) var hasLoadFailed = false
   /// 手动重试时递增，界面把它放进加载任务的 id 以重新发起读取。
   private(set) var loadRequest = 0

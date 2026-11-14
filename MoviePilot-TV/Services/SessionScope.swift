@@ -31,6 +31,8 @@ final class SessionScope {
   /// 媒体服务器配置含密钥，只在内存里保存；读取不续期，到期后重新读取。播放失败时另行强制核对。
   let mediaServerConfigCache = CoalescingCache<String, [MediaServerConf]>(
     ttl: 300, capacity: 1, renewsTTLOnAccess: false)
+  /// TMDB 的 key、接口地址和代理（单集对应补查用），同样只在内存里，读取不续期。
+  let tmdbAccessCache = CoalescingCache<String, TmdbAccessSettings>(ttl: 300, capacity: 1, renewsTTLOnAccess: false)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
@@ -64,6 +66,7 @@ final class SessionScope {
     tmdbEpisodesCache.invalidateAll()
     mediaSourceCatalogCache.invalidateAll()
     mediaServerConfigCache.invalidateAll()
+    tmdbAccessCache.invalidateAll()
   }
 
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。

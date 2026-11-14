@@ -102,6 +102,8 @@ nonisolated enum AppSymbol {
   static let subscriptionTrial = "ticket"
   /// 正在加载（如详情页按季订阅按钮在等季信息）。
   static let loading = "ellipsis.circle"
+  /// 正在检查、正在核对这类要等一会儿的状态说明：静态的转圈图标，不加动画（会一直闪）。
+  static let checking = "progress.indicator"
   /// 对勾表示「是 / 已完成」。
   static let success = "checkmark.circle.fill"
   static let failure = "xmark.circle.fill"

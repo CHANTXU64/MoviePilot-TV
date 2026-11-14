@@ -177,6 +177,10 @@ struct EmbyServerConnection: MediaServerConnection {
       .map { MediaLibraryFolder(id: $0.id, paths: $0.paths) }
   }
 
+  func libraryProfiles() async throws -> [MediaLibraryProfile] {
+    try await perform(.readLibraries) { try await client.virtualFolders() }
+  }
+
   /// 一部剧和一个媒体库在 Emby 上都是条目，按条目重新扫描；整个库另有接口。
   func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws {
     try await perform(.refreshLibrary) {

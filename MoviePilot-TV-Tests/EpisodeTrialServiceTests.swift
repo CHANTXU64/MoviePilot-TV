@@ -127,6 +127,9 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(readyBefore, [request.key])
       service.libraryRechecked([request.key: .failed("媒体服务器读取失败")], readyBeforeCheck: readyBefore)
       XCTAssertTrue(entry().isPlayable)
+      // 还在向 TMDB 核对：同样不知道，照样能播。
+      service.libraryRechecked([request.key: .checking(server: "emby", files: 1)], readyBeforeCheck: readyBefore)
+      XCTAssertTrue(entry().isPlayable)
 
       // 这次查到媒体服务器上确认没有了（文件被删）：不再显示能播，可以重新试看。
       service.libraryRechecked([request.key: .notOnServer], readyBeforeCheck: readyBefore)
@@ -179,7 +182,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
         trialBlock: nil, canCancelTrial: true)
       XCTAssertFalse(entry.isPlayable)
       XCTAssertEqual(entry.primaryAction, .openPanel)
-      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库") + "。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+      XCTAssertEqual(entry.panel.message, match.message(server: "测试媒体库"))
       XCTAssertEqual(entry.panel.buttons, [.play])
     }
   }
@@ -549,7 +552,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertTrue(entry().trial.isSubmissionUnconfirmed)
       XCTAssertNil(entry().cardStatus, "没人在跟，不显示一直不变的「正在确认进度」")
       XCTAssertEqual(entry().menuActions, [.startTrial, .details])
-      XCTAssertEqual(entry().panel.message, EpisodeEntry.unconfirmedSubmissionMessage)
+      XCTAssertEqual(entry().panel.detail, EpisodeEntry.unconfirmedSubmissionMessage)
       XCTAssertEqual(entry().panel.buttons, [.startTrial(isRetry: true)])
 
       // 打开面板时查一次订阅列表，还是没有就停在这里。
@@ -779,7 +782,7 @@ final class EpisodeTrialServiceTests: XCTestCase {
         entry.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
       XCTAssertFalse(entry.canStartTrial)
       XCTAssertEqual(entry.menuActions, [.details])
-      XCTAssertEqual(entry.panel.message, "暂时无法确认试看进度")
+      XCTAssertEqual(entry.panel.detail, "暂时无法确认试看进度")
       XCTAssertEqual(entry.panel.buttons, [])
 
       backend.failDownloader(false)

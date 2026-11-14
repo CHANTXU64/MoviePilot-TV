@@ -2,18 +2,18 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// 单集对应模块：服务器文件 ↔ TMDB 单集的三步对应。纯逻辑，读取流程用替身数据源。
+/// 单集对应模块：服务器文件 ↔ TMDB 单集。读取流程用替身数据源。
 final class EpisodeMatchingTests: XCTestCase {
   // MARK: 替身
 
   /// 没有 TMDB 单集编号的文件（比如只用 TVDB 刮削的 Emby）。
   private func file(
     _ id: String, season: Int? = 1, episode: Int?, end: Int? = nil, tmdb: Int? = nil, path: String? = nil,
-    premiere: String? = nil
+    premiere: String? = nil, name: String? = nil, seriesID: String? = nil
   ) -> ServerMediaItem {
     ServerMediaItem(
-      id: id, kind: .episode, seasonNumber: season, episodeNumber: episode, episodeNumberEnd: end,
-      externalIDs: tmdb.map { ["tmdb": String($0)] } ?? ["tvdb": "9\(id)"], path: path, premiereDate: premiere)
+      id: id, kind: .episode, name: name, seasonNumber: season, episodeNumber: episode, episodeNumberEnd: end,
+      externalIDs: tmdb.map { ["tmdb": String($0)] } ?? [:], path: path, premiereDate: premiere, seriesID: seriesID)
   }
 
   /// 默认顺序第 1 季：第 1–6 集是 TMDB 101–106，第 n 集 2025-01-0n 播出。
@@ -83,15 +83,18 @@ final class EpisodeMatchingTests: XCTestCase {
       "特别篇是第 0 季")
   }
 
-  func testFilePathKeyIgnoresMountPointsCaseAndExtension() {
-    let moviePilot = FilePathKey(path: "/media/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv")
-    XCTAssertNotNil(moviePilot)
-    XCTAssertEqual(FilePathKey(path: "/data/tv/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv"), moviePilot, "挂载点不同")
-    XCTAssertEqual(FilePathKey(path: #"\\nas\video\season 1\长风渡 - s01e05.MKV"#), moviePilot, "Windows 路径、大小写不同")
-    XCTAssertEqual(FilePathKey(path: "/strm/长风渡/Season 1/长风渡 - S01E05.strm"), moviePilot, "STRM 只是扩展名不同")
-    XCTAssertNotEqual(FilePathKey(path: "/data/Season 2/长风渡 - S01E05.mkv"), moviePilot, "上一级目录不同")
-    XCTAssertNil(FilePathKey(path: "长风渡 - S01E05.mkv"), "只有文件名不够比")
-    XCTAssertNil(FilePathKey(path: nil))
+  func testTransferPathMatchingIgnoresMountPointsCaseAndExtension() {
+    let record = record("/media/电视剧/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv", episodes: "E05")
+    for path in [
+      "/data/tv/长风渡 (2023)/Season 1/长风渡 - S01E05.mkv",
+      #"\\nas\video\season 1\长风渡 - s01e05.MKV"#,
+      "/strm/长风渡/Season 1/长风渡 - S01E05.strm",
+    ] {
+      XCTAssertEqual(index([file("e5", episode: 5, path: path)], records: [record]).availability(of: 105), .playable(server: "emby"))
+    }
+    for path in ["/data/Season 2/长风渡 - S01E05.mkv", "长风渡 - S01E05.mkv", nil] {
+      XCTAssertTrue(index([file("e5", episode: 5, path: path)], records: [record]).confirmedEpisodes(tmdbEpisodeID: 105).isEmpty)
+    }
   }
 
   // MARK: 播出日期
@@ -136,6 +139,111 @@ final class EpisodeMatchingTests: XCTestCase {
     XCTAssertEqual(index.uncertainEpisodes(tmdbEpisodeID: 102).map(\.item.id), ["e1"])
   }
 
+  func testLongerPathSuffixSeparatesCopiesWithTheSameFilenameAndSeasonFolder() {
+    let files = [
+      file("a", episode: 1, path: "/emby/A剧/Season 1/E01.mkv"),
+      file("b", episode: 1, path: "/emby/A剧第一季/Season 1/E01.mkv"),
+    ]
+    let records = [
+      record("/mp/A剧/Season 1/E01.mkv", episodes: "E01"),
+      record("/mp/A剧第一季/Season 1/E01.mkv", episodes: "E02"),
+    ]
+    let matched = index(files, records: records)
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["a"])
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 102).map(\.id), ["b"])
+    let oneRecord = index(files, records: [records[0]])
+    XCTAssertEqual(oneRecord.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["a"])
+    XCTAssertEqual(oneRecord.summary.byTransferRecord, 1)
+  }
+
+  func testFullPathWinsButEquallyStrongCompetingCopiesNeedConfirmation() {
+    let files = [
+      file("a", episode: 1, path: "/a/Show/Season 1/E01.mkv"),
+      file("b", episode: 1, path: "/b/Show/Season 1/E01.mkv"),
+    ]
+    let exact = record("/b/Show/Season 1/E01.mkv", episodes: "E02")
+    let tied = record("/mp/Show/Season 1/E01.mkv", episodes: "E01")
+    let matched = index(files, records: [tied, exact])
+    XCTAssertEqual(matched.confirmedEpisodes(tmdbEpisodeID: 102).map(\.id), ["b"])
+    XCTAssertEqual(matched.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["a"])
+    let ambiguous = index(files, records: [tied])
+    XCTAssertEqual(ambiguous.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["a", "b"])
+  }
+
+  func testExactPathConfirmsAliasesAndSameDirectoryVersionsButNotAnotherCopy() {
+    let files = [
+      file("a", episode: 1, path: "/emby/Show/Season 1/E01.mp4"),
+      file("alias", episode: 1, path: "/emby/Show/Season 1/E01.mp4"),
+      file("mkv", episode: 1, path: "/emby/Show/Season 1/E01.mkv"),
+      file("other", episode: 1, path: "/other/Show/Season 1/E01.mp4"),
+    ]
+    let record = record("/emby/Show/Season 1/E01.mp4", episodes: "E01")
+    XCTAssertEqual(index(files, records: [record]).confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["a", "alias", "mkv"])
+  }
+
+  func testTitleNeedsTheSameEpisodeNumberAndUniquenessOnBothSides() {
+    let key = EpisodeListKey(episodeGroup: nil, season: 1)
+    func confirmed(_ files: [ServerMediaItem], _ titles: [String], independent: Bool = true) -> [String] {
+      let season = titles.enumerated().map { TmdbEpisode(id: 101 + $0.offset, episodeNumber: 1 + $0.offset, name: $0.element) }
+      // 经过 TVDB 刮削的条目带着 TVDB 单集编号。
+      let files = files.map {
+        ServerMediaItem(
+          id: $0.id, kind: .episode, name: $0.name, seasonNumber: $0.seasonNumber, episodeNumber: $0.episodeNumber,
+          externalIDs: ["tvdb": "9\($0.id)"])
+      }
+      // TVDB 编号在 TMDB 明确查空，才用标题核实。
+      let evidence = EpisodeEvidence(
+        independentFiles: independent ? Set(files.map(\.id)) : [],
+        lookups: Dictionary(uniqueKeysWithValues: files.map { ($0.id, EpisodeLookupOutcome.notFound) }))
+      return ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: files, lists: [key: season], evidence: evidence)
+        .confirmedEpisodes(tmdbEpisodeID: 101).map(\.id)
+    }
+    let correct = file("a", episode: 1, name: "A Quiet  Town")
+    XCTAssertEqual(confirmed([correct], ["a quiet town", "After the rain"]), ["a"])
+    XCTAssertTrue(
+      confirmed([correct], ["a quiet town", "After the rain"], independent: false).isEmpty,
+      "服务器的单集资料可能来自 TMDB 时，标题一致证明不了什么")
+    XCTAssertTrue(confirmed([correct], ["a quiet town", "A Quiet Town"]).isEmpty)
+    XCTAssertTrue(confirmed([correct, file("b", episode: 2, name: "A Quiet Town")], ["a quiet town", "Other"]).isEmpty)
+    XCTAssertTrue(confirmed([file("b", episode: 2, name: "A Quiet Town")], ["a quiet town", "Other"]).isEmpty)
+    for generic in ["第 1 集", "第一集", "Episode 1", "S01E01", "TBA", "第１話", "1화"] {
+      XCTAssertTrue(confirmed([file("a", episode: 1, name: generic)], [generic]).isEmpty, generic)
+    }
+  }
+
+  func testConsistentSmallOffsetChangesOnlyThePanelWarning() throws {
+    let season = ["2025-01-04", "2025-01-11", "2025-01-18", "2025-01-25"].enumerated().map {
+      TmdbEpisode(id: 101 + $0.offset, episodeNumber: 1 + $0.offset, name: "这集的标题 \($0.offset)", airDate: $0.element)
+    }
+    let files = ["2025-01-02", "2025-01-09", "2025-01-16"].enumerated().map {
+      file("e\($0.offset)", episode: 1 + $0.offset, premiere: $0.element, name: "English title \($0.offset)", seriesID: "s1")
+    }
+    func match(_ files: [ServerMediaItem], _ list: [TmdbEpisode] = season) throws -> UncertainEpisodeMatch {
+      let index = ServerEpisodeIndex(
+        serverName: "emby", hasSeries: true, episodes: files, lists: [EpisodeListKey(episodeGroup: nil, season: 1): list])
+      return try XCTUnwrap(index.uncertainEpisodes(tmdbEpisodeID: 101).first?.match)
+    }
+    let matched = try match(files)
+    XCTAssertTrue(matched.hasConsistentSeasonOffset)
+    let availability = EpisodeAvailability.uncertain(server: "emby", match: matched)
+    let entry = EpisodeEntry(availability: availability, allowsSeasonDateOffset: true)
+    XCTAssertEqual(entry.primaryAction, .openPanel)
+    XCTAssertFalse(try XCTUnwrap(entry.panel.message).contains("播出日期不同"))
+    XCTAssertTrue(try XCTUnwrap(entry.panel.message).contains("整季日期差两三天"))
+    XCTAssertTrue(try XCTUnwrap(EpisodeEntry(availability: availability).panel.message).contains("播出日期不同"))
+    XCTAssertFalse(try match(Array(files.prefix(2)) + [files[0]]).hasConsistentSeasonOffset, "副本不能凑成三集")
+    XCTAssertFalse(try match(files + [file("e4", episode: 4, premiere: "2025-01-25", seriesID: "s1")]).hasConsistentSeasonOffset)
+    XCTAssertFalse(try match(files + [file("e4", episode: 4, name: "另一个标题", seriesID: "s1")]).hasConsistentSeasonOffset)
+    let doubleRelease = season + [TmdbEpisode(id: 105, episodeNumber: 5, airDate: "2025-01-25")]
+    XCTAssertFalse(try match(files, doubleRelease).hasConsistentSeasonOffset, "同日放出两集")
+    let fourDayGap = season + [TmdbEpisode(id: 105, episodeNumber: 5, airDate: "2025-01-29")]
+    XCTAssertFalse(try match(files, fourDayGap).hasConsistentSeasonOffset, "恰好半个间隔也不放行")
+    let shiftedOneEpisode = ["2025-01-11", "2025-01-18", "2025-01-25"].enumerated().map {
+      file("e\($0.offset)", episode: 1 + $0.offset, premiere: $0.element, seriesID: "s1")
+    }
+    XCTAssertFalse(try match(shiftedOneEpisode).hasConsistentSeasonOffset, "周播整季错一集")
+  }
+
   func testNumbersFollowTheEpisodeGroupTheSeriesWasOrganizedWith() {
     // 这部剧最近一次按剧集组 g1 整理；没有记录的文件 S01E01 也按 g1 的编号比，是 TMDB 104，不是默认顺序的 101。
     let index = index(
@@ -146,7 +254,9 @@ final class EpisodeMatchingTests: XCTestCase {
       ])
     XCTAssertEqual(
       index.availability(of: 104),
-      .uncertain(server: "emby", match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches)))
+      .uncertain(
+        server: "emby",
+        match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches)))
     XCTAssertEqual(index.availability(of: 101), .notOnServer)
     XCTAssertNil(ServerEpisodeIndex.numberingGroup([]), "没有记录按默认顺序")
   }
@@ -166,8 +276,7 @@ final class EpisodeMatchingTests: XCTestCase {
     XCTAssertEqual(index.summary.airDateDiffers, 1)
     XCTAssertEqual(
       index.availability(of: 102).message,
-      "“emby”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按季号集号找到的第 1 季第 2 集，"
-        + "但播出日期对不上（服务器上是 2025-03-01，这一集是 2025-01-02），很可能不是这一集")
+      "很可能不是这一集。按第 1 季第 2 集找到，播出日期不同")
     XCTAssertEqual(
       index.summary.logText,
       "按 TMDB 单集编号对上 0 个文件，按整理记录对上 0 个，按季号集号对上 3 个（播出日期对上 1 个、对不上 1 个），"
@@ -273,7 +382,7 @@ final class EpisodeMatchingTests: XCTestCase {
         seasonReads.append(group)
         return [1, 2]
       },
-      transferRecords: {
+      transferRecords: { _ in
         recordReads += 1
         throw URLError(.timedOut)
       })
@@ -317,7 +426,7 @@ final class EpisodeMatchingTests: XCTestCase {
     return try await EpisodeMatchLoader.index(
       serverName: "emby", hasSeries: true, episodes: files, incompleteReason: nil,
       sources: EpisodeMatchingSources(
-        seasonList: { available[$0] ?? [] }, seasons: seasons, transferRecords: { records }),
+        seasonList: { available[$0] ?? [] }, seasons: seasons, transferRecords: { _ in records }),
       describe: { _ in "超时" })
   }
 

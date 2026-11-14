@@ -31,7 +31,8 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(playable.cardStatus, .playable)
     XCTAssertNil(playable.notPlayableMessage)
     XCTAssertEqual(playable.panel.buttons, [.play])
-    XCTAssertEqual(playable.panel.message, "在“客厅”上可以播放")
+    XCTAssertEqual(playable.panel.headline, "可以播放")
+    XCTAssertEqual(playable.panel.detail, "在“客厅”上")
   }
 
   func testEpisodeNotOnServerOpensThePanelAndOffersTrial() {
@@ -40,7 +41,9 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(missing.menuActions, [.startTrial, .details])
     XCTAssertNil(missing.cardStatus, "不在库是常态，卡片上不标")
     XCTAssertEqual(missing.panel.buttons, [.startTrial(isRetry: false)])
-    XCTAssertEqual(missing.panel.message, "媒体服务器上没有这一集。试看会下载这一集，下好的文件会留在媒体库里")
+    XCTAssertEqual(missing.panel.headline, "服务器上没有这一集")
+    XCTAssertEqual(missing.panel.detail, "试看下载的文件会留在媒体库里")
+    XCTAssertFalse(missing.panel.proceedsDespiteWarning, "确认没有：按钮就叫「试看」")
     XCTAssertEqual(missing.notPlayableMessage, EpisodeAvailability.notOnServerMessage)
   }
 
@@ -50,7 +53,8 @@ final class EpisodeEntryTests: XCTestCase {
       XCTAssertFalse(unsure.canStartTrial, "\(availability)")
       XCTAssertEqual(unsure.menuActions, [.details], "\(availability)")
       XCTAssertEqual(unsure.panel.buttons, [.recheck], "\(availability)")
-      XCTAssertEqual(unsure.panel.message, availability.message, "\(availability)")
+      XCTAssertEqual(unsure.panel.message, availability.statusText?.joined, "\(availability)")
+      XCTAssertEqual(unsure.panel.tone, .caution, "\(availability)")
     }
     XCTAssertNil(entry(.failed("连不上")).cardStatus, "读取失败在行头提示一次，不盖在每张卡上")
     XCTAssertEqual(entry(.unidentifiable(.missingEpisodeID)).cardStatus, .attention)
@@ -67,15 +71,15 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(unmatched.primaryAction, .openPanel)
     XCTAssertEqual(unmatched.menuActions, [.details])
     XCTAssertEqual(unmatched.panel.buttons, [.startTrial(isRetry: false), .recheck])
-    XCTAssertEqual(
-      unmatched.panel.message,
-      "媒体服务器“客厅”上有文件认不出是哪一集，这一集可能已经在里面。试看会下载这一集，下好的文件会留在媒体库里")
+    XCTAssertEqual(unmatched.panel.headline, "这一集可能已经入库")
+    XCTAssertEqual(unmatched.panel.detail, "有文件认不出是哪一集，刷新元数据后再检查")
+    XCTAssertTrue(unmatched.panel.proceedsDespiteWarning, "按钮写「仍要试看」")
     XCTAssertEqual(unmatched.notPlayableMessage, EpisodeAvailability.unmatchedMessage(server: "客厅"))
     XCTAssertEqual(unmatched.accessibilityStatus, EpisodeAvailability.unmatchedMessage(server: "客厅"))
   }
 
   func testUnidentifiedFilesKeepTheExplanationWhateverTheTrialState() {
-    let note = "媒体服务器“客厅”上有文件认不出是哪一集，这一集可能已经在里面"
+    let note = "这一集可能已经入库。有文件认不出是哪一集，刷新元数据后再检查"
     let unaired = entry(.unmatched(server: "客厅"), block: .notAired("2099-01-01"))
     XCTAssertEqual(unaired.panel.message, note + "。这一集 2099-01-01 播出，播出后才能试看")
     XCTAssertEqual(unaired.panel.buttons, [.recheck])
@@ -110,7 +114,7 @@ final class EpisodeEntryTests: XCTestCase {
     let unaired = entry(.notOnServer, block: .notAired("2099-01-01"))
     XCTAssertEqual(unaired.menuActions, [.details])
     XCTAssertEqual(unaired.panel.buttons, [])
-    XCTAssertEqual(unaired.panel.message, "媒体服务器上没有这一集。这一集 2099-01-01 播出，播出后才能试看")
+    XCTAssertEqual(unaired.panel.message, "服务器上没有这一集。这一集 2099-01-01 播出，播出后才能试看")
   }
 
   func testWithoutInAppPlaybackThePanelOnlyShowsTheOverview() {
@@ -124,7 +128,7 @@ final class EpisodeEntryTests: XCTestCase {
   func testCheckingAvailabilityIsExplainedOnPlayPause() {
     let checking = entry(nil, checking: true)
     XCTAssertEqual(checking.notPlayableMessage, "正在检查这一集能不能播放")
-    XCTAssertEqual(checking.panel.message, "正在检查这一集能不能播放")
+    XCTAssertEqual(checking.panel.message, "正在检查")
     XCTAssertEqual(checking.panel.buttons, [])
   }
 
@@ -137,7 +141,7 @@ final class EpisodeEntryTests: XCTestCase {
       .trialInProgress(EpisodeEntry.TrialIndicator(label: "下载中", fraction: 0.42, stage: .download)))
     XCTAssertEqual(downloading.menuActions, [.cancelTrial(subscriptionID: 81), .details])
     XCTAssertEqual(downloading.panel.buttons, [.cancelTrial(subscriptionID: 81)])
-    XCTAssertEqual(downloading.panel.message, "正在下载 42%，下完还要整理和入库才能播放")
+    XCTAssertEqual(downloading.panel.detail, "正在下载 42%，下完还要整理和入库才能播放")
     XCTAssertFalse(downloading.canStartTrial)
     XCTAssertEqual(downloading.accessibilityStatus, "试看中，下载中，42%")
     XCTAssertEqual(downloading.notPlayableMessage, "正在下载 42%，下完还要整理和入库才能播放", "按播放键时说明还要多久、还差哪几步")
@@ -146,21 +150,21 @@ final class EpisodeEntryTests: XCTestCase {
   func testThePanelSaysWhatIsLeftSoDownloadedIsNotMistakenForPlayable() {
     // 面板不列整个流程，只写现在这一步，和后面还要经过什么才能播。
     let searching = entry(.notOnServer, trial: trial(.searching, subscriptionID: 81))
-    XCTAssertEqual(searching.panel.message, "正在搜索资源，找到后还要下载、整理和入库才能播放")
+    XCTAssertEqual(searching.panel.detail, "正在搜索资源，找到后还要下载、整理和入库才能播放")
 
     let unknownProgress = entry(.notOnServer, trial: trial(.downloading(progress: nil)))
-    XCTAssertEqual(unknownProgress.panel.message, "正在下载，下完还要整理和入库才能播放")
+    XCTAssertEqual(unknownProgress.panel.detail, "正在下载，下完还要整理和入库才能播放")
 
     let waiting = entry(.notOnServer, trial: trial(.waitingForOrganization, subscriptionID: 81))
     XCTAssertEqual(
       waiting.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "等待整理", fraction: nil, stage: .organize)))
-    XCTAssertEqual(waiting.panel.message, "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理")
+    XCTAssertEqual(waiting.panel.detail, "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理")
 
     let organizing = entry(.notOnServer, trial: trial(.organizing))
-    XCTAssertEqual(organizing.panel.message, "MoviePilot 正在整理，整理完还要入库才能播放")
+    XCTAssertEqual(organizing.panel.detail, "MoviePilot 正在整理，整理完还要入库才能播放")
 
     let library = entry(.notOnServer, trial: trial(.waitingForLibrary))
-    XCTAssertEqual(library.panel.message, "已经整理好，在等媒体服务器入库")
+    XCTAssertEqual(library.panel.detail, "已经整理好，在等媒体服务器入库")
     XCTAssertEqual(library.panel.buttons, [], "订阅已删、只在跟下载时没有可取消的")
   }
 
@@ -177,7 +181,7 @@ final class EpisodeEntryTests: XCTestCase {
       downloading.cardStatus,
       .trialInProgress(EpisodeEntry.TrialIndicator(label: "下载还需约 13 分钟", fraction: 0.42, stage: .download)),
       "写明是下载还要多久，不是还要多久能播")
-    XCTAssertEqual(downloading.panel.message, "正在下载 42%，还需约 13 分钟，下完还要整理和入库才能播放")
+    XCTAssertEqual(downloading.panel.detail, "正在下载 42%，还需约 13 分钟，下完还要整理和入库才能播放")
     XCTAssertEqual(downloading.accessibilityStatus, "试看中，下载还需约 13 分钟，42%")
   }
 
@@ -222,7 +226,7 @@ final class EpisodeEntryTests: XCTestCase {
       following.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
     XCTAssertFalse(following.canStartTrial)
     XCTAssertEqual(following.menuActions, [.details])
-    XCTAssertEqual(following.panel.message, "暂时无法确认试看进度")
+    XCTAssertEqual(following.panel.detail, "暂时无法确认试看进度")
     XCTAssertEqual(following.panel.buttons, [], "订阅已经删了，没有可取消的")
   }
 
@@ -232,7 +236,7 @@ final class EpisodeEntryTests: XCTestCase {
       .notOnServer, trial: trial(.unavailable("试看订阅的配置刚刚有变化，稍后再核对"), subscriptionID: 81))
     XCTAssertEqual(
       retrying.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "试看中", fraction: nil, stage: nil)))
-    XCTAssertEqual(retrying.panel.message, "试看订阅的配置刚刚有变化，稍后再核对")
+    XCTAssertEqual(retrying.panel.detail, "试看订阅的配置刚刚有变化，稍后再核对")
     XCTAssertEqual(retrying.panel.buttons, [.cancelTrial(subscriptionID: 81)])
     XCTAssertFalse(retrying.canStartTrial)
   }
@@ -261,7 +265,7 @@ final class EpisodeEntryTests: XCTestCase {
       .trialInProgress(EpisodeEntry.TrialIndicator(label: "正在取消试看", fraction: nil, stage: nil)))
     XCTAssertEqual(cancelling.notPlayableMessage, "正在取消试看")
     XCTAssertEqual(cancelling.menuActions, [.details])
-    XCTAssertEqual(cancelling.panel.message, EpisodeTrialHoldNotice.cancellingMessage)
+    XCTAssertEqual(cancelling.panel.detail, EpisodeTrialHoldNotice.cancellingMessage)
     XCTAssertEqual(cancelling.panel.buttons, [])
   }
 
@@ -292,13 +296,18 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertNil(uncertain.notPlayableMessage)
     XCTAssertEqual(uncertain.accessibilityStatus, "可以播放，可能不是这一集")
     XCTAssertEqual(uncertain.panel.buttons, [.play])
-    XCTAssertEqual(
-      uncertain.panel.message,
-      "“客厅”上的文件没有 TMDB 编号，也对不上 MoviePilot 的整理记录，是按季号集号找到的第 1 季第 5 集，"
-        + "播出日期也对得上，但仍可能不是这一集。按季号集号算这一集已经在媒体服务器上，所以不提供试看")
+    XCTAssertEqual(uncertain.panel.headline, "可能不是这一集", "先说结论")
+    XCTAssertEqual(uncertain.panel.detail, "按第 1 季第 5 集找到，播出日期一致")
+    XCTAssertEqual(uncertain.panel.tone, .caution)
+    XCTAssertTrue(uncertain.panel.proceedsDespiteWarning, "按钮写「仍要播放」")
     XCTAssertEqual(
       entry(.uncertain(server: "客厅", match: numberMatch), block: .unsupported).panel.message,
-      numberMatch.message(server: "客厅"), "本来就不能试看时不提试看")
+      numberMatch.message(server: "客厅"), "能不能试看都是同一段说明")
+    let noMetadata = UncertainEpisodeMatch(
+      season: 1, episode: 5, episodeGroup: nil, airDate: .unknown, serverHasNoMetadata: true)
+    XCTAssertEqual(
+      entry(.uncertain(server: "客厅", match: noMetadata)).panel.buttons, [.play, .recheck],
+      "让刷新元数据的，刷新后要能在面板里重新检查")
     XCTAssertEqual(entry(.playable(server: "客厅")).playPauseAction, .play)
     XCTAssertEqual(entry(.notOnServer).playPauseAction, .explain(EpisodeAvailability.notOnServerMessage))
   }
@@ -309,7 +318,8 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(ready.primaryAction, .openPanel)
     XCTAssertEqual(ready.cardStatus, .playable)
     XCTAssertEqual(ready.panel.buttons, [.play])
-    XCTAssertEqual(ready.panel.message, "试看的这一集已经整理入库。" + numberMatch.message(server: "客厅"))
+    XCTAssertEqual(ready.panel.headline, "可能不是这一集")
+    XCTAssertEqual(ready.panel.detail, "试看的这一集已经入库。按第 1 季第 5 集找到，播出日期一致")
   }
 
   // MARK: 试看结局
@@ -319,14 +329,14 @@ final class EpisodeEntryTests: XCTestCase {
     XCTAssertEqual(noResource.cardStatus, .trialStopped(.noEligibleResource))
     XCTAssertEqual(noResource.menuActions, [.startTrial, .details], "结束后可以重新试看")
     XCTAssertEqual(noResource.panel.buttons, [.startTrial(isRetry: true)])
-    XCTAssertEqual(noResource.panel.message, EpisodeTrialEnding.noEligibleResource.message)
+    XCTAssertEqual(noResource.panel.detail, EpisodeTrialEnding.noEligibleResource.message)
 
     let organize = entry(.notOnServer, trial: trial(.concluded(.organizationFailed)))
-    XCTAssertEqual(organize.panel.message, EpisodeTrialEnding.organizationFailed.message)
+    XCTAssertEqual(organize.panel.detail, EpisodeTrialEnding.organizationFailed.message)
 
     let cancelled = entry(.notOnServer, trial: trial(.concluded(.cancelled)))
     XCTAssertNil(cancelled.cardStatus, "用户自己取消是预期的结果，卡片上不提示")
-    XCTAssertEqual(cancelled.panel.message, "已取消试看，可以重新试看")
+    XCTAssertEqual(cancelled.panel.detail, "已取消试看，可以重新试看")
     XCTAssertEqual(cancelled.panel.buttons, [.startTrial(isRetry: true)])
   }
 
@@ -351,12 +361,13 @@ final class EpisodeEntryTests: XCTestCase {
     let blocked = entry(.notOnServer, trial: trial(otherEpisode: 3))
     XCTAssertFalse(blocked.canStartTrial)
     XCTAssertEqual(blocked.menuActions, [.details])
-    XCTAssertEqual(blocked.panel.message, "这一季的第 3 集正在试看，结束后才能试看这一集")
+    XCTAssertEqual(blocked.panel.detail, "这一季的第 3 集正在试看，结束后才能试看这一集")
     XCTAssertEqual(blocked.panel.buttons, [])
 
     let subscribed = entry(.notOnServer, trial: trial(.waitingForSubscription))
     XCTAssertFalse(subscribed.canStartTrial)
-    XCTAssertEqual(subscribed.panel.message, "这一季已经有订阅，等订阅下载这一集")
+    XCTAssertEqual(subscribed.panel.headline, "这一季已经有订阅")
+    XCTAssertEqual(subscribed.panel.detail, "等订阅下载这一集")
   }
 
   func testStartFeedbackOnlyCoversResultsTheCardCannotShow() {

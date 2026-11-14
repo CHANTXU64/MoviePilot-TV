@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 单集面板：统一阅读 Sheet 的两栏形式。左栏是剧名、时长和播出日期，下面一句话说明这一集能不能播、试看到了哪一步，
-/// 以及能做的操作；右栏是简介。没有应用内播放时左栏只有信息，和原来的单集详情一样。
+/// 单集面板：统一阅读 Sheet 的两栏形式。左栏是剧名、时长和播出日期，下面先用一句醒目的结论说这一集能不能播、
+/// 试看到了哪一步，再用一两行小字说原因或下一步，最下面是能做的操作；右栏是简介。
+/// 没有应用内播放时左栏只有信息，和原来的单集详情一样。
 ///
 /// 内容随集列表的状态实时变化（打开期间刷新试看进度），操作交给集列表执行：播放要先关掉面板再起播，
 /// 按「试看」后面板也关掉，进度看卡片正中。
@@ -20,10 +21,13 @@ struct EpisodeActionSheet: View {
   var body: some View {
     let panel = entry.panel
     ReadingSheet(
-      title: episode.cardTitle, blocks: Self.blocks(for: episode), focusesBodyByDefault: panel.buttons.isEmpty
+      title: episode.cardTitle, blocks: Self.blocks(for: episode), focusesBodyByDefault: panel.buttons.isEmpty,
+      size: .compact
     ) {
       sidebar(panel)
     }
+    // 挂在整个面板上：只挂在左栏时，打开面板的默认焦点仍会落到右上的正文。
+    .defaultFocus($focusedButton, panel.buttons.isEmpty ? nil : 0)
   }
 
   static func blocks(for episode: MoviePilotEpisode) -> [ReadingBlock] {
@@ -42,10 +46,8 @@ struct EpisodeActionSheet: View {
             .padding(.bottom, 24)
         }
         info
-        if let message = panel.message {
-          Text(message)
-            .font(.caption)
-            .fixedSize(horizontal: false, vertical: true)
+        if let headline = panel.headline {
+          status(panel, headline: headline)
             .padding(.top, 32)
         }
       }
@@ -60,7 +62,35 @@ struct EpisodeActionSheet: View {
         }
       }
     }
-    .defaultFocus($focusedButton, 0)
+  }
+
+  /// 结论（图标加粗体）和下面的原因（次要颜色的小字）。
+  private func status(_ panel: EpisodeEntry.Panel, headline: String) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Label {
+        Text(headline)
+      } icon: {
+        Self.icon(for: panel.tone)
+      }
+      .font(.body.bold())
+      .fixedSize(horizontal: false, vertical: true)
+      if let detail = panel.detail {
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private static func icon(for tone: EpisodeEntry.Panel.Tone) -> some View {
+    switch tone {
+    case .ready: Image(systemName: AppSymbol.success).foregroundStyle(.green)
+    case .caution: Image(systemName: AppSymbol.warning).foregroundStyle(.yellow)
+    case .working: Image(systemName: AppSymbol.checking).foregroundStyle(.secondary)
+    case .info: Image(systemName: AppSymbol.info).foregroundStyle(.secondary)
+    }
   }
 
   @ViewBuilder
@@ -83,12 +113,13 @@ struct EpisodeActionSheet: View {
     let systemImage: String
     var loadingTitle = ""
     var isLoading = false
+    let cautious = entry.panel.proceedsDespiteWarning
     switch button {
     case .play:
-      title = "播放"
+      title = cautious ? "仍要播放" : "播放"
       systemImage = AppSymbol.play
     case .startTrial(let isRetry):
-      title = isRetry ? "重新试看" : "试看"
+      title = cautious ? "仍要试看" : isRetry ? "重新试看" : "试看"
       systemImage = AppSymbol.subscriptionTrial
       loadingTitle = "正在发起试看"
       isLoading = entry.trial.isStarting
