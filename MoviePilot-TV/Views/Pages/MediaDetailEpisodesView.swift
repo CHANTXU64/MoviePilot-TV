@@ -11,6 +11,8 @@ struct MediaDetailEpisodesView: View {
   let playback: EpisodePlaybackSource?
   /// 默认显示的季和停在哪一集（看过的剧停在接着看的那一集），见 `MediaDetailViewModel.episodeRowHint`。
   var rowHint: EpisodeRowHint? = nil
+  /// 详情页「继续播放」指向服务器上还没有的下一集时，请本行打开那一集的面板。
+  var panelRequest: EpisodePanelRequest? = nil
   let allowsRequests: Bool
   let isContentVisible: Bool
   /// 第一页底部只露出卡片：本行是第二页首行时，行头在翻到第二页后才出现，与其他行一致。
@@ -38,7 +40,8 @@ struct MediaDetailEpisodesView: View {
       catalog: catalog, allowsRequests: allowsRequests, playback: playback,
       trial: APIService.shared.sessionScope.episodeTrial,
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand),
-      rowHint: rowHint
+      rowHint: rowHint,
+      panelRequest: panelRequest
     )
   }
 }
@@ -155,8 +158,12 @@ private struct EpisodeBrowser: View {
   var initialEpisodeOffset: Int? = nil
   /// 默认显示的季和停在哪一集，只用于默认顺序（剧集组的季号不同）。只在用户还没碰过本行时采用（见 `appliedHint`）。
   var rowHint: EpisodeRowHint? = nil
+  /// 请本行打开某一集的面板（默认顺序下）：先换到那一季，集列表到了再打开。
+  var panelRequest: EpisodePanelRequest? = nil
 
   @State private var storedGroup = GroupState(id: nil)
+  /// 等集列表到了再打开面板的那一集。
+  @State private var pendingPanel: EpisodeRowHint?
   /// 采用了的提示：观看进度晚到或刷新时，本行没有焦点、用户也没选过季才换过去，不在用户操作时改季、跳位置。
   @State private var appliedHint: EpisodeRowHint?
   @FocusState private var focus: EpisodeRowFocus?
@@ -276,6 +283,19 @@ private struct EpisodeBrowser: View {
       preferred: groupID == nil ? media.season ?? appliedHint?.season : nil,
       available: seasons.compactMap(\.season_number)
     )
+  }
+
+  /// 要打开面板的那一集所在季的集列表到了没有。
+  private var pendingPanelLoaded: Bool {
+    guard let hint = pendingPanel, case .loaded = group.episodeStates[hint.season] else { return false }
+    return true
+  }
+
+  private func openPendingPanel() {
+    guard let hint = pendingPanel, case .loaded(let episodes) = group.episodeStates[hint.season] else { return }
+    // 集列表到了：找得到就打开，找不到（列表变了）就作罢，不留着等以后突然弹出来。
+    pendingPanel = nil
+    if let episode = hint.episode(in: episodes) { panelEpisode = episode }
   }
 
   /// 本行要停的那一集（提示指向的、在当前显示的季里的那一集）。
@@ -414,6 +434,7 @@ private struct EpisodeBrowser: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       afterPanelDismiss = nil
+      pendingPanel = nil
       panelEpisode = nil
     }
     // 焦点停在状态卡上时集列表到了：交给第一集，状态卡被移除时焦点不会跳出本行。
@@ -421,6 +442,13 @@ private struct EpisodeBrowser: View {
       guard let firstID, focus == .status else { return }
       focus = .episode(firstID)
     }
+    .onChange(of: panelRequest?.id) { _, _ in
+      guard let request = panelRequest, groupID == nil else { return }
+      if seasonNumber != request.hint.season { group.selectedSeason = request.hint.season }
+      pendingPanel = request.hint
+      openPendingPanel()
+    }
+    .onChange(of: pendingPanelLoaded) { _, _ in openPendingPanel() }
     .onChange(of: rowHint, initial: true) { _, hint in
       guard hint != appliedHint, focus == nil, focusedSeason == nil, group.selectedSeason == nil else { return }
       appliedHint = hint

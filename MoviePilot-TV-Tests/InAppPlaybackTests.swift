@@ -429,6 +429,14 @@ final class InAppPlaybackModelTests: XCTestCase {
         episode("s2e1", season: 2, episode: 1, played: true),
         episode("s2e2", season: 2, episode: 2),
       ])?.0, "s2e2")
+    // 实际遇到的：整季看完后又回头看了第 1、2 集几分钟——仍按看到的最后一集算，不回到前面。
+    XCTAssertEqual(
+      try upNext([
+        episode("e1", season: 1, episode: 1, played: true, position: 698),
+        episode("e2", season: 1, episode: 2, played: true, position: 306),
+        episode("e3", season: 1, episode: 3, played: true),
+        episode("e4", season: 1, episode: 4),
+      ])?.0, "e4")
     // 续播点接近片尾算看完；不到 1 分钟不算看过。
     XCTAssertEqual(
       try upNext([episode("e1", season: 1, episode: 1, position: 7000), episode("e2", season: 1, episode: 2)])?.0, "e2")
@@ -442,6 +450,15 @@ final class InAppPlaybackModelTests: XCTestCase {
         episode("e3", season: 1, episode: 3),
       ])?.0, "e3")
     XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1, played: true)]), "全看完了")
+    XCTAssertEqual(
+      PlaybackEpisodeProgress.lastWatched(in: try items([
+        episode("e1", season: 1, episode: 1, played: true, position: 698),
+        episode("e2", season: 1, episode: 2, played: true),
+      ]))?.id, "e2", "服务器上看完的最后一集，详情页据此在集列表里找下一集")
+    XCTAssertNil(
+      PlaybackEpisodeProgress.lastWatched(in: try items([
+        episode("e1", season: 1, episode: 1, played: true), episode("e2", season: 1, episode: 2, position: 1800),
+      ])), "后面还有看到一半的，接着看它")
     XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1)]), "一集都没看过")
 
     XCTAssertEqual(
@@ -472,7 +489,7 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(resuming.title, "第 2 季第 5 集", "看到一半：播放图标、进度条和季集号")
     XCTAssertEqual(resuming.progress, 0.25)
     XCTAssertEqual(resuming.accessibilityLabel, "继续播放 第 2 季第 5 集")
-    XCTAssertEqual(resuming.target, .serverItem(serverName: "emby", itemID: "e5"), "单集对应没确定时直接播这份文件")
+    XCTAssertEqual(resuming.action, .play(.serverItem(serverName: "emby", itemID: "e5")), "单集对应没确定时直接播这份文件")
 
     let next = ServerMediaItem(id: "e6", kind: .episode, seasonNumber: 2, episodeNumber: 6, runtimeSeconds: 3600)
     let fresh = SeriesPlayAction.make(
@@ -485,8 +502,8 @@ final class InAppPlaybackModelTests: XCTestCase {
     let queued = SeriesPlayAction.make(
       upNext: PlaybackEpisodeProgress.UpNext(episode: next, resumes: false), serverName: "emby", matched: matched,
       seasonEpisodes: [matched], context: context)
-    guard case .episode(let episode, let acceptance) = queued.target else {
-      return XCTFail("单集对应确定能播时按集起播，实际 \(queued.target)")
+    guard case .play(.episode(let episode, let acceptance)) = queued.action else {
+      return XCTFail("单集对应确定能播时按集起播，实际 \(queued.action)")
     }
     XCTAssertEqual(episode.episode, matched)
     XCTAssertEqual(acceptance, .confirmedOnly)
@@ -1075,6 +1092,22 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     let notSeries = await coordinator.seriesProgress(for: .serverItem(serverName: "other", itemID: "s1"))
     XCTAssertNil(notSeries, "不是可播放的服务器时没有进度")
+  }
+
+  func testMovieProgressReadsTheResumePoint() async {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie(positionSeconds: 1800)]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let progress = await coordinator.movieProgress(for: .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(progress, 0.25, "两小时的片子看到 30 分钟")
+    XCTAssertNil(coordinator.session, "只读进度，不起播")
+
+    PlaybackURLProtocol.stub.configure { $0.items["lan.playback-tests.local|m1"] = Self.movie(positionSeconds: 0) }
+    let unwatched = await coordinator.movieProgress(for: .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNil(unwatched, "没看过不画进度条")
   }
 
   func testSeriesWithoutPlayableEpisodesExplains() async {

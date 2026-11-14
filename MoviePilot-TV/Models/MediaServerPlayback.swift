@@ -579,8 +579,9 @@ nonisolated enum PlaybackEpisodeOrder {
 }
 
 /// 一部剧接着看哪一集（详情页的「继续播放」和集列表默认停的位置）。
-/// 只看有文件的正片集（全是特别篇时才看特别篇），按季号、集号排：最靠后的一集看过或看了一部分的为准——
-/// 看了一部分（续播点有效，见 `PlaybackResumePolicy`）就接着看它，看完了就看它后面的一集。
+/// 只看有文件的正片集（全是特别篇时才看特别篇），按季号、集号排：
+/// 最靠后的一集看过或看了一部分的为准：看了一部分（续播点有效，见 `PlaybackResumePolicy`）就接着看它，
+/// 看完了就看它后面的一集。前面集上留着的续播点不算（比如整季看完后又回头看了几分钟）。
 /// 一集都没看过、或最后一集已经看完时为 nil。
 nonisolated enum PlaybackEpisodeProgress {
   struct UpNext: Equatable, Sendable {
@@ -591,17 +592,27 @@ nonisolated enum PlaybackEpisodeProgress {
 
   static func upNext(in items: [ServerMediaItem]) -> UpNext? {
     let ordered = orderedEpisodes(items)
-    func resumePosition(_ item: ServerMediaItem) -> Double? {
-      PlaybackResumePolicy.resumePosition(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
-    }
-    func isWatched(_ item: ServerMediaItem) -> Bool {
-      item.played
-        || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
-    }
     guard let last = ordered.lastIndex(where: { isWatched($0) || resumePosition($0) != nil }) else { return nil }
     if !isWatched(ordered[last]) { return UpNext(episode: ordered[last], resumes: true) }
     let next = ordered.index(after: last)
     return ordered.indices.contains(next) ? UpNext(episode: ordered[next], resumes: false) : nil
+  }
+
+  /// 看完了的最靠后一集（`upNext` 为 nil、服务器上它后面没有文件时，详情页按 MoviePilot 集列表找它的下一集）。
+  /// 它后面还有看过一部分的集时为 nil（那时 `upNext` 接着看那一集）。
+  static func lastWatched(in items: [ServerMediaItem]) -> ServerMediaItem? {
+    guard let last = orderedEpisodes(items).last(where: { isWatched($0) || resumePosition($0) != nil }), isWatched(last)
+    else { return nil }
+    return last
+  }
+
+  private static func resumePosition(_ item: ServerMediaItem) -> Double? {
+    PlaybackResumePolicy.resumePosition(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
+  }
+
+  private static func isWatched(_ item: ServerMediaItem) -> Bool {
+    item.played
+      || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
   }
 
   /// 服务器上有文件的正片集里最新的一季，集列表没看过时默认显示它。

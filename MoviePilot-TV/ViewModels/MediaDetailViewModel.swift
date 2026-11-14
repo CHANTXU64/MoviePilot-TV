@@ -48,8 +48,12 @@ class MediaDetailViewModel: ObservableObject {
   /// 剧的「继续播放」：按服务器上的观看记录从接着看的那一集开始（见 `PlaybackEpisodeProgress`）。
   /// nil 时详情页显示普通的「播放」（`inAppPlaybackTarget`）。
   @Published private(set) var seriesPlayAction: SeriesPlayAction?
+  /// 电影看到了哪里（0…1）：有值时「播放」按钮只有播放图标和已播放进度条。
+  @Published private(set) var movieProgress: Double?
   /// 集列表默认显示的季和停在哪一集：看过的剧停在接着看的那一集；没看过时是服务器上最新入库的那一季。
   @Published private(set) var episodeRowHint: EpisodeRowHint?
+  /// 「继续播放」指向服务器上还没有的下一集时，按下请集列表打开那一集的面板（每次按下一个新请求）。
+  @Published private(set) var episodePanelRequest: EpisodePanelRequest?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -215,6 +219,7 @@ class MediaDetailViewModel: ObservableObject {
       episodePlayback = nil
       inAppPlaybackTarget = nil
       seriesPlayAction = nil
+      movieProgress = nil
       episodeRowHint = nil
     }
     guard hasAppliedFullDetail else { return }
@@ -586,8 +591,8 @@ class MediaDetailViewModel: ObservableObject {
         itemRef.itemID, expected: expected, in: servers, preferredServer: itemRef.server)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
       inAppPlaybackTarget = target
-      if detail.type == "电视剧", let target {
-        startSeriesProgressLoad(target)
+      if let target {
+        startWatchProgressLoad(target)
         observePlaybackEnd(target)
       }
     } catch is CancellationError {
@@ -598,11 +603,25 @@ class MediaDetailViewModel: ObservableObject {
 
   // MARK: - 剧的观看进度
 
-  private func startSeriesProgressLoad(_ target: PlaybackTarget) {
+  /// 读观看进度：剧算「继续播放」和集列表默认的位置，电影算按钮上的已播放进度。
+  private func startWatchProgressLoad(_ target: PlaybackTarget) {
     seriesProgressTask?.cancel()
     seriesProgressTask = Task { [weak self] in
-      await self?.loadSeriesProgress(target)
+      guard let self else { return }
+      switch self.detail.type {
+      case "电视剧": await self.loadSeriesProgress(target)
+      case "电影": await self.loadMovieProgress(target)
+      default: break
+      }
     }
+  }
+
+  private func loadMovieProgress(_ target: PlaybackTarget) async {
+    let snapshot = apiService.sessionSnapshot()
+    let progress = await apiService.sessionScope.playbackCoordinator.movieProgress(for: target)
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot), inAppPlaybackTarget == target
+    else { return }
+    movieProgress = progress
   }
 
   /// 播放结束、进度写回发完后重读（见 `PlaybackCoordinator.watchStateUpdates`）。
@@ -611,7 +630,7 @@ class MediaDetailViewModel: ObservableObject {
     playbackEndObservation = coordinator.watchStateUpdates
       .sink { [weak self] _ in
         guard let self, self.inAppPlaybackTarget == target else { return }
-        self.startSeriesProgressLoad(target)
+        self.startWatchProgressLoad(target)
       }
   }
 
@@ -623,8 +642,19 @@ class MediaDetailViewModel: ObservableObject {
       !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot), inAppPlaybackTarget == target
     else { return }
     guard let upNext = progress.upNext, let season = upNext.episode.seasonNumber else {
-      seriesPlayAction = nil
-      episodeRowHint = progress.latestSeason.map { EpisodeRowHint(season: $0) }
+      // 服务器上看完的最后一集后面没有文件：MoviePilot 集列表里还有下一集（还没下载、没入库）时指向它，按下打开它的面板。
+      let next = await progress.lastWatched.asyncFlatMap { await self.episodeAfter($0) }
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot), inAppPlaybackTarget == target
+      else { return }
+      if let next {
+        let text = SeriesPlayAction.title(resumes: false, season: next.seasonNumber, episode: next.episodeNumber)
+        seriesPlayAction = SeriesPlayAction(title: text, accessibilityLabel: text, action: .openEpisode)
+        episodeRowHint = EpisodeRowHint(
+          season: next.seasonNumber, tmdbEpisodeID: next.tmdbEpisodeID, episodeNumber: next.episodeNumber)
+      } else {
+        seriesPlayAction = nil
+        episodeRowHint = progress.latestSeason.map { EpisodeRowHint(season: $0) }
+      }
       return
     }
     // 对到 MoviePilot 集列表（默认顺序）里的那一集：按集起播带着同季列表，播放器里能接着播下一集。
@@ -660,6 +690,36 @@ class MediaDetailViewModel: ObservableObject {
     episodeRowHint = EpisodeRowHint(
       season: season, tmdbEpisodeID: matched?.tmdbEpisodeID,
       episodeNumber: matched?.episodeNumber ?? upNext.episode.episodeNumber)
+  }
+
+  /// MoviePilot 集列表（默认顺序）里服务器上 `watched` 这一集的下一集：同一季的下一集，这一季看完了是下一个正片季的第一集。
+  /// 对不上、读不到或已经是最后一集时为 nil。
+  private func episodeAfter(_ watched: ServerMediaItem) async -> MoviePilotEpisode? {
+    guard let season = watched.seasonNumber, let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail),
+      let list = try? await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil),
+      let hit = PlaybackMetadataLookup.episode(matching: watched, in: list)
+    else { return nil }
+    let episodes = MoviePilotEpisode.list(list, season: season)
+    guard let current = episodes.first(where: { $0.tmdbEpisodeID != nil && $0.tmdbEpisodeID == hit.id })
+      ?? episodes.first(where: { $0.episodeNumber == hit.episodeNumber })
+    else { return nil }
+    if episodes.indices.contains(current.index + 1) { return episodes[current.index + 1] }
+    let seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
+    guard season > 0, let nextSeason = seasons.filter({ $0 > season }).min(),
+      let nextList = try? await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: nextSeason, episodeGroup: nil)
+    else { return nil }
+    return MoviePilotEpisode.list(nextList, season: nextSeason).first
+  }
+
+  /// 「继续播放」按下：能播时起播，指向服务器上还没有的集时请集列表打开那一集的面板。
+  func performSeriesPlayAction(_ action: SeriesPlayAction) {
+    switch action.action {
+    case .play(let target):
+      apiService.sessionScope.playbackCoordinator.play(target, media: detail)
+    case .openEpisode:
+      guard let hint = episodeRowHint else { return }
+      episodePanelRequest = EpisodePanelRequest(hint: hint)
+    }
   }
 
   /// 根据媒体的海报或背景图更新详情页背景
@@ -959,7 +1019,13 @@ struct SeriesPlayAction: Equatable {
   var progress: Double? = nil
   /// 读屏用的完整说法（有进度条时标题里省掉了「继续播放」）。
   var accessibilityLabel: String
-  let target: PlaybackTarget
+  let action: Action
+
+  enum Action: Equatable {
+    case play(PlaybackTarget)
+    /// 下一集服务器上还没有：打开集列表里那一集的面板（能试看时在面板里试看），和按那张集卡片一样。
+    case openEpisode
+  }
 
   /// `matched` 是单集对应确定能播的 MoviePilot 集（调用方查过 `episodeAvailability`），按集起播：
   /// 与按下那一集的卡片相同，能接着播下一集。没有时直接播服务器上的这份文件（没有上一集、下一集）。
@@ -985,7 +1051,7 @@ struct SeriesPlayAction: Equatable {
     let spoken = title(resumes: upNext.resumes, season: season, episode: episode)
     return SeriesPlayAction(
       title: progress == nil ? spoken : episodeText(season: season, episode: episode) ?? spoken,
-      progress: progress, accessibilityLabel: spoken, target: target)
+      progress: progress, accessibilityLabel: spoken, action: .play(target))
   }
 
   /// 「继续播放 第 2 季第 5 集」「播放 第 2 季第 6 集」；缺编号时只写「继续播放」「播放」。
@@ -1016,5 +1082,18 @@ struct EpisodeRowHint: Equatable {
     if let tmdbEpisodeID, let hit = episodes.first(where: { $0.tmdbEpisodeID == tmdbEpisodeID }) { return hit }
     guard let episodeNumber else { return nil }
     return episodes.first { $0.episodeNumber == episodeNumber && $0.seasonNumber == season }
+  }
+}
+
+/// 请集列表打开某一集的面板。`id` 每次不同：同一集连按两次也各打开一次。
+struct EpisodePanelRequest: Equatable {
+  let id = UUID()
+  let hint: EpisodeRowHint
+}
+
+extension Optional {
+  fileprivate func asyncFlatMap<U>(_ transform: (Wrapped) async -> U?) async -> U? {
+    guard let self else { return nil }
+    return await transform(self)
   }
 }

@@ -518,6 +518,7 @@ struct MediaDetailView: View {
                     ? preloadTask.seasonViewModel : nil,
                   playback: viewModel.episodePlayback,
                   rowHint: viewModel.episodeRowHint,
+                  panelRequest: viewModel.episodePanelRequest,
                   allowsRequests: allowsRequests,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",
@@ -1053,22 +1054,29 @@ struct MediaDetailView: View {
           HStack(spacing: 20) {
             if let playbackTarget = viewModel.inAppPlaybackTarget {
               // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）：看到一半是播放图标、已播放进度条和季集号。
-              // 没看过、读不到观看记录时是普通的「播放」。
+              // 电影看到一半只有播放图标和已播放进度条，不写字。没看过、读不到观看记录时是普通的「播放」。
               let seriesAction = viewModel.seriesPlayAction
+              let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
+              let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
               Button(action: {
-                apiService.sessionScope.playbackCoordinator.play(
-                  seriesAction?.target ?? playbackTarget, media: viewModel.detail)
+                if let seriesAction {
+                  viewModel.performSeriesPlayAction(seriesAction)
+                } else {
+                  apiService.sessionScope.playbackCoordinator.play(playbackTarget, media: viewModel.detail)
+                }
               }) {
                 HStack(spacing: 14) {
                   Image(systemName: AppSymbol.play)
-                  if let progress = seriesAction?.progress {
+                  if let progress {
                     PlaybackProgressBar(fraction: progress)
                   }
-                  Text(seriesAction?.title ?? "播放")
+                  if let title {
+                    Text(title)
+                  }
                 }
                 .foregroundStyle(.primary)
               }
-              .accessibilityLabel(seriesAction?.accessibilityLabel ?? "播放")
+              .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "继续播放")
               .focused($focusedButton, equals: .play)
             }
 

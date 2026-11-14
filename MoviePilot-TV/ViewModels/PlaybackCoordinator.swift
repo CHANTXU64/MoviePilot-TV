@@ -441,12 +441,67 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let upNext: PlaybackEpisodeProgress.UpNext?
     /// 服务器上有文件的最新正片季。
     let latestSeason: Int?
+    /// 看完了的最靠后一集，`upNext` 为 nil 时才有（服务器上它后面没有文件），见 `PlaybackEpisodeProgress.lastWatched`。
+    var lastWatched: ServerMediaItem? = nil
   }
 
   /// 读详情页这部剧（`target` 是入库查询找到的整剧条目）在可播放服务器上的集和观看记录，第一台找到这部剧的为准。
   /// 刚播完回到详情页时，先等进度写回发完（最多 `pendingReportWait`），读到的才是刚看到的位置。
   /// 应用内播放不可用、哪台都没找到或都读不到时为 nil：详情页照常显示「播放」，集列表按默认的季。
   func seriesProgress(for target: PlaybackTarget) async -> SeriesProgress? {
+    await withLocatedLibraryItem(target) { server, connection, found -> SeriesProgress? in
+      guard found.kind == .series else { return nil }
+      let episodes = try await connection.episodes(seriesID: found.id)
+      let upNext = PlaybackEpisodeProgress.upNext(in: episodes)
+      let progress = SeriesProgress(
+        serverName: server.name, upNext: upNext, latestSeason: PlaybackEpisodeProgress.latestSeason(in: episodes),
+        lastWatched: upNext == nil ? PlaybackEpisodeProgress.lastWatched(in: episodes) : nil)
+      Logger.info(Self.seriesProgressSummary(progress, episodes: episodes, connection: connection))
+      return progress
+    }
+  }
+
+  /// 详情页电影看到了哪里（0…1，规则见 `PlaybackResumePolicy.progressFraction`），「继续播放」按钮画已播放进度条用。
+  /// 重新读一次条目，以服务器此刻的续播点为准。没看、看完了、读不到时为 nil。
+  func movieProgress(for target: PlaybackTarget) async -> Double? {
+    let fraction: Double?? = await withLocatedLibraryItem(target) { server, connection, found -> Double?? in
+      guard found.kind == .movie else { return nil }
+      let fresh = try await connection.item(id: found.id, timeout: MediaServerHTTP.quickTimeout) ?? found
+      let fraction = PlaybackResumePolicy.progressFraction(
+        positionSeconds: fresh.resumePositionSeconds, durationSeconds: fresh.runtimeSeconds)
+      Logger.info(
+        "[Playback] 电影观看进度：服务器 \(server.name)，用户 \(connection.userID)，条目 \(fresh.id)，"
+          + "续播点 \(Int(fresh.resumePositionSeconds)) 秒，时长 \(fresh.runtimeSeconds.map { "\(Int($0)) 秒" } ?? "未知")，"
+          + "已看完 \(fresh.played)")
+      return .some(fraction)
+    }
+    return fraction ?? nil
+  }
+
+  /// 观看进度读到了什么，写进日志便于排查「明明看过却没显示继续播放」：用的是哪台服务器、哪个用户，
+  /// 有几集看过、几集有续播点，最后接着看哪一集。
+  private static func seriesProgressSummary(
+    _ progress: SeriesProgress, episodes: [ServerMediaItem], connection: any MediaServerConnection
+  ) -> String {
+    func label(_ item: ServerMediaItem) -> String {
+      "S\(item.seasonNumber.map(String.init) ?? "?")E\(item.episodeNumber.map(String.init) ?? "?")"
+    }
+    let withFile = episodes.filter { $0.kind == .episode && $0.hasFile }
+    let played = withFile.filter(\.played).map(label)
+    let resumable = withFile.filter { $0.resumePositionSeconds > 0 }.map { "\(label($0))@\(Int($0.resumePositionSeconds))s" }
+    let upNext = progress.upNext.map { "\(label($0.episode))\($0.resumes ? "（接着看）" : "（从头）")" } ?? "无"
+    return "[Playback] 剧集观看进度：服务器 \(progress.serverName)，用户 \(connection.userID)，有文件 \(withFile.count) 集，"
+      + "已看完 \(played.isEmpty ? "无" : played.joined(separator: " "))，"
+      + "有续播点 \(resumable.isEmpty ? "无" : resumable.joined(separator: " "))，接着看 \(upNext)"
+  }
+
+  /// 在可播放的服务器上找到详情页的条目（电影或整部剧），交给 `body` 读它的观看记录；第一台 `body` 给出结果的为准。
+  /// 找法与起播相同（见 `prepare`）：入库条目按外部编号找、只在所属服务器上按 ID 兜底。
+  /// 起播前先等上一次播放的进度写回发完（最多 `pendingReportWait`）。
+  private func withLocatedLibraryItem<T>(
+    _ target: PlaybackTarget,
+    _ body: @escaping (MediaServerConf, any MediaServerConnection, ServerMediaItem) async throws -> T?
+  ) async -> T? {
     guard !isTornDown, allowsPlayback, let apiService else { return nil }
     await reporter.waitForQueued(atMost: Self.pendingReportWait)
     guard !Task.isCancelled, let servers = try? await apiService.fetchCachedMediaServers() else { return nil }
@@ -468,23 +523,20 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let userName = apiService.currentOrStoredUserName
     for server in candidates {
       do {
-        let progress = try await withConnection(to: server, preferredUserName: userName) {
-          connection -> SeriesProgress? in
+        let result = try await withConnection(to: server, preferredUserName: userName) { connection -> T? in
           let found: ServerMediaItem?
           if let expected {
             found = try await Self.findLibraryItem(itemID, expected: expected, owner: owner, strict: strict, on: connection)
           } else {
             found = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout)
           }
-          guard let found, found.kind == .series else { return nil }
-          let episodes = try await connection.episodes(seriesID: found.id)
-          return SeriesProgress(
-            serverName: server.name, upNext: PlaybackEpisodeProgress.upNext(in: episodes),
-            latestSeason: PlaybackEpisodeProgress.latestSeason(in: episodes))
+          guard let found else { return nil }
+          return try await body(server, connection, found)
         }
-        if let progress { return progress }
+        if let result { return result }
       } catch {
         if error is CancellationError || Task.isCancelled { return nil }
+        Logger.warning("[Playback] 读观看进度失败（\(server.name)）：\(Self.message(for: error))")
       }
     }
     return nil
