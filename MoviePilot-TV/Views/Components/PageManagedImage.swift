@@ -402,7 +402,8 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     decodedImage = image
     // 返回时垫着的模糊缩略图换成原图时淡入，不是突然一跳。
     let preview = role.isDetailBackdrop ? lifecycle?.backdropPreview(for: key) : nil
-    prepareBackdropPreviewIfNeeded(from: image)
+    // 每次解码都按这张图重做缩略图；上面已经拿到正在显示的旧缩略图，下面仍从它淡入新原图。
+    prepareBackdropPreviewIfNeeded(from: image, refreshesSameKey: true)
     let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
       if let preview, surface.image === preview {
@@ -420,9 +421,9 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private static let backdropPreviewBlurRadius: CGFloat = 10
   private static let backdropPreviewCrossfadeDuration: TimeInterval = 0.25
 
-  private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
+  private func prepareBackdropPreviewIfNeeded(from image: UIImage, refreshesSameKey: Bool = false) {
     guard role.isDetailBackdrop else { return }
-    lifecycle?.prepareBackdropPreview(for: key, role: role) {
+    lifecycle?.prepareBackdropPreview(for: key, role: role, refreshesSameKey: refreshesSameKey) {
       let longEdge = max(image.size.width, image.size.height)
       guard longEdge > 0 else { return nil }
       let ratio = min(1, Self.backdropPreviewLongEdge / longEdge)

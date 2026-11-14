@@ -135,8 +135,12 @@ final class PageImageLifecycle: ObservableObject {
     return detailBackdropPreview?.image
   }
 
-  func prepareBackdropPreview(for key: String, role: PageImageRole, makePreview: () -> UIImage?) {
-    guard !isRemoved, isDetailBackdropVisible, detailBackdropPreview?.key != key else { return }
+  /// `refreshesSameKey`：同一张背景重新解码时也重做缩略图。同一地址的图片内容可能已经换了，
+  /// 缩略图又是第二页的模糊背景，不能沿用旧的。
+  func prepareBackdropPreview(
+    for key: String, role: PageImageRole, refreshesSameKey: Bool = false, makePreview: () -> UIImage?
+  ) {
+    guard !isRemoved, isDetailBackdropVisible, refreshesSameKey || detailBackdropPreview?.key != key else { return }
     // 本地卡片在详情背景下方。只要主背景仍属于该页，转场也应使用它的小图。
     if role == .detailBackdropFallback, let preview = detailBackdropPreview,
       preview.role == .detailBackdrop, imageResources[preview.key] != nil

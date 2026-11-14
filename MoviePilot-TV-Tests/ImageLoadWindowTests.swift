@@ -801,6 +801,41 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertNil(lifecycle.currentBackdropPreview)
   }
 
+  /// 同一张背景（key 不变）重新解码出不同内容时，缩略图跟着换；返回时仍从旧缩略图淡入新原图。
+  func testSameSlotRedecodeRefreshesPreviewAfterCrossfadingFromTheOldOne() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let parent = coordinator.lifecycle(for: coordinator.push(resourceRequest("parent")))
+    parent.setDetailBackdropVisible(true)
+    let backdrop = makeSlot(key: "backdrop", lifecycle: parent, role: .detailBackdrop)
+    let surface = PageManagedImageView()
+    let demand = PageImageDemandLease()
+    backdrop.attach(surface, demandID: demand.id)
+    demand.bind(to: backdrop, isEnabled: true)
+    func solid(_ color: UIColor) -> UIImage {
+      UIGraphicsImageRenderer(size: CGSize(width: 960, height: 540)).image { context in
+        color.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: 960, height: 540))
+      }
+    }
+    backdrop.acceptRetrievedImage(solid(.blue))
+    let oldPreview = try XCTUnwrap(parent.currentBackdropPreview?.image)
+
+    // 进子页：父页原图释放，垫上旧缩略图。
+    coordinator.push(resourceRequest("child"))
+    XCTAssertTrue(surface.image === oldPreview)
+
+    // 返回后同一个 slot 解码出内容不同的新图。
+    coordinator.path.removeLast()
+    let newImage = solid(.red)
+    backdrop.acceptRetrievedImage(newImage)
+    XCTAssertTrue(surface.image === newImage, "原图从旧缩略图淡入替换")
+    let newPreview = try XCTUnwrap(parent.currentBackdropPreview)
+    XCTAssertEqual(newPreview.key, "backdrop")
+    XCTAssertFalse(newPreview.image === oldPreview, "同一个 key 也按新图重做缩略图")
+    XCTAssertTrue(parent.backdropPreview(for: "backdrop") === newPreview.image)
+  }
+
   func testDetailBackdropCardCanProvidePreviewAfterPrimaryIsRemoved() throws {
     let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
     coordinator.setStackForeground(true)
