@@ -233,8 +233,10 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
 
   /// 带编号的文件为什么没核对成。
   enum UnverifiedReason: Equatable, Sendable {
-    /// 连不上 TMDB、被限流、到时间没查完，或 TMDB 的对应关系有歧义。稍后会再查。
+    /// 连不上 TMDB、被限流、到时间没查完。稍后会再查。
     case lookupIncomplete
+    /// 编号在 TMDB 查到了，但对应这部剧的不止一集，或属于另一部剧：再查也一样，不承诺重试。
+    case idsDisagree
     /// 没能读取媒体服务器的媒体库配置，不知道单集资料从哪来，没法核对。
     case librarySettingsUnreadable
   }
@@ -274,6 +276,7 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     let detail =
       switch reason {
       case .lookupIncomplete: "有文件还没和 TMDB 核对上，稍后自动重试"
+      case .idsDisagree: "有文件的编号和 TMDB 对不上，无法确定是哪一集"
       case .librarySettingsUnreadable: "读不到服务器的媒体库设置，无法核对"
       }
     return StatusText(headline: "\(noun)可能已经入库", detail: detail)
@@ -290,6 +293,17 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
   /// 播放器里找上一集、下一集时：不会自动更新，请用户稍后再试。
   static func checkingQueueMessage(server: String) -> String {
     "还有文件在和 TMDB 核对，稍后再试"
+  }
+
+  /// 只按季号集号找到的文件编号在 TMDB 指向别的剧。
+  var hasIdentityConflict: Bool {
+    if case .uncertain(_, let match) = self { return match.identityConflict }
+    return false
+  }
+
+  /// 编号指向别的剧时，播放器里停下来的说明（写明是哪台服务器）。
+  static func identityConflictMessage(server: String) -> String {
+    "很可能不是这一集：“\(server)”上这一集的文件编号在 TMDB 属于另一部剧"
   }
 
   /// 确定能播。
@@ -344,7 +358,9 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
       let result = lookup.availability(of: episode)
       switch result {
       case .playable: return result
-      case .uncertain: if uncertain == nil { uncertain = result }
+      case .uncertain(_, let match):
+        // 编号指向别的剧的副本排在后面：别的副本（这台或别的服务器上）没有冲突时以它为准。
+        if uncertain == nil || (uncertain?.hasIdentityConflict == true && !match.identityConflict) { uncertain = result }
       case .failed: if failure == nil { failure = result }
       case .checking: if checking == nil { checking = result }
       case .unidentifiable: if unidentifiable == nil { unidentifiable = result }
@@ -391,6 +407,9 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
   ) -> EpisodeQueueStatus {
     if let status = onCurrentServer(episode, lookup: current) { return status }
     switch EpisodeAvailability.resolve(episode, lookups: [current] + others) {
+    case .uncertain(let server, let match) where match.identityConflict:
+      // 只找到编号指向别的剧的文件：不当作没有跳过，也不自动播它，停下来说明。
+      return .unknown(EpisodeAvailability.identityConflictMessage(server: server))
     case .playable(let server), .uncertain(let server, _): return .elsewhere(server: server)
     case .notOnServer: return .absent
     case .unmatched(let server): return .unmatched(server: server)

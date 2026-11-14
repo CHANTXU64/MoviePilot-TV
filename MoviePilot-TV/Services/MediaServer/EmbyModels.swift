@@ -505,7 +505,18 @@ nonisolated struct EmbyVirtualFolder: Decodable, Sendable {
 nonisolated struct EmbyVirtualFolderList: Decodable, Sendable {
   let profiles: [MediaLibraryProfile]
 
+  private enum CodingKeys: String, CodingKey { case items = "Items" }
+
+  /// `Library/VirtualFolders/Query` 回 `{"Items": [...]}`，`Library/VirtualFolders` 回顶层数组，两种都认。
   init(from decoder: Decoder) throws {
+    if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
+      try self.init(items: keyed.superDecoder(forKey: .items))
+    } else {
+      try self.init(items: decoder)
+    }
+  }
+
+  private init(items decoder: Decoder) throws {
     var container = try decoder.unkeyedContainer()
     var profiles: [MediaLibraryProfile] = []
     while !container.isAtEnd {

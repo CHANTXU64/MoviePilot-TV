@@ -2231,13 +2231,14 @@ extension PlaybackCoordinatorTests {
 
   private func makeCoordinator(
     _ service: APIService, tmdb directory: any TmdbEpisodeDirectory,
-    roundBudget: Duration = TmdbEpisodeEvidence.roundBudget, now: @escaping () -> Date = Date.init
+    roundBudget: Duration = TmdbEpisodeEvidence.roundBudget,
+    retryDelay: Duration = .seconds(PlaybackCoordinator.lookupRoundRetryInterval), now: @escaping () -> Date = Date.init
   ) -> PlaybackCoordinator {
     services.append(service)
     let enabled = enabledInSettings
     return PlaybackCoordinator(
       apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
-      tmdbDirectory: directory, lookupRoundBudget: roundBudget, now: now)
+      tmdbDirectory: directory, lookupRoundBudget: roundBudget, lookupRetryDelay: retryDelay, now: now)
   }
 
   /// 先订阅、再触发：协调器这一轮补查结束时（一定会发通知）满足。
@@ -2270,6 +2271,26 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(after, [.playable(server: "emby")])
     let calls = await directory.networkCalls
     XCTAssertEqual(calls, 1)
+  }
+
+  func testOlderEmbyWithoutTheQueryEndpointStillGivesLibrarySettings() async throws {
+    // 和 MoviePilot 一样先读 `Library/VirtualFolders/Query`；旧版 Emby 没有（404）时退回 `Library/VirtualFolders`。
+    configureLibraryWithoutEpisodeIDs(
+      #"{"Id":"e-bg","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"Name":"Other","Path":"/emby/长风渡/Season 2/03.mkv","ProviderIds":{"Tvdb":"8001"}}"#)
+    configureTvdbOnlyLibraryWithTmdbAccess()
+    PlaybackURLProtocol.stub.configure { $0.legacyVirtualFolders = [Self.lan] }
+    let episode = try groupEpisode(0)
+    let tmdbEpisodeID = try XCTUnwrap(episode.tmdbEpisodeID)
+    let directory = ScriptedTmdbDirectory(found: ["tvdb 8001": [TmdbFoundEpisode(id: tmdbEpisodeID, showID: 100)]])
+    let coordinator = makeCoordinator(makeService(), tmdb: directory)
+    let (ended, subscription) = lookupRoundEnd(coordinator)
+    defer { subscription.cancel() }
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [ended], timeout: 10)
+    let after = await coordinator.episodeAvailability(for: [episode], context: context())
+    XCTAssertEqual(after, [.playable(server: "emby")])
+    let paths = PlaybackURLProtocol.stub.requests().map(\.url.path).filter { $0.contains("VirtualFolders") }
+    XCTAssertEqual(paths, ["/Library/VirtualFolders/Query", "/Library/VirtualFolders"])
   }
 
   func testMissingEpisodeWaitsForTheLookupRoundBeforeOfferingTrial() async throws {
@@ -2324,6 +2345,50 @@ extension PlaybackCoordinatorTests {
     await fulfillment(of: [second], timeout: 5)
     let secondCalls = await directory.networkCalls
     XCTAssertEqual(secondCalls, 2, "冷却过后确实又查了一轮，冷却期内没有")
+  }
+
+  func testIncompleteRoundAsksTheOpenPageToCheckAgainLater() async throws {
+    // 第一轮没查全（TMDB 卡着、到点结束）：面板写着“稍后自动重试”，详情页一直开着也要在重查间隔后收到通知，
+    // 重读时开下一轮。
+    configureLibraryWithoutEpisodeIDs(
+      #"{"Id":"far","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"Path":"/emby/长风渡/Season 2/38.mkv","ProviderIds":{"Tvdb":"8038"}}"#)
+    configureTvdbOnlyLibraryWithTmdbAccess()
+    let episode = try groupEpisode(0)
+    nonisolated(unsafe) var clock = Date()
+    let directory = ScriptedTmdbDirectory(released: false)
+    let coordinator = makeCoordinator(
+      makeService(), tmdb: directory, roundBudget: .milliseconds(300), retryDelay: .milliseconds(300), now: { clock })
+    let (first, firstSubscription) = lookupRoundEnd(coordinator)
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [first], timeout: 5)
+    firstSubscription.cancel()
+
+    clock += PlaybackCoordinator.lookupRoundRetryInterval + 1
+    let (retry, retrySubscription) = lookupRoundEnd(coordinator)
+    await fulfillment(of: [retry], timeout: 5)
+    retrySubscription.cancel()
+    let (second, secondSubscription) = lookupRoundEnd(coordinator)
+    defer { secondSubscription.cancel() }
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [second], timeout: 5)
+    let calls = await directory.networkCalls
+    XCTAssertEqual(calls, 2, "收到通知重读时又查了一轮")
+  }
+
+  func testCompleteRoundDoesNotScheduleARetry() async throws {
+    configureLibraryWithoutEpisodeIDs(
+      #"{"Id":"far","Type":"Episode","ParentIndexNumber":2,"IndexNumber":38,"Path":"/emby/长风渡/Season 2/38.mkv","ProviderIds":{"Tvdb":"8038"}}"#)
+    configureTvdbOnlyLibraryWithTmdbAccess()
+    let episode = try groupEpisode(0)
+    let coordinator = makeCoordinator(makeService(), tmdb: ScriptedTmdbDirectory(), retryDelay: .milliseconds(200))
+    let (first, firstSubscription) = lookupRoundEnd(coordinator)
+    _ = await coordinator.episodeAvailability(for: [episode], context: context())
+    await fulfillment(of: [first], timeout: 5)
+    firstSubscription.cancel()
+    let (retry, retrySubscription) = lookupRoundEnd(coordinator)
+    defer { retrySubscription.cancel() }
+    retry.isInverted = true
+    await fulfillment(of: [retry], timeout: 0.8)
   }
 
   func testNewFileStartsALookupWithoutWaitingForTheCooldown() async throws {
@@ -2401,7 +2466,7 @@ extension PlaybackCoordinatorTests {
 
     configureLibraryWithoutEpisodeIDs(old.replacingOccurrences(of: #""Id":"far""#, with: #""Id":"far2""#))
     let replaced = await coordinator.episodeAvailability(for: [episode], context: context(), forceRefresh: true)
-    XCTAssertEqual(replaced, [.unverified(server: "emby", reason: .lookupIncomplete)])
+    XCTAssertEqual(replaced, [.unverified(server: "emby", reason: .idsDisagree)])
     let calls = await directory.networkCalls
     XCTAssertEqual(calls, 1, "编号查过，不再请求")
   }
@@ -4404,8 +4469,10 @@ private final class PlaybackStub: @unchecked Sendable {
     var mediaServerExists = #"{"success":true,"data":{"item":{}}}"#
     /// host → Emby `Library/SelectableMediaFolders` 的回包（没有时是空数组）
     var mediaFolders: [String: String] = [:]
-    /// host → Emby `Library/VirtualFolders` 的回包（没有时 404：媒体库配置读不到）
+    /// host → Emby 媒体库列表（顶层数组）。默认由 `Library/VirtualFolders/Query` 包在 `Items` 里回；没有时 404：媒体库配置读不到。
     var virtualFolders: [String: String] = [:]
+    /// 这些 host 是旧版 Emby：没有 `Query` 接口，只有 `Library/VirtualFolders`。
+    var legacyVirtualFolders: Set<String> = []
     var usersGate: DispatchSemaphore?
     /// 卡住“开始播放”上报（模拟网络慢）
     var reportStartGate: DispatchSemaphore?
@@ -4549,8 +4616,19 @@ private final class PlaybackURLProtocol: URLProtocol {
       respond(204, "")
     } else if path.hasSuffix("/Library/SelectableMediaFolders") {
       respond(200, scenario.mediaFolders[host] ?? "[]")
+    } else if path.hasSuffix("/Library/VirtualFolders/Query") {
+      // 旧版 Emby 没有这个接口：回 404，客户端退回 `Library/VirtualFolders`。
+      if let folders = scenario.virtualFolders[host], !scenario.legacyVirtualFolders.contains(host) {
+        respond(200, #"{"Items":\#(folders),"TotalRecordCount":1}"#)
+      } else {
+        respond(404, "")
+      }
     } else if path.hasSuffix("/Library/VirtualFolders") {
-      if let folders = scenario.virtualFolders[host] { respond(200, folders) } else { respond(404, "") }
+      if let folders = scenario.virtualFolders[host], scenario.legacyVirtualFolders.contains(host) {
+        respond(200, folders)
+      } else {
+        respond(404, "")
+      }
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
       if let status = scenario.searchStatus[host] {
         respond(status, "{}")

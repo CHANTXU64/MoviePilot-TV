@@ -74,13 +74,15 @@ nonisolated enum EpisodeLookupOutcome: Equatable, Sendable {
   case found(ExternalEpisodeMatch)
   /// 每个编号都明确查空：TMDB 没收录对应关系，这时才考虑用标题核实。
   case notFound
-  /// 反查到这部剧的不止一集，或编号指向别的剧：对应关系有歧义或身份冲突，不能确定是哪一集。
+  /// 反查到这部剧的不止一集：对应关系有歧义，不能确定是哪一集。
   case ambiguous
+  /// 编号在 TMDB 只指向别的剧：身份冲突，这个文件多半不是这一集（或服务器刮错了），不自动接着播。
+  case conflicting
   /// 还没查过、请求失败、限流或到时间没查：不知道是哪一集。
   case unresolved
 
   /// 没能确定这个文件是哪一集：没找到的集可能就是它。
-  var leavesFileUnplaced: Bool { self == .ambiguous || self == .unresolved }
+  var leavesFileUnplaced: Bool { self == .ambiguous || self == .conflicting || self == .unresolved }
 }
 
 /// 文件和 MoviePilot 数据之外的单集依据，建对应表时按服务器条目 ID 查。只来自本机已有的数据（缓存的媒体库配置和 TMDB 补查结果），
@@ -119,6 +121,11 @@ nonisolated struct EpisodeEvidence: Equatable, Sendable {
     return match
   }
 
+  /// 这个文件的外部编号在 TMDB 指向别的剧（单集资料可能来自 TMDB 的文件不算）。
+  func conflicts(_ file: ServerMediaItem) -> Bool {
+    independentFiles.contains(file.id) && lookups[file.id] == .conflicting
+  }
+
   /// 这个文件的标题能拿来核实：单集资料不是从 TMDB 取的、条目带着 TVDB 单集编号，而且编号在 TMDB 明确查空。
   /// 编号优先于标题：标题可能来自以前开着 TMDB 刮的旧条目或第三方工具按 TMDB 写的 NFO，编号能查到就以编号为准；
   /// 超时、限流、查出多集时都不用标题确认。
@@ -129,8 +136,9 @@ nonisolated struct EpisodeEvidence: Equatable, Sendable {
 
 /// 确定对应里不靠文件编号和整理记录的那些，起播前按各自的依据复核（见 `ServerEpisodeIndex.recheck`）。
 nonisolated enum EpisodeConfirmationBasis: Equatable, Sendable {
-  /// 服务器上的标题和 TMDB 同季唯一的标题一致：起播前标题不能变。
-  case title
+  /// 服务器上的标题和 TMDB 同季唯一的标题一致，当时的外部编号（`ExternalEvidenceRequest.lookupSources` 里的）
+  /// 在 TMDB 都明确查空：起播前标题和这些编号都不能变（重新刮削换了编号，新编号可能对应别的集）。
+  case title(externalIDs: [String: String])
   /// 外部编号在 TMDB 反查到了这一集：起播前这个编号不能变。
   case externalID(source: String, value: String)
 }
@@ -164,6 +172,11 @@ nonisolated struct ExternalEvidenceRequest: Equatable, Sendable {
 
   /// 能反查的外部编号来源，按优先顺序。TVDB 的单集编号最常见；IMDb 的少，TMDB 也常没收录。
   static let lookupSources = ["tvdb", "imdb"]
+
+  /// 文件上能反查的那些外部编号。
+  static func lookupIDs(of file: ServerMediaItem) -> [String: String] {
+    file.externalIDs.filter { lookupSources.contains($0.key) }
+  }
 
   /// 带着单集外部编号、还没靠文件编号或整理记录确定的文件都查，包括季号集号对不上任何一集、认不出是哪一集的
   /// （季号集号差得越远越要靠编号）。`independentFiles` 为 nil 时还不知道媒体库配置，先按都可能要查挑出来（用于判断

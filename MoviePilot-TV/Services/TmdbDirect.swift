@@ -265,7 +265,8 @@ nonisolated enum TmdbEpisodeEvidence {
 
   private enum LookupTrouble: Sendable { case failed, coolingDown }
 
-  /// 依次用各个外部编号反查。结果里这部剧只有一集就是它；不止一集，或编号指向别的剧，都说明对应关系有歧义，不再用别的编号。
+  /// 依次用各个外部编号反查。结果里这部剧只有一集就是它；不止一集是歧义（`ambiguous`），只指向别的剧是身份冲突
+  /// （`conflicting`），都不再用别的编号。
   /// 都没查到时，每个编号都明确查空才算 `notFound`；有编号没查成（没缓存、失败、限流、到时间）就是 `unresolved`。
   private static func lookUp(
     _ candidate: ExternalEvidenceRequest.Candidate, tmdbID: Int, access: TmdbAccess?,
@@ -284,8 +285,9 @@ nonisolated enum TmdbEpisodeEvidence {
         if mine.count == 1, let found = mine.first {
           return (candidate.itemID, .found(ExternalEpisodeMatch(tmdbEpisodeID: found.id, source: source, value: value)), nil)
         }
-        // 不止一集，或这个编号在 TMDB 指向别的剧（身份冲突）：都不能当作查空，不放行标题确认。
-        if !mine.isEmpty || !all.isEmpty { return (candidate.itemID, .ambiguous, nil) }
+        // 不止一集（歧义），或这个编号在 TMDB 只指向别的剧（身份冲突）：都不能当作查空，不放行标题确认。
+        if !mine.isEmpty { return (candidate.itemID, .ambiguous, nil) }
+        if !all.isEmpty { return (candidate.itemID, .conflicting, nil) }
       } catch TmdbDirectError.coolingDown {
         return (candidate.itemID, .unresolved, .coolingDown)
       } catch {

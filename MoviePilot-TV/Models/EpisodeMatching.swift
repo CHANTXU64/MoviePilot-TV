@@ -275,6 +275,8 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   var hasConsistentSeasonOffset = false
   /// 服务器上这个文件没有资料：没有任何外部编号，也没有首播日期。多半没刮削到，标题就是文件名。
   var serverHasNoMetadata = false
+  /// 这个文件的外部编号在 TMDB 指向别的剧：很可能不是这一集，上一集、下一集不自动接着播它（面板里仍可选择播放）。
+  var identityConflict = false
   /// 服务器上的集名和这一集同季唯一的具体标题相同，但不够确认（集名来源不清楚，或编号还没在 TMDB 查空）。只作参考，面板里不写，免得说明太长。
   var titleMatches = false
 
@@ -282,6 +284,9 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   /// 具体日期、集名这些细节写日志，不放进面板。
   func statusText(server: String, allowsSeasonDateOffset: Bool = false) -> StatusText {
     let found = "按第 \(season) 季第 \(episode) 集找到"
+    if identityConflict {
+      return StatusText(headline: "很可能不是这一集", detail: "这个文件的编号在 TMDB 属于另一部剧")
+    }
     if allowsSeasonDateOffset && hasConsistentSeasonOffset {
       return StatusText(headline: "可能不是这一集", detail: found + "，整季日期差两三天")
     }
@@ -414,7 +419,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       case .recorded(let placement):
         let ids = placement.episodes.compactMap { Self.episodeID(number: $0, in: lists[placement.list]) }
         if ids.isEmpty {
-          summary.unplaced += 1
+          // 记录里的剧集组或集号已经不在 MoviePilot 的列表里：记录定位不了，外部编号反查到了就以它为准。
+          if let found = evidence.lookedUp(file) {
+            lateMatches.append((file, found.tmdbEpisodeID, .externalID(source: found.source, value: found.value)))
+            summary.byLookup += 1
+          } else {
+            summary.unplaced += 1
+          }
         } else {
           ids.forEach { confirm(file, as: $0) }
           summary.byTransferRecord += 1
@@ -445,7 +456,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
             return list.uniqueTitle(of: candidate) == title
           }
           if titleMatches, evidence.titleCanVerify(file) {
-            lateMatches.append((file, id, .title))
+            lateMatches.append((file, id, .title(externalIDs: ExternalEvidenceRequest.lookupIDs(of: file))))
             summary.byTitle += 1
             continue
           }
@@ -464,7 +475,8 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
           guard let id = season.episodes[number]?.id else { continue }
           let match = UncertainEpisodeMatch(
             season: key.season, episode: number, episodeGroup: key.episodeGroup, airDate: airDate,
-            hasConsistentSeasonOffset: hasOffset, serverHasNoMetadata: hasNoMetadata, titleMatches: titleMatches)
+            hasConsistentSeasonOffset: hasOffset, serverHasNoMetadata: hasNoMetadata,
+            identityConflict: evidence.conflicts(file), titleMatches: titleMatches)
           uncertain[id, default: []].append(UncertainFile(item: file, match: match))
           matched = true
         }
@@ -491,15 +503,21 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     for (file, id, _) in lateMatches { confirm(file, as: id) }
     confirmedBy = Dictionary(lateMatches.map { ($0.file.id, $0.basis) }, uniquingKeysWith: { first, _ in first })
     self.confirmed = confirmed
-    self.uncertain = uncertain.filter { confirmed[$0.key] == nil }
+    // 同一集有几份时，编号指向别的剧的排在后面：面板说明、起播和接着播都先用没有冲突的那份（保持服务器原来的顺序）。
+    self.uncertain = uncertain.filter { confirmed[$0.key] == nil }.mapValues { files in
+      files.filter { !$0.match.identityConflict } + files.filter(\.match.identityConflict)
+    }
     unidentifiedFileCount = summary.unidentified
     let placed = Set(confirmed.values.flatMap { $0.map(\.id) })
     let unresolved = plan.files.filter { file in
       !placed.contains(file.id) && evidence.lookups[file.id]?.leavesFileUnplaced == true
     }
     unresolvedFileCount = unresolved.count
+    // 都是查到了但对不上（歧义、身份冲突）时不承诺重试；有没查成的才是“稍后自动重试”。
+    let stillUnanswered = unresolved.contains { evidence.lookups[$0.id] == .unresolved }
     checkingFileCount = unresolved.filter { evidence.checkingFiles.contains($0.id) }.count
-    unverifiedReason = evidence.librarySettingsUnknown ? .librarySettingsUnreadable : .lookupIncomplete
+    unverifiedReason =
+      evidence.librarySettingsUnknown ? .librarySettingsUnreadable : stillUnanswered ? .lookupIncomplete : .idsDisagree
     self.summary = summary
   }
 
@@ -719,9 +737,10 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
       return .same
     }
     switch basis {
-    case .title:
+    case .title(let externalIDs):
       guard fresh.hasFile, fresh.seriesID == recorded.seriesID,
-        let title = EpisodeTitle.normalized(fresh.name), title == EpisodeTitle.normalized(recorded.name)
+        let title = EpisodeTitle.normalized(fresh.name), title == EpisodeTitle.normalized(recorded.name),
+        ExternalEvidenceRequest.lookupIDs(of: fresh) == externalIDs
       else { return .changed }
     case .externalID(let source, let value):
       guard fresh.hasFile, fresh.seriesID == recorded.seriesID, fresh.externalIDs[source] == value else { return .changed }
@@ -749,14 +768,16 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   }
 
   /// 起播时逐个试的条目（第一条不能直连，比如 strm，就换下一条）：有确定的文件只用确定的，否则用按季号集号对上的。
-  func playableEpisodes(tmdbEpisodeID: Int) -> [ServerMediaItem] {
+  /// 上一集、下一集（`forQueue`）不用编号指向别的剧的文件，那种只在用户看过面板后手动播。
+  func playableEpisodes(tmdbEpisodeID: Int, forQueue: Bool = false) -> [ServerMediaItem] {
     let confirmed = confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID)
-    return confirmed.isEmpty ? uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).map(\.item) : confirmed
+    guard confirmed.isEmpty else { return confirmed }
+    return uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).filter { !forQueue || !$0.match.identityConflict }.map(\.item)
   }
 
-  /// 队列和每集状态用的代表条目。上一集、下一集也用按季号集号对上的，不打断连续播放。
+  /// 上一集、下一集用的代表条目：也用按季号集号对上的，不打断连续播放；编号指向别的剧的不用。
   func playableEpisode(tmdbEpisodeID: Int) -> ServerMediaItem? {
-    playableEpisodes(tmdbEpisodeID: tmdbEpisodeID).first
+    playableEpisodes(tmdbEpisodeID: tmdbEpisodeID, forQueue: true).first
   }
 
   /// 这台服务器上有文件的集（确定的和按季号集号对上的）。

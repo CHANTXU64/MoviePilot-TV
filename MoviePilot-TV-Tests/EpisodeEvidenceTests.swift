@@ -81,6 +81,10 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertNil(profiles[1].episodeFetchers, "没有单集这一项：服务器用默认来源")
     XCTAssertTrue(profiles[1].mayUseTmdbForEpisodes)
     XCTAssertEqual(profiles[2].paths, [], "坏字段只丢它自己")
+    let query = try JSONDecoder().decode(
+      EmbyVirtualFolderList.self, from: Data(#"{"Items":\#(json),"TotalRecordCount":3}"#.utf8)
+    ).profiles
+    XCTAssertEqual(query, profiles, "`Library/VirtualFolders/Query` 把同样的列表放在 Items 里")
   }
 
   // MARK: 对应规则
@@ -97,6 +101,57 @@ final class EpisodeEvidenceTests: XCTestCase {
     let fromTmdb = index([shifted], evidence: EpisodeEvidence(lookups: ["e1": .found(found)]))
     XCTAssertTrue(fromTmdb.confirmedEpisodes(tmdbEpisodeID: 103).isEmpty, "外部编号可能是 TMDB 按季号集号给的")
     XCTAssertEqual(fromTmdb.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["e1"])
+  }
+
+  func testLookupIsUsedWhenTheTransferRecordPointsOutsideTheList() {
+    // 路径对上了整理记录，但记录里的第 1 季第 9 集不在 MoviePilot 的列表里（记录定位不了）：外部编号反查到了就以它为准。
+    let recordedFile = file("e1", episode: 9, ids: ["tvdb": "9009"], path: "/data/剧/Season 1/S01E09.mkv")
+    let record = EpisodeTransferRecord(
+      id: 1, mediaID: "100", seasons: "S01", episodes: "E09", path: "/media/剧/Season 1/S01E09.mkv")
+    let found = ExternalEpisodeMatch(tmdbEpisodeID: 104, source: "tvdb", value: "9009")
+    func built(_ evidence: EpisodeEvidence) -> ServerEpisodeIndex {
+      ServerEpisodeIndex(
+        serverName: "emby", hasSeries: true, episodes: [recordedFile], lists: [key: chineseSeason], records: [record],
+        evidence: evidence)
+    }
+    XCTAssertTrue(built(EpisodeEvidence()).confirmedEpisodes(tmdbEpisodeID: 104).isEmpty)
+    let looked = built(EpisodeEvidence(independentFiles: ["e1"], lookups: ["e1": .found(found)]))
+    XCTAssertEqual(looked.confirmedEpisodes(tmdbEpisodeID: 104).map(\.id), ["e1"])
+    XCTAssertEqual(looked.confirmedBy["e1"], .externalID(source: "tvdb", value: "9009"))
+  }
+
+  func testIDThatBelongsToAnotherShowIsNotPlayedAutomatically() {
+    // 编号在 TMDB 只指向别的剧：面板里仍可手动播，但上一集、下一集不自动接着播，缺的集按可能已有说明。
+    let conflicting = file("e1", episode: 1, ids: ["tvdb": "777"])
+    let built = index([conflicting], evidence: EpisodeEvidence(independentFiles: ["e1"], lookups: ["e1": .conflicting]))
+    let match = built.uncertainEpisodes(tmdbEpisodeID: 101).first?.match
+    XCTAssertEqual(match?.identityConflict, true)
+    XCTAssertEqual(match?.statusText(server: "emby").headline, "很可能不是这一集")
+    XCTAssertEqual(built.playableEpisodes(tmdbEpisodeID: 101).map(\.id), ["e1"], "用户看过面板后可以手动播")
+    XCTAssertNil(built.playableEpisode(tmdbEpisodeID: 101), "不自动接着播")
+    XCTAssertEqual(
+      built.availability(of: 102), .unverified(server: "emby", reason: .idsDisagree), "查到了但对不上：不承诺重试")
+    let episode = MoviePilotEpisode(TmdbEpisode(id: 101, episodeNumber: 1), season: 1, index: 0)
+    guard case .unknown(let message) = EpisodeQueueStatus.resolve(episode, current: .loaded(built), others: []) else {
+      return XCTFail("停下来说明，不当作没有跳过")
+    }
+    XCTAssertTrue(message.contains("“emby”"), "说明写明是哪台服务器")
+
+    // 同一集还有一份没有冲突的副本：面板、起播和接着播都先用它。
+    let clean = file("e2", episode: 1, ids: ["tvdb": "778"])
+    let both = index(
+      [conflicting, clean], evidence: EpisodeEvidence(independentFiles: ["e1", "e2"], lookups: ["e1": .conflicting]))
+    XCTAssertEqual(both.uncertainEpisodes(tmdbEpisodeID: 101).map(\.item.id), ["e2", "e1"])
+    XCTAssertEqual(both.playableEpisode(tmdbEpisodeID: 101)?.id, "e2")
+    guard case .uncertain(_, let shown) = both.availability(of: 101) else { return XCTFail() }
+    XCTAssertFalse(shown.identityConflict)
+
+    // 冲突的在当前服务器、没有冲突的在另一台：说这一集在另一台上，不按冲突停下。
+    let other = ServerEpisodeIndex(
+      serverName: "emby2", hasSeries: true, episodes: [clean], lists: [key: chineseSeason], evidence: EpisodeEvidence())
+    XCTAssertEqual(
+      EpisodeAvailability.resolve(episode, lookups: [.loaded(built), .loaded(other)]),
+      .uncertain(server: "emby2", match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: nil, airDate: .unknown)))
   }
 
   func testTitleConfirmsOnlyAfterTheIDWasExplicitlyNotFound() throws {
@@ -118,7 +173,7 @@ final class EpisodeEvidenceTests: XCTestCase {
     }
     let notFound = built(.notFound, files: files)
     XCTAssertEqual(notFound.confirmedEpisodes(tmdbEpisodeID: 101).map(\.id), ["e1"])
-    XCTAssertEqual(notFound.confirmedBy["e1"], .title)
+    XCTAssertEqual(notFound.confirmedBy["e1"], .title(externalIDs: ExternalEvidenceRequest.lookupIDs(of: files[0])))
     XCTAssertEqual(notFound.uncertainEpisodes(tmdbEpisodeID: 102).map(\.item.id), ["e2"])
 
     for outcome: EpisodeLookupOutcome? in [nil, .unresolved, .ambiguous] {
@@ -155,6 +210,19 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(ServerEpisodeIndex.recheck(recorded, recorded: recorded, tmdbEpisodeID: 103, basis: basis), .same)
     let rescraped = file("e1", episode: 1, ids: ["tvdb": "9002"], path: "/tv/a.mkv")
     XCTAssertEqual(ServerEpisodeIndex.recheck(rescraped, recorded: recorded, tmdbEpisodeID: 103, basis: basis), .changed)
+  }
+
+  func testRecheckOfATitleMatchAlsoKeepsItsExternalIDs() {
+    // 按标题确认时编号在 TMDB 明确查空；重新刮削只换了 TVDB 编号，新编号可能对应别的集，要重建对应表。
+    let recorded = file("e1", episode: 1, ids: ["tvdb": "1"], path: "/tv/a.mkv", name: "Rainy Day")
+    let basis = EpisodeConfirmationBasis.title(externalIDs: ["tvdb": "1"])
+    XCTAssertEqual(ServerEpisodeIndex.recheck(recorded, recorded: recorded, tmdbEpisodeID: 101, basis: basis), .same)
+    let rescraped = file("e1", episode: 1, ids: ["tvdb": "2"], path: "/tv/a.mkv", name: "Rainy Day")
+    XCTAssertEqual(ServerEpisodeIndex.recheck(rescraped, recorded: recorded, tmdbEpisodeID: 101, basis: basis), .changed)
+    let gainedIMDb = file("e1", episode: 1, ids: ["tvdb": "1", "imdb": "tt9"], path: "/tv/a.mkv", name: "Rainy Day")
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(gainedIMDb, recorded: recorded, tmdbEpisodeID: 101, basis: basis), .changed,
+      "多了没查过的编号也要重查")
   }
 
   func testRequestCoversEveryUnconfirmedSingleEpisodeFileWithAnID() throws {
@@ -217,7 +285,9 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(
       afterRound, .unverified(server: "emby", reason: .lookupIncomplete), "没查成：可以试看，但先说明媒体库里可能已有")
     XCTAssertTrue(afterRound.allowsTrial)
-    XCTAssertEqual(availability(.ambiguous, inProgress: false), .unverified(server: "emby", reason: .lookupIncomplete))
+    XCTAssertEqual(
+      availability(.ambiguous, inProgress: false), .unverified(server: "emby", reason: .idsDisagree),
+      "查到了但有歧义：再查也一样，不承诺重试")
     let unreadable = index(
       [farOff],
       evidence: EpisodeEvidence(lookups: ["farOff": .unresolved], librarySettingsUnknown: true)
@@ -354,7 +424,7 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(result.lookups["c"], .found(ExternalEpisodeMatch(tmdbEpisodeID: 106, source: "imdb", value: "tt3")))
     XCTAssertEqual(result.lookups["d"], .notFound, "每个编号都明确查空")
     XCTAssertEqual(result.lookups["e"], .unresolved, "有一个编号没查成就不算查空")
-    XCTAssertEqual(result.lookups["f"], .ambiguous, "编号指向别的剧是身份冲突，不算查空")
+    XCTAssertEqual(result.lookups["f"], .conflicting, "编号指向别的剧是身份冲突，不算查空")
     XCTAssertFalse(result.isComplete)
     XCTAssertEqual(result.translatedSeasons[1]?.count, 1, "只给编号明确查空的文件取季列表，空列表不要")
     XCTAssertNil(result.translatedSeasons[2], "没查成的不比标题")
