@@ -64,8 +64,7 @@ nonisolated struct TmdbProxy: Equatable, Hashable, Sendable {
     guard let port = components.port.map({ UInt16(exactly: $0) }) ?? defaultPort else { return .failure(.unreadable) }
     return .success(
       TmdbProxy(
-        kind: kind, host: host, port: port, username: components.user?.removingPercentEncoding,
-        password: components.password?.removingPercentEncoding))
+        kind: kind, host: host, port: port, username: components.user, password: components.password))
   }
 
   enum ProxyProblem: Error, Equatable, Sendable {

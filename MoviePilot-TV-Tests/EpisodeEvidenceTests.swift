@@ -423,6 +423,12 @@ final class EpisodeEvidenceTests: XCTestCase {
     XCTAssertEqual(plain, TmdbAccess(apiKey: "k", domain: "api.tmdb.org", locale: "zh"))
     let socks = try TmdbAccessSettings(apiKey: "k", domain: "d", proxyHost: "socks5://u%40x:p@192.168.1.2:7891").access.get()
     XCTAssertEqual(socks.proxy, TmdbProxy(kind: .socks5, host: "192.168.1.2", port: 7891, username: "u@x", password: "p"))
+    // 账号密码只解码一次：`%25` 是字面的 `%`，`%252F` 是字面的 `%2F`，不再变成 `/`。
+    let encoded = try TmdbAccessSettings(
+      apiKey: "k", domain: "d", proxyHost: "http://us%25er:p%252Fword@192.168.1.2:7890"
+    ).access.get()
+    XCTAssertEqual(encoded.proxy?.username, "us%er")
+    XCTAssertEqual(encoded.proxy?.password, "p%2Fword")
     let http = try TmdbAccessSettings(apiKey: "k", domain: "d", proxyHost: "http://nas.lan").access.get()
     XCTAssertEqual(http.proxy?.port, 80)
     for unusable in ["http://127.0.0.1:7890", "http://localhost:7890", "ftp://1.2.3.4", "not a url"] {
