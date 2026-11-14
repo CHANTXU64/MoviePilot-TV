@@ -192,6 +192,8 @@ private struct EpisodeBrowser: View {
     var results: [MoviePilotEpisode.ID: EpisodeAvailability]?
     /// 能播的集在服务器上的文件时长（秒），TMDB 没给时长时用来补上。
     var serverRuntimes: [MoviePilotEpisode.ID: Double] = [:]
+    /// 看过一部分的集看到了哪里（0…1），卡片上画已播放进度条。
+    var watchProgress: [MoviePilotEpisode.ID: Double] = [:]
     /// 应用内播放不可用（不是管理员、版本不支持、设置里关了、没有能播放的服务器）：不显示播放和试看。
     var isOffered = true
     /// 重查期间沿用上次的结果，按钮显示加载中，焦点不跳。
@@ -404,6 +406,10 @@ private struct EpisodeBrowser: View {
     }
     .onReceive(apiService.sessionScope.playbackCoordinator.evidenceUpdates) { updated in
       guard updated == tmdbID else { return }
+      group.availabilityUpdates += 1
+    }
+    // 播放结束、进度写回之后重读：卡片上的已播放进度跟着更新。
+    .onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates) { _ in
       group.availabilityUpdates += 1
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
@@ -656,6 +662,7 @@ private struct EpisodeBrowser: View {
       stillSize: stillSize,
       loadsImage: loadsImage,
       status: entry?.cardStatus,
+      watchProgress: entry == nil ? nil : currentAvailability(season: episode.seasonNumber)?.watchProgress[episode.id],
       accessibilityStatus: entry?.accessibilityStatus,
       // 没有应用内播放时长按只有「详情」，和有播放时一样都有长按菜单。
       menuActions: entry?.menuActions ?? [.details],
@@ -913,6 +920,9 @@ private struct EpisodeBrowser: View {
       state.serverRuntimes = Dictionary(
         zip(episodes.map(\.id), lookup.serverRuntimeSeconds).compactMap { id, seconds in seconds.map { (id, $0) } },
         uniquingKeysWith: { first, _ in first })
+      state.watchProgress = Dictionary(
+        zip(episodes.map(\.id), lookup.watchProgress).compactMap { id, value in value.map { (id, $0) } },
+        uniquingKeysWith: { first, _ in first })
       let rechecked = zip(episodes, results).compactMap { episode, availability in
         trialKey(for: episode).map { ($0, availability) }
       }
@@ -1107,6 +1117,8 @@ private struct EpisodeCard: View {
   let stillSize: CGSize
   let loadsImage: Bool
   let status: EpisodeEntry.CardStatus?
+  /// 看过一部分时的已播放进度（0…1）。
+  let watchProgress: Double?
   let accessibilityStatus: String?
   /// 长按菜单，至少有「详情」。
   let menuActions: [EpisodeEntry.MenuAction]
@@ -1121,7 +1133,7 @@ private struct EpisodeCard: View {
     Button(action: onSelect) {
       EpisodeCardContent(
         episode: episode, stillURL: stillURL, isFocused: isFocused,
-        stillSize: stillSize, loadsImage: loadsImage, status: status
+        stillSize: stillSize, loadsImage: loadsImage, status: status, watchProgress: watchProgress
       )
       .contentShape(.rect)
     }
@@ -1141,7 +1153,9 @@ private struct EpisodeCard: View {
       }
     }
     .accessibilityLabel(episode.cardTitle)
-    .accessibilityValue((episode.metadata + [accessibilityStatus].compactMap { $0 }).joined(separator: "，"))
+    .accessibilityValue(
+      (episode.metadata + [accessibilityStatus, watchProgress.map { "已播放 \(Int(($0 * 100).rounded()))%" }]
+        .compactMap { $0 }).joined(separator: "，"))
     .accessibilityActions {
       ForEach(menuActions, id: \.menuID) { action in
         Button(action.title) { onMenuAction(action) }
@@ -1190,6 +1204,8 @@ struct EpisodeCardContent: View {
   var loadsImage = true
   /// 能不能播、试看到哪一步，画在剧照上（见 `EpisodeCardStatusOverlay`）。
   var status: EpisodeEntry.CardStatus?
+  /// 能播放、看过一部分时的已播放进度（0…1）。
+  var watchProgress: Double? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1228,7 +1244,8 @@ struct EpisodeCardContent: View {
       }
       if let status {
         EpisodeCardStatusOverlay(
-          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, isFocused: isFocused)
+          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, watchProgress: watchProgress,
+          isFocused: isFocused)
           .transition(.opacity)
       }
     }

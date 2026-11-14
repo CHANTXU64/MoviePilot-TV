@@ -451,6 +451,47 @@ final class InAppPlaybackModelTests: XCTestCase {
       ])), 2, "最新的、有文件的正片季")
   }
 
+  func testProgressFractionOnlyForAValidResumePoint() {
+    XCTAssertEqual(PlaybackResumePolicy.progressFraction(positionSeconds: 1800, durationSeconds: 3600), 0.5)
+    XCTAssertNil(PlaybackResumePolicy.progressFraction(positionSeconds: 30, durationSeconds: 3600), "不到 1 分钟不算看过")
+    XCTAssertNil(PlaybackResumePolicy.progressFraction(positionSeconds: 3400, durationSeconds: 3600), "接近片尾算看完")
+    XCTAssertNil(PlaybackResumePolicy.progressFraction(positionSeconds: 1800, durationSeconds: nil), "不知道时长不画")
+    XCTAssertNil(PlaybackResumePolicy.progressFraction(positionSeconds: 1800, durationSeconds: 0))
+  }
+
+  @MainActor
+  func testSeriesPlayActionShowsProgressAndEpisodeWhenResuming() {
+    let context = EpisodePlaybackContext(
+      media: MediaInfo(tmdb_id: 100, source: "themoviedb", type: "电视剧"), episodeGroup: nil, seasons: [1, 2],
+      libraryItem: nil)
+    let half = ServerMediaItem(
+      id: "e5", kind: .episode, seasonNumber: 2, episodeNumber: 5, runtimeSeconds: 3600, resumePositionSeconds: 900)
+    let resuming = SeriesPlayAction.make(
+      upNext: PlaybackEpisodeProgress.UpNext(episode: half, resumes: true), serverName: "emby", matched: nil,
+      seasonEpisodes: [], context: context)
+    XCTAssertEqual(resuming.title, "第 2 季第 5 集", "看到一半：播放图标、进度条和季集号")
+    XCTAssertEqual(resuming.progress, 0.25)
+    XCTAssertEqual(resuming.accessibilityLabel, "继续播放 第 2 季第 5 集")
+    XCTAssertEqual(resuming.target, .serverItem(serverName: "emby", itemID: "e5"), "单集对应没确定时直接播这份文件")
+
+    let next = ServerMediaItem(id: "e6", kind: .episode, seasonNumber: 2, episodeNumber: 6, runtimeSeconds: 3600)
+    let fresh = SeriesPlayAction.make(
+      upNext: PlaybackEpisodeProgress.UpNext(episode: next, resumes: false), serverName: "emby", matched: nil,
+      seasonEpisodes: [], context: context)
+    XCTAssertEqual(fresh.title, "播放 第 2 季第 6 集")
+    XCTAssertNil(fresh.progress)
+
+    let matched = MoviePilotEpisode(TmdbEpisode(id: 506, episodeNumber: 6), season: 2, index: 5)
+    let queued = SeriesPlayAction.make(
+      upNext: PlaybackEpisodeProgress.UpNext(episode: next, resumes: false), serverName: "emby", matched: matched,
+      seasonEpisodes: [matched], context: context)
+    guard case .episode(let episode, let acceptance) = queued.target else {
+      return XCTFail("单集对应确定能播时按集起播，实际 \(queued.target)")
+    }
+    XCTAssertEqual(episode.episode, matched)
+    XCTAssertEqual(acceptance, .confirmedOnly)
+  }
+
   @MainActor
   func testSeriesPlayActionTitleNamesTheEpisode() {
     XCTAssertEqual(SeriesPlayAction.title(resumes: true, season: 2, episode: 5), "继续播放 第 2 季第 5 集")
@@ -1511,6 +1552,25 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     await run(coordinator, .serverItem(serverName: "emby", itemID: "e1"))
     return try XCTUnwrap(coordinator.session)
+  }
+
+  func testEndingPlaybackPublishesWatchStateAfterProgressIsSaved() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSessionWithUserData(coordinator)
+    session.itemDidLoadForTesting()
+    await coordinator.reporterForTesting.waitForQueued()
+    let fired = expectation(description: "观看进度更新")
+    var savedBeforeNotice = false
+    let subscription = coordinator.watchStateUpdates.sink {
+      savedBeforeNotice = PlaybackURLProtocol.stub.requests().contains {
+        "\($0.method) \($0.url.path)" == "POST /Users/u-admin/Items/e1/UserData"
+      }
+      fired.fulfill()
+    }
+    coordinator.endSession(session)
+    await fulfillment(of: [fired], timeout: 10)
+    XCTAssertTrue(savedBeforeNotice, "进度写回发完之后才通知详情页重读")
+    subscription.cancel()
   }
 
   private func stoppedItem(completed: Bool = false) -> PlaybackSession.EndedItem {

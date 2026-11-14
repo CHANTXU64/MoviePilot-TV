@@ -226,6 +226,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 一轮补查结束时发出这部剧的 TMDB 编号（集索引已作废，结果在本机缓存里），详情页据此重读播放状态：
   /// 查到的集变成能播，“正在核对”的集按查完的结果显示。
   let evidenceUpdates = PassthroughSubject<Int, Never>()
+  /// 一次播放结束、观看进度写回发完（最多等 `pendingReportWait`）后发出：集索引已作废，
+  /// 详情页据此重读每集的已播放进度和「继续播放」。
+  let watchStateUpdates = PassthroughSubject<Void, Never>()
+  private var watchStateRefreshTask: Task<Void, Never>?
   /// 一轮补查结束后，这么久之内不再开下一轮。
   static let lookupRoundRetryInterval: TimeInterval = 600
   /// 一轮补查最多多久（见 `TmdbEpisodeEvidence.roundBudget`），测试可以改短。
@@ -348,6 +352,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     phase = .idle
     session.stop()
     if let notice { self.notice = Failure(message: notice) }
+    refreshWatchStateAfterReports()
+  }
+
+  /// 停止上报和进度写回由 `session.stop()` 排进上报队列；发完后作废集索引（里面记的续播点、已看完是旧的），再通知详情页重读。
+  private func refreshWatchStateAfterReports() {
+    watchStateRefreshTask?.cancel()
+    watchStateRefreshTask = Task { [weak self] in
+      guard let self else { return }
+      await self.reporter.waitForQueued(atMost: Self.pendingReportWait)
+      guard !Task.isCancelled, !self.isTornDown else { return }
+      self.episodeIndexes.invalidateAll()
+      self.watchStateUpdates.send()
+    }
   }
 
   /// App 离开前台（回主屏、打开 App 切换器）时保存正在播放条目的观看进度，播放不结束。
@@ -363,6 +380,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     isTornDown = true
     switchTask?.cancel()
     switchTask = nil
+    watchStateRefreshTask?.cancel()
+    watchStateRefreshTask = nil
     switch phase {
     case .resolving(let task): task.cancel()
     case .playing(let session): session.stop()
@@ -594,7 +613,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     guard !Task.isCancelled else { return nil }
     return EpisodePlaybackLookup(
       availability: episodes.map { EpisodeAvailability.resolve($0, lookups: lookups) },
-      serverRuntimeSeconds: episodes.map { EpisodeAvailability.serverRuntimeSeconds($0, lookups: lookups) }
+      serverRuntimeSeconds: episodes.map { EpisodeAvailability.serverRuntimeSeconds($0, lookups: lookups) },
+      watchProgress: episodes.map { EpisodeAvailability.watchProgress($0, lookups: lookups) }
     )
   }
 

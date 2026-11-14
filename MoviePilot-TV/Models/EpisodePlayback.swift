@@ -381,24 +381,38 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     return uncertain ?? failure ?? checking ?? unidentifiable ?? unmatched ?? .notOnServer
   }
 
-  /// 能播的这一集在服务器上的文件时长（秒），和 `resolve` 的选择一致：先找确定有这一集的服务器，
-  /// 都没有时用按季号集号对上的文件（编号指向别的剧的不用）。没有文件或服务器没给时长时为 nil。
-  static func serverRuntimeSeconds(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> Double? {
+  /// 能播的这一集在服务器上的文件，和 `resolve` 的选择一致：先找确定有这一集的服务器，
+  /// 都没有时用按季号集号对上的文件（编号指向别的剧的不用）。没有文件时为 nil。
+  static func serverFile(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> ServerMediaItem? {
     guard let tmdbEpisodeID = episode.tmdbEpisodeID else { return nil }
     let indexes = lookups.compactMap { lookup -> ServerEpisodeIndex? in
       if case .loaded(let index) = lookup { return index }
       return nil
     }
     let confirmed = indexes.lazy.compactMap { $0.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).first }.first
-    let item = confirmed ?? indexes.lazy.compactMap { $0.playableEpisode(tmdbEpisodeID: tmdbEpisodeID) }.first
-    return item?.runtimeSeconds.flatMap { $0 > 0 ? $0 : nil }
+    return confirmed ?? indexes.lazy.compactMap { $0.playableEpisode(tmdbEpisodeID: tmdbEpisodeID) }.first
+  }
+
+  /// 能播的这一集在服务器上的文件时长（秒），文件见 `serverFile`。没有文件或服务器没给时长时为 nil。
+  static func serverRuntimeSeconds(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> Double? {
+    serverFile(episode, lookups: lookups)?.runtimeSeconds.flatMap { $0 > 0 ? $0 : nil }
+  }
+
+  /// 这一集看到了哪里（0…1），卡片上的已播放进度条用。文件见 `serverFile`，规则见 `PlaybackResumePolicy.progressFraction`：
+  /// 没看、看完了、或服务器没给时长时为 nil。
+  static func watchProgress(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> Double? {
+    guard let file = serverFile(episode, lookups: lookups) else { return nil }
+    return PlaybackResumePolicy.progressFraction(
+      positionSeconds: file.resumePositionSeconds, durationSeconds: file.runtimeSeconds)
   }
 }
 
-/// 详情页一季的查询结果，都与查询的集一一对应：每集能不能播，和能播的集在服务器上的文件时长（秒）。
+/// 详情页一季的查询结果，都与查询的集一一对应：每集能不能播、能播的集在服务器上的文件时长（秒），
+/// 和看到了哪里（0…1，没看或看完了为 nil）。
 nonisolated struct EpisodePlaybackLookup: Equatable, Sendable {
   let availability: [EpisodeAvailability]
   let serverRuntimeSeconds: [Double?]
+  var watchProgress: [Double?] = []
 }
 
 /// 播放队列里一集相对当前服务器的状态。上一集、下一集只在当前服务器上找。

@@ -711,6 +711,15 @@ nonisolated enum PlaybackResumePolicy {
     return positionSeconds
   }
 
+  /// 看到了哪里（0…1），画已播放进度条用：只在有有效续播点（见 `resumePosition`）且知道时长时给出，
+  /// 和起播时接着播的条件一致——画了进度条的，按下就从这里接着播。
+  static func progressFraction(positionSeconds: Double, durationSeconds: Double?) -> Double? {
+    guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0,
+      let position = resumePosition(positionSeconds: positionSeconds, durationSeconds: durationSeconds)
+    else { return nil }
+    return min(1, max(0, position / durationSeconds))
+  }
+
   /// 播放结束位置达到时长的 90% 视为看完；没有时长就不算看完。
   static func isCompleted(positionSeconds: Double, durationSeconds: Double?) -> Bool {
     guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return false }

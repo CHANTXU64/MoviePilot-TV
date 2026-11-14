@@ -1052,15 +1052,23 @@ struct MediaDetailView: View {
           }
           HStack(spacing: 20) {
             if let playbackTarget = viewModel.inAppPlaybackTarget {
-              // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）；没看过、读不到观看记录时是普通的「播放」。
+              // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）：看到一半是播放图标、已播放进度条和季集号。
+              // 没看过、读不到观看记录时是普通的「播放」。
               let seriesAction = viewModel.seriesPlayAction
               Button(action: {
                 apiService.sessionScope.playbackCoordinator.play(
                   seriesAction?.target ?? playbackTarget, media: viewModel.detail)
               }) {
-                Label(seriesAction?.title ?? "播放", systemImage: AppSymbol.play)
-                  .foregroundColor(.primary)
+                HStack(spacing: 14) {
+                  Image(systemName: AppSymbol.play)
+                  if let progress = seriesAction?.progress {
+                    PlaybackProgressBar(fraction: progress)
+                  }
+                  Text(seriesAction?.title ?? "播放")
+                }
+                .foregroundStyle(.primary)
               }
+              .accessibilityLabel(seriesAction?.accessibilityLabel ?? "播放")
               .focused($focusedButton, equals: .play)
             }
 

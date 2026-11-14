@@ -605,13 +605,10 @@ class MediaDetailViewModel: ObservableObject {
     }
   }
 
+  /// 播放结束、进度写回发完后重读（见 `PlaybackCoordinator.watchStateUpdates`）。
   private func observePlaybackEnd(_ target: PlaybackTarget) {
     let coordinator = apiService.sessionScope.playbackCoordinator
-    playbackEndObservation = coordinator.$phase
-      .map { if case .playing = $0 { true } else { false } }
-      .removeDuplicates()
-      .dropFirst()
-      .filter { !$0 }
+    playbackEndObservation = coordinator.watchStateUpdates
       .sink { [weak self] _ in
         guard let self, self.inAppPlaybackTarget == target else { return }
         self.startSeriesProgressLoad(target)
@@ -955,8 +952,13 @@ class MediaDetailViewModel: ObservableObject {
 }
 
 /// 详情页剧的「继续播放」按钮：标题写明从哪一集开始，按下起播。
+/// 看到一半时按钮是播放图标、已播放进度条和「第 X 季第 Y 集」（与 Apple TV App 一样）。
 struct SeriesPlayAction: Equatable {
   let title: String
+  /// 看到一半时的已播放进度（0…1），画在播放图标后面；从头看的一集、或服务器没给时长时为 nil。
+  var progress: Double? = nil
+  /// 读屏用的完整说法（有进度条时标题里省掉了「继续播放」）。
+  var accessibilityLabel: String
   let target: PlaybackTarget
 
   /// `matched` 是单集对应确定能播的 MoviePilot 集（调用方查过 `episodeAvailability`），按集起播：
@@ -973,19 +975,31 @@ struct SeriesPlayAction: Equatable {
     } else {
       target = .serverItem(serverName: serverName, itemID: server.id)
     }
+    let season = matched?.seasonNumber ?? server.seasonNumber
+    let episode = matched?.episodeNumber ?? server.episodeNumber
+    let progress =
+      upNext.resumes
+      ? PlaybackResumePolicy.progressFraction(
+        positionSeconds: server.resumePositionSeconds, durationSeconds: server.runtimeSeconds)
+      : nil
+    let spoken = title(resumes: upNext.resumes, season: season, episode: episode)
     return SeriesPlayAction(
-      title: title(
-        resumes: upNext.resumes, season: matched?.seasonNumber ?? server.seasonNumber,
-        episode: matched?.episodeNumber ?? server.episodeNumber),
-      target: target)
+      title: progress == nil ? spoken : episodeText(season: season, episode: episode) ?? spoken,
+      progress: progress, accessibilityLabel: spoken, target: target)
   }
 
   /// 「继续播放 第 2 季第 5 集」「播放 第 2 季第 6 集」；缺编号时只写「继续播放」「播放」。
   static func title(resumes: Bool, season: Int?, episode: Int?) -> String {
     let verb = resumes ? "继续播放" : "播放"
-    guard let season, let episode else { return verb }
+    guard let text = episodeText(season: season, episode: episode) else { return verb }
+    return "\(verb) \(text)"
+  }
+
+  /// 「第 2 季第 5 集」「特别篇第 1 集」；缺编号时为 nil。
+  static func episodeText(season: Int?, episode: Int?) -> String? {
+    guard let season, let episode else { return nil }
     let seasonText = season == 0 ? "特别篇" : "第 \(season) 季"
-    return "\(verb) \(seasonText)第 \(episode) 集"
+    return "\(seasonText)第 \(episode) 集"
   }
 }
 
