@@ -277,8 +277,27 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
   var serverHasNoMetadata = false
   /// 这个文件的外部编号在 TMDB 指向别的剧：很可能不是这一集，上一集、下一集不自动接着播它（面板里仍可选择播放）。
   var identityConflict = false
+  /// 核对日期用的 MoviePilot 日期：这个文件第一集在所用编号（默认顺序，或 `episodeGroup` 那套）里的播出日期。
+  /// 起播前重新读到条目、日期变了时按它再核对（见 `PlaybackCoordinator.prepareFirstPlayable`），和建集索引时同一个依据。
+  var referenceAirDate: String? = nil
   /// 服务器上的集名和这一集同季唯一的具体标题相同，但不够确认（集名来源不清楚，或编号还没在 TMDB 查空）。只作参考，面板里不写，免得说明太长。
   var titleMatches = false
+
+  /// 没有迹象表明这个文件是别的集：编号不指向别的集，播出日期也没有对不上。「继续播放」以 MoviePilot 的 TMDB 集列表为准，
+  /// 这样的文件不问就播（`EpisodeMatchAcceptance.consistentNumberMatches`），有迹象的打开面板说明、由用户决定。
+  /// 整季日期都差两三天（`hasConsistentSeasonOffset`）也算对不上：面板只在没有别的编号顺序时才放宽它（见
+  /// `statusText(allowsSeasonDateOffset:)`），这里拿不到这个条件，交给面板说明。
+  var hasNoContraryEvidence: Bool {
+    if identityConflict { return false }
+    if case .differs = airDate { return false }
+    return true
+  }
+
+  /// 可信程度，越小越可信：没有反证、播出日期对不上、编号指向别的剧。同一集有几份时据此选代表、排起播顺序。
+  var credibilityRank: Int {
+    if identityConflict { return 2 }
+    return hasNoContraryEvidence ? 0 : 1
+  }
 
   /// 给用户的说明，`server` 是这个文件所在的服务器。先说结论（可能不是这一集），再用一句话说按什么找到的、哪里对不上；
   /// 具体日期、集名这些细节写日志，不放进面板。
@@ -476,7 +495,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
           let match = UncertainEpisodeMatch(
             season: key.season, episode: number, episodeGroup: key.episodeGroup, airDate: airDate,
             hasConsistentSeasonOffset: hasOffset, serverHasNoMetadata: hasNoMetadata,
-            identityConflict: evidence.conflicts(file), titleMatches: titleMatches)
+            identityConflict: evidence.conflicts(file), referenceAirDate: first?.airDate, titleMatches: titleMatches)
           uncertain[id, default: []].append(UncertainFile(item: file, match: match))
           matched = true
         }
@@ -767,8 +786,12 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   }
 
   /// 这一集按季号集号对上的文件；有确定的文件时为空。
+  /// 按可信程度排（`UncertainEpisodeMatch.credibilityRank`：没有反证的在前，日期对不上的其次，编号冲突的最后），
+  /// 同一档保持原顺序。面板说明的代表、集卡片的进度和时长、起播先试的文件都按这个顺序取，几处一致。
   func uncertainEpisodes(tmdbEpisodeID: Int) -> [UncertainFile] {
-    uncertain[tmdbEpisodeID] ?? []
+    (uncertain[tmdbEpisodeID] ?? []).enumerated().sorted { lhs, rhs in
+      (lhs.element.match.credibilityRank, lhs.offset) < (rhs.element.match.credibilityRank, rhs.offset)
+    }.map(\.element)
   }
 
   /// 起播时逐个试的条目（第一条不能直连，比如 strm，就换下一条）：有确定的文件只用确定的，否则用按季号集号对上的。
@@ -795,6 +818,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// - 其他：确认没有（`notOnServer`）。有季号集号、只是集列表里没有那一集、编号在 TMDB 也明确查空的文件不影响别的集。
   func availability(of tmdbEpisodeID: Int) -> EpisodeAvailability {
     if !confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty { return .playable(server: serverName) }
+    // 同一台上有几份时以最可信的为准（`uncertainEpisodes` 的顺序），和起播时先试的一致。
     if let file = uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).first {
       return .uncertain(server: serverName, match: file.match)
     }

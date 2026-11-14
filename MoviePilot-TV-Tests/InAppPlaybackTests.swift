@@ -457,6 +457,38 @@ final class InAppPlaybackModelTests: XCTestCase {
         episode("e2", season: 1, episode: 2),
         episode("e3", season: 1, episode: 3),
       ])?.0, "e3")
+    let combined =
+      #"{"Id":"e1-2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":2,"RunTimeTicks":72000000000,"UserData":{"Played":true}}"#
+    XCTAssertEqual(
+      try upNext([combined, episode("e2", season: 1, episode: 2, position: 1800), episode("e3", season: 1, episode: 3)])?.0,
+      "e3", "单独的 E02 带着旧续播点：合集已经看完了它，不回去接着看")
+    XCTAssertEqual(
+      try upNext([
+        episode("e1", season: 1, episode: 1, played: true), combined,
+        episode("e2", season: 1, episode: 2), episode("e3", season: 1, episode: 3),
+      ])?.0, "e3", "单独的 E01 排在合集前面：合集看完的范围不丢")
+    // 两份看完的合集范围重叠（E01–E05、E02–E03）：接着看 E06，详情页核对用的「看完的最后一集」也是到 E05 的那份。
+    let overlapping = try items([
+      #"{"Id":"e1-5","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":5,"UserData":{"Played":true}}"#,
+      #"{"Id":"e2-3","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2,"IndexNumberEnd":3,"UserData":{"Played":true}}"#,
+      episode("e6", season: 1, episode: 6),
+    ])
+    XCTAssertEqual(PlaybackEpisodeProgress.upNext(in: overlapping)?.episode.id, "e6")
+    XCTAssertEqual(PlaybackEpisodeProgress.lastWatched(in: overlapping)?.id, "e1-5")
+    // 只看完 E01–E05，没看过的 E02–E07 起始集被覆盖：接着看 E06，看完的最后一集仍是 E01–E05，不被推到 E07。
+    let unwatchedOverlap = try items([
+      #"{"Id":"e1-5","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":5,"UserData":{"Played":true}}"#,
+      #"{"Id":"e2-7","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2,"IndexNumberEnd":7}"#,
+      episode("e6", season: 1, episode: 6),
+    ])
+    XCTAssertEqual(PlaybackEpisodeProgress.upNext(in: unwatchedOverlap)?.episode.id, "e6")
+    XCTAssertEqual(PlaybackEpisodeProgress.lastWatched(in: unwatchedOverlap)?.id, "e1-5")
+    // 服务器给的结束集号异常大也照常算，不逐集展开。
+    XCTAssertNil(
+      try upNext([
+        #"{"Id":"bad","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":2000000000,"UserData":{"Played":true}}"#,
+        episode("e2", season: 1, episode: 2),
+      ]), "看完的范围包含后面所有集")
     // 同一部剧在两个媒体库各有一份：同一集在哪份上看完都算，接着看下一集，不会落到另一份的同一集上。
     XCTAssertEqual(
       try upNext([
@@ -529,6 +561,42 @@ final class InAppPlaybackModelTests: XCTestCase {
     }
     XCTAssertEqual(episode.episode, matched)
     XCTAssertEqual(acceptance, .confirmedOnly)
+  }
+
+  @MainActor
+  func testContinueDecisionPlaysUnlessThereIsEvidenceOfAnotherEpisode() {
+    func match(airDate: AirDateCheck, conflict: Bool = false, offset: Bool = false) -> UncertainEpisodeMatch {
+      var match = UncertainEpisodeMatch(season: 1, episode: 2, episodeGroup: nil, airDate: airDate)
+      match.identityConflict = conflict
+      match.hasConsistentSeasonOffset = offset
+      return match
+    }
+    let differs = AirDateCheck.differs(server: "2024-01-01", moviePilot: "2024-03-01")
+    XCTAssertTrue(match(airDate: .matches).hasNoContraryEvidence)
+    XCTAssertTrue(match(airDate: .unknown).hasNoContraryEvidence, "核对不了日期也以 TMDB 集列表为准")
+    XCTAssertFalse(match(airDate: .matches, conflict: true).hasNoContraryEvidence, "编号指向别的集")
+    XCTAssertFalse(match(airDate: differs).hasNoContraryEvidence, "播出日期对不上，多半是别的集")
+    XCTAssertFalse(match(airDate: differs, offset: true).hasNoContraryEvidence, "整季差两三天交给面板说明")
+
+    func decide(_ availability: EpisodeAvailability?, hasServerFile: Bool) -> SeriesPlayAction.Decision {
+      SeriesPlayAction.decision(availability, hasServerFile: hasServerFile)
+    }
+    XCTAssertEqual(decide(.playable(server: "b"), hasServerFile: false), .play)
+    XCTAssertEqual(decide(.uncertain(server: "b", match: match(airDate: .unknown)), hasServerFile: false), .play)
+    XCTAssertEqual(
+      decide(.uncertain(server: "b", match: match(airDate: differs)), hasServerFile: true), .openPanel,
+      "有迹象是别的集：服务器上有文件也打开面板，不直接播")
+    XCTAssertEqual(decide(.notOnServer, hasServerFile: false), .openPanel, "还不能播")
+    XCTAssertEqual(
+      decide(.notOnServer, hasServerFile: true), .openPanel, "集索引说这一集没有这个文件（被认成了别的集），不按服务器条目直接播")
+    XCTAssertEqual(decide(.checking(server: "a", files: 2), hasServerFile: true), .playServerFile)
+    XCTAssertEqual(decide(nil, hasServerFile: true), .playServerFile, "查不了单集对应")
+    XCTAssertEqual(
+      SeriesPlayAction.decision(.failed("读取失败"), hasServerFile: true, serverFileHasContraryEvidence: true), .openPanel,
+      "已经知道服务器这份日期对不上：读集索引失败也不按条目直接播")
+    XCTAssertEqual(
+      SeriesPlayAction.decision(.playable(server: "a"), hasServerFile: true, serverFileHasContraryEvidence: true), .play,
+      "整理记录确定了就照常播")
   }
 
   @MainActor
@@ -2970,6 +3038,194 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testContinuePermissionNeverFallsBackToACopyWithAnotherAirDate() async throws {
+    // 同一集两份都没有 TMDB 单集编号：日期核对不了的那份（能不问就播）不能直连，另一份播出日期明显不对。
+    // 「继续播放」的许可只试第一份，不换成日期对不上的那份；面板里按「仍要播放」（numberMatches）才试它。
+    let unplayable = Self.embyEpisode("x-ok", season: 2, episode: 3, tmdb: nil)
+    let otherDate =
+      #"{"Id":"x-date","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z"}"#
+    configureLibraryWithoutEpisodeIDs(unplayable, otherDate)
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2
+      $0.playbackInfoByItem["\(Self.lan)|x-ok"] =
+        #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    guard case .uncertain(_, let match)? = availability?.first else { return XCTFail("\(String(describing: availability))") }
+    XCTAssertTrue(match.hasNoContraryEvidence, "详情页看到的是日期核对不了的那份")
+
+    await run(coordinator, .episode(try queued(0), accepting: .consistentNumberMatches))
+    XCTAssertNil(coordinator.session, "不换成日期对不上的那份")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.contains("/Items/x-date/PlaybackInfo") })
+
+    coordinator.failure = nil
+    await run(coordinator, .episode(try queued(0), accepting: .numberMatches))
+    XCTAssertEqual(coordinator.session?.item.id, "x-date", "用户在面板里看过说明后才试它")
+    coordinator.endCurrentSession()
+  }
+
+  /// 默认分季第 2 季第 3 集（TMDB 555，播出日期 2025-10-02）：「继续播放」只用默认分季。
+  private static let datedDefaultSeason2 = #"[{"id":555,"season_number":2,"episode_number":3,"air_date":"2025-10-02"}]"#
+
+  private func datedDefaultEpisode() throws -> QueuedEpisode {
+    let season = MoviePilotEpisode.list(
+      try JSONDecoder().decode([TmdbEpisode].self, from: Data(Self.datedDefaultSeason2.utf8)), season: 2)
+    return QueuedEpisode(context: context(group: nil), episode: season[0], seasonEpisodes: season)
+  }
+
+  func testContinuePermissionChecksTheAirDateReadJustBeforePlaying() async throws {
+    // 建索引时这份没有播出日期（没反证）；起播前重新读到的条目补上了明显对不上的日期：不问就播的许可下不播它。
+    let undated = Self.embyEpisode("x-1", season: 2, episode: 3, tmdb: nil)
+    configureLibraryWithoutEpisodeIDs(undated)
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2
+    }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    _ = await coordinator.episodeAvailability(for: [queued.episode], context: queued.context)
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|x-1"] =
+        #"{"Id":"x-1","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z"}"#
+    }
+    await run(coordinator, .episode(queued, accepting: .consistentNumberMatches))
+    XCTAssertNil(coordinator.session)
+    XCTAssertNotNil(coordinator.failure, "说明播出日期对不上，请到集列表里确认")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.contains("/Items/x-1/PlaybackInfo") })
+  }
+
+  func testCredibleCopyListedSecondOnTheSameServerIsChosenAndPlayed() async throws {
+    // 同一台上先列出日期对不上的那份、再列出没有反证的那份：详情页的结论和起播都以后者为准，直接播它。
+    let otherDate =
+      #"{"Id":"x-date","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z"}"#
+    let undated = Self.embyEpisode("x-ok", season: 2, episode: 3, tmdb: nil)
+    configureLibraryWithoutEpisodeIDs(otherDate, undated)
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2
+    }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    let availability = await coordinator.episodeAvailability(for: [queued.episode], context: queued.context)
+    guard case .uncertain(_, let match)? = availability?.first else { return XCTFail("\(String(describing: availability))") }
+    XCTAssertTrue(match.hasNoContraryEvidence, "代表结果取没有反证的那份")
+    XCTAssertEqual(SeriesPlayAction.decision(availability?.first, hasServerFile: true), .play)
+
+    await run(coordinator, .episode(queued, accepting: .consistentNumberMatches))
+    XCTAssertEqual(coordinator.session?.item.id, "x-ok")
+    coordinator.endCurrentSession()
+  }
+
+  func testContinueRecheckComparesAMultiEpisodeFileByItsFirstEpisode() async throws {
+    // 第 2 季第 3、4 集在一个没有 TMDB 单集编号的文件里；要播第 4 集（晚一周播出）。建索引时文件还没有日期，
+    // 起播前重新读到补上了第 3 集的日期：按建索引时核对这个文件用的日期（第一集的）比，不因为和第 4 集不同就拦下。
+    let combined = #"{"Id":"x-34","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"IndexNumberEnd":4}"#
+    configureLibraryWithoutEpisodeIDs(combined)
+    let list =
+      #"[{"id":555,"season_number":2,"episode_number":3,"air_date":"2025-10-02"},{"id":556,"season_number":2,"episode_number":4,"air_date":"2025-10-09"}]"#
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = list }
+    let season = MoviePilotEpisode.list(try JSONDecoder().decode([TmdbEpisode].self, from: Data(list.utf8)), season: 2)
+    let queued = QueuedEpisode(context: context(group: nil), episode: season[1], seasonEpisodes: season)
+
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [season[1]], context: queued.context)
+    guard case .uncertain(_, let match)? = availability?.first, match.hasNoContraryEvidence else {
+      return XCTFail("第二集在这种文件里应按集号对上、没有反证：\(String(describing: availability))")
+    }
+    XCTAssertEqual(match.referenceAirDate, "2025-10-02", "索引按文件的第一集核对")
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|x-34"] =
+        #"{"Id":"x-34","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"IndexNumberEnd":4,"PremiereDate":"2025-10-02T00:00:00Z"}"#
+    }
+    await run(coordinator, .episode(queued, accepting: .consistentNumberMatches))
+    XCTAssertEqual(coordinator.session?.item.id, "x-34")
+    coordinator.endCurrentSession()
+  }
+
+  func testContinueRecheckTrustsATMDBEpisodeIDAddedJustBeforePlaying() async throws {
+    // 建索引时没有 TMDB 单集编号、也没有日期；起播前重新读到补上了这一集的编号（日期却是服务器那边的另一个日期）：
+    // 编号确定了就是这一集，不再按日期拦。
+    let undated = Self.embyEpisode("x-1", season: 2, episode: 3, tmdb: nil)
+    configureLibraryWithoutEpisodeIDs(undated)
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2 }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    _ = await coordinator.episodeAvailability(for: [queued.episode], context: queued.context)
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|x-1"] =
+        #"{"Id":"x-1","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z","ProviderIds":{"Tmdb":"555"}}"#
+    }
+    await run(coordinator, .episode(queued, accepting: .consistentNumberMatches))
+    XCTAssertEqual(coordinator.session?.item.id, "x-1")
+    coordinator.endCurrentSession()
+  }
+
+  func testCardProgressComesFromTheSameCopyThePanelDescribes() async throws {
+    // 同一台上先列出日期对不上、看过一半的那份，再列出日期核对不了、没看过的那份：面板和起播以后者为准，
+    // 集卡片的已播放进度也取后者（没有进度），不显示另一份的 50%。
+    let otherDate =
+      #"{"Id":"x-date","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z","RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":36000000000}}"#
+    let undated = Self.embyEpisode("x-ok", season: 2, episode: 3, tmdb: nil)
+    configureLibraryWithoutEpisodeIDs(otherDate, undated)
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2 }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    let lookup = await coordinator.episodePlaybackLookup(for: [queued.episode], context: queued.context)
+    XCTAssertEqual(lookup?.watchProgress, [nil], "进度和面板代表的是同一份")
+  }
+
+  func testPanelCardAndPlaybackAgreeOnTheMostCredibleCopyAcrossServers() async throws {
+    // emby（排在前面）上只有日期对不上、看过一半的那份；emby2 上有日期核对不了、没看过的那份。
+    // 面板说明 emby2 的、集卡片不显示 emby 的 50%、面板「仍要播放」也先试 emby2 的。
+    let otherDate =
+      #"{"Id":"x-date","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z","RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":36000000000}}"#
+    configureLibraryWithoutEpisodeIDs(otherDate)
+    let second = "lan2.playback-tests.local"
+    let clean = Self.embyEpisode("x-ok", season: 2, episode: 3, tmdb: nil)
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(clean)
+      $0.items["\(second)|x-ok"] = clean
+      $0.virtualFolders[second] = $0.virtualFolders[Self.lan]
+      $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2
+    }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    let lookup = await coordinator.episodePlaybackLookup(for: [queued.episode], context: queued.context)
+    guard case .uncertain(let server, let match)? = lookup?.availability.first else {
+      return XCTFail("\(String(describing: lookup?.availability))")
+    }
+    XCTAssertEqual(server, "emby2")
+    XCTAssertTrue(match.hasNoContraryEvidence)
+    XCTAssertEqual(lookup?.watchProgress, [nil], "集卡片的进度和面板代表的是同一份")
+
+    await run(coordinator, .episode(queued, accepting: .numberMatches))
+    XCTAssertEqual(coordinator.session?.item.id, "x-ok", "「仍要播放」先试没有反证的那份")
+    coordinator.endCurrentSession()
+  }
+
+  func testRebuiltIndexCredibleCopyIsTriedAfterTheOldCopyTurnsOutStale() async throws {
+    // 面板「仍要播放」时旧索引里只有日期对不上的那份；它已经删了，重建索引后找到一份没有反证的新副本：直接播新副本。
+    let otherDate =
+      #"{"Id":"x-date","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"PremiereDate":"2020-01-01T00:00:00Z"}"#
+    configureLibraryWithoutEpisodeIDs(otherDate)
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.datedDefaultSeason2 }
+    let coordinator = makeCoordinator(makeService())
+    let queued = try datedDefaultEpisode()
+    _ = await coordinator.episodeAvailability(for: [queued.episode], context: queued.context)
+
+    let fresh = Self.embyEpisode("x-new", season: 2, episode: 3, tmdb: nil)
+    PlaybackURLProtocol.stub.configure {
+      $0.items = ["\(Self.lan)|x-new": fresh]
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(fresh)
+    }
+    await run(coordinator, .episode(queued, accepting: .numberMatches))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "x-new", "重建后按当前许可重新考虑新索引里的候选")
+    coordinator.endCurrentSession()
+  }
+
   func testPanelPermissionIsNotWidenedWhenTheCleanCopyGoesOffline() async throws {
     // 面板按 emby2 上没有冲突的副本说明“可能不是这一集”，用户按「仍要播放」时 emby2 离线了：不换成 emby 上编号冲突的那份，
     // 报错让用户看到新的说明。面板改成说明编号冲突后再按，才播冲突的那份。
@@ -3955,6 +4211,28 @@ extension PlaybackCoordinatorTests {
     await run(coordinator, .episode(try queued(0), accepting: .numberMatches))
     XCTAssertEqual(coordinator.session?.startSeconds, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
     XCTAssertEqual(coordinator.session?.playback.title, "长风渡 · 第 1 季 第 10 集 · 重逢")
+    coordinator.endCurrentSession()
+  }
+
+  func testResumeStartsTheCopyWithTheResumePointEvenIfTheIndexPredatesIt() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    // 集索引建的时候只有 s1 这一份。
+    _ = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    // 之后另一个媒体库多了一份 4K（uhd），续播点在它上面；60 秒的集索引里还没有它。
+    let uhdEpisode =
+      #"{"Id":"x-uhd","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"ProviderIds":{"Tmdb":"555"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(), Self.series(id: "uhd")].joined(separator: ",")
+      $0.episodes["\(Self.lan)|uhd"] = Self.embyEpisodes(uhdEpisode)
+      $0.items["\(Self.lan)|x-uhd"] = uhdEpisode
+    }
+    var queued = try queued(0)
+    queued.preferredFile = ServerFileRef(server: "emby", itemID: "x-uhd")
+    await run(coordinator, .episode(queued, accepting: .confirmedOnly))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "x-uhd", "播有续播点的那一份，不从头播旧索引里的另一份")
+    XCTAssertEqual(coordinator.session?.startSeconds, 1800)
     coordinator.endCurrentSession()
   }
 

@@ -619,25 +619,29 @@ nonisolated enum PlaybackEpisodeProgress {
   }
 
   static func upNext(in items: [ServerMediaItem]) -> UpNext? {
-    let ordered = orderedEpisodes(items)
-    guard let last = ordered.lastIndex(where: { isWatched($0) || resumePosition($0) != nil }) else { return nil }
-    let watched = ordered[last]
-    if !isWatched(watched) { return UpNext(episode: watched, resumes: true) }
-    // 看完的是一个含多集的文件（如 E01–E02）时，跳过它已经包含的集（同库里单独的 E02）。
-    let covered = watched.episodeNumberEnd ?? watched.episodeNumber
-    let next = ordered[(last + 1)...].first { item in
-      guard let covered, item.seasonNumber == watched.seasonNumber, let number = item.episodeNumber else { return true }
-      return number > covered
-    }
-    return next.map { UpNext(episode: $0, resumes: false) }
+    let slots = orderedSlots(items)
+    guard let last = slots.lastIndex(where: \.isReached) else { return nil }
+    if slots[last].resumable { return UpNext(episode: slots[last].item, resumes: true) }
+    let next = slots.index(after: last)
+    return slots.indices.contains(next) ? UpNext(episode: slots[next].item, resumes: false) : nil
   }
 
   /// 看完了的最靠后一集（详情页按 MoviePilot 集列表找它紧接着的下一集，核对服务器上的 `upNext` 是不是它）。
   /// 它后面还有看过一部分的集时为 nil（那时 `upNext` 接着看那一集）。
+  /// 只在真正看完的文件里取：几份看完的文件范围重叠时（E01–E05 和 E02–E03）取看完范围到得最远的那一份；
+  /// 没看过、只是起始集被看完的合集覆盖的文件（看完 E01–E05 后的 E02–E07）不算，免得把看完的位置推远。
   static func lastWatched(in items: [ServerMediaItem]) -> ServerMediaItem? {
-    guard let last = orderedEpisodes(items).last(where: { isWatched($0) || resumePosition($0) != nil }), isWatched(last)
-    else { return nil }
-    return last
+    let slots = orderedSlots(items)
+    guard let last = slots.lastIndex(where: \.isReached), !slots[last].resumable else { return nil }
+    let reached = position(slots[last].item)
+    return episodePool(items).filter { isWatched($0) && position($0) <= reached }.max { lhs, rhs in
+      (lhs.seasonNumber ?? 0, lastEpisode(lhs) ?? 0) < (rhs.seasonNumber ?? 0, lastEpisode(rhs) ?? 0)
+    }
+  }
+
+  /// 文件在剧里的位置（季号、起始集号），缺编号的排最后。
+  private static func position(_ item: ServerMediaItem) -> (Int, Int) {
+    (item.seasonNumber ?? Int.max, item.episodeNumber ?? Int.max)
   }
 
   private static func resumePosition(_ item: ServerMediaItem) -> Double? {
@@ -649,11 +653,9 @@ nonisolated enum PlaybackEpisodeProgress {
       || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
   }
 
-  /// 同一集的几份：在哪份上看完了都算看完（用看完的那份）；都没看完时用有续播点、看得最远的那份；都没看过用第一份。
-  private static func representative(_ copies: [ServerMediaItem]) -> ServerMediaItem {
-    if let watched = copies.first(where: isWatched) { return watched }
-    let resumable = copies.filter { resumePosition($0) != nil }
-    return resumable.max { $0.resumePositionSeconds < $1.resumePositionSeconds } ?? copies[0]
+  /// 文件最后包含到第几集（一个文件含多集时是 `episodeNumberEnd`）。
+  private static func lastEpisode(_ item: ServerMediaItem) -> Int? {
+    item.episodeNumberEnd ?? item.episodeNumber
   }
 
   /// 服务器上有文件的正片集里最新的一季，集列表没看过时默认显示它。
@@ -661,29 +663,71 @@ nonisolated enum PlaybackEpisodeProgress {
     items.filter { $0.kind == .episode && $0.hasFile }.compactMap(\.seasonNumber).filter { $0 > 0 }.max()
   }
 
-  /// 有文件的集按季号集号排好；同一季同一集有几份（几个媒体库各有一份）时合成一份，见 `representative`。
-  private static func orderedEpisodes(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
+  /// 一集（同一季同一个起始集号的几份文件合成一份）。
+  private struct Slot {
+    /// 代表这一集的文件：看完了用看完的那份（含的集最多的）；没看完用有续播点、看得最远的那份；都没看过用第一份。
+    let item: ServerMediaItem
+    /// 有一份文件真正看完了。
+    let watched: Bool
+    /// 没有哪份看完，但起始集包含在别的看完的文件里（看完 E01–E02 后单独的 E02）：接着看时跳过它，
+    /// 但它自己没看过，不能拿它的结束集号算看到了哪里（见 `lastWatched`）。
+    let covered: Bool
+    let resumable: Bool
+
+    /// 已经看到这里（看完、被覆盖，或看到一半）。
+    var isReached: Bool { watched || covered || resumable }
+  }
+
+  /// 有文件的正片集；没有正片时用全部（只有特别篇）。
+  private static func episodePool(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
     let available = items.filter { $0.kind == .episode && $0.hasFile }
     let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
-    var pool: [ServerMediaItem] = []
-    var slots: [String: Int] = [:]
-    var copies: [[ServerMediaItem]] = []
-    for item in regular.isEmpty ? available : regular {
+    return regular.isEmpty ? available : regular
+  }
+
+  /// 有文件的正片集按季号集号排好。先把看完的文件包含的集都记下来，再逐集判断看完、看到一半，
+  /// 不让同一集的另一份文件（单独的 E02 带着旧续播点、单独的 E01 排在合集前面）盖掉合集已看完的范围。
+  private static func orderedSlots(_ items: [ServerMediaItem]) -> [Slot] {
+    let pool = episodePool(items)
+    // 按季记看完的集号区间，不逐集展开：服务器给的结束集号异常大时也不会卡住。
+    var covered: [Int: [ClosedRange<Int>]] = [:]
+    for item in pool where isWatched(item) {
+      guard let season = item.seasonNumber, let first = item.episodeNumber, let last = lastEpisode(item), last >= first
+      else { continue }
+      covered[season, default: []].append(first...last)
+    }
+    var keys: [String: Int] = [:]
+    var groups: [[ServerMediaItem]] = []
+    for item in pool {
       guard let season = item.seasonNumber, let episode = item.episodeNumber else {
-        copies.append([item])
+        groups.append([item])
         continue
       }
-      if let slot = slots["\(season)|\(episode)"] {
-        copies[slot].append(item)
+      if let index = keys["\(season)|\(episode)"] {
+        groups[index].append(item)
       } else {
-        slots["\(season)|\(episode)"] = copies.count
-        copies.append([item])
+        keys["\(season)|\(episode)"] = groups.count
+        groups.append([item])
       }
     }
-    pool = copies.map(representative)
-    return pool.enumerated().sorted { lhs, rhs in
-      let left = (lhs.element.seasonNumber ?? Int.max, lhs.element.episodeNumber ?? Int.max, lhs.offset)
-      let right = (rhs.element.seasonNumber ?? Int.max, rhs.element.episodeNumber ?? Int.max, rhs.offset)
+    let slots = groups.map { copies -> Slot in
+      let first = copies[0]
+      let isCovered = first.seasonNumber.flatMap { season in
+        first.episodeNumber.map { episode in covered[season]?.contains { $0.contains(episode) } ?? false }
+      } ?? false
+      if let watched = copies.filter(isWatched).max(by: { (lastEpisode($0) ?? 0) < (lastEpisode($1) ?? 0) }) {
+        return Slot(item: watched, watched: true, covered: false, resumable: false)
+      }
+      if isCovered { return Slot(item: first, watched: false, covered: true, resumable: false) }
+      let resumable = copies.filter { resumePosition($0) != nil }
+      if let resumed = resumable.max(by: { $0.resumePositionSeconds < $1.resumePositionSeconds }) {
+        return Slot(item: resumed, watched: false, covered: false, resumable: true)
+      }
+      return Slot(item: first, watched: false, covered: false, resumable: false)
+    }
+    return slots.enumerated().sorted { lhs, rhs in
+      let left = (lhs.element.item.seasonNumber ?? Int.max, lhs.element.item.episodeNumber ?? Int.max, lhs.offset)
+      let right = (rhs.element.item.seasonNumber ?? Int.max, rhs.element.item.episodeNumber ?? Int.max, rhs.offset)
       return left < right
     }.map(\.element)
   }

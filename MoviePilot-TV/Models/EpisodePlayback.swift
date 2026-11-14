@@ -378,8 +378,13 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
       switch result {
       case .playable: return result
       case .uncertain(_, let match):
-        // 编号指向别的剧的副本排在后面：别的副本（这台或别的服务器上）没有冲突时以它为准。
-        if uncertain == nil || (uncertain?.hasIdentityConflict == true && !match.identityConflict) { uncertain = result }
+        // 编号指向别的剧的副本排最后，有迹象是别的集（播出日期对不上）的其次：别的副本（这台或别的服务器上）更可信时
+        // 以它为准，和起播时实际先试的一致。
+        if case .uncertain(_, let current)? = uncertain {
+          if match.credibilityRank < current.credibilityRank { uncertain = result }
+        } else {
+          uncertain = result
+        }
       case .failed: if failure == nil { failure = result }
       case .checking: if checking == nil { checking = result }
       case .unidentifiable: if unidentifiable == nil { unidentifiable = result }
@@ -399,7 +404,15 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
       return nil
     }
     let confirmed = indexes.lazy.compactMap { $0.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).first }.first
-    return confirmed ?? indexes.lazy.compactMap { $0.playableEpisode(tmdbEpisodeID: tmdbEpisodeID) }.first
+    if let confirmed { return confirmed }
+    // 没有确定的：各台服务器上按季号集号对上、编号不冲突的文件里取最可信的（同档按服务器顺序），
+    // 和 `resolve` 选面板代表、起播时先试的一致。
+    let candidates = indexes.enumerated().flatMap { server, index in
+      index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).filter { !$0.match.identityConflict }.map { (server, $0) }
+    }
+    return candidates.min { lhs, rhs in
+      (lhs.1.match.credibilityRank, lhs.0) < (rhs.1.match.credibilityRank, rhs.0)
+    }?.1.item
   }
 
   /// 能播的这一集在服务器上的文件时长（秒），文件见 `serverFile`。没有文件或服务器没给时长时为 nil。

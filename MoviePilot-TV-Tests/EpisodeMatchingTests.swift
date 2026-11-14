@@ -256,7 +256,9 @@ final class EpisodeMatchingTests: XCTestCase {
       index.availability(of: 104),
       .uncertain(
         server: "emby",
-        match: UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: "g1", airDate: .matches)))
+        match: UncertainEpisodeMatch(
+          season: 1, episode: 1, episodeGroup: "g1", airDate: .matches, referenceAirDate: "2025-01-04")),
+      "核对日期用的是剧集组 g1 里这一集的日期")
     XCTAssertEqual(index.availability(of: 101), .notOnServer)
     XCTAssertNil(ServerEpisodeIndex.numberingGroup([]), "没有记录按默认顺序")
   }

@@ -36,8 +36,9 @@ class HomeViewModel: ObservableObject {
   private var libraryLinksTask: Task<Void, Never>?
   /// 「最近添加」里海报读不出来的条目改用的 TMDB 海报，键见 `itemKey`。
   @Published private(set) var posterFallbacks: [String: URL] = [:]
-  /// 海报读不出来时还不知道 TMDB 编号（批量读还没回来）、只能按标题找的卡片：读到编号后按编号重新找一次。
-  private var postersAwaitingIdentity: [String: (item: MediaServerPlayItem, server: String)] = [:]
+  /// 报过海报读不出来的卡片，和找回退海报时用的身份（`libraryLinks` 里的，nil 表示还不知道、按标题找）。
+  /// 身份变了（读到编号、识别结果变了）就按新身份重找，结果写回前复核身份没再变。
+  private var posterRequests: [String: (item: MediaServerPlayItem, server: String, link: LibraryItemLink?)] = [:]
 
   private let apiService: APIService
   private var latestMediaSelectedServerKey: String? {
@@ -435,7 +436,7 @@ class HomeViewModel: ObservableObject {
         var next = self.libraryLinks.filter { !$0.key.hasPrefix("\(request.server)|") }
         for (id, link) in links { next[Self.itemKey(server: request.server, itemID: id)] = link }
         self.libraryLinks = next
-        self.retryPostersAwaitingIdentity(on: request.server)
+        self.refreshPosterFallbacks(on: request.server)
       }
     }
   }
@@ -512,7 +513,12 @@ class HomeViewModel: ObservableObject {
       }
     }
     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
-    return await handler.getTMDBJumpTarget(for: info).map(CardDestination.detail)
+    guard var target = await handler.getTMDBJumpTarget(for: info) else { return nil }
+    // 服务器暂时读不到时也带上这份文件：MoviePilot 还没同步到它、之后服务器恢复时，详情页仍能播放（起播前按编号核对）。
+    if let itemID = inAppPlaybackItemID(item) {
+      target.libraryItemHint = MediaServerItemRef(itemID: itemID, server: server)
+    }
+    return .detail(target)
   }
 
   func posterFallbackURL(for item: MediaServerPlayItem, server: String) -> URL? {
@@ -523,40 +529,41 @@ class HomeViewModel: ObservableObject {
   /// （见 `libraryLinks`），不知道时按标题、年份识别；确认没有 TMDB 编号的不找。识别结果和海报路径都在会话里记住
   /// （`APIService.cachedRecognizedTmdbId`、`cachedTmdbPosterPath`），请求失败的下次再找。
   /// `server` 是卡片所在的服务器（建卡片时取），不用回调到达时选中的：条目 ID 只在它自己的服务器上有意义。
-  /// `replacing`：已有的回退海报是按标题找的，按读到的编号重新找、替换。
-  func loadPosterFallback(for item: MediaServerPlayItem, server: String, replacing: Bool = false) {
+  func loadPosterFallback(for item: MediaServerPlayItem, server: String) {
     let key = Self.itemKey(server: server, itemID: item.id)
-    let inAppItemID = Self.inAppPlaybackItemID(
-      item, server: server, playableServers: inAppPlayableServers,
-      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
-      backendVersion: apiService.settings?.BACKEND_VERSION)
-    let link = inAppItemID.flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
-    // 还不知道编号时先按标题找（找到的也可能不准），编号读到后再按编号找一次、替换掉。
-    if link == nil, inAppItemID != nil { postersAwaitingIdentity[key] = (item, server) }
-    // 已经有了就不再找（卡片滚回来会再报一次）；按编号替换按标题找到的走 `replacing`。
-    if posterFallbacks[key] != nil, !replacing { return }
+    let link = posterLink(for: item, server: server)
+    // 同一身份已经找到了就不再找（卡片滚回来会再报一次）。
+    if let request = posterRequests[key], request.link == link, posterFallbacks[key] != nil { return }
+    posterRequests[key] = (item, server, link)
     let snapshot = apiService.sessionSnapshot()
     Task { [weak self] in
-      guard let self, let url = await self.tmdbPosterURL(for: item, link: link),
-        self.apiService.isSessionUnchanged(from: snapshot)
-      else { return }
-      // 按标题找的晚回来时编号已经读到：以按编号找的为准，不覆盖。
-      if link == nil, let inAppItemID, self.libraryLinks[Self.itemKey(server: server, itemID: inAppItemID)] != nil {
-        return
+      guard let self else { return }
+      let url = await self.tmdbPosterURL(for: item, link: link)
+      // 找的期间身份变了（编号读到了）：以按新身份找的为准。
+      guard self.apiService.isSessionUnchanged(from: snapshot), self.posterRequests[key]?.link == link else { return }
+      if let url {
+        self.posterFallbacks[key] = url
+      } else if link != nil {
+        // 按确定的身份找不到海报：之前按别的身份找到的不对，去掉。
+        self.posterFallbacks[key] = nil
       }
-      self.posterFallbacks[key] = url
     }
   }
 
-  /// 读到 `server` 上条目的编号后，对还在等编号的缺图卡片按编号重新找海报。
-  private func retryPostersAwaitingIdentity(on server: String) {
-    let waiting = postersAwaitingIdentity.filter { $0.value.server == server }
-    for (key, entry) in waiting {
-      guard let itemID = trimmedNonEmpty([entry.item.item_id?.value]),
-        libraryLinks[Self.itemKey(server: server, itemID: itemID)] != nil
-      else { continue }
-      postersAwaitingIdentity[key] = nil
-      loadPosterFallback(for: entry.item, server: server, replacing: true)
+  /// 卡片对应条目在 `libraryLinks` 里的身份；不能在应用内播放或还没读到时为 nil。
+  private func posterLink(for item: MediaServerPlayItem, server: String) -> LibraryItemLink? {
+    Self.inAppPlaybackItemID(
+      item, server: server, playableServers: inAppPlayableServers,
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    ).flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
+  }
+
+  /// `server` 上的条目身份读到或变了以后，对报过缺图、当时身份不同的卡片按新身份重找海报。
+  private func refreshPosterFallbacks(on server: String) {
+    for request in posterRequests.values where request.server == server {
+      guard posterLink(for: request.item, server: server) != request.link else { continue }
+      loadPosterFallback(for: request.item, server: server)
     }
   }
 

@@ -58,6 +58,9 @@ enum PlaybackTarget: Equatable {
 nonisolated enum EpisodeMatchAcceptance: Comparable, Sendable {
   /// 只播确定的文件：按卡片、遥控器播放键、长按菜单直接起播。
   case confirmedOnly
+  /// 详情页「继续播放」：确定的文件之外，也播只按季号集号对上、没有迹象表明是别的集的文件
+  /// （`UncertainEpisodeMatch.hasNoContraryEvidence`）。以 MoviePilot 的 TMDB 集列表为准，不弹面板打断观看。
+  case consistentNumberMatches
   /// 面板说明了“可能不是这一集”：也试只按季号集号对上、编号没有冲突的文件。
   case numberMatches
   /// 面板说明了“编号属于另一部剧”：编号指向别的剧的文件也试（仍先试没有冲突的）。
@@ -1358,15 +1361,24 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let refreshRound = RefreshRound()
     /// 这一轮已经重建过集索引的服务器。
     var refreshedServers: Set<String> = []
-    /// 按季号集号对上的分两步试：先在各台服务器上试编号不冲突的；面板说明过编号冲突（`identityConflicts`）才试编号指向别的剧的。
-    enum Pass { case cached, refreshed, uncertain, conflicting }
-    for pass in [Pass.cached, .refreshed, .uncertain, .conflicting] {
+    /// 按季号集号对上的按可信程度分几步试，每一步都走遍各台服务器（和 `EpisodeAvailability.resolve` 选面板代表、
+    /// `serverFile` 取集卡片进度的顺序一致）：先试没有反证的（`credible`），面板说明过“可能不是这一集”
+    /// （`numberMatches`）再试日期对不上的（`uncertain`），说明过编号冲突（`identityConflicts`）才试编号指向别的剧的。
+    enum Pass { case cached, refreshed, credible, uncertain, conflicting }
+    for pass in [Pass.cached, .refreshed, .credible, .uncertain, .conflicting] {
+      let required: EpisodeMatchAcceptance? =
+        switch pass {
+        case .cached, .refreshed: nil
+        case .credible: .consistentNumberMatches
+        case .uncertain: .numberMatches
+        case .conflicting: .identityConflicts
+        }
       let servers: [MediaServerConf] =
         switch pass {
         case .cached: candidates
         case .refreshed: outdated
-        case .uncertain, .conflicting:
-          acceptance >= (pass == .uncertain ? .numberMatches : .identityConflicts)
+        case .credible, .uncertain, .conflicting:
+          acceptance >= required!
             ? candidates.filter { server in uncertain.contains { $0.name == server.name } } : []
         }
       for server in servers {
@@ -1385,19 +1397,49 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
               // 重建后的索引里，这份文件可能已按新编号确定，或者换成了另一档：确定的先试，冲突的仍按许可。
               let confirmed = pass == .cached || pass == .refreshed || reread
                 ? index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID) : []
+              // 续播点所在的那份只按季号集号对上、许可又允许播它时，和确定的文件一起先试：不为别的服务器上确定的那份
+              // 从头播。实际试的每份都按同一个许可筛（`accepts`），详情页查过的那份播不了时也不会换成有迹象是别的集的。
+              let preferredUncertain = uncertainFiles.filter {
+                $0.item.id == queued.preferredFile?.itemID && queued.preferredFile?.server == connection.serverName
+                  && Self.accepts($0.match, acceptance)
+              }.map(\.item)
               let files =
                 switch pass {
-                case .cached, .refreshed: confirmed
-                case .uncertain: confirmed + uncertainFiles.filter { !$0.match.identityConflict }.map(\.item)
+                case .cached, .refreshed: confirmed + preferredUncertain
+                case .credible:
+                  confirmed + uncertainFiles.filter { Self.accepts($0.match, acceptance) && $0.match.hasNoContraryEvidence }
+                    .map(\.item)
+                case .uncertain:
+                  // 重建过索引（`reread`）时按当前许可重新考虑新索引里的全部候选：可信的那一轮已经过了，
+                  // 新找到的没有反证的副本不能漏掉（`uncertainEpisodes` 已按可信程度排好，它在前）。
+                  confirmed + uncertainFiles.filter {
+                    Self.accepts($0.match, acceptance) && (reread || !$0.match.hasNoContraryEvidence)
+                  }.map(\.item)
                 case .conflicting:
                   confirmed + uncertainFiles.filter { reread || $0.match.identityConflict }.map(\.item)
                 }
+              // 要先试的那份文件（续播点在它上面）这一集的索引里没有：索引可能是它入库前建的，先重建这台的索引再试，
+              // 不然会从头播另一份。这一轮已经重建过的不再重读。
+              if let preferred = queued.preferredFile, preferred.server == connection.serverName, !refresh,
+                !refreshedServers.contains(server.name),
+                !files.contains(where: { $0.id == preferred.itemID }),
+                !uncertainFiles.contains(where: { $0.item.id == preferred.itemID })
+              {
+                reread = true
+                continue
+              }
+              // 「继续播放」不问就播的只按季号集号对上的文件，起播前重新读到的条目也要没有反证（日期可能刚补上），
+              // 按建索引时核对这个文件用的日期比。
+              let rechecksDate: [String: String?] = acceptance == .consistentNumberMatches
+                ? Dictionary(uncertainFiles.map { ($0.item.id, $0.match.referenceAirDate) }, uniquingKeysWith: { first, _ in first })
+                : [:]
               let attempt = try await Self.prepareFirstPlayable(
                 Self.preferringFile(queued.preferredFile, in: files, on: connection.serverName), on: connection,
-                episode: queued, tmdbEpisodeID: tmdbEpisodeID, confirmedBy: index.confirmedBy)
+                episode: queued, tmdbEpisodeID: tmdbEpisodeID, confirmedBy: index.confirmedBy,
+                rechecksAirDate: rechecksDate)
               // 按季号集号对上的文件起播前核对不过（重新刮削换了外部编号、季号集号或路径）：按新证据重建这台的索引，
               // 用同样的许可再试一次。这一轮已经重建过的不再重读。
-              guard attempt.prepared == nil, attempt.foundStale, pass == .uncertain || pass == .conflicting,
+              guard attempt.prepared == nil, attempt.foundStale, pass == .credible || pass == .uncertain || pass == .conflicting,
                 !refreshedServers.contains(server.name)
               else { return (index, attempt) }
               reread = true
@@ -1431,6 +1473,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     case .uncertain(let server, let match) where match.identityConflict && acceptance < .identityConflicts:
       // 用户看到的不是编号冲突的说明（那时有没冲突的副本），现在只剩冲突的：说明新情况，不替用户播它。
       throw PlaybackError.episodeUnavailable(EpisodeAvailability.identityConflictMessage(server: server))
+    case .uncertain(let server, let match) where !match.hasNoContraryEvidence && acceptance == .consistentNumberMatches:
+      // 「继续播放」不问就播的只有没迹象是别的集的文件，剩下的都有迹象：说明情况，请用户在集列表里打开这一集决定。
+      let status = match.statusText(server: server)
+      let reason = status.detail.map { "（\($0)）" } ?? ""
+      throw PlaybackError.episodeUnavailable(
+        "“\(server)”上的文件\(status.headline)\(reason)，请在集列表里打开这一集确认后再播")
     case .playable, .uncertain:
       // 集索引里有，重新读取时条目已经变了。
       throw missingIdentity ?? PlaybackError.episodeUnavailable(EpisodeAvailability.notOnServerMessage)
@@ -1463,6 +1511,17 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     case stale
     case missingEpisodeID
     case needsIndex
+    /// 重新读到的条目播出日期和这一集对不上（`rechecksAirDate`）：不问就播的许可下不播它。
+    case airDateDiffers
+  }
+
+
+  /// 只按季号集号对上的文件在这个许可下能不能试：编号冲突的不试（冲突的另有一轮）；
+  /// `consistentNumberMatches` 只试没有迹象是别的集的，`numberMatches` 起（用户在面板里看过说明）都试。
+  static func accepts(_ match: UncertainEpisodeMatch, _ acceptance: EpisodeMatchAcceptance) -> Bool {
+    guard !match.identityConflict else { return false }
+    if acceptance >= .numberMatches { return true }
+    return acceptance >= .consistentNumberMatches && match.hasNoContraryEvidence
   }
 
   /// 把要先试的文件（`QueuedEpisode.preferredFile`）排到最前，其余保持原顺序。不在这台服务器上、不在 `files` 里时原样返回。
@@ -1479,9 +1538,13 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 同一集在一台服务器上的各个条目（不同媒体库各一个）逐个试：先重新读条目，续播点以服务器此刻为准；
   /// 重新核对还是集索引里记的那一集后才准备播放（见 `ServerEpisodeIndex.recheck`）。无法确认、读取失败或不能直连时，继续试其他副本。
   /// `fromIndex` 为 false 时候选只是条目 ID（播放中换集），条目上没有编号时留给调用方按集索引核对。
+  /// `rechecksAirDate` 里的候选（「继续播放」不问就播的只按季号集号对上的文件 → 建索引时核对它用的 MoviePilot 日期，
+  /// 见 `UncertainEpisodeMatch.referenceAirDate`）重新读到后有了新的反证就不播：重新读到的条目已经带上这一集的
+  /// TMDB 单集编号时算确定的，不再比日期；日期和建索引时一样（已经核对过）也不再比；变了时按那个日期比。
   private static func prepareFirstPlayable(
     _ candidates: [ServerMediaItem], on connection: any MediaServerConnection, episode: QueuedEpisode,
-    tmdbEpisodeID: Int, fromIndex: Bool = true, confirmedBy: [String: EpisodeConfirmationBasis] = [:]
+    tmdbEpisodeID: Int, fromIndex: Bool = true, confirmedBy: [String: EpisodeConfirmationBasis] = [:],
+    rechecksAirDate: [String: String?] = [:]
   ) async throws -> EpisodeAttempt {
     var attempt = EpisodeAttempt()
     for candidate in candidates {
@@ -1492,7 +1555,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           fresh, recorded: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID,
           basis: confirmedBy[candidate.id])
         {
-        case .same: return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
+        case .same:
+          if let reference = rechecksAirDate[candidate.id], fresh.tmdbEpisodeID != tmdbEpisodeID,
+            fresh.premiereDate != candidate.premiereDate,
+            case .differs = AirDateCheck.compare(server: fresh.premiereDate, moviePilot: reference)
+          {
+            return .airDateDiffers
+          }
+          return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
         case .changed: return .stale
         case .lostEpisodeID: return .missingEpisodeID
         case .needsIndex: return .needsIndex
@@ -1506,6 +1576,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         attempt.foundStale = true
       case .success(.needsIndex):
         attempt.needsIndex = true
+      case .success(.airDateDiffers):
+        if attempt.failure == nil {
+          attempt.failure = PlaybackError.episodeUnavailable(
+            "“\(connection.serverName)”上的文件播出日期和这一集对不上，请在集列表里打开这一集确认后再播")
+        }
       case .success(.missingEpisodeID):
         attempt.foundStale = true
         attempt.missingIdentity = .episodeUnavailable(
