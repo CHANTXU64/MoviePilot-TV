@@ -695,7 +695,7 @@ private struct EpisodeBrowser: View {
 
   private func select(_ episode: MoviePilotEpisode) {
     if entry(for: episode)?.primaryAction == .play {
-      play(episode, allowsUncertain: false)
+      play(episode, accepting: .confirmedOnly)
     } else {
       panelEpisode = episode
     }
@@ -704,7 +704,7 @@ private struct EpisodeBrowser: View {
   /// 遥控器播放键（见 `EpisodeEntry.playPauseAction`）。没有应用内播放时不响应。
   private func playPause(_ episode: MoviePilotEpisode) {
     switch entry(for: episode)?.playPauseAction {
-    case .play: play(episode, allowsUncertain: false)
+    case .play: play(episode, accepting: .confirmedOnly)
     case .openPanel: panelEpisode = episode
     case .explain(let message): notificationManager.show(message: message, type: .info)
     case nil: break
@@ -713,7 +713,7 @@ private struct EpisodeBrowser: View {
 
   private func perform(_ action: EpisodeEntry.MenuAction, on episode: MoviePilotEpisode) {
     switch action {
-    case .play: play(episode, allowsUncertain: false)
+    case .play: play(episode, accepting: .confirmedOnly)
     case .startTrial: startTrial(episode)
     case .cancelTrial(let id): cancelTrial(id)
     case .details: panelEpisode = episode
@@ -723,8 +723,9 @@ private struct EpisodeBrowser: View {
   private func performPanelAction(_ button: EpisodeEntry.PanelButton, on episode: MoviePilotEpisode) {
     switch button {
     case .play:
-      let allowsUncertain = entry(for: episode)?.uncertainMatch != nil
-      afterPanelDismiss = { play(episode, allowsUncertain: allowsUncertain) }
+      // 按此刻面板上的说明给许可，关掉面板后原样交给起播。
+      let acceptance = entry(for: episode)?.panelPlaybackAcceptance ?? .confirmedOnly
+      afterPanelDismiss = { play(episode, accepting: acceptance) }
       panelEpisode = nil
     case .startTrial:
       // 进度显示在卡片正中，不用开着面板等：关掉面板，焦点回到这张卡。
@@ -742,12 +743,12 @@ private struct EpisodeBrowser: View {
   }
 
   /// 按集起播：带上这一集所在那一季的集列表，播放器里能接着播上一集、下一集。
-  private func play(_ episode: MoviePilotEpisode, allowsUncertain: Bool) {
+  private func play(_ episode: MoviePilotEpisode, accepting acceptance: EpisodeMatchAcceptance) {
     guard let playback, let context = playbackContext(playback),
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }
     apiService.sessionScope.playbackCoordinator.play(
-      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), allowsUncertain: allowsUncertain))
+      .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), accepting: acceptance))
   }
 
   /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）

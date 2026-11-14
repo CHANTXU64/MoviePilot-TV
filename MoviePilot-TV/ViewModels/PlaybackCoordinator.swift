@@ -13,8 +13,19 @@ enum PlaybackTarget: Equatable {
   /// 已知服务器名称和这台服务器自己的条目 ID（首页“最近添加”，或详情页已在服务器上找到）。
   case serverItem(serverName: String, itemID: String)
   /// 详情页集列表里的一集，带着它所在那一季的集列表：在各台可播放的服务器上找这一集的文件，见 `EpisodeMatching.swift`。
-  /// `allowsUncertain`：用户已在单集面板看过“可能不是这一集”的说明时为 true，才会试只按季号集号对上的文件。
-  case episode(QueuedEpisode, allowsUncertain: Bool)
+  /// `accepting`：用户在单集面板看过的说明允许试哪些文件，见 `EpisodeMatchAcceptance`。
+  case episode(QueuedEpisode, accepting: EpisodeMatchAcceptance)
+}
+
+/// 按集起播时可以试哪些文件，按用户按下时面板显示的说明给：说明之后情况变了（比如没冲突的那台服务器离线），
+/// 播放器报错，用户看到新的说明再决定，不替用户放宽。
+nonisolated enum EpisodeMatchAcceptance: Comparable, Sendable {
+  /// 只播确定的文件：按卡片、遥控器播放键、长按菜单直接起播。
+  case confirmedOnly
+  /// 面板说明了“可能不是这一集”：也试只按季号集号对上、编号没有冲突的文件。
+  case numberMatches
+  /// 面板说明了“编号属于另一部剧”：编号指向别的剧的文件也试（仍先试没有冲突的）。
+  case identityConflicts
 }
 
 enum PlaybackError: LocalizedError, Equatable {
@@ -213,6 +224,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private var lookupRetries: [String: Task<Void, Never>] = [:]
   /// 没查全的一轮结束后多久通知重查，测试可以改短。
   private let lookupRetryDelay: Duration
+  /// 各部剧（TMDB 编号）的补查结果版本，放进集索引的缓存键。一轮补查结束时只递增这部剧的，让它的集索引按新结果重建，
+  /// 不作废别的剧（它们可能正在读）。
+  private var evidenceVersions: [Int: Int] = [:]
   /// 上次读到的 MoviePilot 集列表语言（`TMDB_LOCALE`），只读缓存时按它挑要比的其他语言。
   private var tmdbLocale: String?
   private let now: () -> Date
@@ -658,13 +672,39 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   }
 
   /// 一台服务器上这部剧的集索引，缓存 `episodeIndexTTL`，见 `loadEpisodeIndex`。`refresh` 不为 nil 时不沿用缓存。
+  ///
+  /// 缓存键带着这部剧的补查版本（`evidenceVersions`）。读的过程中一轮补查结束了（版本变了），读到的是补查前的结果，
+  /// 按新版本再读一次（跟上别人已经发起的新读取）；只有第一次按调用方的要求强制重读。跟了 `evidenceFollowLimit` 次
+  /// 版本还在变时抛出读取失败。
   private func episodeIndex(
     _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
     refresh: RefreshRound? = nil
   ) async throws -> ServerEpisodeIndex {
+    var refresh = refresh
+    for _ in 0..<Self.evidenceFollowLimit {
+      let version = evidenceVersions[context.tmdbID] ?? 0
+      let index = try await episodeIndex(context, on: connection, strict: strict, refresh: refresh, version: version)
+      if evidenceVersions[context.tmdbID] ?? 0 == version { return index }
+      refresh = nil
+    }
+    // 补查一直在出新结果（几台服务器的补查先后结束）：不把已知过期的结果交出去，按读取失败处理，稍后重试。
+    throw PlaybackError.episodeUnavailable(Self.evidenceUnsettledMessage(server: connection.serverName))
+  }
+
+  /// 读集索引时最多跟几次补查版本的变化。
+  static let evidenceFollowLimit = 3
+
+  static func evidenceUnsettledMessage(server: String) -> String {
+    "“\(server)”上这部剧的核对结果正在更新，稍后再试"
+  }
+
+  private func episodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
+    refresh: RefreshRound?, version: Int
+  ) async throws -> ServerEpisodeIndex {
     let key = [
       connection.serverName, connection.reportingServer.absoluteString, connection.userID, context.seriesLookupKey,
-      strict ? "strict" : "",
+      strict ? "strict" : "", "evidence\(version)",
     ].joined(separator: "|")
     return try await episodeIndexes.value(for: key, forceRefresh: refresh != nil, validate: validateNotTornDown) {
       [weak self] in
@@ -822,16 +862,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     lookupRounds[key] = nil
     round.cancel()
     checkedLookupFiles[key, default: []].formUnion(round.files)
-    episodeIndexes.invalidateAll()
-    evidenceUpdates.send(tmdbID)
+    evidenceChanged(tmdbID)
     if !complete {
       let delay = lookupRetryDelay
       lookupRetries[key] = Task { [weak self] in
         try? await Task.sleep(for: delay)
         guard !Task.isCancelled, let self, !self.isTornDown else { return }
         self.lookupRetries[key] = nil
-        self.episodeIndexes.invalidateAll()
-        self.evidenceUpdates.send(tmdbID)
+        self.evidenceChanged(tmdbID)
       }
     }
     guard byDeadline else { return }
@@ -839,9 +877,14 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       try? await Task.sleep(for: .seconds(URLSessionTmdbTransport.resourceTimeout + 1))
       guard !Task.isCancelled, let self, !self.isTornDown else { return }
       self.lateLookupNotices[key] = nil
-      self.episodeIndexes.invalidateAll()
-      self.evidenceUpdates.send(tmdbID)
+      self.evidenceChanged(tmdbID)
     }
+  }
+
+  /// 这部剧的补查结果可能变了：它的集索引按新结果重建（换缓存键，见 `evidenceVersions`），通知详情页重读。
+  func evidenceChanged(_ tmdbID: Int) {
+    evidenceVersions[tmdbID, default: 0] += 1
+    evidenceUpdates.send(tmdbID)
   }
 
   /// 返回这一轮是否查全：没有要查的、或该查的都有了答案为 true；读不到配置、请求失败、限流时为 false。会话结束、取消时为 true（不再重试）。
@@ -1065,7 +1108,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 以编号为准：先只试确定的文件，各台都没有确定能播的，才按服务器顺序试只按季号集号对上的。
   /// 每台服务器的读取和起播都在 `withConnection` 里，缓存的地址连不上时换地址重试。
   private func prepareEpisode(
-    _ queued: QueuedEpisode, allowsUncertain: Bool, servers: [MediaServerConf], preferredUserName: String?,
+    _ queued: QueuedEpisode, accepting acceptance: EpisodeMatchAcceptance, servers: [MediaServerConf],
+    preferredUserName: String?,
     certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
     guard let tmdbEpisodeID = queued.episode.tmdbEpisodeID else {
@@ -1081,13 +1125,18 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     var uncertain: [MediaServerConf] = []
     /// 重读过时的服务器是一轮：各台都重读，整理记录只重读一次。
     let refreshRound = RefreshRound()
-    enum Pass { case cached, refreshed, uncertain }
-    for pass in [Pass.cached, .refreshed, .uncertain] {
+    /// 这一轮已经重建过集索引的服务器。
+    var refreshedServers: Set<String> = []
+    /// 按季号集号对上的分两步试：先在各台服务器上试编号不冲突的；面板说明过编号冲突（`identityConflicts`）才试编号指向别的剧的。
+    enum Pass { case cached, refreshed, uncertain, conflicting }
+    for pass in [Pass.cached, .refreshed, .uncertain, .conflicting] {
       let servers: [MediaServerConf] =
         switch pass {
         case .cached: candidates
         case .refreshed: outdated
-        case .uncertain: allowsUncertain ? candidates.filter { server in uncertain.contains { $0.name == server.name } } : []
+        case .uncertain, .conflicting:
+          acceptance >= (pass == .uncertain ? .numberMatches : .identityConflicts)
+            ? candidates.filter { server in uncertain.contains { $0.name == server.name } } : []
         }
       for server in servers {
         do {
@@ -1095,22 +1144,39 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             to: server, preferredUserName: preferredUserName, certificateFailures: &certificateFailures
           ) {
             connection in
-            let index = try await self.episodeIndex(
-              queued.context, on: connection, strict: strict, refresh: pass == .refreshed ? refreshRound : nil)
-            let files =
-              pass == .uncertain
-              ? index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).map(\.item)
-              : index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID)
-            let attempt = try await Self.prepareFirstPlayable(
-              files, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
-              confirmedBy: index.confirmedBy)
-            return (index, attempt)
+            var reread = false
+            while true {
+              let refresh = pass == .refreshed || reread
+              if refresh { refreshedServers.insert(server.name) }
+              let index = try await self.episodeIndex(
+                queued.context, on: connection, strict: strict, refresh: refresh ? refreshRound : nil)
+              let uncertainFiles = index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID)
+              // 重建后的索引里，这份文件可能已按新编号确定，或者换成了另一档：确定的先试，冲突的仍按许可。
+              let confirmed = pass == .cached || pass == .refreshed || reread
+                ? index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID) : []
+              let files =
+                switch pass {
+                case .cached, .refreshed: confirmed
+                case .uncertain: confirmed + uncertainFiles.filter { !$0.match.identityConflict }.map(\.item)
+                case .conflicting:
+                  confirmed + uncertainFiles.filter { reread || $0.match.identityConflict }.map(\.item)
+                }
+              let attempt = try await Self.prepareFirstPlayable(
+                files, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID,
+                confirmedBy: index.confirmedBy)
+              // 按季号集号对上的文件起播前核对不过（重新刮削换了外部编号、季号集号或路径）：按新证据重建这台的索引，
+              // 用同样的许可再试一次。这一轮已经重建过的不再重读。
+              guard attempt.prepared == nil, attempt.foundStale, pass == .uncertain || pass == .conflicting,
+                !refreshedServers.contains(server.name)
+              else { return (index, attempt) }
+              reread = true
+            }
           }
           if let prepared = attempt.prepared { return prepared }
           lookups[server.name] = .loaded(index)
           if firstError == nil { firstError = attempt.error }
           if missingIdentity == nil { missingIdentity = attempt.missingIdentity }
-          guard pass != .uncertain else { continue }
+          guard pass == .cached || pass == .refreshed else { continue }
           let hasUncertain = !index.uncertainEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty
           if hasUncertain, !uncertain.contains(where: { $0.name == server.name }) { uncertain.append(server) }
           let isMissing = index.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty && !hasUncertain
@@ -1131,6 +1197,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     switch availability {
     case .failed(let reason):
       throw PlaybackError.episodeUnavailable(reason)
+    case .uncertain(let server, let match) where match.identityConflict && acceptance < .identityConflicts:
+      // 用户看到的不是编号冲突的说明（那时有没冲突的副本），现在只剩冲突的：说明新情况，不替用户播它。
+      throw PlaybackError.episodeUnavailable(EpisodeAvailability.identityConflictMessage(server: server))
     case .playable, .uncertain:
       // 集索引里有，重新读取时条目已经变了。
       throw missingIdentity ?? PlaybackError.episodeUnavailable(EpisodeAvailability.notOnServerMessage)
@@ -1475,9 +1544,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           ? PlaybackError.noPlayableServer : PlaybackError.serverNotSupported(server.name)
       }
       candidates = [server]
-    case .episode(let queued, let allowsUncertain):
+    case .episode(let queued, let acceptance):
       return try await prepareEpisode(
-        queued, allowsUncertain: allowsUncertain, servers: servers, preferredUserName: preferredUserName,
+        queued, accepting: acceptance, servers: servers, preferredUserName: preferredUserName,
         certificateFailures: &certificateFailures)
     }
 

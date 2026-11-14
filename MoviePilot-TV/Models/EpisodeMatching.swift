@@ -713,7 +713,7 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   enum Recheck: Equatable, Sendable {
     /// 还是对应表里记的那一集
     case same
-    /// 条目变了（编号、季号集号或文件路径不同），对应表要重读
+    /// 条目变了（编号、外部编号、季号集号或文件路径不同），对应表要重读
     case changed
     /// 对应时带着 TMDB 单集编号，重新读取却没有了
     case lostEpisodeID
@@ -745,9 +745,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     case .externalID(let source, let value):
       guard fresh.hasFile, fresh.seriesID == recorded.seriesID, fresh.externalIDs[source] == value else { return .changed }
     case nil:
-      break
+      // 按整理记录或季号集号对应的：能反查的外部编号也不能变。补查按这些编号判断过它是不是这部剧的这一集
+      // （编号指向别的剧的文件起播要单独许可），重新刮削换了编号要按新编号重建对应表。
+      guard ExternalEvidenceRequest.lookupIDs(of: fresh) == ExternalEvidenceRequest.lookupIDs(of: recorded) else {
+        return .changed
+      }
     }
-    // 按整理记录或季号集号对应的：仍然没有编号，季号集号和文件路径都没变。
+    // 仍然没有编号，季号集号和文件路径都没变。
     guard fresh.tmdbEpisodeID == nil, fresh.seasonNumber == recorded.seasonNumber,
       fresh.episodeNumber == recorded.episodeNumber, fresh.episodeNumberEnd == recorded.episodeNumberEnd,
       fresh.path == nil || recorded.path == nil || fresh.path == recorded.path

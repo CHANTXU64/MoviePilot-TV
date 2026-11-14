@@ -120,6 +120,12 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
   /// 卡片上显示播放角标、面板里有「播放」：确定能播，或按季号集号找到了文件。
   var offersPlayback: Bool { isPlayable || uncertainMatch != nil }
 
+  /// 在单集面板按「播放」「仍要播放」时给起播的许可：按此刻面板显示的说明。
+  var panelPlaybackAcceptance: EpisodeMatchAcceptance {
+    guard let uncertain = uncertainMatch else { return .confirmedOnly }
+    return uncertain.match.identityConflict ? .identityConflicts : .numberMatches
+  }
+
   /// 遥控器播放键在不能播的集上提示的原因；能播（含按季号集号找到了文件）时为 nil。
   var notPlayableMessage: String? {
     guard !offersPlayback else { return nil }
