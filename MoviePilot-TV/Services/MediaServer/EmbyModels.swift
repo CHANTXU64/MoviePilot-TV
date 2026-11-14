@@ -140,6 +140,12 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     }
   }
 
+  /// 这个用户已看完。读不到时当作没看完。
+  var isPlayed: Bool {
+    if case .bool(let value) = userData?["Played"] { return value }
+    return false
+  }
+
   /// 转成与服务器无关的条目。没有 `Type` 时按 `defaultKind`（剧集列表里的都是单集）。
   /// `image` 按条目 ID、图片类型和版本标签给出图片地址；不传时条目不带图片。
   func serverItem(
@@ -163,6 +169,7 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       episodeNumberEnd: indexNumberEnd,
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
+      played: isPlayed,
       hasFile: locationType?.lowercased() != "virtual",
       externalIDs: ExternalMediaID.normalizedTable(providerIDs),
       path: path,

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -13,10 +14,15 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
       from: JSONSerialization.data(withJSONObject: fields))
   }
 
-  func testSelectableSeasonsKeepSpecialsFirstAndDropInvalidOrDuplicate() {
+  func testSelectableSeasonsPutSpecialsLastAndDropInvalidOrDuplicate() {
     let result = MediaDetailEpisodeSeasons.selectable(
       [season(2), season(0), season(nil), season(-1), season(1), season(2)])
-    XCTAssertEqual(result.compactMap(\.season_number), [0, 1, 2])
+    XCTAssertEqual(result.compactMap(\.season_number), [1, 2, 0])
+  }
+
+  func testSeasonDisplayOrderPutsSpecialsThenMissingNumbersLast() {
+    let result = SeasonDisplayOrder.sorted([season(nil), season(0), season(3), season(1)])
+    XCTAssertEqual(result.map(\.season_number), [1, 3, 0, nil])
   }
 
   func testCurrentSeasonPrefersUserChoiceThenDetailSeasonThenFirstRegularSeason() {
@@ -27,6 +33,27 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     XCTAssertNil(MediaDetailEpisodeSeasons.current(selected: nil, preferred: 1, available: []))
   }
 
+  func testRowHintFindsEpisodeByTMDBIDThenByNumber() {
+    let episodes = MoviePilotEpisode.list(
+      [TmdbEpisode(id: 501, episodeNumber: 1), TmdbEpisode(id: 502, episodeNumber: 2), TmdbEpisode(id: nil, episodeNumber: 3)],
+      season: 2)
+    XCTAssertEqual(EpisodeRowHint(season: 2, tmdbEpisodeID: 502, episodeNumber: 9).episode(in: episodes)?.index, 1)
+    XCTAssertEqual(EpisodeRowHint(season: 2, tmdbEpisodeID: 999, episodeNumber: 3).episode(in: episodes)?.index, 2)
+    XCTAssertNil(EpisodeRowHint(season: 1, episodeNumber: 3).episode(in: episodes), "季对不上不停")
+    XCTAssertNil(EpisodeRowHint(season: 2).episode(in: episodes), "只指定季时不停在某一集")
+  }
+
+  func testSeasonPageTitleListsSpecialsAfterTheRegularRange() {
+    XCTAssertEqual(SubscribeSeasonContentView.seasonPageTitle(0..<3, numbers: [1, 2, 3]), "1–3 季")
+    XCTAssertEqual(SubscribeSeasonContentView.seasonPageTitle(100..<103, numbers: [101, 102, 0]), "101–102 季 · 特别篇")
+    XCTAssertEqual(SubscribeSeasonContentView.seasonPageTitle(100..<103, numbers: [102, 101, 0]), "第 101–103 项")
+  }
+
+  func testLeadingScrollAnchorKeepsTheSafeAreaMargin() {
+    let anchor = EpisodeCardLayout.leadingScrollAnchor(cardWidth: 410, rowWidth: 1920)
+    XCTAssertEqual(anchor.x * (1920 - 410), 81, accuracy: 0.001, "滚到最左边后卡片左边留 81pt")
+  }
+
   func testExpandIsAvailableForMultipleSeasonsOrMoreThanTenEpisodes() {
     XCTAssertFalse(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1, episodeCount: 10)], loadedEpisodeCount: 10))
     XCTAssertTrue(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1, episodeCount: 11)], loadedEpisodeCount: 0))
@@ -34,10 +61,12 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     XCTAssertTrue(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1), season(2)], loadedEpisodeCount: 0))
   }
 
-  func testManySeasonsOrLongGroupSeasonNamesUseMenuInsteadOfChips() {
-    let few = (1...8).map { "第 \($0) 季" }
+  func testMoreThanFourSeasonsOrLongGroupSeasonNamesUseMenuInsteadOfChips() {
+    let few = (1...4).map { "第 \($0) 季" }
     XCTAssertTrue(MediaDetailEpisodeSeasons.fitsChips(titles: few))
-    XCTAssertFalse(MediaDetailEpisodeSeasons.fitsChips(titles: few + ["第 9 季"]))
+    XCTAssertTrue(MediaDetailEpisodeSeasons.fitsChips(titles: ["第 1 季", "第 2 季", "第 3 季", "特别篇"]))
+    XCTAssertFalse(MediaDetailEpisodeSeasons.fitsChips(titles: few + ["第 5 季"]))
+    XCTAssertFalse(MediaDetailEpisodeSeasons.fitsChips(titles: few + ["特别篇"]), "4 季加特别篇共 5 项，改用菜单")
     let longNames = Array(repeating: "东海篇 · 罗格镇与颠倒山之前的故事", count: 3)
     XCTAssertFalse(MediaDetailEpisodeSeasons.fitsChips(titles: longNames))
   }
@@ -45,15 +74,15 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
   func testLargeSeasonMenuGroupsKeepSpecialsAndEverySeasonReachable() {
     let special = PickerOption(title: "特别篇", value: 0)
     let regular = (1...1_003).map { PickerOption(title: "第 \($0) 季", value: $0) }
-    XCTAssertTrue(MediaDetailEpisodeSeasons.menuGroups([special] + regular.prefix(49)).isEmpty)
-    XCTAssertEqual(MediaDetailEpisodeSeasons.menuGroups([special] + regular.prefix(50)).count, 2)
+    XCTAssertTrue(MediaDetailEpisodeSeasons.menuGroups(regular.prefix(49) + [special]).isEmpty)
+    XCTAssertEqual(MediaDetailEpisodeSeasons.menuGroups(regular.prefix(50) + [special]).count, 2)
 
-    let groups = MediaDetailEpisodeSeasons.menuGroups([special] + regular)
-    XCTAssertNil(groups.first?.title)
-    XCTAssertEqual(groups.dropFirst().first?.title, "第 1–50 季")
-    XCTAssertEqual(groups.last?.title, "第 1001–1003 季")
+    let groups = MediaDetailEpisodeSeasons.menuGroups(regular + [special])
+    XCTAssertEqual(groups.first?.title, "第 1–50 季")
+    XCTAssertEqual(groups.dropLast().last?.title, "第 1001–1003 季")
+    XCTAssertNil(groups.last?.title, "特别篇单独一组，放在最后")
     XCTAssertTrue(groups.allSatisfy { $0.options.count <= 50 })
-    XCTAssertEqual(groups.flatMap(\.options).map(\.value), Array(0...1_003))
+    XCTAssertEqual(groups.flatMap(\.options).map(\.value), Array(1...1_003) + [0])
   }
 
   func testEpisodePagesCoverAllEpisodesAndExpansionOpensTheContainingRange() {

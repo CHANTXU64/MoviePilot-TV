@@ -517,6 +517,7 @@ struct MediaDetailView: View {
                   subscriptionSeasons: shouldShowSeasonSubscriptionSection
                     ? preloadTask.seasonViewModel : nil,
                   playback: viewModel.episodePlayback,
+                  rowHint: viewModel.episodeRowHint,
                   allowsRequests: allowsRequests,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",
@@ -1051,10 +1052,13 @@ struct MediaDetailView: View {
           }
           HStack(spacing: 20) {
             if let playbackTarget = viewModel.inAppPlaybackTarget {
+              // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）；没看过、读不到观看记录时是普通的「播放」。
+              let seriesAction = viewModel.seriesPlayAction
               Button(action: {
-                apiService.sessionScope.playbackCoordinator.play(playbackTarget, media: viewModel.detail)
+                apiService.sessionScope.playbackCoordinator.play(
+                  seriesAction?.target ?? playbackTarget, media: viewModel.detail)
               }) {
-                Label("播放", systemImage: AppSymbol.play)
+                Label(seriesAction?.title ?? "播放", systemImage: AppSymbol.play)
                   .foregroundColor(.primary)
               }
               .focused($focusedButton, equals: .play)

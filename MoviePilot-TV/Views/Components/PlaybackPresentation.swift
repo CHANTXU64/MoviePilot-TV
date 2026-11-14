@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 挂在主界面上的播放呈现：解析中的遮罩、续播询问、全屏播放器和失败提示。
+/// 挂在主界面上的播放呈现：解析中的遮罩、全屏播放器和失败提示。有续播点时直接接着播，不询问。
 struct PlaybackPresentationModifier: ViewModifier {
   @ObservedObject var coordinator: PlaybackCoordinator
   @EnvironmentObject private var notificationManager: NotificationManager
@@ -30,22 +30,6 @@ struct PlaybackPresentationModifier: ViewModifier {
           }
           .onExitCommand { coordinator.cancelResolving() }
         }
-      }
-      .confirmationDialog(
-        coordinator.resumePrompt?.prepared.title ?? "继续播放",
-        isPresented: Binding(
-          get: { coordinator.resumePrompt != nil },
-          set: { if !$0 { coordinator.dismissResumePrompt() } }),
-        titleVisibility: .visible,
-        presenting: coordinator.resumePrompt
-      ) { prompt in
-        Button("从 \(Duration.seconds(Int(prompt.position)).formatted(.runtime)) 继续播放") {
-          coordinator.resume(prompt, fromBeginning: false)
-        }
-        Button("从头播放") {
-          coordinator.resume(prompt, fromBeginning: true)
-        }
-        Button("取消", role: .cancel) { coordinator.dismissResumePrompt() }
       }
       .fullScreenCover(
         item: Binding(

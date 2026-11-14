@@ -97,13 +97,13 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   /// 播放界面的条目：标题、季集号、简介、日期、评分和图片都取 `metadata`（MoviePilot 为准，缺的项用媒体服务器的，
-  /// 见 `PlaybackMetadata`），与续播询问的标题同一份来源。演职员暂不接入；章节不在条目上，见 `MediaSession.chapters`。
+  /// 见 `PlaybackMetadata`），与播放界面标题同一份来源。演职员暂不接入；章节不在条目上，见 `MediaSession.chapters`。
   /// 按集播放时带上队列用的剧集、季标识；其他条目不带，播放界面的队列为空。
   init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
     type = BaseItemKind(item.kind)
     runTimeTicks = item.runtimeSeconds.map(Self.ticks(seconds:))
-    // 「第 1 集」这类集名没有信息量：信息面板的标题改显示季集号，与续播询问的标题一致。
+    // 「第 1 集」这类集名没有信息量：信息面板的标题改显示季集号，与播放界面的标题一致。
     if item.kind == .episode, let title = metadata.title,
       PlaybackTitles.isPlaceholderEpisodeName(title, episodeNumber: metadata.episodeNumber)
     {

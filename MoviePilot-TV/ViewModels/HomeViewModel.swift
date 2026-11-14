@@ -374,6 +374,37 @@ class HomeViewModel: ObservableObject {
     return trimmedNonEmpty([item.item_id?.value])
   }
 
+  /// 按下「最近添加」卡片是跳到媒体服务器 App（卡片左下角有跳转图标），还是打开详情页。卡片不直接播放：
+  /// 播放在详情页里（电影按「播放」、剧按单集卡片）。能在应用内播放且设置里选了在应用内打开时打开详情页；
+  /// 否则这类服务器支持跳转就跳过去，不支持跳转（如 Jellyfin）的也打开详情页。
+  static func opensMediaServerApp(canOpenMediaLibrary: Bool, canPlayInApp: Bool, prefersInApp: Bool) -> Bool {
+    canOpenMediaLibrary && !(canPlayInApp && prefersInApp)
+  }
+
+  func opensMediaServerApp(_ item: MediaServerPlayItem) -> Bool {
+    Self.opensMediaServerApp(
+      canOpenMediaLibrary: Self.supportsMediaLibraryDeepLink(serverType: item.server_type),
+      canPlayInApp: inAppPlaybackItemID(item) != nil,
+      prefersInApp: SystemViewModel.shouldPlayHomeMediaInApp)
+  }
+
+  /// 「最近添加」条目对应的详情页。能在应用内播放的服务器上先读条目自己的 TMDB 编号（与这份文件一一对应）；
+  /// 读不到时按标题、年份识别（识别不出时 `handler` 会提示）。
+  func detailTarget(for item: MediaServerPlayItem, using handler: MediaActionHandler) async -> MediaInfo? {
+    let snapshot = apiService.sessionSnapshot()
+    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+    if let itemID = inAppPlaybackItemID(item),
+      let identity = await apiService.sessionScope.playbackCoordinator.libraryItemTMDBIdentity(
+        serverName: selectedLatestMediaServer, itemID: itemID)
+    {
+      guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+      let typed = MediaInfo(title: item.title, type: identity.mediaType, year: item.subtitle)
+      return MediaActionHandler.tmdbJumpTarget(for: typed, tmdbId: identity.tmdbID)
+    }
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+    return await handler.getTMDBJumpTarget(for: info)
+  }
+
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
   static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
     guard let serverType else { return true }

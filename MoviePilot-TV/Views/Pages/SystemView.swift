@@ -929,7 +929,7 @@ struct SystemView: View {
           .focused($focusedItem, equals: .inAppPlayback)
         case .homeMediaTap:
           Toggle(
-            "点击首页媒体直接播放",
+            "首页媒体在应用内打开",
             isOn: Binding(
               get: { viewModel.homeMediaTapPlaysInApp },
               set: { viewModel.homeMediaTapPlaysInApp = $0 }

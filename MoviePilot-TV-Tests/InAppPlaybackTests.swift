@@ -393,6 +393,72 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertNil(try first([]))
   }
 
+  func testUpNextContinuesTheFurthestWatchedEpisode() throws {
+    // 每集 2 小时（72000000000 tick）；`position` 是续播点（秒）。
+    func episode(
+      _ id: String, season: Int, episode: Int, played: Bool = false, position: Int = 0, location: String = "FileSystem"
+    ) -> String {
+      let ticks = Int64(position) * 10_000_000
+      return #"{"Id":"\#(id)","Type":"Episode","ParentIndexNumber":\#(season),"IndexNumber":\#(episode),"RunTimeTicks":72000000000,"LocationType":"\#(location)","UserData":{"Played":\#(played),"PlaybackPositionTicks":\#(ticks)}}"#
+    }
+    func items(_ episodes: [String]) throws -> [ServerMediaItem] {
+      try decode(EmbyItemsPage.self, #"{"Items":[\#(episodes.joined(separator: ","))]}"#).items
+        .map { $0.serverItem(defaultKind: .episode) }
+    }
+    func upNext(_ episodes: [String]) throws -> (String, Bool)? {
+      PlaybackEpisodeProgress.upNext(in: try items(episodes)).map { ($0.episode.id, $0.resumes) }
+    }
+
+    let watchedTwo = [
+      episode("s1e1", season: 1, episode: 1, played: true),
+      episode("s1e2", season: 1, episode: 2, played: true),
+      episode("s1e3", season: 1, episode: 3),
+    ]
+    XCTAssertTrue(try items(watchedTwo)[0].played, "读出 Emby 的已看完标记")
+    XCTAssertEqual(try upNext(watchedTwo)?.0, "s1e3", "看完第 2 集，接着看第 3 集")
+    XCTAssertEqual(try upNext(watchedTwo)?.1, false)
+
+    let halfway = [episode("s1e1", season: 1, episode: 1, played: true), episode("s1e2", season: 1, episode: 2, position: 1800)]
+    XCTAssertEqual(try upNext(halfway)?.0, "s1e2", "看到一半的接着看")
+    XCTAssertEqual(try upNext(halfway)?.1, true)
+
+    // 前面有一集看了一半，后面又看完了更靠后的：以最靠后的为准。
+    XCTAssertEqual(
+      try upNext([
+        episode("s1e1", season: 1, episode: 1, position: 1800),
+        episode("s2e1", season: 2, episode: 1, played: true),
+        episode("s2e2", season: 2, episode: 2),
+      ])?.0, "s2e2")
+    // 续播点接近片尾算看完；不到 1 分钟不算看过。
+    XCTAssertEqual(
+      try upNext([episode("e1", season: 1, episode: 1, position: 7000), episode("e2", season: 1, episode: 2)])?.0, "e2")
+    XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1, position: 30), episode("e2", season: 1, episode: 2)]))
+    // 特别篇、缺失的集不算；最后一集看完了就没有接着看的。
+    XCTAssertEqual(
+      try upNext([
+        episode("sp", season: 0, episode: 1, played: true),
+        episode("e1", season: 1, episode: 1, played: true),
+        episode("missing", season: 1, episode: 2, location: "Virtual"),
+        episode("e3", season: 1, episode: 3),
+      ])?.0, "e3")
+    XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1, played: true)]), "全看完了")
+    XCTAssertNil(try upNext([episode("e1", season: 1, episode: 1)]), "一集都没看过")
+
+    XCTAssertEqual(
+      PlaybackEpisodeProgress.latestSeason(in: try items([
+        episode("sp", season: 0, episode: 1), episode("s3", season: 3, episode: 1, location: "Virtual"),
+        episode("s2", season: 2, episode: 1), episode("s1", season: 1, episode: 1),
+      ])), 2, "最新的、有文件的正片季")
+  }
+
+  @MainActor
+  func testSeriesPlayActionTitleNamesTheEpisode() {
+    XCTAssertEqual(SeriesPlayAction.title(resumes: true, season: 2, episode: 5), "继续播放 第 2 季第 5 集")
+    XCTAssertEqual(SeriesPlayAction.title(resumes: false, season: 2, episode: 6), "播放 第 2 季第 6 集")
+    XCTAssertEqual(SeriesPlayAction.title(resumes: false, season: 0, episode: 1), "播放 特别篇第 1 集")
+    XCTAssertEqual(SeriesPlayAction.title(resumes: true, season: nil, episode: 3), "继续播放")
+  }
+
   func testEpisodeTitleShowsSeriesAndNumbers() throws {
     func titles(_ item: ServerMediaItem) -> (primary: String, secondary: String?) {
       item.metadata.playerTitles(isEpisode: item.kind == .episode)
@@ -805,7 +871,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     XCTAssertNil(coordinator.failure)
     XCTAssertFalse(coordinator.isResolving)
-    XCTAssertNil(coordinator.resumePrompt)
+    XCTAssertEqual(coordinator.session?.startSeconds, 0, "没有续播点时从头播")
     let url = try XCTUnwrap(streamURL(coordinator))
     XCTAssertEqual(url.host, "wan.playback-tests.local")
     XCTAssertEqual(url.path, "/emby/Videos/m1/stream.mp4")
@@ -873,7 +939,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(probes.count, 1, "配置没变时不再重新探测")
   }
 
-  func testSavedPositionAsksBeforePlaying() async throws {
+  func testSavedPositionResumesWithoutAsking() async throws {
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local:8096"))]"
       $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
@@ -883,16 +949,11 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
 
-    let prompt = try XCTUnwrap(coordinator.resumePrompt)
-    XCTAssertEqual(prompt.position, 1800)
-    XCTAssertNil(coordinator.session)
+    let session = try XCTUnwrap(coordinator.session, "有续播点也直接起播，不询问")
+    XCTAssertEqual(session.startSeconds, 1800, "从上次的位置接着播")
 
     coordinator.play(.serverItem(serverName: "emby", itemID: "m1"))
-    XCTAssertNil(coordinator.resolveTaskForTesting, "询问期间不重复开始解析")
-
-    coordinator.resume(prompt, fromBeginning: false)
-    XCTAssertNil(coordinator.resumePrompt)
-    XCTAssertNotNil(coordinator.session)
+    XCTAssertNil(coordinator.resolveTaskForTesting, "播放期间不重复开始解析")
     coordinator.endCurrentSession()
   }
 
@@ -951,6 +1012,28 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let playbackInfoRequest = PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/PlaybackInfo") }
     XCTAssertEqual(playbackInfoRequest?.url.path, "/Items/e1/PlaybackInfo")
     coordinator.endCurrentSession()
+  }
+
+  func testSeriesProgressReadsWatchStateFromTheLocatedSeries() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|s1": #"{"Id":"s1","Name":"某剧","Type":"Series"}"#]
+      $0.episodes = [
+        "lan.playback-tests.local|s1":
+          #"{"Items":[{"Id":"e1","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"UserData":{"Played":true}},{"Id":"e2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2,"RunTimeTicks":\#(Self.twoHours),"UserData":{"Played":false,"PlaybackPositionTicks":18000000000}},{"Id":"s2e1","Type":"Episode","ParentIndexNumber":2,"IndexNumber":1}]}"#
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let progress = await coordinator.seriesProgress(for: .serverItem(serverName: "emby", itemID: "s1"))
+    XCTAssertEqual(progress?.serverName, "emby")
+    XCTAssertEqual(progress?.upNext?.episode.id, "e2")
+    XCTAssertEqual(progress?.upNext?.resumes, true)
+    XCTAssertEqual(progress?.latestSeason, 2)
+    XCTAssertNil(coordinator.session, "只读进度，不起播")
+
+    let notSeries = await coordinator.seriesProgress(for: .serverItem(serverName: "other", itemID: "s1"))
+    XCTAssertNil(notSeries, "不是可播放的服务器时没有进度")
   }
 
   func testSeriesWithoutPlayableEpisodesExplains() async {
@@ -1103,7 +1186,6 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     // Emby 请求与 MoviePilot 会话无关，可以跑完；结果在发布前按会话丢弃。
     XCTAssertNil(coordinator.session)
-    XCTAssertNil(coordinator.resumePrompt)
     XCTAssertNil(coordinator.failure)
     XCTAssertFalse(coordinator.isResolving)
   }
@@ -1534,9 +1616,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endSession(session)
   }
 
-  func testResumeAskUsesSelectedSourceRuntime() async throws {
-    // 条目记的是 2 小时的版本，起播的是 3 小时的加长版，停在 1 小时 55 分：离片尾还远，应询问续播。
-    func prompt(sourceRuntime: String) async throws -> PlaybackCoordinator.ResumePrompt? {
+  func testResumePointUsesSelectedSourceRuntime() async throws {
+    // 条目记的是 2 小时的版本，起播的是 3 小时的加长版，停在 1 小时 55 分：离片尾还远，应接着播。
+    func startSeconds(sourceRuntime: String) async throws -> Double? {
       PlaybackURLProtocol.stub.reset()
       PlaybackURLProtocol.stub.configure {
         $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
@@ -1547,18 +1629,15 @@ final class PlaybackCoordinatorTests: XCTestCase {
       }
       let coordinator = makeCoordinator(makeService())
       await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-      defer {
-        coordinator.dismissResumePrompt()
-        coordinator.endCurrentSession()
-      }
-      return coordinator.resumePrompt
+      defer { coordinator.endCurrentSession() }
+      return coordinator.session?.startSeconds
     }
 
     let threeHours = #","RunTimeTicks":108000000000"#
-    let extended = try await prompt(sourceRuntime: threeHours)
-    XCTAssertEqual(extended?.position, 6900, "按所选片源的 3 小时算，1 小时 55 分还没接近片尾")
-    let unknown = try await prompt(sourceRuntime: "")
-    XCTAssertNil(unknown, "片源没给时长时退回条目的 2 小时：已过 90%，直接从头播放")
+    let extended = try await startSeconds(sourceRuntime: threeHours)
+    XCTAssertEqual(extended, 6900, "按所选片源的 3 小时算，1 小时 55 分还没接近片尾")
+    let unknown = try await startSeconds(sourceRuntime: "")
+    XCTAssertEqual(unknown, 0, "片源没给时长时退回条目的 2 小时：已过 90%，直接从头播放")
   }
 
   /// 从播放界面换集：界面发起，协调器解析并替换会话条目，界面再起播新条目。走真实的 `MediaSession` 和 mpv 播放器，
@@ -3532,8 +3611,9 @@ extension PlaybackCoordinatorTests {
         #"{"Id":"e-s2e3","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"ProviderIds":{"Tmdb":"555"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
     }
     await run(coordinator, .episode(try queued(0), accepting: .numberMatches))
-    XCTAssertEqual(coordinator.resumePrompt?.position, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
-    XCTAssertEqual(coordinator.resumePrompt?.prepared.title, "长风渡 · 第 1 季 第 10 集 · 重逢")
+    XCTAssertEqual(coordinator.session?.startSeconds, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
+    XCTAssertEqual(coordinator.session?.playback.title, "长风渡 · 第 1 季 第 10 集 · 重逢")
+    coordinator.endCurrentSession()
   }
 
   func testUnplayableCopyFallsBackToAnotherCopyOnTheSameServer() async throws {

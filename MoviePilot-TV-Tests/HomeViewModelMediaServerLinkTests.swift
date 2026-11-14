@@ -213,6 +213,17 @@ final class HomeViewModelMediaServerLinkTests: XCTestCase {
     XCTAssertFalse(HomeViewModel.supportsMediaLibraryDeepLink(serverType: .zspace))
   }
 
+  func testRecentCardsNeverPlayDirectlyAndOnlyJumpWhenTheServerAppCanOpen() {
+    // 能跳转、没选在应用内打开：跳到媒体服务器 App（卡片带跳转图标）。
+    XCTAssertTrue(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: true, canPlayInApp: true, prefersInApp: false))
+    XCTAssertTrue(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: true, canPlayInApp: false, prefersInApp: true))
+    // 能在应用内播放且选了在应用内打开：打开详情页。
+    XCTAssertFalse(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: true, canPlayInApp: true, prefersInApp: true))
+    // 服务器不支持跳转（如 Jellyfin）：一律打开详情页。
+    XCTAssertFalse(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: false, canPlayInApp: false, prefersInApp: false))
+    XCTAssertFalse(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: false, canPlayInApp: true, prefersInApp: false))
+  }
+
   private func openMediaItemURL(_ item: MediaServerPlayItem) -> URL? {
     var openedURL: URL?
     let action = OpenURLAction { url in

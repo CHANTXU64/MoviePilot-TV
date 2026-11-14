@@ -81,7 +81,8 @@ class SystemViewModel: ObservableObject {
     }
   }
 
-  /// 首页“最近添加”的电影和剧集点击后直接在应用内播放；关闭时跳转媒体服务器 App。默认关闭。
+  /// 首页“最近添加”里能在应用内播放的电影和剧集，按下后打开详情页（在详情页播放）；关闭时跳转媒体服务器 App。
+  /// 默认关闭。键名沿用旧的“点击直接播放”，已打开的用户升级后改为打开详情页。见 `HomeViewModel.opensMediaServerApp`。
   @Published var homeMediaTapPlaysInApp: Bool = false {
     didSet {
       UserDefaults.standard.set(homeMediaTapPlaysInApp, forKey: Self.homeMediaTapPlaysInAppKey)

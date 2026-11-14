@@ -1,5 +1,22 @@
 import Foundation
 
+/// 季的显示顺序：正片季按季号升序，特别篇（第 0 季）排在最后（与 MoviePilot Web 详情页一致，
+/// 特别篇多是花絮，不占最前面的位置）。没有季号的排在特别篇之后。详情页集列表和分季订阅共用。
+enum SeasonDisplayOrder {
+  static func sorted(_ seasons: [TmdbSeason]) -> [TmdbSeason] {
+    seasons.enumerated().sorted { lhs, rhs in
+      let left = rank(lhs.element.season_number)
+      let right = rank(rhs.element.season_number)
+      return left == right ? lhs.offset < rhs.offset : left < right
+    }.map(\.element)
+  }
+
+  static func rank(_ seasonNumber: Int?) -> (Int, Int) {
+    guard let seasonNumber else { return (2, 0) }
+    return seasonNumber == 0 ? (1, 0) : (0, seasonNumber)
+  }
+}
+
 enum SeasonDisplayFormatter {
   /// 季卡与详情 Sheet 共用季名规则，避免 S00、缺失和非法季号出现不同文案。
   static func name(seasonNumber: Int?, rawName: String?) -> String {

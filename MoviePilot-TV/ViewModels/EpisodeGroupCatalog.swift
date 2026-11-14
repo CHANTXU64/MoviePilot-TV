@@ -27,7 +27,7 @@ final class EpisodeGroupCatalog {
     let seasons = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
     try Task.checkCancellation()
     guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    seasonsByGroup[groupID] = seasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+    seasonsByGroup[groupID] = SeasonDisplayOrder.sorted(seasons)
   }
 
   /// 会话变化或手动重试时变化，用作界面加载任务的 id。

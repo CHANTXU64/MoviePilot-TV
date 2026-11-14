@@ -254,6 +254,8 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   let runtimeSeconds: Double?
   /// 服务器记录的续播位置（秒），没有时为 0。
   let resumePositionSeconds: Double
+  /// 服务器上这个用户已看完（标记为已播放）。详情页「继续播放」据此找接着看的那一集，见 `PlaybackEpisodeOrder.upNext`。
+  let played: Bool
   /// 服务器上只有元数据、没有文件（缺失的集）时为 false。
   let hasFile: Bool
   /// 外部编号：规范来源（见 `ExternalMediaID.normalizedSource`）→ 有效编号。
@@ -280,7 +282,8 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   init(
     id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
     episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
-    resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:],
+    resumePositionSeconds: Double = 0, played: Bool = false, hasFile: Bool = true,
+    externalIDs: [String: String] = [:],
     path: String? = nil, premiereDate: String? = nil, seriesID: String? = nil, overview: String? = nil,
     communityRating: Double? = nil, officialRating: String? = nil, posterURL: URL? = nil, thumbnailURL: URL? = nil
   ) {
@@ -293,6 +296,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     self.episodeNumberEnd = episodeNumberEnd
     self.runtimeSeconds = runtimeSeconds
     self.resumePositionSeconds = resumePositionSeconds
+    self.played = played
     self.hasFile = hasFile
     self.externalIDs = externalIDs
     self.path = trimmedNonEmpty([path])
@@ -325,7 +329,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   }
 }
 
-/// 播放界面、续播询问显示的条目信息：标题、季集号、简介、日期、评分和图片。
+/// 播放界面显示的条目信息：标题、季集号、简介、日期、评分和图片。
 /// 以 MoviePilot 的为准（详情页、集列表，或按服务器条目的外部编号查到的 MoviePilot 详情）；MoviePilot 没有这个条目，
 /// 或缺某一项时，用媒体服务器适配器给的（`ServerMediaItem.metadata`），不限于哪一类服务器。
 nonisolated struct PlaybackMetadata: Equatable, Sendable {
@@ -574,11 +578,54 @@ nonisolated enum PlaybackEpisodeOrder {
   }
 }
 
-/// 正在播放的那个文件有多长。续播询问、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
+/// 一部剧接着看哪一集（详情页的「继续播放」和集列表默认停的位置）。
+/// 只看有文件的正片集（全是特别篇时才看特别篇），按季号、集号排：最靠后的一集看过或看了一部分的为准——
+/// 看了一部分（续播点有效，见 `PlaybackResumePolicy`）就接着看它，看完了就看它后面的一集。
+/// 一集都没看过、或最后一集已经看完时为 nil。
+nonisolated enum PlaybackEpisodeProgress {
+  struct UpNext: Equatable, Sendable {
+    let episode: ServerMediaItem
+    /// 接着看到一半的这一集（有续播点）；false 表示上一集看完了，这一集从头看。
+    let resumes: Bool
+  }
+
+  static func upNext(in items: [ServerMediaItem]) -> UpNext? {
+    let ordered = orderedEpisodes(items)
+    func resumePosition(_ item: ServerMediaItem) -> Double? {
+      PlaybackResumePolicy.resumePosition(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
+    }
+    func isWatched(_ item: ServerMediaItem) -> Bool {
+      item.played
+        || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
+    }
+    guard let last = ordered.lastIndex(where: { isWatched($0) || resumePosition($0) != nil }) else { return nil }
+    if !isWatched(ordered[last]) { return UpNext(episode: ordered[last], resumes: true) }
+    let next = ordered.index(after: last)
+    return ordered.indices.contains(next) ? UpNext(episode: ordered[next], resumes: false) : nil
+  }
+
+  /// 服务器上有文件的正片集里最新的一季，集列表没看过时默认显示它。
+  static func latestSeason(in items: [ServerMediaItem]) -> Int? {
+    items.filter { $0.kind == .episode && $0.hasFile }.compactMap(\.seasonNumber).filter { $0 > 0 }.max()
+  }
+
+  private static func orderedEpisodes(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
+    let available = items.filter { $0.kind == .episode && $0.hasFile }
+    let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
+    let pool = regular.isEmpty ? available : regular
+    return pool.enumerated().sorted { lhs, rhs in
+      let left = (lhs.element.seasonNumber ?? Int.max, lhs.element.episodeNumber ?? Int.max, lhs.offset)
+      let right = (rhs.element.seasonNumber ?? Int.max, rhs.element.episodeNumber ?? Int.max, rhs.offset)
+      return left < right
+    }.map(\.element)
+  }
+}
+
+/// 正在播放的那个文件有多长。续播点、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
 nonisolated enum PlaybackDuration {
   /// 依次取播放器读到的时长、所选片源的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
   /// 起播后 mpv 读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
-  /// 起播前（续播询问）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
+  /// 起播前（算续播点时）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
   static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
     [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
   }
