@@ -1951,6 +1951,23 @@ class APIService: ObservableObject {
     return t
   }
 
+  /// 同 `recognizeTmdbId`，结果在会话里记住（`libraryRecognitionCache`），认不出也记住；请求失败不记，下次再识别。
+  func cachedRecognizedTmdbId(title: String, year: String?, type: String?) async throws -> Int? {
+    try await sessionCachedValue(
+      sessionScope.libraryRecognitionCache, key: [type ?? "", year ?? "", title].joined(separator: "|")
+    ) {
+      try await self.recognizeTmdbId(title: title, year: year, type: type)
+    }
+  }
+
+  /// TMDB 条目的海报路径（读 MoviePilot 详情），在会话里记住（`tmdbPosterPathCache`），没有海报也记住。
+  func cachedTmdbPosterPath(tmdbID: Int, type: String?) async throws -> String? {
+    try await sessionCachedValue(sessionScope.tmdbPosterPathCache, key: "\(type ?? "")|\(tmdbID)") {
+      let media = MediaInfo(tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), type: type)
+      return try await self.fetchMediaDetail(media: media).poster_path
+    }
+  }
+
   /// 优化后的 TMDB ID 识别逻辑 (移植并增强自 MediaIdSelector.vue)
   /// 结合了 searchMedia (基于影视数据库的精确搜索) 和 recognizeMedia (基于名称规则的模糊猜测)
   /// 旨在提升 Douban、Bangumi、媒体库项目的识别准确率。

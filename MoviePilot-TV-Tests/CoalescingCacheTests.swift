@@ -123,6 +123,29 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual([initial, renewed, stillCached, reloaded], [1, 1, 1, 2])
   }
 
+  func testLookupTellsCachedValueFromFreshLoad() async throws {
+    let cache = CoalescingCache<String, Int>(ttl: 10, capacity: 10)
+    let probe = LoadProbe()
+    let load: @MainActor () async throws -> Int = {
+      probe.loadCount += 1
+      return probe.loadCount
+    }
+
+    let first = try await cache.lookup(for: "key", validate: {}, load: load)
+    let second = try await cache.lookup(for: "key", validate: {}, load: load)
+    let forced = try await cache.lookup(for: "key", forceRefresh: true, validate: {}, load: load)
+    let rejected = try await cache.lookup(for: "key", acceptsCachedValue: { _ in false }, validate: {}, load: load)
+
+    XCTAssertEqual(first.value, 1)
+    XCTAssertFalse(first.isCached, "刚读的")
+    XCTAssertEqual(second.value, 1)
+    XCTAssertTrue(second.isCached, "缓存里的")
+    XCTAssertEqual(forced.value, 2)
+    XCTAssertFalse(forced.isCached)
+    XCTAssertEqual(rejected.value, 3)
+    XCTAssertFalse(rejected.isCached, "缓存值不收时重新读")
+  }
+
   func testNonRenewingEntryExpiresFromStoreTime() async throws {
     let clock = TestClock()
     let cache = CoalescingCache<String, Int>(

@@ -22,18 +22,20 @@ struct MediaDetailEpisodesView: View {
   var body: some View {
     if let subscriptionSeasons {
       SharedEpisodeGroupView(seasons: subscriptionSeasons) { groupID in
-        shelf(groupID: groupID, groupMenu: nil, catalog: subscriptionSeasons.episodeGroupCatalog)
+        shelf(groupID: groupID, groupMenu: nil, catalog: subscriptionSeasons.episodeGroupCatalog) {
+          subscriptionSeasons.selectedGroupId = ""
+        }
       }
     } else {
       LocalEpisodeGroupView(tmdbID: tmdbID, isActive: allowsRequests && isContentVisible) {
         groupID, groupMenu, catalog in
-        shelf(groupID: groupID, groupMenu: groupMenu, catalog: catalog)
+        shelf(groupID: groupID, groupMenu: groupMenu, catalog: catalog) { groupMenu.selection.wrappedValue = "" }
       }
     }
   }
 
   private func shelf(
-    groupID: String?, groupMenu: EpisodeGroupMenu?, catalog: EpisodeGroupCatalog
+    groupID: String?, groupMenu: EpisodeGroupMenu?, catalog: EpisodeGroupCatalog, showDefaultSeasons: @escaping () -> Void
   ) -> some View {
     EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
@@ -41,7 +43,8 @@ struct MediaDetailEpisodesView: View {
       trial: APIService.shared.sessionScope.episodeTrial,
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand),
       rowHint: rowHint,
-      panelRequest: panelRequest
+      panelRequest: panelRequest,
+      showDefaultSeasons: showDefaultSeasons
     )
   }
 }
@@ -160,10 +163,14 @@ private struct EpisodeBrowser: View {
   var rowHint: EpisodeRowHint? = nil
   /// 请本行打开某一集的面板（默认顺序下）：先换到那一季，集列表到了再打开。
   var panelRequest: EpisodePanelRequest? = nil
+  /// 切回默认分季（不选剧集组）：`panelRequest` 指的是默认顺序里的集，选着剧集组时先切回来。
+  var showDefaultSeasons: (() -> Void)? = nil
 
   @State private var storedGroup = GroupState(id: nil)
   /// 等集列表到了再打开面板的那一集。
   @State private var pendingPanel: EpisodeRowHint?
+  /// 选着剧集组时来的 `panelRequest`：切回默认分季后再打开。
+  @State private var panelAfterGroupReset: EpisodeRowHint?
   /// 采用了的提示：观看进度晚到或刷新时，本行没有焦点、用户也没选过季才换过去，不在用户操作时改季、跳位置。
   @State private var appliedHint: EpisodeRowHint?
   @FocusState private var focus: EpisodeRowFocus?
@@ -289,6 +296,13 @@ private struct EpisodeBrowser: View {
   private var pendingPanelLoaded: Bool {
     guard let hint = pendingPanel, case .loaded = group.episodeStates[hint.season] else { return false }
     return true
+  }
+
+  /// 换到 `hint` 那一季，集列表到了打开那一集的面板。
+  private func openPanel(_ hint: EpisodeRowHint) {
+    if seasonNumber != hint.season { group.selectedSeason = hint.season }
+    pendingPanel = hint
+    openPendingPanel()
   }
 
   private func openPendingPanel() {
@@ -428,8 +442,9 @@ private struct EpisodeBrowser: View {
       guard updated == tmdbID else { return }
       group.availabilityUpdates += 1
     }
-    // 播放结束、进度写回之后重读：卡片上的已播放进度跟着更新。
-    .onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates) { _ in
+    // 播放结束、进度写回之后重读：卡片上的已播放进度跟着更新。播的是别的片时不动。
+    .onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates) { change in
+      guard change.concerns(tmdbID: tmdbID, itemID: playback?.libraryItem?.itemID) else { return }
       group.availabilityUpdates += 1
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
@@ -443,10 +458,21 @@ private struct EpisodeBrowser: View {
       focus = .episode(firstID)
     }
     .onChange(of: panelRequest?.id) { _, _ in
-      guard let request = panelRequest, groupID == nil else { return }
-      if seasonNumber != request.hint.season { group.selectedSeason = request.hint.season }
-      pendingPanel = request.hint
-      openPendingPanel()
+      guard let request = panelRequest else { return }
+      guard groupID == nil else {
+        panelAfterGroupReset = request.hint
+        showDefaultSeasons?()
+        return
+      }
+      openPanel(request.hint)
+    }
+    .onChange(of: groupID) { _, id in
+      guard id == nil, let hint = panelAfterGroupReset else {
+        panelAfterGroupReset = nil
+        return
+      }
+      panelAfterGroupReset = nil
+      openPanel(hint)
     }
     .onChange(of: pendingPanelLoaded) { _, _ in openPendingPanel() }
     .onChange(of: rowHint, initial: true) { _, hint in

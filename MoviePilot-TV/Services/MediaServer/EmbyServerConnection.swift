@@ -71,6 +71,13 @@ struct EmbyServerConnection: MediaServerConnection {
       .serverItem(image: imageURL)
   }
 
+  func items(ids: [String]) async throws -> [ServerMediaItem] {
+    guard !ids.isEmpty else { return [] }
+    return try await perform(.readItem) {
+      try await client.items(ids: ids, userID: userID, timeout: EmbyClient.quickTimeout)
+    }.map { $0.serverItem(image: imageURL) }
+  }
+
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem] {
     let keys = Self.providerSearchKeys(for: expected)
     guard !keys.isEmpty else { return [] }

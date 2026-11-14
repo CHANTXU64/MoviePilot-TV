@@ -254,7 +254,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   let runtimeSeconds: Double?
   /// 服务器记录的续播位置（秒），没有时为 0。
   let resumePositionSeconds: Double
-  /// 服务器上这个用户已看完（标记为已播放）。详情页「继续播放」据此找接着看的那一集，见 `PlaybackEpisodeOrder.upNext`。
+  /// 服务器上这个用户已看完（标记为已播放）。详情页「继续播放」据此找接着看的那一集，见 `PlaybackEpisodeProgress.upNext`。
   let played: Bool
   /// 服务器上只有元数据、没有文件（缺失的集）时为 false。
   let hasFile: Bool
@@ -499,27 +499,36 @@ nonisolated struct ServerChapter: Equatable, Sendable {
   }
 }
 
-/// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
-/// 详情页只拿到 MoviePilot 入库表里的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
-/// 媒体服务器条目对应的 TMDB 编号和 MoviePilot 媒体类型（首页「最近添加」打开详情页用）。
-nonisolated struct LibraryItemIdentity: Equatable, Sendable {
-  let tmdbID: Int
-  /// 「电影」或「电视剧」。
-  let mediaType: String
+/// 首页「最近添加」的卡片按下做什么（见 `PlaybackCoordinator.libraryItemLinks`）。
+nonisolated enum LibraryItemLink: Equatable, Sendable {
+  /// 刮到了 TMDB 编号：打开这部片的详情页。`mediaType` 是「电影」或「电视剧」。
+  case detail(tmdbID: Int, mediaType: String)
+  /// 没有 TMDB 编号，MoviePilot 没有它的详情：直接在应用内播放，播放界面用媒体服务器的信息。
+  case libraryOnly
 
-  /// 条目不是电影或整部剧、没刮到有效 TMDB 编号时为 nil。
+  /// 不是电影或整部剧时为 nil。
   init?(item: ServerMediaItem) {
+    let mediaType: String
     switch item.kind {
     case .movie: mediaType = "电影"
     case .series: mediaType = "电视剧"
     case .episode, .other: return nil
     }
-    guard let id = MediaIdentifier.validNumericIdentifier(item.externalID(for: "tmdb").flatMap { Int($0) })
-    else { return nil }
-    tmdbID = id
+    if let id = MediaIdentifier.validNumericIdentifier(item.externalID(for: "tmdb").flatMap { Int($0) }) {
+      self = .detail(tmdbID: id, mediaType: mediaType)
+    } else {
+      self = .libraryOnly
+    }
+  }
+
+  var tmdbID: Int? {
+    guard case .detail(let id, _) = self else { return nil }
+    return id
   }
 }
 
+/// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
+/// 详情页只拿到 MoviePilot 入库表里的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   /// 条目类型（电影 / 剧集）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
   let kind: ServerMediaItem.Kind?
@@ -623,7 +632,7 @@ nonisolated enum PlaybackEpisodeProgress {
     return ordered.indices.contains(next) ? UpNext(episode: ordered[next], resumes: false) : nil
   }
 
-  /// 看完了的最靠后一集（`upNext` 为 nil、服务器上它后面没有文件时，详情页按 MoviePilot 集列表找它的下一集）。
+  /// 看完了的最靠后一集（详情页按 MoviePilot 集列表找它紧接着的下一集，核对服务器上的 `upNext` 是不是它）。
   /// 它后面还有看过一部分的集时为 nil（那时 `upNext` 接着看那一集）。
   static func lastWatched(in items: [ServerMediaItem]) -> ServerMediaItem? {
     guard let last = orderedEpisodes(items).last(where: { isWatched($0) || resumePosition($0) != nil }), isWatched(last)
@@ -640,15 +649,38 @@ nonisolated enum PlaybackEpisodeProgress {
       || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
   }
 
+  /// 同一集的几份：在哪份上看完了都算看完（用看完的那份）；都没看完时用有续播点、看得最远的那份；都没看过用第一份。
+  private static func representative(_ copies: [ServerMediaItem]) -> ServerMediaItem {
+    if let watched = copies.first(where: isWatched) { return watched }
+    let resumable = copies.filter { resumePosition($0) != nil }
+    return resumable.max { $0.resumePositionSeconds < $1.resumePositionSeconds } ?? copies[0]
+  }
+
   /// 服务器上有文件的正片集里最新的一季，集列表没看过时默认显示它。
   static func latestSeason(in items: [ServerMediaItem]) -> Int? {
     items.filter { $0.kind == .episode && $0.hasFile }.compactMap(\.seasonNumber).filter { $0 > 0 }.max()
   }
 
+  /// 有文件的集按季号集号排好；同一季同一集有几份（几个媒体库各有一份）时合成一份，见 `representative`。
   private static func orderedEpisodes(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
     let available = items.filter { $0.kind == .episode && $0.hasFile }
     let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
-    let pool = regular.isEmpty ? available : regular
+    var pool: [ServerMediaItem] = []
+    var slots: [String: Int] = [:]
+    var copies: [[ServerMediaItem]] = []
+    for item in regular.isEmpty ? available : regular {
+      guard let season = item.seasonNumber, let episode = item.episodeNumber else {
+        copies.append([item])
+        continue
+      }
+      if let slot = slots["\(season)|\(episode)"] {
+        copies[slot].append(item)
+      } else {
+        slots["\(season)|\(episode)"] = copies.count
+        copies.append([item])
+      }
+    }
+    pool = copies.map(representative)
     return pool.enumerated().sorted { lhs, rhs in
       let left = (lhs.element.seasonNumber ?? Int.max, lhs.element.episodeNumber ?? Int.max, lhs.offset)
       let right = (rhs.element.seasonNumber ?? Int.max, rhs.element.episodeNumber ?? Int.max, rhs.offset)
