@@ -18,15 +18,8 @@ enum PageImageRole: String {
   case activePage
   case detailBackdrop
   case detailBackdropFallback
-  /// 详情第二页的预模糊背景：跟主背景一起保留和释放，但不作为返回转场的小图。
-  case detailBackdropBlur
 
   var isDetailBackdrop: Bool {
-    self == .detailBackdrop || self == .detailBackdropFallback || self == .detailBackdropBlur
-  }
-
-  /// 能否作为返回详情页时先垫上的背景小图。
-  var providesBackdropPreview: Bool {
     self == .detailBackdrop || self == .detailBackdropFallback
   }
 }
@@ -90,7 +83,15 @@ final class PageImageLifecycle: ObservableObject {
   private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
-  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)?
+  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)? {
+    didSet {
+      if backdropPreviewImage !== detailBackdropPreview?.image {
+        backdropPreviewImage = detailBackdropPreview?.image
+      }
+    }
+  }
+  /// 这一页背景的模糊缩略图：返回时先垫上，也直接用作第二页的模糊背景（不再另外下载、解码一张）。
+  @Published private(set) var backdropPreviewImage: UIImage?
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
@@ -266,7 +267,7 @@ final class PageImageLifecycle: ObservableObject {
     let isAllowed = switch resource.role {
     case .content: keepsContentImages
     case .activePage: keepsActivePageImages
-    case .detailBackdrop, .detailBackdropFallback, .detailBackdropBlur: keepsDetailBackdrop
+    case .detailBackdrop, .detailBackdropFallback: keepsDetailBackdrop
     }
     resource.setPageImageAllowed(isAllowed)
   }

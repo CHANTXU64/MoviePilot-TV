@@ -265,7 +265,6 @@ private struct MediaSectionView: View {
                   : nil
               )
               .focused($focusedItemId, equals: item.id)
-              .focusLiftCard(isFocused: focusedItemId == item.id)
               .compositingGroup()
               .contextMenu {
                 if canPlayInApp(item) {
@@ -477,7 +476,6 @@ private struct SubscribeSectionView: View {
               onViewDetail: { onViewDetail(item) }
             )
             .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
-            .focusLiftCard(isFocused: focusedItemId == HomeSubscribeFocusID.value(for: item.id))
           }
         }
         .padding(.top, 25)

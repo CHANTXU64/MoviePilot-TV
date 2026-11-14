@@ -473,7 +473,6 @@ private struct ResultRow: View {
               }
             )
             .focused($focusedItemId, equals: item.id)
-            .focusLiftCard(isFocused: focusedItemId == item.id)
             .mediaContextMenu(
               item: item
             )
@@ -570,7 +569,6 @@ private struct PersonResultRow: View {
               navigationCoordinator.push(item)
             }
             .focused($focusedItemId, equals: item.id)
-            .focusLiftCard(isFocused: focusedItemId == item.id)
             .compositingGroup()
             .contextMenu {
               Button {

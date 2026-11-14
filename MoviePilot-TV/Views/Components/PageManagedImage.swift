@@ -401,7 +401,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     guard shouldLoadImage else { return }
     decodedImage = image
     // 返回时垫着的模糊缩略图换成原图时淡入，不是突然一跳。
-    let preview = role.providesBackdropPreview ? lifecycle?.backdropPreview(for: key) : nil
+    let preview = role.isDetailBackdrop ? lifecycle?.backdropPreview(for: key) : nil
     prepareBackdropPreviewIfNeeded(from: image)
     let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
@@ -414,14 +414,14 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     }
   }
 
-  /// 返回详情页时先垫上的背景缩略图：长边 320 像素并模糊过，放大到全屏也只是柔和的模糊背景，不会像马赛克。
-  /// 模糊半径约合第二页背景在缩略图尺寸上的半径，回到第二页时看起来一致。
+  /// 详情背景的缩略图：长边 320 像素并模糊过，放大到全屏也只是柔和的模糊背景，不会像马赛克。
+  /// 返回详情页时先垫上，也直接用作第二页的模糊背景；模糊半径约合原图上 80 像素。
   private static let backdropPreviewLongEdge: CGFloat = 320
   private static let backdropPreviewBlurRadius: CGFloat = 10
   private static let backdropPreviewCrossfadeDuration: TimeInterval = 0.25
 
   private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
-    guard role.providesBackdropPreview else { return }
+    guard role.isDetailBackdrop else { return }
     lifecycle?.prepareBackdropPreview(for: key, role: role) {
       let longEdge = max(image.size.width, image.size.height)
       guard longEdge > 0 else { return nil }
@@ -635,6 +635,8 @@ final class PageManagedImageView: UIImageView {
       options: .transitionCrossDissolve,
       animations: { self.image = image }
     )
+    // 顶对齐的海报背景按图片比例算高度，换图后要重新布局。
+    (superview as? PageBackdropImageContainer)?.setNeedsLayout()
   }
 
   fileprivate func clearRenderedImage() {

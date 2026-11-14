@@ -8,6 +8,8 @@ struct ShelfPicker<Item: Identifiable>: View {
   let items: [Item]
   @Binding var selection: Item?
   let title: (Item) -> String
+  /// 放在页头上移的横排页头里时打开（详情页演员 / 职员行），按胶囊实际占到的宽度判断是否上移。
+  var liftsWithFocusedCard = false
 
   @FocusState private var focusedShelfId: Item.ID?
   @FocusState private var isTopRedirectorFocused: Bool
@@ -40,8 +42,7 @@ struct ShelfPicker<Item: Identifiable>: View {
             .focused($focusedShelfId, equals: shelf.id)
           }
         }
-        // 放在横向卡片行的页头时，按胶囊实际占到的宽度判断页头是否上移。
-        .focusLiftHeaderPart()
+        .modifier(ShelfPickerFocusLift(isEnabled: liftsWithFocusedCard))
       }
       .scrollClipDisabled()
 
@@ -116,5 +117,18 @@ struct ShelfChip: View {
     .tint(appearance.tint)
     // 放在链尾：样式会再包一层，此处确保 trait 落在最终的可访问元素上。
     .accessibilityAddTraits(accessibilityTraits)
+  }
+}
+
+/// 只在调用方打开时挂页头上移，其他地方不测量、不上报。
+private struct ShelfPickerFocusLift: ViewModifier {
+  let isEnabled: Bool
+
+  func body(content: Content) -> some View {
+    if isEnabled {
+      content.focusLiftHeaderPart()
+    } else {
+      content
+    }
   }
 }

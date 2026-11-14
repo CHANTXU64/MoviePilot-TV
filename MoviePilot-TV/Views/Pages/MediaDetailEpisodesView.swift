@@ -429,7 +429,9 @@ private struct EpisodeBrowser: View {
   }
 
   private var gridHeader: some View {
-    DetailExpansionHeader(title: media.cleanedTitle ?? media.title ?? "剧集") {
+    DetailExpansionHeader(
+      title: media.cleanedTitle ?? media.title ?? "剧集", cardImageSize: EpisodeCardLayout.gridStillSize
+    ) {
       HStack(spacing: 20) {
         gridSeasonSelector
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -1001,15 +1003,12 @@ enum EpisodeCardLayout {
   /// 聚焦底板与放大后剧照之间的缝。
   static let platterGap: CGFloat = 10
 
-  /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐。
-  static func platterHorizontalInset(stillWidth: CGFloat) -> CGFloat {
-    stillWidth * (PosterCardFocus.focusedScale(forWidth: stillWidth) - 1) / 2
-  }
+  /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐（剧照聚焦时左右各多出 `focusedGrowth`）。
+  static let platterHorizontalInset = PosterCardFocus.focusedGrowth
 
   /// 聚焦时文字下移多少：让底板顶边落在放大后剧照下方 `platterGap` 处。
   static func focusedTextOffset(stillSize: CGSize) -> CGFloat {
-    stillSize.height * (PosterCardFocus.focusedScale(forWidth: stillSize.width) - 1) / 2
-      + platterGap + platterVerticalInset - textGap
+    PosterCardFocus.focusedVerticalGrowth(forImageSize: stillSize) + platterGap + platterVerticalInset - textGap
   }
 }
 
@@ -1031,7 +1030,6 @@ private struct EpisodeShelfRow<Card: View>: View {
             at: offset, itemCount: episodes.count, anchorIndex: anchorIndex, cardKind: .episode,
             usesFocusWindow: memoryOptimization.isEnabled
           ))
-          .focusLiftCard(isFocused: focusedEpisodeID == episode.id)
         }
       }
       .padding(.horizontal, 81)
@@ -1073,6 +1071,8 @@ private struct EpisodeCard: View {
     .buttonStyle(PosterCardButtonStyle())
     .focusEffectDisabled()
     .focused($isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
     .onChange(of: isFocused) { _, focused in onFocus?(focused) }
     .onPlayPauseCommand(perform: onPlayPause)
     // 菜单一直挂着，只换里面的项：状态到了时卡片不重建，焦点不丢。
@@ -1141,7 +1141,11 @@ struct EpisodeCardContent: View {
       still
         .posterCardFocusLift(
           isFocused: isFocused, width: stillSize.width, cornerRadius: EpisodeCardLayout.stillCornerRadius)
-      EpisodeCardText(episode: episode, focusProgress: isFocused ? 1 : 0, stillSize: stillSize)
+      EpisodeCardText(
+        episode: episode, focusProgress: isFocused ? 1 : 0, stillSize: stillSize,
+        // 剧照角上没有显示时长时（不能播、试看中、状态还没读到），时长写在第一行，每张卡正好出现一次。
+        showsRuntime: status != .playable
+      )
     }
     .frame(width: stillSize.width, alignment: .leading)
     .posterCardFocusAnimation(isFocused: isFocused)
@@ -1182,6 +1186,8 @@ struct EpisodeCardText: View, Animatable {
   let episode: MoviePilotEpisode?
   nonisolated var focusProgress: CGFloat = 0
   var stillSize = EpisodeCardLayout.stillSize
+  /// 第一行是否带时长；能播放的卡片时长在剧照角上，这里不重复。
+  var showsRuntime = true
 
   nonisolated var animatableData: CGFloat {
     get { focusProgress }
@@ -1193,7 +1199,7 @@ struct EpisodeCardText: View, Animatable {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(episode?.eyebrow ?? "第 1 集 · 2024-01-01")
+      Text(episode?.eyebrow(includesRuntime: showsRuntime) ?? "第 1 集 · 45 分钟 · 2024-01-01")
         .font(.caption2)
         .foregroundStyle(.secondary)
         .monospacedDigit()
@@ -1214,7 +1220,7 @@ struct EpisodeCardText: View, Animatable {
       // 底板只画在背景里往外伸，不改变卡片的布局尺寸。
       RoundedRectangle(cornerRadius: EpisodeCardLayout.stillCornerRadius, style: .continuous)
         .fill(Color.white.opacity(0.18 * clampedProgress))
-        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset(stillWidth: stillSize.width))
+        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset)
         .padding(.vertical, -EpisodeCardLayout.platterVerticalInset)
     }
     .compositingGroup()
@@ -1311,9 +1317,11 @@ extension MoviePilotEpisode {
     trimmedNonEmpty([name]) ?? episodeLabel ?? "单集"
   }
 
-  /// 卡片顶行小字：「第 N 集 · 2024-01-01」。时长在能播放的卡片上跟着剧照角上的播放图标显示。
-  var eyebrow: String {
-    [episodeLabel, trimmedNonEmpty([airDate])].compactMap { $0 }.joined(separator: " · ")
+  /// 卡片顶行小字：「第 N 集 · 45 分钟 · 2024-01-01」。
+  /// 能播放的卡片时长跟着剧照角上的播放图标显示，这一行就不带时长（`includesRuntime` 为 false）。
+  func eyebrow(includesRuntime: Bool) -> String {
+    [episodeLabel, includesRuntime ? runtimeText : nil, trimmedNonEmpty([airDate])]
+      .compactMap { $0 }.joined(separator: " · ")
   }
 
   /// 时长：「45 分钟」；没有或为 0 时不显示。

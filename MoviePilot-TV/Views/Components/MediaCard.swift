@@ -355,6 +355,8 @@ struct MediaCard: View {
       textInfoView
     }
     .posterCardFocusAnimation(isFocused: isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
     .onChange(of: isFocused) { _, newValue in
       onFocus?(newValue)
     }

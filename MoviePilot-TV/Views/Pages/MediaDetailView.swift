@@ -46,8 +46,10 @@ private struct MediaDetailBackgroundLayer: View {
   let usingPosterAsBackdrop: Bool
   let showingContentPage: Bool
   let hidesContentPageBackground: Bool
-  /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色，不准备模糊图。
+  /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色。
   let providesBlurredContentPage: Bool
+  /// 这一页背景的模糊缩略图（`PageImageLifecycle.backdropPreviewImage`），第二页直接用它作模糊背景。
+  let blurredBackdrop: UIImage?
   var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
@@ -57,9 +59,15 @@ private struct MediaDetailBackgroundLayer: View {
     let showsBlurredLayer = usesBlurredLayer && showingContentPage && !hidesContentPageBackground
     ZStack {
       image
-      if usesBlurredLayer, let url {
-        // 预模糊图在首屏就挂着、透明度为 0，切到第二页时直接淡入，不在每帧实时模糊。
-        blurredImage(url)
+      if usesBlurredLayer, let blurredBackdrop {
+        // 缩略图在主背景解码时就已生成并模糊过：首屏就挂着、透明度为 0，切到第二页时淡入。
+        // 不另外下载、解码，也不在每帧实时模糊。
+        let size = UIScreen.main.bounds.size
+        Image(uiImage: blurredBackdrop)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: size.width, height: size.height)
+          .clipped()
           .opacity(showsBlurredLayer ? 1 : 0)
       }
     }
@@ -100,23 +108,6 @@ private struct MediaDetailBackgroundLayer: View {
       Color.gray.opacity(0.3)
         .ignoresSafeArea()
     }
-  }
-
-  private func blurredImage(_ url: URL) -> some View {
-    let size = UIScreen.main.bounds.size
-    let screenScale = UIScreen.main.scale
-    return PageManagedImage(
-      url: url,
-      processor: MediaDetailBackgroundImage.contentPageProcessor(for: size, screenScale: screenScale),
-      isEnabled: true,
-      role: .detailBackdropBlur,
-      participatesInPageLifecycle: true,
-      skipsMemoryCache: true,
-      scaleFactor: MediaDetailBackgroundImage.contentPageScale(for: size, screenScale: screenScale),
-      fadeDuration: 0
-    )
-    .frame(width: size.width, height: size.height)
-    .ignoresSafeArea()
   }
 }
 
@@ -404,6 +395,7 @@ struct MediaDetailView: View {
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
           providesBlurredContentPage: !memoryOptimization.isEnabled,
+          blurredBackdrop: imageLifecycle.backdropPreviewImage,
           role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
@@ -418,6 +410,7 @@ struct MediaDetailView: View {
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
           providesBlurredContentPage: !memoryOptimization.isEnabled,
+          blurredBackdrop: imageLifecycle.backdropPreviewImage,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
           }
@@ -1303,7 +1296,8 @@ struct MediaDetailView: View {
                   get: { creditKind },
                   set: { if let option = $0 { selectCreditKind(option) } }
                 ),
-                title: \.title
+                title: \.title,
+                liftsWithFocusedCard: true
               )
               .font(.callout)
               .padding(.leading, 81)
@@ -1391,7 +1385,6 @@ struct MediaDetailView: View {
         navigateFromSecondPage(to: actor)
       }
       .focused($focusedActorId, equals: actor.id)
-      .focusLiftCard(isFocused: focusedActorId == actor.id)
       .compositingGroup()
       .contextMenu {
         Button {
@@ -1425,7 +1418,6 @@ struct MediaDetailView: View {
         navigateFromSecondPage(to: director)
       }
       .focused($focusedDirectorId, equals: director.id)
-      .focusLiftCard(isFocused: focusedDirectorId == director.id)
       .compositingGroup()
       .contextMenu {
         Button {
@@ -1589,7 +1581,6 @@ struct MediaDetailView: View {
               )
               .equatable()
               .focused($focusedRecommendId, equals: media.id)
-              .focusLiftCard(isFocused: focusedRecommendId == media.id)
               .mediaContextMenu(item: media)
             }
             if viewModel.recommendPaginator.isLoadingMore {
@@ -1670,7 +1661,6 @@ struct MediaDetailView: View {
               )
               .equatable()
               .focused($focusedSimilarId, equals: media.id)
-              .focusLiftCard(isFocused: focusedSimilarId == media.id)
               .mediaContextMenu(item: media)
             }
             if viewModel.similarPaginator.isLoadingMore {

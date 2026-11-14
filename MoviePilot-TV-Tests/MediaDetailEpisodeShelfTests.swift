@@ -83,7 +83,8 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     let full = MoviePilotEpisode(
       TmdbEpisode(id: 1, episodeNumber: 3, name: " 暗流 ", airDate: "2024-03-02", runtime: 46),
       season: 1, index: 2)
-    XCTAssertEqual(full.eyebrow, "第 3 集 · 2024-03-02")
+    XCTAssertEqual(full.eyebrow(includesRuntime: true), "第 3 集 · 46 分钟 · 2024-03-02")
+    XCTAssertEqual(full.eyebrow(includesRuntime: false), "第 3 集 · 2024-03-02")
     XCTAssertEqual(full.runtimeText, "46 分钟")
     XCTAssertEqual(full.metadata, ["46 分钟", "2024-03-02"])
     XCTAssertEqual(full.displayTitle, "暗流")
@@ -91,7 +92,7 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
 
     let bare = MoviePilotEpisode(
       TmdbEpisode(id: nil, episodeNumber: 5, name: "  ", runtime: 0), season: 1, index: 4)
-    XCTAssertEqual(bare.eyebrow, "第 5 集")
+    XCTAssertEqual(bare.eyebrow(includesRuntime: true), "第 5 集")
     XCTAssertNil(bare.runtimeText)
     XCTAssertEqual(bare.displayTitle, "第 5 集")
   }
@@ -99,7 +100,7 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
   func testFocusedPlatterLinesUpWithScaledStill() {
     for width in [EpisodeCardLayout.stillSize.width, EpisodeCardLayout.gridStillSize.width] {
       XCTAssertEqual(
-        width + 2 * EpisodeCardLayout.platterHorizontalInset(stillWidth: width),
+        width + 2 * EpisodeCardLayout.platterHorizontalInset,
         width * PosterCardFocus.focusedScale(forWidth: width),
         accuracy: 0.001)
     }

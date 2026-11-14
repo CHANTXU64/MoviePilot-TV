@@ -732,8 +732,9 @@ final class ImageLoadWindowTests: XCTestCase {
 
   /// 内存优化关闭时，返回不等子页背景释放，父页背景马上开始加载。
   func testPopLoadsParentBackdropImmediatelyWhenNotWaitingForRemovedPage() throws {
+    let originalPolicy = DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop
     DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = false
-    defer { DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = true }
+    defer { DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = originalPolicy }
     let coordinator = ImageNavigationCoordinator(
       apiService: .testingInstance(), removedLifecycleRetention: .seconds(60)
     )

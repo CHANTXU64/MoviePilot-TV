@@ -9,17 +9,19 @@ import SwiftUI
 /// 用法：
 /// - 行容器挂 `focusLiftRow(cardImageSize:)`，上移距离取卡片图片聚焦时往上长出的高度；
 /// - 页头里实际有内容的每一块挂 `focusLiftHeaderPart()`（中间有 `Spacer` 的左右两块分别挂）；
-/// - 每张卡挂 `focusLiftCard(isFocused:)`。
+/// - 卡片不用调用方挂：图片卡片（海报、人物、查看全部、单集）内部用自己的焦点状态挂了 `focusLiftCard`，
+///   放进挂了 `focusLiftRow` 的行就自动参与；放在网格等没有页头上移的地方时不做任何计算。
 ///
-/// 位置按行坐标系量，整页上下滚动时不变；卡片只在跨进、跨出某一块时上报，滚动途中不逐帧刷新页头。
-/// 只有聚焦的那张卡量位置，其余卡片横向滚动时不写状态。
+/// 位置按行坐标系量，整页上下滚动时不变。覆盖了哪几块在测量时就算好，聚焦卡片只在跨进、跨出某一块时写状态，
+/// 横向滚动途中不逐帧写；没聚焦的卡片不写状态。
 ///
 /// 焦点移到屏幕外的卡片时，横排要滚一段才把它带进来。这段时间卡片还在行外，直接比位置会先判成
 /// 「下方没有卡片」、页头落下，滚到位后又顶起来，来回弹一下。所以比之前先把卡片挪回行的可见宽度内，
 /// 按滚动结束后的位置判断。
 nonisolated private let focusLiftRowSpace = "FocusLiftRow"
 
-private nonisolated struct FocusLiftSpan: Equatable, Sendable {
+/// 卡片或页头块在行坐标系里的水平范围。上移判断的纯逻辑都在这里，可直接测试。
+nonisolated struct FocusLiftSpan: Equatable, Sendable {
   var minX: CGFloat
   var maxX: CGFloat
 
@@ -27,6 +29,14 @@ private nonisolated struct FocusLiftSpan: Equatable, Sendable {
     minX = frame.minX
     maxX = frame.maxX
   }
+
+  init(minX: CGFloat, maxX: CGFloat) {
+    self.minX = minX
+    self.maxX = maxX
+  }
+
+  /// 页头块是否有内容：空的按钮区宽度为 0，不参与判断。
+  var hasContent: Bool { maxX - minX >= 1 }
 
   func overlaps(_ other: FocusLiftSpan) -> Bool {
     minX < other.maxX && maxX > other.minX
@@ -48,9 +58,19 @@ private nonisolated struct FocusLiftSpan: Equatable, Sendable {
     }
     return span
   }
+
+  /// 聚焦卡片正下方覆盖到的页头块。卡片先按滚进可见宽度后的位置算，屏幕外的卡片也按它将停下的位置判断。
+  static func liftedParts(
+    cardSpan: FocusLiftSpan,
+    rowWidth: CGFloat,
+    headerParts: [FocusLiftHeaderPartFrame]
+  ) -> Set<UUID> {
+    let settled = cardSpan.shifted(into: rowWidth)
+    return Set(headerParts.filter { $0.span.hasContent && $0.span.overlaps(settled) }.map(\.id))
+  }
 }
 
-private nonisolated struct FocusLiftHeaderPartFrame: Equatable, Sendable {
+nonisolated struct FocusLiftHeaderPartFrame: Equatable, Sendable {
   let id: UUID
   let span: FocusLiftSpan
 }
@@ -126,7 +146,12 @@ private struct FocusLiftRowContainer: ViewModifier {
       .onPreferenceChange(FocusLiftHeaderPartsKey.self) { headerParts = $0 }
       .onPreferenceChange(FocusLiftLiftedPartsKey.self) { reportLiftedParts($0) }
       .coordinateSpace(.named(focusLiftRowSpace))
-      .onDisappear { dropTask?.cancel() }
+      .onDisappear {
+        // 没等到的落下直接生效：离开时焦点不在这一行，回来后也可能不再上报，页头不能悬在上面。
+        dropTask?.cancel()
+        dropTask = nil
+        liftedParts = reportedParts
+      }
   }
 
   /// 上移立即生效，落下稍等再生效：焦点从一张卡换到下一张时，新卡的位置晚一拍才量到，
@@ -161,7 +186,7 @@ private struct FocusLiftHeaderPart: ViewModifier {
       // 空的按钮区宽度为 0，不算页头内容。
       .preference(
         key: FocusLiftHeaderPartsKey.self,
-        value: span.map { $0.maxX - $0.minX >= 1 ? [FocusLiftHeaderPartFrame(id: id, span: $0)] : [] } ?? []
+        value: span.map { $0.hasContent ? [FocusLiftHeaderPartFrame(id: id, span: $0)] : [] } ?? []
       )
       .offset(y: isLifted ? -lift : 0)
       .animation(reduceMotion ? nil : PosterCardFocus.animation, value: isLifted)
@@ -172,22 +197,21 @@ private struct FocusLiftCard: ViewModifier {
   let isFocused: Bool
   @Environment(\.focusLiftHeaderParts) private var headerParts
   @Environment(\.focusLiftRowWidth) private var rowWidth
-  @State private var span: FocusLiftSpan?
+  @State private var liftedParts: Set<UUID> = []
 
   func body(content: Content) -> some View {
     content
-      // 没聚焦时恒为 nil，横向滚动时不触发 action、不写状态；聚焦变化本身会让结果变化，取到当前位置。
-      .onGeometryChange(for: FocusLiftSpan?.self) { [isFocused] proxy in
-        isFocused ? FocusLiftSpan(proxy.frame(in: .named(focusLiftRowSpace))) : nil
-      } action: { span = $0 }
-      .preference(key: FocusLiftLiftedPartsKey.self, value: liftedParts)
-  }
-
-  /// 聚焦时，自己（按滚进可见宽度后的位置）正下方覆盖到的页头块；集合只在跨进、跨出某一块时变化。
-  private var liftedParts: Set<UUID> {
-    guard isFocused, let span else { return [] }
-    let settled = span.shifted(into: rowWidth)
-    return Set(headerParts.filter { $0.span.overlaps(settled) }.map(\.id))
+      // 覆盖了哪几块直接在测量时算好：结果只在跨进、跨出某一块时变化，横向滚动途中不逐帧写状态。
+      // 没聚焦、或不在页头上移的行里（没有页头块）时恒为空集合。
+      .onGeometryChange(for: Set<UUID>.self) { [isFocused, headerParts, rowWidth] proxy in
+        guard isFocused, !headerParts.isEmpty else { return [] }
+        return FocusLiftSpan.liftedParts(
+          cardSpan: FocusLiftSpan(proxy.frame(in: .named(focusLiftRowSpace))),
+          rowWidth: rowWidth,
+          headerParts: headerParts
+        )
+      } action: { liftedParts = $0 }
+      .preference(key: FocusLiftLiftedPartsKey.self, value: isFocused ? liftedParts : [])
   }
 }
 
@@ -203,7 +227,7 @@ extension View {
     modifier(FocusLiftHeaderPart())
   }
 
-  /// 行里的一张卡片；`isFocused` 用行自己的焦点状态判断。
+  /// 一张图片卡片；`isFocused` 用卡片自己的焦点状态。只在卡片组件内部挂，调用方不用管。
   func focusLiftCard(isFocused: Bool) -> some View {
     modifier(FocusLiftCard(isFocused: isFocused))
   }
