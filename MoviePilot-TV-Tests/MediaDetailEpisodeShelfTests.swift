@@ -97,7 +97,7 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     for width in [EpisodeCardLayout.stillSize.width, EpisodeCardLayout.gridStillSize.width] {
       XCTAssertEqual(
         width + 2 * EpisodeCardLayout.platterHorizontalInset(stillWidth: width),
-        width * EpisodeCardLayout.focusedScale,
+        width * PosterCardFocus.focusedScale(forWidth: width),
         accuracy: 0.001)
     }
   }

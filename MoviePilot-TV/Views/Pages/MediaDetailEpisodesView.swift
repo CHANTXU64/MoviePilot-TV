@@ -988,8 +988,7 @@ enum EpisodeCardLayout {
     return CGSize(width: width, height: width * stillSize.height / stillSize.width)
   }()
   static let gridColumns = DetailExpansionGridLayout.columns(width: gridStillSize.width, count: gridColumnCount)
-  static let stillCornerRadius: CGFloat = 20
-  static let focusedScale: CGFloat = 1.08
+  static let stillCornerRadius: CGFloat = PosterCardFocus.cornerRadius
   /// 剧照和文字之间的距离（未聚焦）。
   static let textGap: CGFloat = 18
   /// 聚焦底板比文字多出的上下留白。
@@ -999,12 +998,13 @@ enum EpisodeCardLayout {
 
   /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐。
   static func platterHorizontalInset(stillWidth: CGFloat) -> CGFloat {
-    stillWidth * (focusedScale - 1) / 2
+    stillWidth * (PosterCardFocus.focusedScale(forWidth: stillWidth) - 1) / 2
   }
 
   /// 聚焦时文字下移多少：让底板顶边落在放大后剧照下方 `platterGap` 处。
   static func focusedTextOffset(stillSize: CGSize) -> CGFloat {
-    stillSize.height * (focusedScale - 1) / 2 + platterGap + platterVerticalInset - textGap
+    stillSize.height * (PosterCardFocus.focusedScale(forWidth: stillSize.width) - 1) / 2
+      + platterGap + platterVerticalInset - textGap
   }
 }
 
@@ -1064,7 +1064,7 @@ private struct EpisodeCard: View {
       )
       .contentShape(.rect)
     }
-    .buttonStyle(EpisodeCardButtonStyle())
+    .buttonStyle(PosterCardButtonStyle())
     .focusEffectDisabled()
     .focused($isFocused)
     .onChange(of: isFocused) { _, focused in onFocus?(focused) }
@@ -1116,17 +1116,9 @@ extension EpisodeEntry.MenuAction {
   }
 }
 
-/// 焦点外观由卡片内容自己画（剧照放大、文字底板），按钮样式只负责按下时略回缩。
-private struct EpisodeCardButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.97 : 1)
-      .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-  }
-}
-
 /// 卡片内容：剧照在上，「第几集 · 时长 · 日期」、标题、两行简介在下。
-/// 聚焦时剧照放大并投影，文字下面出现一块与放大后剧照同宽的底板。
+/// 聚焦时剧照放大、投影并淡入高光，文字下面出现一块与放大后剧照同宽的底板。
+/// 聚焦与按下外观与其他图片卡片共用 `PosterCardFocus`。
 struct EpisodeCardContent: View {
   let episode: MoviePilotEpisode?
   var stillURL: URL?
@@ -1141,12 +1133,12 @@ struct EpisodeCardContent: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EpisodeCardLayout.textGap) {
       still
-        .scaleEffect(isFocused ? EpisodeCardLayout.focusedScale : 1)
-        .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 20, y: 10)
+        .posterCardFocusLift(
+          isFocused: isFocused, width: stillSize.width, cornerRadius: EpisodeCardLayout.stillCornerRadius)
       EpisodeCardText(episode: episode, focusProgress: isFocused ? 1 : 0, stillSize: stillSize)
     }
     .frame(width: stillSize.width, alignment: .leading)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isFocused)
+    .posterCardFocusAnimation(isFocused: isFocused)
   }
 
   private var still: some View {
@@ -1172,7 +1164,6 @@ struct EpisodeCardContent: View {
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: status)
     .frame(width: stillSize.width, height: stillSize.height)
-    .clipShape(.rect(cornerRadius: EpisodeCardLayout.stillCornerRadius))
     .accessibilityHidden(true)
   }
 }
@@ -1188,6 +1179,9 @@ struct EpisodeCardText: View, Animatable {
     set { focusProgress = newValue }
   }
 
+  /// 弹簧动画会略冲过 0…1，颜色混合和底板透明度只取这个范围。
+  private var clampedProgress: Double { Double(min(max(focusProgress, 0), 1)) }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text(episode?.eyebrow ?? "第 1 集 · 45 分钟")
@@ -1197,7 +1191,7 @@ struct EpisodeCardText: View, Animatable {
         .lineLimit(1, reservesSpace: true)
       Text(episode?.displayTitle ?? "剧集标题")
         .font(.caption.bold())
-        .foregroundStyle(Color.secondary.mix(with: .primary, by: Double(focusProgress)))
+        .foregroundStyle(Color.secondary.mix(with: .primary, by: clampedProgress))
         .lineLimit(1, reservesSpace: true)
       Text(episode.map { $0.displayOverview ?? "暂无简介" } ?? "单集简介\n单集简介")
         .font(.caption)
@@ -1210,7 +1204,7 @@ struct EpisodeCardText: View, Animatable {
     .background {
       // 底板只画在背景里往外伸，不改变卡片的布局尺寸。
       RoundedRectangle(cornerRadius: EpisodeCardLayout.stillCornerRadius, style: .continuous)
-        .fill(Color.white.opacity(0.18 * Double(focusProgress)))
+        .fill(Color.white.opacity(0.18 * clampedProgress))
         .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset(stillWidth: stillSize.width))
         .padding(.vertical, -EpisodeCardLayout.platterVerticalInset)
     }

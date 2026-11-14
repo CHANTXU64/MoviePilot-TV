@@ -331,26 +331,22 @@ struct MediaCard: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      // 海报图片
-      posterContent
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(
-          color: .black.opacity(isFocused ? 0.5 : 0),
-          radius: 20,
-          y: 10
-        )
-        .scaleEffect(isFocused ? 1.1 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
-        .focusable(true)
-        .focused($isFocused)
-        .onTapGesture {
-          action?()
-        }
+      Button {
+        action?()
+      } label: {
+        posterContent
+          .frame(width: width, height: height)
+          .posterCardFocusLift(isFocused: isFocused, width: width)
+      }
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
+      .focused($isFocused)
+      .accessibilityLabel(title)
 
       // 标题和副标题 - 在按钮外部，清晰分离
       textInfoView
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
     .onChange(of: isFocused) { _, newValue in
       onFocus?(newValue)
     }
@@ -384,12 +380,12 @@ struct MediaCard: View {
       }
       .lineLimit(1)
       .compositingGroup()
-      .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
+      .frame(maxWidth: isFocused ? width + PosterCardFocus.focusedTextExtraWidth : width, alignment: .center)
     }
-    .frame(width: width + 30)
-    .padding(.horizontal, -15)
-    .offset(y: isFocused ? 18 : 0)
-    .animation(.easeInOut(duration: 0.2), value: isFocused)
+    .frame(width: width + PosterCardFocus.focusedTextExtraWidth)
+    .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
+    .offset(y: isFocused ? PosterCardFocus.focusedTextOffset(forImageSize: CGSize(width: width, height: height)) : 0)
+    .posterCardTitleAnimation(isFocused: isFocused)
   }
 
   // 提取的海报内容 - Apple TV 风格设计

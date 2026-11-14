@@ -15,48 +15,12 @@ struct MoreCard: View {
   var body: some View {
     VStack(spacing: 10) {
       // 海报图片及模糊背景
-      ZStack {
-        Color(white: 0.12)
-
-        PageManagedImage(
-          url: posterUrl,
-          processor: DownsamplingImageProcessor(size: CGSize(width: width, height: height))
-            |> ResizingImageProcessor(
-              referenceSize: CGSize(width: 256, height: 384),
-              mode: .aspectFill
-            ),
-          isEnabled: loadsImage,
-          participatesInPageLifecycle: true,
-          skipsMemoryCache: true
-        )
-        .frame(width: width, height: height)
-        .blur(radius: 20)
-        .clipped()
-
-        // 半透明遮罩层
-        Color.black.opacity(0.3)
-
-        // 中间文字
-        Text(titleText)
-          .font(.headline.bold())
-          .foregroundStyle(isFocused ? .white : .secondary)
-          .multilineTextAlignment(.center)
-          .padding()
+      Button(action: action) {
+        posterContent
       }
-      .frame(width: width, height: height)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
-      .shadow(
-        color: .black.opacity(isFocused ? 0.5 : 0),
-        radius: 20,
-        y: 10
-      )
-      .scaleEffect(isFocused ? 1.1 : 1.0)
-      .focusable(true)
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
       .focused($isFocused)
-      .onTapGesture {
-        action()
-      }
-      .animation(.easeInOut(duration: 0.2), value: isFocused)
 
       // 文本占位区 (与 MediaCard 保持一致的高度)
       VStack(spacing: 4) {
@@ -78,5 +42,39 @@ struct MoreCard: View {
         .frame(maxWidth: width, alignment: .center)
       }
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
+  }
+
+  private var posterContent: some View {
+    ZStack {
+      Color(white: 0.12)
+
+      PageManagedImage(
+        url: posterUrl,
+        processor: DownsamplingImageProcessor(size: CGSize(width: width, height: height))
+          |> ResizingImageProcessor(
+            referenceSize: CGSize(width: 256, height: 384),
+            mode: .aspectFill
+          ),
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true
+      )
+      .frame(width: width, height: height)
+      .blur(radius: 20)
+      .clipped()
+
+      // 半透明遮罩层
+      Color.black.opacity(0.3)
+
+      // 中间文字
+      Text(titleText)
+        .font(.headline.bold())
+        .foregroundStyle(isFocused ? .white : .secondary)
+        .multilineTextAlignment(.center)
+        .padding()
+    }
+    .frame(width: width, height: height)
+    .posterCardFocusLift(isFocused: isFocused, width: width)
   }
 }
