@@ -56,6 +56,48 @@ enum MediaTypePresentation {
   }
 }
 
+/// 图片上徽标的托底：有徽标的上沿或下沿铺一条由深到透明的浅渐变，不给每个徽标单独垫底座。
+/// 只轻轻压一点，白色粗体徽标在亮图上也能分出来，不让图片边缘发黑。海报和单集剧照共用。
+enum ImageBadgeScrim {
+  /// 徽标离图片边缘的距离；卡片圆角 20pt，内容内收后与圆角协调。
+  static let inset: CGFloat = 14
+  /// 由边缘向内的渐变，`location` 0 在图片边缘。
+  static let gradient = Gradient(stops: [
+    .init(color: .black.opacity(0.35), location: 0),
+    .init(color: .black.opacity(0.15), location: 0.45),
+    .init(color: .black.opacity(0), location: 1),
+  ])
+
+  /// 渐变的高度：80pt，最多占图片高度的三成。
+  static func height(forImageHeight imageHeight: CGFloat) -> CGFloat {
+    min(80, imageHeight * 0.3)
+  }
+
+  /// 下沿有状态文字（还差几集、已订阅等）时用的深一档渐变：只压文字后面那一窄条。
+  /// 文字是要读清楚的整句，在颜色杂的海报上浅渐变压不住；图标类徽标仍用浅的。
+  static let textGradient = Gradient(stops: [
+    .init(color: .black.opacity(0.65), location: 0),
+    .init(color: .black.opacity(0.5), location: 0.55),
+    .init(color: .black.opacity(0), location: 1),
+  ])
+
+  /// 深一档渐变的高度：70pt，盖住一行状态文字后很快淡完，最多占图片高度的三成。
+  static func textHeight(forImageHeight imageHeight: CGFloat) -> CGFloat {
+    min(70, imageHeight * 0.3)
+  }
+
+  /// 铺在图片下沿的渐变，作为图片上的一层放进 ZStack。
+  static func bottomLayer(imageHeight: CGFloat) -> some View {
+    LinearGradient(gradient: gradient, startPoint: .bottom, endPoint: .top)
+      .frame(height: height(forImageHeight: imageHeight))
+      .frame(maxHeight: .infinity, alignment: .bottom)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+  }
+}
+
+/// 海报四角的徽标：图标和文字直接压在图上，有徽标的那一边铺 `ImageBadgeScrim` 托底。
+/// 全部画在一个 Canvas 里，不依赖聚焦状态，滚动和聚焦时不重画，也不用模糊、材质或阴影。
 private struct BadgeOverlay: View, Equatable {
   let typeText: String?
   let ratingText: String?
@@ -63,145 +105,109 @@ private struct BadgeOverlay: View, Equatable {
   let bottomLeftSecondaryText: String?
   let source: MediaSource?
 
+  private var hasRating: Bool {
+    guard let ratingText, !ratingText.isEmpty, let score = Double(ratingText) else { return false }
+    return score > 0
+  }
+
   var body: some View {
     Canvas { context, size in
-      let badgeBg = Color.black.opacity(0.4)
-      let cornerRadius: CGFloat = 8
-      let padding: CGFloat = 10
-      // 注意：UIFont 属于 UIKit，不直接用于 SwiftUI Canvas 的文本绘制。
-      // Canvas 中的文本绘制使用 SwiftUI 的 Text 或 context.draw(Text(...))。
-      // 这里的字体变量仅用于说明，并未直接应用在下方的 Canvas 绘制逻辑中。
-      // 对于实际的文本样式，由 symbols 块中的 Text 视图处理。
-      // let font = UIFont.systemFont(ofSize: 14, weight: .bold)
-      // let smallFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+      let inset = ImageBadgeScrim.inset
+      let scrimHeight = ImageBadgeScrim.height(forImageHeight: size.height)
 
-      // 左上：媒体类型徽章
-      // 媒体类型图标从 symbols 中解析，symbols 已经配置了正确的字体和前景色。
-      if let symbol = context.resolveSymbol(id: "typeIcon") {
-        // 根据 symbol 大小和所需边距计算徽章大小
-        let badgeContentWidth = symbol.size.width
-        let badgeContentHeight = symbol.size.height
-        let horizontalPadding: CGFloat = 16  // 每侧 8px
-        let verticalPadding: CGFloat = 16  // 每侧 8px
-        let badgeSize = CGSize(
-          width: badgeContentWidth + horizontalPadding,
-          height: badgeContentHeight + verticalPadding
-        )
-        let badgeRect = CGRect(
-          origin: CGPoint(x: padding, y: padding), size: badgeSize)
+      let typeSymbol = context.resolveSymbol(id: "typeIcon")
+      let starSymbol = context.resolveSymbol(id: "ratingStar")
+      let ratingLabel = context.resolveSymbol(id: "ratingText")
+      let statusLabel = context.resolveSymbol(id: "statusText")
+      let secondaryLabel = context.resolveSymbol(id: "secondaryText")
+      let sourceIcon = context.resolveSymbol(id: "sourceIcon")
+
+      let hasTop = typeSymbol != nil || (starSymbol != nil && ratingLabel != nil)
+      let hasBottom = statusLabel != nil || secondaryLabel != nil || sourceIcon != nil
+
+      // 渐变托底：只画有徽标的那一边。
+      if hasTop {
         context.fill(
-          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-          with: .color(badgeBg))
-        context.draw(
-          symbol,
-          at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+          Path(CGRect(x: 0, y: 0, width: size.width, height: scrimHeight)),
+          with: .linearGradient(
+            ImageBadgeScrim.gradient,
+            startPoint: .zero,
+            endPoint: CGPoint(x: 0, y: scrimHeight)
+          )
+        )
+      }
+      if hasBottom {
+        // 有状态文字时压深一档，只有来源图标时用浅的。
+        let hasBottomText = statusLabel != nil || secondaryLabel != nil
+        let bottomHeight = hasBottomText ? ImageBadgeScrim.textHeight(forImageHeight: size.height) : scrimHeight
+        context.fill(
+          Path(CGRect(x: 0, y: size.height - bottomHeight, width: size.width, height: bottomHeight)),
+          with: .linearGradient(
+            hasBottomText ? ImageBadgeScrim.textGradient : ImageBadgeScrim.gradient,
+            startPoint: CGPoint(x: 0, y: size.height),
+            endPoint: CGPoint(x: 0, y: size.height - bottomHeight)
+          )
+        )
       }
 
-      // 右上：评分徽章
-      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0,
-        let starSymbol = context.resolveSymbol(id: "ratingStar"),
-        let ratingLabel = context.resolveSymbol(id: "ratingText")
-      {
-        let starWidth = starSymbol.size.width
-        let ratingTextWidth = ratingLabel.size.width
-        let contentSpacing: CGFloat = 4
-        let horizontalPadding: CGFloat = 20  // 每侧 10px
-        let verticalPadding: CGFloat = 12  // 每侧 6px
+      // 左上：媒体类型（图标或文字）。
+      if let typeSymbol {
+        context.draw(typeSymbol, at: CGPoint(x: inset, y: inset), anchor: .topLeading)
+      }
 
-        let contentWidth = starWidth + contentSpacing + ratingTextWidth
-        let contentHeight = max(starSymbol.size.height, ratingLabel.size.height)
-
-        let badgeSize = CGSize(
-          width: contentWidth + horizontalPadding, height: contentHeight + verticalPadding)
-        let badgeRect = CGRect(
-          origin: CGPoint(x: size.width - padding - badgeSize.width, y: padding),
-          size: badgeSize)
-        context.fill(
-          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-          with: .color(badgeBg))
-
-        // 在徽章内居中绘制星星和文本
-        let startX = badgeRect.minX + horizontalPadding / 2
+      // 右上：评分，星星在左、分数在右。
+      if let starSymbol, let ratingLabel {
+        let spacing: CGFloat = 6
+        let rowHeight = max(starSymbol.size.height, ratingLabel.size.height)
+        let midY = inset + rowHeight / 2
+        let labelMaxX = size.width - inset
+        context.draw(ratingLabel, at: CGPoint(x: labelMaxX, y: midY), anchor: .trailing)
         context.draw(
           starSymbol,
-          at: CGPoint(
-            x: startX + starWidth / 2,
-            y: badgeRect.midY))
-        context.draw(
-          ratingLabel,
-          at: CGPoint(
-            x: startX + starWidth + contentSpacing + ratingTextWidth / 2,
-            y: badgeRect.midY))
+          at: CGPoint(x: labelMaxX - ratingLabel.size.width - spacing, y: midY),
+          anchor: .trailing
+        )
       }
 
-      // 底部区域
-      if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
-        var xOffset: CGFloat = padding
+      // 底部一行：左边主要、次要状态，右边来源图标，按同一条中线对齐。
+      if hasBottom {
+        let rowHeight = max(
+          statusLabel?.size.height ?? 0,
+          secondaryLabel?.size.height ?? 0,
+          sourceIcon?.size.height ?? 0
+        )
+        let midY = size.height - inset - rowHeight / 2
+        var x = inset
 
-        // 左下：状态徽章
-        if let statusLabel = context.resolveSymbol(id: "statusText") {
-          let horizontalPadding: CGFloat = 20  // 每侧 10px
-          let verticalPadding: CGFloat = 12  // 每侧 6px
-          let badgeSize = CGSize(
-            width: statusLabel.size.width + horizontalPadding,
-            height: statusLabel.size.height + verticalPadding
-          )
-          let badgeRect = CGRect(
-            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
-            size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
-          context.draw(statusLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
-          xOffset = badgeRect.maxX + 6
+        if let statusLabel {
+          context.draw(statusLabel, at: CGPoint(x: x, y: midY), anchor: .leading)
+          x += statusLabel.size.width + 12
         }
-
-        // 左下次要状态
-        if let secondaryLabel = context.resolveSymbol(id: "secondaryText") {
-          let horizontalPadding: CGFloat = 20  // 每侧 10px
-          let verticalPadding: CGFloat = 12  // 每侧 6px
-          let badgeSize = CGSize(
-            width: secondaryLabel.size.width + horizontalPadding,
-            height: secondaryLabel.size.height + verticalPadding
-          )
-          let badgeRect = CGRect(
-            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
-            size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
-          context.draw(secondaryLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+        if let secondaryLabel {
+          context.draw(secondaryLabel, at: CGPoint(x: x, y: midY), anchor: .leading)
         }
-
-        // 右下：来源图标
-        if let sourceIcon = context.resolveSymbol(id: "sourceIcon") {
-          // 绘制图标前应用阴影
-          context.addFilter(.shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1))
-          context.draw(
-            sourceIcon,
-            at: CGPoint(
-              x: size.width - padding - sourceIcon.size.width / 2 - 6,  // 考虑了边距和图标自身的内部间距
-              y: size.height - padding - sourceIcon.size.height / 2 - 2))  // 考虑了边距和图标自身的内部间距
+        if let sourceIcon {
+          context.draw(sourceIcon, at: CGPoint(x: size.width - inset, y: midY), anchor: .trailing)
         }
       }
     } symbols: {
-      // 通过 symbols 提供需要的 SwiftUI 内容（仅创建一次，不参与 view tree diffing）
-      Group {
-        if let type = typeText, !type.isEmpty {
+      // 徽标内容直接压在渐变上，统一用粗体提高可读性。
+      if let type = typeText, !type.isEmpty {
+        Group {
           if let typeIcon = MediaTypePresentation.badgeIconName(for: type) {
             Image(systemName: typeIcon)
           } else {
             Text(type)
           }
         }
+        .font(.caption2.bold())
+        .foregroundStyle(.white)
+        .tag("typeIcon")
       }
-      .font(.caption2.bold())
-      .foregroundStyle(.white)
-      .tag("typeIcon")
 
-      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0 {
+      if hasRating, let rating = ratingText {
         Image(systemName: AppSymbol.rating)
-          .font(.caption2)
+          .font(.caption2.bold())
           .foregroundStyle(.yellow)
           .tag("ratingStar")
 
@@ -213,28 +219,30 @@ private struct BadgeOverlay: View, Equatable {
 
       if let status = bottomLeftText, !status.isEmpty {
         Text(status)
-          .font(.caption2)
+          .font(.caption2.bold())
           .foregroundStyle(.white)
+          .lineLimit(1)
           .tag("statusText")
       }
 
       if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
         Text(secondary)
-          .font(.caption2)
-          .foregroundStyle(.white)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.white.opacity(0.8))
+          .lineLimit(1)
           .tag("secondaryText")
       }
 
-      if let source = source {
+      if let source {
         Image(source.assetName)
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 36, height: 36)
-          .padding(.horizontal, 2)
-          .padding(.vertical, 2)
           .tag("sourceIcon")
       }
     }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 
   static func == (lhs: BadgeOverlay, rhs: BadgeOverlay) -> Bool {
@@ -419,7 +427,7 @@ struct MediaCard: View {
     }
     .overlay {
       if showBadges {
-        // 覆盖徽章 - 纯色浅黑风格
+        // 四角徽标：渐变托底，不垫底座
         BadgeOverlay(
           typeText: typeText,
           ratingText: ratingText,

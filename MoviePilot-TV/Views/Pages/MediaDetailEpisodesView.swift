@@ -1122,7 +1122,7 @@ extension EpisodeEntry.MenuAction {
   }
 }
 
-/// 卡片内容：剧照在上，「第几集 · 时长 · 日期」、标题、两行简介在下。
+/// 卡片内容：剧照在上（能播放时角上是播放图标和时长），「第几集 · 日期」、标题、两行简介在下。
 /// 聚焦时剧照放大、投影并淡入高光，文字下面出现一块与放大后剧照同宽的底板。
 /// 聚焦与按下外观与其他图片卡片共用 `PosterCardFocus`。
 struct EpisodeCardContent: View {
@@ -1162,9 +1162,12 @@ struct EpisodeCardContent: View {
           participatesInPageLifecycle: true,
           skipsMemoryCache: true
         )
+        // 下沿浅渐变每张剧照都铺，不论能不能播：一行里画面相近的剧照不会有的压暗、有的不压暗。
+        ImageBadgeScrim.bottomLayer(imageHeight: stillSize.height)
       }
       if let status {
-        EpisodeCardStatusOverlay(status: status, stillSize: stillSize)
+        EpisodeCardStatusOverlay(
+          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, isFocused: isFocused)
           .transition(.opacity)
       }
     }
@@ -1190,7 +1193,7 @@ struct EpisodeCardText: View, Animatable {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(episode?.eyebrow ?? "第 1 集 · 45 分钟")
+      Text(episode?.eyebrow ?? "第 1 集 · 2024-01-01")
         .font(.caption2)
         .foregroundStyle(.secondary)
         .monospacedDigit()
@@ -1308,15 +1311,19 @@ extension MoviePilotEpisode {
     trimmedNonEmpty([name]) ?? episodeLabel ?? "单集"
   }
 
-  /// 卡片顶行小字：「第 N 集 · 45 分钟 · 2024-01-01」。
+  /// 卡片顶行小字：「第 N 集 · 2024-01-01」。时长在能播放的卡片上跟着剧照角上的播放图标显示。
   var eyebrow: String {
-    ([episodeLabel] + metadata.map(Optional.some)).compactMap { $0 }.joined(separator: " · ")
+    [episodeLabel, trimmedNonEmpty([airDate])].compactMap { $0 }.joined(separator: " · ")
   }
 
-  /// 播出日期与时长
+  /// 时长：「45 分钟」；没有或为 0 时不显示。
+  var runtimeText: String? {
+    runtimeMinutes.flatMap { $0 > 0 ? "\($0) 分钟" : nil }
+  }
+
+  /// 时长与播出日期（读屏用，不分能不能播都读出来）
   var metadata: [String] {
-    let runtime = runtimeMinutes.flatMap { $0 > 0 ? "\($0) 分钟" : nil }
-    return [runtime, trimmedNonEmpty([airDate])].compactMap { $0 }
+    [runtimeText, trimmedNonEmpty([airDate])].compactMap { $0 }
   }
 
   var displayOverview: String? {

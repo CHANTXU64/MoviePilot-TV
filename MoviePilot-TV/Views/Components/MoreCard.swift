@@ -11,6 +11,8 @@ struct MoreCard: View {
   @FocusState private var isFocused: Bool
   private let width: CGFloat = 256
   private let height: CGFloat = 384
+  /// 背景图解码尺寸：卡片的四分之一，模糊半径相应缩成 5（相当于原尺寸上的 20）。
+  private static let blurredBackdropSize = CGSize(width: 64, height: 96)
 
   var body: some View {
     VStack(spacing: 10) {
@@ -49,19 +51,17 @@ struct MoreCard: View {
     ZStack {
       Color(white: 0.12)
 
+      // 解码时缩到四分之一再模糊一次，显示时拉伸回卡片大小：看起来同样是糊的背景，
+      // 但不用 `.blur` 在聚焦放大的每一帧重新模糊。
       PageManagedImage(
         url: posterUrl,
-        processor: DownsamplingImageProcessor(size: CGSize(width: width, height: height))
-          |> ResizingImageProcessor(
-            referenceSize: CGSize(width: 256, height: 384),
-            mode: .aspectFill
-          ),
+        processor: DownsamplingImageProcessor(size: Self.blurredBackdropSize)
+          |> BlurImageProcessor(blurRadius: 5),
         isEnabled: loadsImage,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true
       )
       .frame(width: width, height: height)
-      .blur(radius: 20)
       .clipped()
 
       // 半透明遮罩层

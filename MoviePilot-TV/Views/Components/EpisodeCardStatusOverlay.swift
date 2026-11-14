@@ -2,18 +2,23 @@ import SwiftUI
 
 /// 单集卡片剧照上的状态，画在剧照里面，随聚焦一起放大。
 ///
-/// - 能播放、个别集没法对应：左下角一个小图标。已入库的剧可能整季都能播，不能每张都大大地标。
+/// - 能播放：左下角播放图标，后面跟这一集的时长；个别集没法对应：左下角一个警告图标。
+///   没聚焦时用次一级的亮度，聚焦时才全亮。已入库的剧可能整季都能播，不能每张都大大地标。
+///   托底的浅渐变由卡片每张都铺（见 `EpisodeCardContent`），不随能不能播出现或消失。
 /// - 试看进行中：剧照压暗，正中是进度（拿得到下载进度时是逐渐填满的圆环，否则只转圈），下面是这一步的短字和几步的进度点。
 ///   同一季只能有一集在试看，一行里一般只有一张这样的卡。
 /// - 试看结局：剧照轻压暗，正中一个静止的图标和短字。不动表示已经停了，和进行中的圆环分开。
 struct EpisodeCardStatusOverlay: View {
   let status: EpisodeEntry.CardStatus
   let stillSize: CGSize
+  /// 能播放时跟在播放图标后面的时长，例如「45 分钟」。
+  var runtimeText: String? = nil
+  var isFocused = false
 
   var body: some View {
     switch status {
     case .playable:
-      cornerBadge(AppSymbol.play, tint: .white)
+      cornerBadge(AppSymbol.play, tint: .white, text: runtimeText)
     case .attention:
       cornerBadge(AppSymbol.warning, tint: .yellow)
     case .trialInProgress(let indicator):
@@ -56,14 +61,25 @@ struct EpisodeCardStatusOverlay: View {
     min(76, stillSize.height * 0.33)
   }
 
-  private func cornerBadge(_ symbol: String, tint: Color) -> some View {
-    Image(systemName: symbol)
-      .font(.caption.bold())
-      .foregroundStyle(tint)
-      .frame(width: 48, height: 48)
-      .background(Circle().fill(Color.black.opacity(0.6)))
-      .padding(14)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+  /// 左下角的小图标（和可选的短字）直接压在剧照上，不垫底座。
+  private func cornerBadge(_ symbol: String, tint: Color, text: String? = nil) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: symbol)
+        .imageScale(.small)
+        .foregroundStyle(tint)
+      if let text {
+        Text(text)
+          .foregroundStyle(.white)
+          .monospacedDigit()
+          .lineLimit(1)
+      }
+    }
+    // 和海报四角徽标同一级（caption2，tvOS 最小字号），比卡片下面的单集标题（caption）小一级。
+    .font(.caption2.bold())
+    // 只改透明度：没聚焦时次一级，聚焦时全亮，跟着卡片的聚焦动画变化。
+    .opacity(isFocused ? 1 : 0.65)
+    .padding(ImageBadgeScrim.inset)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
   }
 }
 
