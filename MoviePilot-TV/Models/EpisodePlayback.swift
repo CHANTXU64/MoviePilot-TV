@@ -74,7 +74,8 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
   let overview: String?
   let stillPath: String?
   let airDate: String?
-  let runtimeMinutes: Int?
+  /// 时长（分钟）：TMDB 给的；详情页显示时 TMDB 没有，会用服务器上文件的时长补上（见 `fillingRuntime`）。
+  private(set) var runtimeMinutes: Int?
   let voteAverage: Double?
   /// 在本季列表里的位置
   let index: Int
@@ -93,6 +94,15 @@ nonisolated struct MoviePilotEpisode: Equatable, Sendable, Identifiable {
     runtimeMinutes = episode.runtime
     voteAverage = episode.voteAverage
     self.index = index
+  }
+
+  /// 详情页显示用：TMDB 没给时长（新番、长篇动画后面的集常这样）时，用服务器上这一集文件的时长补上。
+  /// TMDB 有时长时以 TMDB 为准。
+  func fillingRuntime(serverSeconds: Double?) -> MoviePilotEpisode {
+    guard (runtimeMinutes ?? 0) <= 0, let serverSeconds, serverSeconds >= 30 else { return self }
+    var episode = self
+    episode.runtimeMinutes = max(1, Int((serverSeconds / 60).rounded()))
+    return episode
   }
 
   static func list(_ episodes: [TmdbEpisode], season: Int) -> [MoviePilotEpisode] {
@@ -370,6 +380,25 @@ nonisolated enum EpisodeAvailability: Equatable, Sendable {
     }
     return uncertain ?? failure ?? checking ?? unidentifiable ?? unmatched ?? .notOnServer
   }
+
+  /// 能播的这一集在服务器上的文件时长（秒），和 `resolve` 的选择一致：先找确定有这一集的服务器，
+  /// 都没有时用按季号集号对上的文件（编号指向别的剧的不用）。没有文件或服务器没给时长时为 nil。
+  static func serverRuntimeSeconds(_ episode: MoviePilotEpisode, lookups: [ServerEpisodeLookup]) -> Double? {
+    guard let tmdbEpisodeID = episode.tmdbEpisodeID else { return nil }
+    let indexes = lookups.compactMap { lookup -> ServerEpisodeIndex? in
+      if case .loaded(let index) = lookup { return index }
+      return nil
+    }
+    let confirmed = indexes.lazy.compactMap { $0.confirmedEpisodes(tmdbEpisodeID: tmdbEpisodeID).first }.first
+    let item = confirmed ?? indexes.lazy.compactMap { $0.playableEpisode(tmdbEpisodeID: tmdbEpisodeID) }.first
+    return item?.runtimeSeconds.flatMap { $0 > 0 ? $0 : nil }
+  }
+}
+
+/// 详情页一季的查询结果，都与查询的集一一对应：每集能不能播，和能播的集在服务器上的文件时长（秒）。
+nonisolated struct EpisodePlaybackLookup: Equatable, Sendable {
+  let availability: [EpisodeAvailability]
+  let serverRuntimeSeconds: [Double?]
 }
 
 /// 播放队列里一集相对当前服务器的状态。上一集、下一集只在当前服务器上找。

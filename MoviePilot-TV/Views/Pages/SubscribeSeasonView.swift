@@ -136,6 +136,7 @@ struct SubscribeSeasonContentView: View {
             shelf
           }
         }
+        .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
       case .grid(let imageLifecycle):
         expandedGrid(imageLifecycle: imageLifecycle)
       }
@@ -285,6 +286,7 @@ struct SubscribeSeasonContentView: View {
           .font(.callout)
           .bold()
           .foregroundStyle(.secondary)
+          .focusLiftHeaderPart()
 
         Spacer()
 
@@ -294,6 +296,7 @@ struct SubscribeSeasonContentView: View {
             Button("展开") { onMoreTapped?() }
           }
         }
+        .focusLiftHeaderPart()
       }
       .padding(.horizontal, 89)
 

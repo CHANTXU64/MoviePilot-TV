@@ -38,24 +38,23 @@ struct PersonCard: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      posterContent
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(
-          color: .black.opacity(isFocused ? 0.5 : 0),
-          radius: 20,
-          y: 10
-        )
-        .scaleEffect(isFocused ? 1.1 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
-        .focusable(true)
-        .focused($isFocused)
-        .onTapGesture {
-          action?()
-        }
+      Button {
+        action?()
+      } label: {
+        posterContent
+          .frame(width: width, height: height)
+          .posterCardFocusLift(isFocused: isFocused, width: width)
+      }
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
+      .focused($isFocused)
+      .accessibilityLabel(person.name ?? "未知")
 
       textInfoView
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
   }
 
   private var textInfoView: some View {
@@ -75,12 +74,12 @@ struct PersonCard: View {
       }
       .lineLimit(1)
       .compositingGroup()
-      .frame(maxWidth: isFocused ? width + 20 : width, alignment: .center)
+      .frame(maxWidth: isFocused ? width + PosterCardFocus.focusedTextExtraWidth : width, alignment: .center)
     }
-    .frame(width: width + 20)
-    .padding(.horizontal, -10)
-    .offset(y: isFocused ? 16 : 0)
-    .animation(.easeInOut(duration: 0.2), value: isFocused)
+    .frame(width: width + PosterCardFocus.focusedTextExtraWidth)
+    .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
+    .offset(y: isFocused ? PosterCardFocus.focusedTextOffset(forImageSize: CGSize(width: width, height: height)) : 0)
+    .posterCardTitleAnimation(isFocused: isFocused)
   }
 
   private var posterContent: some View {

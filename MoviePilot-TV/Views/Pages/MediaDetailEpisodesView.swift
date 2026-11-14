@@ -183,6 +183,8 @@ private struct EpisodeBrowser: View {
     let source: EpisodePlaybackSource
     /// nil 表示第一次查、还没有结果。
     var results: [MoviePilotEpisode.ID: EpisodeAvailability]?
+    /// 能播的集在服务器上的文件时长（秒），TMDB 没给时长时用来补上。
+    var serverRuntimes: [MoviePilotEpisode.ID: Double] = [:]
     /// 应用内播放不可用（不是管理员、版本不支持、设置里关了、没有能播放的服务器）：不显示播放和试看。
     var isOffered = true
     /// 重查期间沿用上次的结果，按钮显示加载中，焦点不跳。
@@ -357,6 +359,7 @@ private struct EpisodeBrowser: View {
             // 同演员行：翻页时行头从卡片位置往上滑入，卡片盖在它上面，不被胶囊挡住。
             .zIndex(2)
         }
+        .focusLiftRow(cardImageSize: EpisodeCardLayout.stillSize)
       }
     }
     .task(id: allowsRequests && needsSeasonLookup
@@ -403,20 +406,24 @@ private struct EpisodeBrowser: View {
   private var shelfHeader: some View {
     HStack(spacing: 20) {
       shelfSeasonSelector
+        .focusLiftHeaderPart()
       Spacer(minLength: 0)
-      episodePagePicker
-      supplementalSeasonRetry
-      availabilityRetry
-      groupMenu?.control(defaultSeasons: defaultMenuSeasons)
-      if case .shelf(_, let onExpand) = layout, showsExpandButton {
-        Button("展开") {
-          onExpand(MediaEpisodeGridRequest(
-            mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
-            initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
-          ))
+      HStack(spacing: 20) {
+        episodePagePicker
+        supplementalSeasonRetry
+        availabilityRetry
+        groupMenu?.control(defaultSeasons: defaultMenuSeasons)
+        if case .shelf(_, let onExpand) = layout, showsExpandButton {
+          Button("展开") {
+            onExpand(MediaEpisodeGridRequest(
+              mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
+              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
+            ))
+          }
+          .accessibilityLabel("展开剧集")
         }
-        .accessibilityLabel("展开剧集")
       }
+      .focusLiftHeaderPart()
     }
     .font(.callout)
     .padding(.horizontal, 81)
@@ -424,7 +431,9 @@ private struct EpisodeBrowser: View {
   }
 
   private var gridHeader: some View {
-    DetailExpansionHeader(title: media.cleanedTitle ?? media.title ?? "剧集") {
+    DetailExpansionHeader(
+      title: media.cleanedTitle ?? media.title ?? "剧集", cardImageSize: EpisodeCardLayout.gridStillSize
+    ) {
       HStack(spacing: 20) {
         gridSeasonSelector
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -620,7 +629,7 @@ private struct EpisodeBrowser: View {
   ) -> some View {
     let entry = entry(for: episode)
     return EpisodeCard(
-      episode: episode,
+      episode: displayed(episode),
       stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
       stillSize: stillSize,
       loadsImage: loadsImage,
@@ -637,6 +646,12 @@ private struct EpisodeBrowser: View {
   }
 
   // MARK: 播放与试看
+
+  /// 显示用的这一集：TMDB 没给时长时，用服务器上这一集文件的时长补上。只用于卡片和单集面板的显示，
+  /// 播放、试看等操作仍用原来的这一集。
+  private func displayed(_ episode: MoviePilotEpisode) -> MoviePilotEpisode {
+    episode.fillingRuntime(serverSeconds: currentAvailability(season: episode.seasonNumber)?.serverRuntimes[episode.id])
+  }
 
   private func currentAvailability(season: Int) -> SeasonAvailability? {
     guard let playback, let state = group.availability[season], state.source == playback else { return nil }
@@ -794,7 +809,7 @@ private struct EpisodeBrowser: View {
     let pollsTrial = request != nil && !entry.offersPlayback
       && (entry.availability?.allowsTrial == true || entry.trial.isTracked || entry.trial.progress != nil)
     EpisodeActionSheet(
-      episode: episode,
+      episode: displayed(episode),
       seriesTitle: media.cleanedTitle ?? media.title,
       entry: entry,
       isCancellingTrial: entry.trial.subscriptionID.map(cancellingTrials.contains) ?? false,
@@ -866,12 +881,16 @@ private struct EpisodeBrowser: View {
     pending.isRefreshing = previous?.results != nil
     group.availability[request.season] = pending
     let readyBeforeCheck = trial.readyEpisodes(among: episodes.compactMap(trialKey(for:)))
-    let results = await apiService.sessionScope.playbackCoordinator.episodeAvailability(
+    let lookup = await apiService.sessionScope.playbackCoordinator.episodePlaybackLookup(
       for: episodes, context: context, forceRefresh: forceRefresh)
     guard canPublish(request.session) else { return }
     var state = SeasonAvailability(source: request.source, retry: request.retry)
-    if let results {
+    if let lookup {
+      let results = lookup.availability
       state.results = Dictionary(zip(episodes.map(\.id), results), uniquingKeysWith: { first, _ in first })
+      state.serverRuntimes = Dictionary(
+        zip(episodes.map(\.id), lookup.serverRuntimeSeconds).compactMap { id, seconds in seconds.map { (id, $0) } },
+        uniquingKeysWith: { first, _ in first })
       let rechecked = zip(episodes, results).compactMap { episode, availability in
         trialKey(for: episode).map { ($0, availability) }
       }
@@ -988,8 +1007,7 @@ enum EpisodeCardLayout {
     return CGSize(width: width, height: width * stillSize.height / stillSize.width)
   }()
   static let gridColumns = DetailExpansionGridLayout.columns(width: gridStillSize.width, count: gridColumnCount)
-  static let stillCornerRadius: CGFloat = 20
-  static let focusedScale: CGFloat = 1.08
+  static let stillCornerRadius: CGFloat = PosterCardFocus.cornerRadius
   /// 剧照和文字之间的距离（未聚焦）。
   static let textGap: CGFloat = 18
   /// 聚焦底板比文字多出的上下留白。
@@ -997,14 +1015,12 @@ enum EpisodeCardLayout {
   /// 聚焦底板与放大后剧照之间的缝。
   static let platterGap: CGFloat = 10
 
-  /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐。
-  static func platterHorizontalInset(stillWidth: CGFloat) -> CGFloat {
-    stillWidth * (focusedScale - 1) / 2
-  }
+  /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐（剧照聚焦时左右各多出 `focusedGrowth`）。
+  static let platterHorizontalInset = PosterCardFocus.focusedGrowth
 
   /// 聚焦时文字下移多少：让底板顶边落在放大后剧照下方 `platterGap` 处。
   static func focusedTextOffset(stillSize: CGSize) -> CGFloat {
-    stillSize.height * (focusedScale - 1) / 2 + platterGap + platterVerticalInset - textGap
+    PosterCardFocus.focusedVerticalGrowth(forImageSize: stillSize) + platterGap + platterVerticalInset - textGap
   }
 }
 
@@ -1064,9 +1080,11 @@ private struct EpisodeCard: View {
       )
       .contentShape(.rect)
     }
-    .buttonStyle(EpisodeCardButtonStyle())
+    .buttonStyle(PosterCardButtonStyle())
     .focusEffectDisabled()
     .focused($isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
     .onChange(of: isFocused) { _, focused in onFocus?(focused) }
     .onPlayPauseCommand(perform: onPlayPause)
     // 菜单一直挂着，只换里面的项：状态到了时卡片不重建，焦点不丢。
@@ -1116,17 +1134,9 @@ extension EpisodeEntry.MenuAction {
   }
 }
 
-/// 焦点外观由卡片内容自己画（剧照放大、文字底板），按钮样式只负责按下时略回缩。
-private struct EpisodeCardButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.97 : 1)
-      .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-  }
-}
-
-/// 卡片内容：剧照在上，「第几集 · 时长 · 日期」、标题、两行简介在下。
-/// 聚焦时剧照放大并投影，文字下面出现一块与放大后剧照同宽的底板。
+/// 卡片内容：剧照在上（能播放时角上是播放图标和时长），「第几集 · 日期」、标题、两行简介在下。
+/// 聚焦时剧照放大、投影并淡入高光，文字下面出现一块与放大后剧照同宽的底板。
+/// 聚焦与按下外观与其他图片卡片共用 `PosterCardFocus`。
 struct EpisodeCardContent: View {
   let episode: MoviePilotEpisode?
   var stillURL: URL?
@@ -1141,12 +1151,16 @@ struct EpisodeCardContent: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EpisodeCardLayout.textGap) {
       still
-        .scaleEffect(isFocused ? EpisodeCardLayout.focusedScale : 1)
-        .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 20, y: 10)
-      EpisodeCardText(episode: episode, focusProgress: isFocused ? 1 : 0, stillSize: stillSize)
+        .posterCardFocusLift(
+          isFocused: isFocused, width: stillSize.width, cornerRadius: EpisodeCardLayout.stillCornerRadius)
+      EpisodeCardText(
+        episode: episode, focusProgress: isFocused ? 1 : 0, stillSize: stillSize,
+        // 剧照角上没有显示时长时（不能播、试看中、状态还没读到），时长写在第一行，每张卡正好出现一次。
+        showsRuntime: status != .playable
+      )
     }
     .frame(width: stillSize.width, alignment: .leading)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isFocused)
+    .posterCardFocusAnimation(isFocused: isFocused)
   }
 
   private var still: some View {
@@ -1164,15 +1178,17 @@ struct EpisodeCardContent: View {
           participatesInPageLifecycle: true,
           skipsMemoryCache: true
         )
+        // 下沿浅渐变每张剧照都铺，不论能不能播：一行里画面相近的剧照不会有的压暗、有的不压暗。
+        ImageBadgeScrim.bottomLayer(imageHeight: stillSize.height)
       }
       if let status {
-        EpisodeCardStatusOverlay(status: status, stillSize: stillSize)
+        EpisodeCardStatusOverlay(
+          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, isFocused: isFocused)
           .transition(.opacity)
       }
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: status)
     .frame(width: stillSize.width, height: stillSize.height)
-    .clipShape(.rect(cornerRadius: EpisodeCardLayout.stillCornerRadius))
     .accessibilityHidden(true)
   }
 }
@@ -1182,22 +1198,27 @@ struct EpisodeCardText: View, Animatable {
   let episode: MoviePilotEpisode?
   nonisolated var focusProgress: CGFloat = 0
   var stillSize = EpisodeCardLayout.stillSize
+  /// 第一行是否带时长；能播放的卡片时长在剧照角上，这里不重复。
+  var showsRuntime = true
 
   nonisolated var animatableData: CGFloat {
     get { focusProgress }
     set { focusProgress = newValue }
   }
 
+  /// 弹簧动画会略冲过 0…1，颜色混合和底板透明度只取这个范围。
+  private var clampedProgress: Double { Double(min(max(focusProgress, 0), 1)) }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(episode?.eyebrow ?? "第 1 集 · 45 分钟")
+      Text(episode?.eyebrow(includesRuntime: showsRuntime) ?? "第 1 集 · 45 分钟 · 2024-01-01")
         .font(.caption2)
         .foregroundStyle(.secondary)
         .monospacedDigit()
         .lineLimit(1, reservesSpace: true)
       Text(episode?.displayTitle ?? "剧集标题")
         .font(.caption.bold())
-        .foregroundStyle(Color.secondary.mix(with: .primary, by: Double(focusProgress)))
+        .foregroundStyle(Color.secondary.mix(with: .primary, by: clampedProgress))
         .lineLimit(1, reservesSpace: true)
       Text(episode.map { $0.displayOverview ?? "暂无简介" } ?? "单集简介\n单集简介")
         .font(.caption)
@@ -1210,8 +1231,8 @@ struct EpisodeCardText: View, Animatable {
     .background {
       // 底板只画在背景里往外伸，不改变卡片的布局尺寸。
       RoundedRectangle(cornerRadius: EpisodeCardLayout.stillCornerRadius, style: .continuous)
-        .fill(Color.white.opacity(0.18 * Double(focusProgress)))
-        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset(stillWidth: stillSize.width))
+        .fill(Color.white.opacity(0.18 * clampedProgress))
+        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset)
         .padding(.vertical, -EpisodeCardLayout.platterVerticalInset)
     }
     .compositingGroup()
@@ -1309,14 +1330,20 @@ extension MoviePilotEpisode {
   }
 
   /// 卡片顶行小字：「第 N 集 · 45 分钟 · 2024-01-01」。
-  var eyebrow: String {
-    ([episodeLabel] + metadata.map(Optional.some)).compactMap { $0 }.joined(separator: " · ")
+  /// 能播放的卡片时长跟着剧照角上的播放图标显示，这一行就不带时长（`includesRuntime` 为 false）。
+  func eyebrow(includesRuntime: Bool) -> String {
+    [episodeLabel, includesRuntime ? runtimeText : nil, trimmedNonEmpty([airDate])]
+      .compactMap { $0 }.joined(separator: " · ")
   }
 
-  /// 播出日期与时长
+  /// 时长：「45 分钟」；没有或为 0 时不显示。
+  var runtimeText: String? {
+    runtimeMinutes.flatMap { $0 > 0 ? "\($0) 分钟" : nil }
+  }
+
+  /// 时长与播出日期（读屏用，不分能不能播都读出来）
   var metadata: [String] {
-    let runtime = runtimeMinutes.flatMap { $0 > 0 ? "\($0) 分钟" : nil }
-    return [runtime, trimmedNonEmpty([airDate])].compactMap { $0 }
+    [runtimeText, trimmedNonEmpty([airDate])].compactMap { $0 }
   }
 
   var displayOverview: String? {

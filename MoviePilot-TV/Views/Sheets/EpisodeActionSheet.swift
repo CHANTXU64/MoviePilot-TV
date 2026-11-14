@@ -95,7 +95,7 @@ struct EpisodeActionSheet: View {
 
   @ViewBuilder
   private var info: some View {
-    let runtime = episode.runtimeMinutes.flatMap { $0 > 0 ? "\($0) 分钟" : nil }
+    let runtime = episode.runtimeText
     let airDate = trimmedNonEmpty([episode.airDate])
     if runtime != nil || airDate != nil {
       VStack(alignment: .leading, spacing: 14) {

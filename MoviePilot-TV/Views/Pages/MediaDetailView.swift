@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 
 /// 详情页「演员 / 职员」合并行当前展示的分类。
@@ -46,42 +47,76 @@ private struct MediaDetailBackgroundLayer: View {
   let usingPosterAsBackdrop: Bool
   let showingContentPage: Bool
   let hidesContentPageBackground: Bool
+  /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色。
+  let providesBlurredContentPage: Bool
+  /// 这一页背景的模糊缩略图（`PageImageLifecycle.currentBackdropPreview`）。
+  /// 只有属于当前背景图片 slot 的才用作第二页模糊背景。
+  let backdropPreview: PageImageLifecycle.BackdropPreview?
   var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
   var body: some View {
-    let showsBlurredBackground = showingContentPage && !hidesContentPageBackground
-    image
-      .blur(
-        radius: showsBlurredBackground && !usingPosterAsBackdrop ? MediaDetailBackgroundImage.blurRadius : 0,
-        opaque: true
-      )
-      .opacity(hidesContentPageBackground ? 0 : 1)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
-      .accessibilityHidden(true)
+    // 海报当背景时主背景本身就是模糊图，不用再叠一张。
+    let usesBlurredLayer = providesBlurredContentPage && !usingPosterAsBackdrop && url != nil
+    let showsBlurredLayer = usesBlurredLayer && showingContentPage && !hidesContentPageBackground
+    let blurredBackdrop = usesBlurredLayer ? currentBlurredBackdrop : nil
+    ZStack {
+      image
+        // 第二页还没有当前背景的模糊图（新背景未就绪或加载失败）时，不露出清晰背景，只留底色。
+        .opacity(showsBlurredLayer && blurredBackdrop == nil ? 0 : 1)
+      if let blurredBackdrop {
+        // 缩略图在主背景解码时就已生成并模糊过：首屏就挂着、透明度为 0，切到第二页时淡入。
+        // 不另外下载、解码，也不在每帧实时模糊。
+        let size = UIScreen.main.bounds.size
+        Image(uiImage: blurredBackdrop)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: size.width, height: size.height)
+          .clipped()
+          .opacity(showsBlurredLayer ? 1 : 0)
+      }
+    }
+    .opacity(hidesContentPageBackground ? 0 : 1)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
+    .ignoresSafeArea()
+    .accessibilityHidden(true)
+  }
+
+  private var heroProcessor: any ImageProcessor {
+    MediaDetailBackgroundImage.heroProcessor(
+      for: UIScreen.main.bounds.size,
+      usingPosterAsBackdrop: usingPosterAsBackdrop,
+      screenScale: UIScreen.main.scale
+    )
+  }
+
+  private var heroScaleFactor: CGFloat {
+    MediaDetailBackgroundImage.downsampleScale(for: UIScreen.main.bounds.size, screenScale: UIScreen.main.scale)
+  }
+
+  /// 属于当前背景图片 slot 的模糊缩略图；key 和下面 `PageManagedImage` 的参数一致。
+  private var currentBlurredBackdrop: UIImage? {
+    guard let url, let backdropPreview else { return nil }
+    let key = PageManagedImageView.slotKey(
+      url: url, processor: heroProcessor, role: role,
+      skipsMemoryCache: true, fadeDuration: 0, scaleFactor: heroScaleFactor
+    )
+    return backdropPreview.key == key ? backdropPreview.image : nil
   }
 
   @ViewBuilder
   private var image: some View {
     if let url {
       let size = UIScreen.main.bounds.size
-      let screenScale = UIScreen.main.scale
       PageManagedImage(
         url: url,
-        processor: MediaDetailBackgroundImage.heroProcessor(
-          for: size,
-          usingPosterAsBackdrop: usingPosterAsBackdrop,
-          screenScale: screenScale
-        ),
+        processor: heroProcessor,
         isEnabled: true,
         role: role,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
-        scaleFactor: MediaDetailBackgroundImage.downsampleScale(
-          for: size,
-          screenScale: screenScale
-        ),
+        scaleFactor: heroScaleFactor,
         alignsImageAtTop: usingPosterAsBackdrop,
         fadeDuration: 0,
         onFailure: { onFailure?(url) }
@@ -378,6 +413,8 @@ struct MediaDetailView: View {
           url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
@@ -391,6 +428,8 @@ struct MediaDetailView: View {
           usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
           }
@@ -1276,7 +1315,8 @@ struct MediaDetailView: View {
                   get: { creditKind },
                   set: { if let option = $0 { selectCreditKind(option) } }
                 ),
-                title: \.title
+                title: \.title,
+                liftsWithFocusedCard: true
               )
               .font(.callout)
               .padding(.leading, 81)
@@ -1285,6 +1325,7 @@ struct MediaDetailView: View {
                 .font(.callout)
                 .bold()
                 .foregroundStyle(.secondary)
+                .focusLiftHeaderPart()
                 .padding(.leading, 89)
             }
           }
@@ -1341,6 +1382,7 @@ struct MediaDetailView: View {
         // 否则实心胶囊会在滑动途中挡住头像；纯文字标题本来就画在卡片下面，效果与之一致。
         .zIndex(2)
       }
+      .focusLiftRow(cardImageSize: PersonCard.imageSize)
     }
   }
 
@@ -1530,6 +1572,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1596,6 +1639,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 
@@ -1608,6 +1652,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1674,6 +1719,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 

@@ -400,27 +400,41 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     didFail = false
     guard shouldLoadImage else { return }
     decodedImage = image
-    prepareBackdropPreviewIfNeeded(from: image)
+    // 返回时垫着的模糊缩略图换成原图时淡入，不是突然一跳。
+    let preview = role.isDetailBackdrop ? lifecycle?.backdropPreview(for: key) : nil
+    // 每次解码都按这张图重做缩略图；上面已经拿到正在显示的旧缩略图，下面仍从它淡入新原图。
+    prepareBackdropPreviewIfNeeded(from: image, refreshesSameKey: true)
     let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
-      surface.install(image, fadeDuration: imageFadeDuration)
+      if let preview, surface.image === preview {
+        surface.install(image, fadeDuration: Self.backdropPreviewCrossfadeDuration, replacesCurrentImage: true)
+      } else {
+        surface.install(image, fadeDuration: imageFadeDuration)
+      }
       surface.notifySuccess(for: key)
     }
   }
 
-  private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
+  /// 详情背景的缩略图：长边 320 像素并模糊过，放大到全屏也只是柔和的模糊背景，不会像马赛克。
+  /// 返回详情页时先垫上，也直接用作第二页的模糊背景；模糊半径约合原图上 80 像素。
+  private static let backdropPreviewLongEdge: CGFloat = 320
+  private static let backdropPreviewBlurRadius: CGFloat = 10
+  private static let backdropPreviewCrossfadeDuration: TimeInterval = 0.25
+
+  private func prepareBackdropPreviewIfNeeded(from image: UIImage, refreshesSameKey: Bool = false) {
     guard role.isDetailBackdrop else { return }
-    lifecycle?.prepareBackdropPreview(for: key, role: role) {
+    lifecycle?.prepareBackdropPreview(for: key, role: role, refreshesSameKey: refreshesSameKey) {
       let longEdge = max(image.size.width, image.size.height)
       guard longEdge > 0 else { return nil }
-      let ratio = min(1, 160 / longEdge)
+      let ratio = min(1, Self.backdropPreviewLongEdge / longEdge)
       let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
       format.preferredRange = .standard
-      return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      let thumbnail = UIGraphicsImageRenderer(size: size, format: format).image { _ in
         image.draw(in: CGRect(origin: .zero, size: size))
       }
+      return thumbnail.kf.blurred(withRadius: Self.backdropPreviewBlurRadius)
     }
   }
 
@@ -548,13 +562,11 @@ final class PageManagedImageView: UIImageView {
       return
     }
 
-    let service = APIService.shared
-    let source = service.imageSource(for: url)
-    let gridKey = managedGridContext.map {
-      "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
-    } ?? "grid:none"
-    let scaleKey = scaleFactor.map { "\($0)" } ?? "default"
-    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(role.rawValue)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)|scale:\(scaleKey)"
+    let key = Self.slotKey(
+      url: url, processor: processor, role: role, gridImageDemandContext: managedGridContext,
+      loadsDiskFileSynchronously: loadsDiskFileSynchronously, skipsMemoryCache: skipsMemoryCache,
+      fadeDuration: fadeDuration, scaleFactor: scaleFactor
+    )
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
       slot?.setGridImageDemandContext(managedGridContext)
@@ -598,6 +610,27 @@ final class PageManagedImageView: UIImageView {
     )
   }
 
+  /// 图片 slot 的身份：图片配置、来源、处理方式和显示参数都相同才是同一张图。
+  /// 详情页第二页按它取当前背景的缩略图，图片配置刷新或换了背景后不会用到旧图。
+  static func slotKey(
+    url: URL,
+    processor: any ImageProcessor,
+    role: PageImageRole,
+    gridImageDemandContext: GridImageDemandContext? = nil,
+    loadsDiskFileSynchronously: Bool = false,
+    skipsMemoryCache: Bool,
+    fadeDuration: TimeInterval,
+    scaleFactor: CGFloat?
+  ) -> String {
+    let service = APIService.shared
+    let source = service.imageSource(for: url)
+    let gridKey = gridImageDemandContext.map {
+      "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
+    } ?? "grid:none"
+    let scaleKey = scaleFactor.map { "\($0)" } ?? "default"
+    return "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(role.rawValue)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)|scale:\(scaleKey)"
+  }
+
   func detach() {
     slot?.detach(self)
     slot = nil
@@ -608,9 +641,10 @@ final class PageManagedImageView: UIImageView {
     clearRenderedImage()
   }
 
-  fileprivate func install(_ image: UIImage, fadeDuration: TimeInterval) {
+  /// `replacesCurrentImage` 为 true 时，已有画面也淡入替换（缩略图换原图）；否则只有空白时才淡入。
+  fileprivate func install(_ image: UIImage, fadeDuration: TimeInterval, replacesCurrentImage: Bool = false) {
     layer.removeAllAnimations()
-    guard fadeDuration > 0, self.image == nil else {
+    guard fadeDuration > 0, self.image == nil || replacesCurrentImage else {
       self.image = image
       (superview as? PageBackdropImageContainer)?.setNeedsLayout()
       return
@@ -621,6 +655,8 @@ final class PageManagedImageView: UIImageView {
       options: .transitionCrossDissolve,
       animations: { self.image = image }
     )
+    // 顶对齐的海报背景按图片比例算高度，换图后要重新布局。
+    (superview as? PageBackdropImageContainer)?.setNeedsLayout()
   }
 
   fileprivate func clearRenderedImage() {

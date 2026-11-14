@@ -37,6 +37,8 @@ enum DetailExpansionGridLayout {
 
 struct DetailExpansionHeader<Controls: View>: View {
   let title: String
+  /// 网格里卡片图片的尺寸，页头下方按它聚焦时长高的距离留空。
+  var cardImageSize: CGSize = MediaCard.defaultPosterSize
   @ViewBuilder let controls: () -> Controls
 
   var body: some View {
@@ -47,7 +49,8 @@ struct DetailExpansionHeader<Controls: View>: View {
         .accessibilityAddTraits(.isHeader)
       controls()
     }
-    .padding(.bottom, 20)
+    // 第一排卡片聚焦长高后不压住标题下的按钮。
+    .padding(.bottom, PosterCardFocus.topClearance(forImageSize: cardImageSize))
   }
 }
 

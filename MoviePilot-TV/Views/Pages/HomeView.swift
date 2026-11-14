@@ -198,6 +198,7 @@ private struct MediaSectionView: View {
           .font(.callout)
           .bold()
           .foregroundStyle(.secondary)
+          .focusLiftHeaderPart()
 
         Spacer()
 
@@ -208,6 +209,7 @@ private struct MediaSectionView: View {
             }
           }
           .pickerStyle(.menu)
+          .focusLiftHeaderPart()
         }
       }
       .padding(.horizontal, 8)
@@ -376,6 +378,7 @@ private struct MediaSectionView: View {
         .focusSection()
       }
     }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 
   private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
@@ -432,6 +435,7 @@ private struct SubscribeSectionView: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       if isFirstRow {
@@ -503,6 +507,7 @@ private struct SubscribeSectionView: View {
       .scrollClipDisabled()
       .focusSection()
     }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 }
 

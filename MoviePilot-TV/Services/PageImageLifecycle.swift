@@ -24,6 +24,16 @@ enum PageImageRole: String {
   }
 }
 
+/// 返回详情页时，父页的全屏背景是否等子页背景释放后再加载。
+///
+/// 内存优化开启时等：两张全屏大图不同时在内存里，等待期间先垫父页的模糊缩略图。
+/// 关闭时不等：按下返回就开始加载，缩略图只是一闪；代价是转场那一两秒里两张大图同时在内存。
+/// 由 `ContentView` 跟随内存优化设置更新；默认等，与开启优化时一致。
+@MainActor
+enum DetailBackdropReturnPolicy {
+  static var waitsForRemovedPageBackdrop = true
+}
+
 /// 页面图片的实际渲染资源。生命周期直接驱动 surface，不依赖隐藏的 SwiftUI 页面重算 body。
 @MainActor
 protocol PageImageResource: AnyObject {
@@ -73,7 +83,23 @@ final class PageImageLifecycle: ObservableObject {
   private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
-  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)?
+  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)? {
+    didSet {
+      if currentBackdropPreview?.key != detailBackdropPreview?.key
+        || currentBackdropPreview?.image !== detailBackdropPreview?.image
+      {
+        currentBackdropPreview = detailBackdropPreview.map { BackdropPreview(key: $0.key, image: $0.image) }
+      }
+    }
+  }
+  /// 这一页背景的模糊缩略图和它所属图片 slot 的 key：返回时先垫上，也用作第二页的模糊背景。
+  /// 使用方要按当前背景的 key 核对，图片配置刷新或换了背景后旧缩略图不能再用。
+  @Published private(set) var currentBackdropPreview: BackdropPreview?
+
+  struct BackdropPreview {
+    let key: String
+    let image: UIImage
+  }
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
@@ -109,8 +135,12 @@ final class PageImageLifecycle: ObservableObject {
     return detailBackdropPreview?.image
   }
 
-  func prepareBackdropPreview(for key: String, role: PageImageRole, makePreview: () -> UIImage?) {
-    guard !isRemoved, isDetailBackdropVisible, detailBackdropPreview?.key != key else { return }
+  /// `refreshesSameKey`：同一张背景重新解码时也重做缩略图。同一地址的图片内容可能已经换了，
+  /// 缩略图又是第二页的模糊背景，不能沿用旧的。
+  func prepareBackdropPreview(
+    for key: String, role: PageImageRole, refreshesSameKey: Bool = false, makePreview: () -> UIImage?
+  ) {
+    guard !isRemoved, isDetailBackdropVisible, refreshesSameKey || detailBackdropPreview?.key != key else { return }
     // 本地卡片在详情背景下方。只要主背景仍属于该页，转场也应使用它的小图。
     if role == .detailBackdropFallback, let preview = detailBackdropPreview,
       preview.role == .detailBackdrop, imageResources[preview.key] != nil
@@ -720,8 +750,9 @@ final class ImageNavigationCoordinator: ObservableObject {
 
   private func reconcileLifecycles() {
     let topIndex = entries.count
-    // Pop 先保留源页面的背景供转场使用，释放后再允许目标页解码。
-    let isDetailBackdropBlocked = lifecycles.values.contains { $0.isRemoved && $0.keepsDetailBackdrop }
+    // Pop 先保留源页面的背景供转场使用；按设置决定目标页是否等它释放后再解码。
+    let isDetailBackdropBlocked = DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop
+      && lifecycles.values.contains { $0.isRemoved && $0.keepsDetailBackdrop }
     rootLifecycle.update(
       phase: phase(for: 0, topIndex: topIndex),
       isStackForeground: isStackForeground,

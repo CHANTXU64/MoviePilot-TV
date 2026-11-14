@@ -52,6 +52,7 @@ struct ContentView: View {
     }
     .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in
       KingfisherCachePolicy.apply(memoryOptimizationEnabled: enabled)
+      DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = enabled
     }
     .onOpenURL { url in
       if topShelfNavigationRouter.handle(url), let route = topShelfNavigationRouter.pendingRoute {

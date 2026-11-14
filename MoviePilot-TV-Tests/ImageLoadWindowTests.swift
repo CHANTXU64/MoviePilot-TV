@@ -698,8 +698,8 @@ final class ImageLoadWindowTests: XCTestCase {
 
     let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
     let preview = try XCTUnwrap(parentSurface.image)
-    XCTAssertEqual(preview.cgImage?.width, 160)
-    XCTAssertEqual(preview.cgImage?.height, 90)
+    XCTAssertEqual(preview.cgImage?.width, 320)
+    XCTAssertEqual(preview.cgImage?.height, 180)
     XCTAssertFalse(preview === image)
     XCTAssertFalse(parentBackdrop.hasLoadedPageImage)
     XCTAssertFalse(card.hasLoadedPageImage)
@@ -728,6 +728,112 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertTrue(parentSurface.image === preview)
     parentBackdrop.acceptRetrievedImage(image)
     XCTAssertTrue(parentSurface.image === image)
+  }
+
+  /// 内存优化关闭时，返回不等子页背景释放，父页背景马上开始加载。
+  func testPopLoadsParentBackdropImmediatelyWhenNotWaitingForRemovedPage() throws {
+    let originalPolicy = DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop
+    DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = false
+    defer { DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = originalPolicy }
+    let coordinator = ImageNavigationCoordinator(
+      apiService: .testingInstance(), removedLifecycleRetention: .seconds(60)
+    )
+    coordinator.setStackForeground(true)
+    let parent = coordinator.lifecycle(for: coordinator.push(resourceRequest("parent")))
+    let parentBackdrop = makeSlot(key: "parent", lifecycle: parent, role: .detailBackdrop)
+    let parentSurface = PageManagedImageView()
+    let parentDemand = PageImageDemandLease()
+    parentBackdrop.attach(parentSurface, demandID: parentDemand.id)
+    parentDemand.bind(to: parentBackdrop, isEnabled: true)
+    parent.setDetailBackdropVisible(true)
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 960, height: 540)).image { context in
+      UIColor.blue.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 960, height: 540))
+    }
+    parentBackdrop.acceptRetrievedImage(image)
+
+    let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
+    let preview = try XCTUnwrap(parentSurface.image)
+    let childBackdrop = makeSlot(key: "child", lifecycle: child, role: .detailBackdrop)
+    let childSurface = PageManagedImageView()
+    let childDemand = PageImageDemandLease()
+    childBackdrop.attach(childSurface, demandID: childDemand.id)
+    childDemand.bind(to: childBackdrop, isEnabled: true)
+    child.setDetailBackdropVisible(true)
+    let childImage = try XCTUnwrap(UIImage(systemName: "film"))
+    childBackdrop.acceptRetrievedImage(childImage)
+
+    coordinator.path.removeLast()
+    // 子页背景仍留着供转场，父页不等它释放就开始加载。
+    XCTAssertTrue(childSurface.image === childImage)
+    XCTAssertEqual(parentBackdrop.retrievalStartCount, 2)
+    XCTAssertTrue(parentSurface.image === preview)
+    parentBackdrop.acceptRetrievedImage(image)
+    XCTAssertTrue(parentSurface.image === image)
+  }
+
+  /// 第二页按 key 取当前背景的缩略图：换了背景（例如图片配置刷新后新 slot）且新图未到时，旧缩略图不能冒充。
+  func testCurrentBackdropPreviewCarriesOwningSlotKey() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let lifecycle = coordinator.lifecycle(for: coordinator.push(resourceRequest("detail")))
+    lifecycle.setDetailBackdropVisible(true)
+    let old = makeSlot(key: "old", lifecycle: lifecycle, role: .detailBackdrop)
+    let oldSurface = PageManagedImageView()
+    let oldDemand = PageImageDemandLease()
+    old.attach(oldSurface, demandID: oldDemand.id)
+    oldDemand.bind(to: old, isEnabled: true)
+    old.acceptRetrievedImage(try XCTUnwrap(UIImage(systemName: "film")))
+    XCTAssertEqual(lifecycle.currentBackdropPreview?.key, "old")
+
+    oldDemand.cancel()
+    old.detach(oldSurface)
+    let new = makeSlot(key: "new", lifecycle: lifecycle, role: .detailBackdrop)
+    let newSurface = PageManagedImageView()
+    let newDemand = PageImageDemandLease()
+    new.attach(newSurface, demandID: newDemand.id)
+    newDemand.bind(to: new, isEnabled: true)
+    XCTAssertNotEqual(lifecycle.currentBackdropPreview?.key, "new", "新背景还没解码时没有属于它的缩略图")
+
+    new.acceptRetrievedImage(try XCTUnwrap(UIImage(systemName: "tv")))
+    XCTAssertEqual(lifecycle.currentBackdropPreview?.key, "new")
+    lifecycle.setDetailBackdropVisible(false)
+    XCTAssertNil(lifecycle.currentBackdropPreview)
+  }
+
+  /// 同一张背景（key 不变）重新解码出不同内容时，缩略图跟着换；返回时仍从旧缩略图淡入新原图。
+  func testSameSlotRedecodeRefreshesPreviewAfterCrossfadingFromTheOldOne() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let parent = coordinator.lifecycle(for: coordinator.push(resourceRequest("parent")))
+    parent.setDetailBackdropVisible(true)
+    let backdrop = makeSlot(key: "backdrop", lifecycle: parent, role: .detailBackdrop)
+    let surface = PageManagedImageView()
+    let demand = PageImageDemandLease()
+    backdrop.attach(surface, demandID: demand.id)
+    demand.bind(to: backdrop, isEnabled: true)
+    func solid(_ color: UIColor) -> UIImage {
+      UIGraphicsImageRenderer(size: CGSize(width: 960, height: 540)).image { context in
+        color.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: 960, height: 540))
+      }
+    }
+    backdrop.acceptRetrievedImage(solid(.blue))
+    let oldPreview = try XCTUnwrap(parent.currentBackdropPreview?.image)
+
+    // 进子页：父页原图释放，垫上旧缩略图。
+    coordinator.push(resourceRequest("child"))
+    XCTAssertTrue(surface.image === oldPreview)
+
+    // 返回后同一个 slot 解码出内容不同的新图。
+    coordinator.path.removeLast()
+    let newImage = solid(.red)
+    backdrop.acceptRetrievedImage(newImage)
+    XCTAssertTrue(surface.image === newImage, "原图从旧缩略图淡入替换")
+    let newPreview = try XCTUnwrap(parent.currentBackdropPreview)
+    XCTAssertEqual(newPreview.key, "backdrop")
+    XCTAssertFalse(newPreview.image === oldPreview, "同一个 key 也按新图重做缩略图")
+    XCTAssertTrue(parent.backdropPreview(for: "backdrop") === newPreview.image)
   }
 
   func testDetailBackdropCardCanProvidePreviewAfterPrimaryIsRemoved() throws {

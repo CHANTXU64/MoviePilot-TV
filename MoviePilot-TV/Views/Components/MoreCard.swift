@@ -11,52 +11,18 @@ struct MoreCard: View {
   @FocusState private var isFocused: Bool
   private let width: CGFloat = 256
   private let height: CGFloat = 384
+  /// 背景图解码尺寸：卡片的四分之一，模糊半径相应缩成 5（相当于原尺寸上的 20）。
+  private static let blurredBackdropSize = CGSize(width: 64, height: 96)
 
   var body: some View {
     VStack(spacing: 10) {
       // 海报图片及模糊背景
-      ZStack {
-        Color(white: 0.12)
-
-        PageManagedImage(
-          url: posterUrl,
-          processor: DownsamplingImageProcessor(size: CGSize(width: width, height: height))
-            |> ResizingImageProcessor(
-              referenceSize: CGSize(width: 256, height: 384),
-              mode: .aspectFill
-            ),
-          isEnabled: loadsImage,
-          participatesInPageLifecycle: true,
-          skipsMemoryCache: true
-        )
-        .frame(width: width, height: height)
-        .blur(radius: 20)
-        .clipped()
-
-        // 半透明遮罩层
-        Color.black.opacity(0.3)
-
-        // 中间文字
-        Text(titleText)
-          .font(.headline.bold())
-          .foregroundStyle(isFocused ? .white : .secondary)
-          .multilineTextAlignment(.center)
-          .padding()
+      Button(action: action) {
+        posterContent
       }
-      .frame(width: width, height: height)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
-      .shadow(
-        color: .black.opacity(isFocused ? 0.5 : 0),
-        radius: 20,
-        y: 10
-      )
-      .scaleEffect(isFocused ? 1.1 : 1.0)
-      .focusable(true)
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
       .focused($isFocused)
-      .onTapGesture {
-        action()
-      }
-      .animation(.easeInOut(duration: 0.2), value: isFocused)
 
       // 文本占位区 (与 MediaCard 保持一致的高度)
       VStack(spacing: 4) {
@@ -78,5 +44,39 @@ struct MoreCard: View {
         .frame(maxWidth: width, alignment: .center)
       }
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
+  }
+
+  private var posterContent: some View {
+    ZStack {
+      Color(white: 0.12)
+
+      // 解码时缩到四分之一再模糊一次，显示时拉伸回卡片大小：看起来同样是糊的背景，
+      // 但不用 `.blur` 在聚焦放大的每一帧重新模糊。
+      PageManagedImage(
+        url: posterUrl,
+        processor: DownsamplingImageProcessor(size: Self.blurredBackdropSize)
+          |> BlurImageProcessor(blurRadius: 5),
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true
+      )
+      .frame(width: width, height: height)
+      .clipped()
+
+      // 半透明遮罩层
+      Color.black.opacity(0.3)
+
+      // 中间文字
+      Text(titleText)
+        .font(.headline.bold())
+        .foregroundStyle(isFocused ? .white : .secondary)
+        .multilineTextAlignment(.center)
+        .padding()
+    }
+    .frame(width: width, height: height)
+    .posterCardFocusLift(isFocused: isFocused, width: width)
   }
 }

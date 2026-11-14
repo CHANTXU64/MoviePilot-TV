@@ -216,6 +216,34 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(index.playableEpisodes(tmdbEpisodeID: 110).map(\.id), ["e10", "e9-10"], "先播这一集自己的文件")
   }
 
+  func testServerRuntimeComesFromTheFileThatWouldPlay() {
+    let lookups: [ServerEpisodeLookup] = [
+      .failed(server: "坏的", message: "读取失败"),
+      index("a", [
+        ServerMediaItem(id: "a1", kind: .episode, runtimeSeconds: 1450, externalIDs: ["tmdb": "1"]),
+        ServerMediaItem(id: "a2", kind: .episode, externalIDs: ["tmdb": "2"]),
+      ]),
+      index("b", [ServerMediaItem(id: "b2", kind: .episode, runtimeSeconds: 1500, externalIDs: ["tmdb": "2"])]),
+    ]
+    XCTAssertEqual(EpisodeAvailability.serverRuntimeSeconds(episode(1), lookups: lookups), 1450)
+    XCTAssertNil(
+      EpisodeAvailability.serverRuntimeSeconds(episode(2), lookups: lookups),
+      "和能不能播选同一台：第一台有这一集但没给时长时不拿别台的")
+    XCTAssertNil(EpisodeAvailability.serverRuntimeSeconds(episode(3), lookups: lookups), "服务器上没有这一集")
+    XCTAssertNil(EpisodeAvailability.serverRuntimeSeconds(episode(nil), lookups: lookups))
+  }
+
+  func testServerRuntimeOnlyFillsWhenTMDBHasNone() {
+    let withoutTMDB = MoviePilotEpisode(TmdbEpisode(id: 42, episodeNumber: 42), season: 1, index: 41)
+    XCTAssertEqual(withoutTMDB.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 24)
+    XCTAssertNil(withoutTMDB.fillingRuntime(serverSeconds: nil).runtimeMinutes)
+    XCTAssertNil(withoutTMDB.fillingRuntime(serverSeconds: 5).runtimeMinutes, "不到半分钟的时长不可信")
+    let zero = MoviePilotEpisode(TmdbEpisode(id: 43, episodeNumber: 43, runtime: 0), season: 1, index: 42)
+    XCTAssertEqual(zero.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 24, "TMDB 填 0 等于没给")
+    let withTMDB = MoviePilotEpisode(TmdbEpisode(id: 1, episodeNumber: 1, runtime: 23), season: 1, index: 0)
+    XCTAssertEqual(withTMDB.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 23, "TMDB 有时长时以 TMDB 为准")
+  }
+
   func testAvailabilityMatchesOnlyByTMDBEpisodeID() {
     let lookups = [
       index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("a3", tmdb: 3, hasFile: false)]),
