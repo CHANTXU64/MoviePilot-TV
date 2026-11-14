@@ -43,10 +43,19 @@ enum PosterCardFocus {
     scale(forWidth: width, growth: pressedGrowth)
   }
 
+  /// 聚焦时图片上、下各长出的高度。
+  static func focusedVerticalGrowth(forImageSize size: CGSize) -> CGFloat {
+    size.height * (focusedScale(forWidth: size.width) - 1) / 2
+  }
+
+  /// 图片上方至少要留的距离：聚焦长高后仍和上方的页头、按钮隔开 8pt。
+  static func topClearance(forImageSize size: CGSize) -> CGFloat {
+    focusedVerticalGrowth(forImageSize: size).rounded(.up) + 8
+  }
+
   /// 竖排卡片聚焦时标题下移多少：跟着放大后的图片底边，保留 `focusedTextSpacing`。
   static func focusedTextOffset(forImageSize size: CGSize, stackSpacing: CGFloat = 10) -> CGFloat {
-    let bottomGrowth = size.height * (focusedScale(forWidth: size.width) - 1) / 2
-    return max(0, bottomGrowth - (stackSpacing - focusedTextSpacing))
+    max(0, focusedVerticalGrowth(forImageSize: size) - (stackSpacing - focusedTextSpacing))
   }
 
   private static func scale(forWidth width: CGFloat, growth: CGFloat) -> CGFloat {

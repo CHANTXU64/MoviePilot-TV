@@ -250,6 +250,11 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     )
   }
 
+  /// 页头与网格之间 `VStack` 已有 20pt，这里补足到海报聚焦后需要的距离。
+  private static var gridTopInset: CGFloat {
+    max(0, PosterCardFocus.topClearance(forImageSize: MediaCard.defaultPosterSize) - 20)
+  }
+
   var body: some View {
     let currentItemIDs = items.map(\.id)
     let retainedItemCount = domRetention.retainedItemCount(
@@ -351,6 +356,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
           }
           .id(listIdentity.id)
           .padding(.horizontal, -12)
+          // 页头画在网格上面；第一排聚焦长高后不能钻到页头下面。
+          .padding(.top, Self.gridTopInset)
           .padding(.bottom, 20)
 
           // 加载更多指示器

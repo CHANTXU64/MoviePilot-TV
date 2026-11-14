@@ -47,7 +47,8 @@ struct DetailExpansionHeader<Controls: View>: View {
         .accessibilityAddTraits(.isHeader)
       controls()
     }
-    .padding(.bottom, 20)
+    // 第一排海报聚焦长高后不压住标题下的按钮。
+    .padding(.bottom, PosterCardFocus.topClearance(forImageSize: MediaCard.defaultPosterSize))
   }
 }
 
