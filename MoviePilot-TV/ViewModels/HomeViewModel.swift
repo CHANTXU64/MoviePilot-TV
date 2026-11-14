@@ -31,6 +31,10 @@ class HomeViewModel: ObservableObject {
   @Published var isLoading = true
   /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
   @Published private(set) var inAppPlayableServers: Set<String> = []
+  /// 「最近添加」里海报读不出来的条目改用的 TMDB 海报，键见 `posterFallbackKey`。
+  @Published private(set) var posterFallbacks: [String: URL] = [:]
+  /// 已经找过 TMDB 海报的条目：找不到的这次不再找。
+  private var posterFallbackRequests: Set<String> = []
 
   private let apiService: APIService
   private var latestMediaSelectedServerKey: String? {
@@ -394,8 +398,9 @@ class HomeViewModel: ObservableObject {
     let snapshot = apiService.sessionSnapshot()
     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
     if let itemID = inAppPlaybackItemID(item),
+      // 打开详情页以服务器此刻的识别结果为准（服务器上可能刚改认过），不用记住的。
       let identity = await apiService.sessionScope.playbackCoordinator.libraryItemTMDBIdentity(
-        serverName: selectedLatestMediaServer, itemID: itemID)
+        serverName: selectedLatestMediaServer, itemID: itemID, forceRefresh: true)
     {
       guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
       let typed = MediaInfo(title: item.title, type: identity.mediaType, year: item.subtitle)
@@ -403,6 +408,68 @@ class HomeViewModel: ObservableObject {
     }
     guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
     return await handler.getTMDBJumpTarget(for: info)
+  }
+
+  func posterFallbackURL(for item: MediaServerPlayItem, server: String) -> URL? {
+    posterFallbacks[Self.posterFallbackKey(item, server: server)]
+  }
+
+  /// 海报读不出来（媒体服务器上没有封面，或者图片读不到）时改用这部片的 TMDB 海报：先按条目上的 TMDB 编号
+  /// （能在应用内播放的服务器才读得到，见 `PlaybackCoordinator.libraryItemTMDBIdentity`），读不到时按标题、年份识别。
+  /// 确认找不到（识别不出、TMDB 也没有海报）时这次不再找；请求失败、账号变了的下次再找。
+  /// `server` 是卡片所在的服务器（建卡片时取），不用回调到达时选中的：条目 ID 只在它自己的服务器上有意义。
+  func loadPosterFallback(for item: MediaServerPlayItem, server: String) {
+    let key = Self.posterFallbackKey(item, server: server)
+    guard posterFallbacks[key] == nil, posterFallbackRequests.insert(key).inserted else { return }
+    let snapshot = apiService.sessionSnapshot()
+    let itemID = Self.inAppPlaybackItemID(
+      item, server: server, playableServers: inAppPlayableServers,
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+    Task { [weak self] in
+      guard let self else { return }
+      let result = await self.tmdbPosterURL(for: item, server: server, itemID: itemID)
+      guard self.apiService.isSessionUnchanged(from: snapshot), case .found(let url) = result else {
+        if case .notFound = result {} else { self.posterFallbackRequests.remove(key) }
+        return
+      }
+      self.posterFallbacks[key] = url
+    }
+  }
+
+  private static func posterFallbackKey(_ item: MediaServerPlayItem, server: String) -> String {
+    "\(server)|\(item.id)"
+  }
+
+  private enum PosterLookup {
+    case found(URL)
+    case notFound
+    /// 请求失败或被取消，下次再找。
+    case failed
+  }
+
+  private func tmdbPosterURL(for item: MediaServerPlayItem, server: String, itemID: String?) async -> PosterLookup {
+    var tmdbID: Int?
+    var mediaType = item.type
+    if let itemID,
+      let identity = await apiService.sessionScope.playbackCoordinator.libraryItemTMDBIdentity(
+        serverName: server, itemID: itemID)
+    {
+      tmdbID = identity.tmdbID
+      mediaType = identity.mediaType
+    } else {
+      do {
+        tmdbID = try await apiService.recognizeTmdbId(title: item.title, year: item.subtitle, type: item.type)
+      } catch {
+        return .failed
+      }
+    }
+    guard let tmdbID else { return .notFound }
+    guard !Task.isCancelled else { return .failed }
+    let media = MediaInfo(
+      tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), title: item.title, type: mediaType)
+    guard let detail = try? await apiService.fetchMediaDetail(media: media) else { return .failed }
+    return apiService.getPosterImageUrl(detail).map(PosterLookup.found) ?? .notFound
   }
 
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）

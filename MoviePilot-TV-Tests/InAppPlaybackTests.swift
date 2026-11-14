@@ -1184,6 +1184,111 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endCurrentSession()
   }
 
+  func testFoundLibraryItemIsReusedButWatchStateIsReadFresh() async throws {
+    let host = "lan.playback-tests.local"
+    func movie(positionSeconds: Int64) -> String {
+      #"{"Id":"731","Name":"测试电影","Type":"Movie","ProviderIds":{"Tmdb":"222"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":\#(positionSeconds * 10_000_000)}}"#
+    }
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(host)|tmdb.222": movie(positionSeconds: 1800)]
+      $0.items = ["\(host)|731": movie(positionSeconds: 1800)]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    func searches() -> Int {
+      PlaybackURLProtocol.stub.requests().filter { ($0.url.query ?? "").contains("AnyProviderIdEquals") }.count
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = PlaybackTarget.libraryItem(itemID: "42", expected: expectation(tmdb: "222"))
+    let first = await coordinator.movieProgress(for: target)
+    XCTAssertEqual(first, 0.25)
+    XCTAssertEqual(searches(), 1)
+
+    // 别处又看了一段：缓存里的条目带的是旧续播点，用到时要重新读。
+    PlaybackURLProtocol.stub.configure { $0.items["\(host)|731"] = movie(positionSeconds: 3600) }
+    let second = await coordinator.movieProgress(for: target)
+    XCTAssertEqual(second, 0.5, "续播点以此刻服务器上的为准")
+    XCTAssertEqual(searches(), 1, "找到过的条目不再按外部编号搜")
+
+    await run(coordinator, target)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.startSeconds, 3600, "起播也按此刻的续播点")
+    XCTAssertEqual(searches(), 1)
+    coordinator.endCurrentSession()
+  }
+
+  func testCachedMovieReidentifiedOnServerIsFoundAgain() async throws {
+    let host = "lan.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(host)|tmdb.222": Self.movie(id: "731", tmdb: "222")]
+      $0.items = ["\(host)|731": Self.movie(id: "731", tmdb: "222")]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = PlaybackTarget.libraryItem(itemID: "42", expected: expectation(tmdb: "222"))
+    _ = await coordinator.movieProgress(for: target)
+
+    // 在服务器上把 731 改认成了别的片，真正的 222 是 800：ID 没变，但不能再播 731。
+    PlaybackURLProtocol.stub.configure {
+      $0.items = ["\(host)|731": Self.movie(id: "731", tmdb: "999"), "\(host)|800": Self.movie(id: "800", tmdb: "222")]
+      $0.providerSearch = ["\(host)|tmdb.222": Self.movie(id: "800", tmdb: "222")]
+    }
+    await run(coordinator, target)
+    XCTAssertEqual(streamURL(coordinator)?.path, "/Videos/800/stream.mp4")
+    coordinator.endCurrentSession()
+  }
+
+  func testCachedSeriesThatWasReaddedIsFoundAgain() async {
+    let host = "lan.playback-tests.local"
+    func series(_ id: String) -> String { #"{"Id":"\#(id)","Name":"某剧","Type":"Series","ProviderIds":{"Tmdb":"222"}}"# }
+    let watched = #"{"Items":[{"Id":"e1","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"UserData":{"Played":true}},{"Id":"e2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2}]}"#
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(host)|tmdb.222": series("s1")]
+      $0.episodes = ["\(host)|s1": watched]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = PlaybackTarget.libraryItem(itemID: "s1", expected: expectation("电视剧", tmdb: "222"))
+    let first = await coordinator.seriesProgress(for: target)
+    XCTAssertEqual(first?.upNext?.episode.id, "e2")
+
+    // 删掉重新入库，换了 ID：缓存里的 s1 读集是 404（当作没有集），要重新找到 s9。
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch = ["\(host)|tmdb.222": series("s9")]
+      $0.episodesStatus["\(host)|s1"] = 404
+      $0.episodes = [
+        "\(host)|s9":
+          #"{"Items":[{"Id":"n1","Type":"Episode","ParentIndexNumber":1,"IndexNumber":1,"UserData":{"Played":true}},{"Id":"n2","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2}]}"#
+      ]
+    }
+    let second = await coordinator.seriesProgress(for: target)
+    XCTAssertEqual(second?.upNext?.episode.id, "n2")
+  }
+
+  func testLibraryItemTMDBIdentityIsRemembered() async {
+    let host = "lan.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: host))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["\(host)|731": Self.movie(id: "731", tmdb: "222")]
+    }
+    func itemReads() -> Int {
+      PlaybackURLProtocol.stub.requests().filter { $0.url.host == host && $0.url.path.hasSuffix("/Items/731") }.count
+    }
+    let coordinator = makeCoordinator(makeService())
+    let first = await coordinator.libraryItemTMDBIdentity(serverName: "a", itemID: "731")
+    XCTAssertEqual(first?.tmdbID, 222)
+    XCTAssertEqual(first?.mediaType, "电影")
+    let reads = itemReads()
+    let second = await coordinator.libraryItemTMDBIdentity(serverName: "a", itemID: "731")
+    XCTAssertEqual(second, first)
+    XCTAssertEqual(itemReads(), reads, "同一个条目不再读服务器")
+  }
+
   func testSingleServerPlaysLibraryItemWithoutExternalID() async throws {
     // 只启用了一台服务器时 ID 只可能来自它，条目没刮削编号也照常播放。
     PlaybackURLProtocol.stub.configure {

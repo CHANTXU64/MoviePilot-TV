@@ -311,6 +311,8 @@ struct MediaCard: View {
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
   var onFocus: ((Bool) -> Void)? = nil
+  /// 海报读不出来（没有地址或加载失败）时调用一次，调用方可以找一张替代的海报，从 `posterFallbackUrl` 传进来。
+  var onPosterUnavailable: (() -> Void)? = nil
 
   init(
     title: String = "",
@@ -329,7 +331,8 @@ struct MediaCard: View {
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
     action: (() -> Void)? = nil,
-    onFocus: ((Bool) -> Void)? = nil
+    onFocus: ((Bool) -> Void)? = nil,
+    onPosterUnavailable: (() -> Void)? = nil
   ) {
     self.title = title
     self.posterUrl = posterUrl
@@ -348,6 +351,7 @@ struct MediaCard: View {
     self.isBackgroundBlurred = isBackgroundBlurred
     self.action = action
     self.onFocus = onFocus
+    self.onPosterUnavailable = onPosterUnavailable
   }
 
   var body: some View {
@@ -414,20 +418,28 @@ struct MediaCard: View {
         )
 
       PageManagedImage(
-        url: posterLoadFailed ? posterFallbackUrl : posterUrl,
+        url: posterLoadFailed || posterUrl == nil ? posterFallbackUrl : posterUrl,
         processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
         isEnabled: loadsImage,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
         onFailure: {
           // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+          guard !posterLoadFailed, posterUrl != nil else { return }
           posterLoadFailed = true
+          onPosterUnavailable?()
         }
       )
     }
     .frame(width: width, height: height)
     .onChange(of: posterUrl) { _, _ in
       posterLoadFailed = false
+    }
+    .onAppear {
+      if posterUrl == nil, loadsImage { onPosterUnavailable?() }
+    }
+    .onChange(of: loadsImage) { _, loads in
+      if posterUrl == nil, loads { onPosterUnavailable?() }
     }
     .overlay {
       if showBadges {

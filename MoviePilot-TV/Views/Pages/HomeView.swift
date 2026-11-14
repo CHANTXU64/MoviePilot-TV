@@ -246,6 +246,7 @@ private struct MediaSectionView: View {
               MediaCard(
                 title: item.title,
                 posterUrl: item.imageURLs.image,
+                posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
                 typeText: item.type,
                 ratingText: nil,
                 bottomLeftText: nil,
@@ -263,7 +264,9 @@ private struct MediaSectionView: View {
                     cardKind: .media,
                     usesFocusWindow: memoryOptimization.isEnabled
                   ),
-                action: { opensApp ? openMediaItem(item) : openDetail(item) }
+                action: { opensApp ? openMediaItem(item) : openDetail(item) },
+                // 媒体服务器上没有封面或读不到时，改用 TMDB 海报。
+                onPosterUnavailable: { [selectedServer] in viewModel.loadPosterFallback(for: item, server: selectedServer) }
               )
               .accessibilityHint(opensApp ? "在媒体服务器 App 中打开" : "打开详情")
               .focused($focusedItemId, equals: item.id)

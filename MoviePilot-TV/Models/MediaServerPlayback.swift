@@ -501,6 +501,25 @@ nonisolated struct ServerChapter: Equatable, Sendable {
 
 /// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
 /// 详情页只拿到 MoviePilot 入库表里的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
+/// 媒体服务器条目对应的 TMDB 编号和 MoviePilot 媒体类型（首页「最近添加」打开详情页用）。
+nonisolated struct LibraryItemIdentity: Equatable, Sendable {
+  let tmdbID: Int
+  /// 「电影」或「电视剧」。
+  let mediaType: String
+
+  /// 条目不是电影或整部剧、没刮到有效 TMDB 编号时为 nil。
+  init?(item: ServerMediaItem) {
+    switch item.kind {
+    case .movie: mediaType = "电影"
+    case .series: mediaType = "电视剧"
+    case .episode, .other: return nil
+    }
+    guard let id = MediaIdentifier.validNumericIdentifier(item.externalID(for: "tmdb").flatMap { Int($0) })
+    else { return nil }
+    tmdbID = id
+  }
+}
+
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   /// 条目类型（电影 / 剧集）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
   let kind: ServerMediaItem.Kind?
@@ -543,6 +562,12 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
       }
     }
     self.init(mediaType: media.type, externalIDs: ids, primarySource: primary)
+  }
+
+  /// 缓存键：类型、主身份来源和全部外部编号都一样，找到的是同一个条目。
+  var cacheKey: String {
+    let ids = externalIDs.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+    return "\(kind.map { "\($0)" } ?? "")|\(primarySource ?? "")|\(ids)"
   }
 
   /// 条目是不是要播的那一个。类型不符的不是。条目带着主身份来源的编号时只看它：服务器常把次要来源刮错
