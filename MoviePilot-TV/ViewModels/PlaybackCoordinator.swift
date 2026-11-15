@@ -272,6 +272,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 集索引已作废，这部片的详情页据此重读每集的已播放进度和「继续播放」，别的详情页不动。
   /// 从后台回到前台时也发一次 `WatchStateChange.unknown`，每个详情页都重读。
   let watchStateUpdates = PassthroughSubject<WatchStateChange, Never>()
+  /// 观看进度马上要变（播放器刚关、刚回到前台），`watchStateUpdates` 稍后才发：详情页据此先作废旧的「继续播放」结论，
+  /// 这段时间按「播放」时等新结论，不按旧的播。
+  let watchStateChanging = PassthroughSubject<WatchStateChange, Never>()
   private var watchStateRefreshTask: Task<Void, Never>?
   /// 结束了、还没发出 `watchStateUpdates` 的播放（见 `refreshWatchStateAfterReports`）。
   private var pendingWatchStateChanges: [WatchStateChange] = []
@@ -351,8 +354,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   }
 
   /// 先等调用方定下播什么再起播（详情页剧的「播放」在观看进度读完前按下时），期间同样显示「正在准备播放」、可以取消。
-  /// `decide` 返回 nil 时不起播：调用方改做了别的（比如打开那一集的面板）。
-  func play(media: MediaInfo? = nil, deciding decide: @escaping @MainActor () async -> PlaybackTarget?) {
+  /// `decide` 返回 nil 时不起播：调用方改做了别的（比如打开那一集的面板）；抛错时照常提示失败原因。
+  func play(media: MediaInfo? = nil, deciding decide: @escaping @MainActor () async throws -> PlaybackTarget?) {
     guard !isTornDown, !isBusy, let apiService else { return }
     guard apiService.canRequestSuperUserEndpoints else {
       fail(PlaybackError.notAllowed)
@@ -370,8 +373,16 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let snapshot = apiService.sessionSnapshot()
     let userName = apiService.currentOrStoredUserName
     let task = Task { [weak self] in
-      guard let target = await decide() else {
-        if let self, !Task.isCancelled { self.phase = .idle }
+      let decided: Result<PlaybackTarget?, Error>
+      do { decided = .success(try await decide()) } catch { decided = .failure(error) }
+      guard case .success(let target?) = decided else {
+        guard let self, !Task.isCancelled else { return }
+        self.phase = .idle
+        if case .failure(let error) = decided, !(error is CancellationError),
+          self.apiService?.isSessionUnchanged(from: snapshot) == true
+        {
+          self.fail(error)
+        }
         return
       }
       let outcome: Result<PreparedPlayback, Error>
@@ -394,6 +405,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
     }
     phase = .resolving(task)
+  }
+
+  /// 告诉用户一件事（不是播放失败），比如「继续播放」为什么没法直接播。
+  func inform(_ message: String) {
+    notice = Failure(message: message)
   }
 
   func cancelResolving() {
@@ -422,6 +438,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 停止上报和进度写回由 `session.stop()` 排进上报队列；发完后作废集索引（里面记的续播点、已看完是旧的），再通知详情页重读。
   /// 上一次的还没发出时新的一次又结束了：两次都要发（播的可能是不同的片），等后一次的写回发完一起发。
   private func refreshWatchStateAfterReports(_ change: WatchStateChange) {
+    watchStateChanging.send(change)
     watchStateRefreshTask?.cancel()
     if !pendingWatchStateChanges.contains(change) { pendingWatchStateChanges.append(change) }
     watchStateRefreshTask = Task { [weak self] in
@@ -782,6 +799,16 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       serverRuntimeSeconds: episodes.map { EpisodeAvailability.serverRuntimeSeconds($0, lookups: lookups) },
       watchProgress: episodes.map { EpisodeAvailability.watchProgress($0, lookups: lookups) }
     )
+  }
+
+  /// 这部剧在各台可播放服务器上的集索引（和集卡片、起播同一份，走集索引缓存），详情页的「继续播放」按它对集。
+  /// 不提供应用内播放或读不到媒体服务器配置时为 nil。
+  func episodeLookups(for context: EpisodePlaybackContext) async -> [ServerEpisodeLookup]? {
+    guard !isTornDown, allowsPlayback, let apiService,
+      let servers = try? await apiService.fetchCachedMediaServers(), servers.contains(where: \.supportsInAppPlayback)
+    else { return nil }
+    let lookups = await episodeLookups(context, servers: servers, preferredUserName: apiService.currentOrStoredUserName)
+    return Task.isCancelled ? nil : lookups
   }
 
   /// 在每台可播放的服务器上读这部剧的集索引，单台失败只记在它自己的结果里。各台互不依赖，同时读；

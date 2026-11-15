@@ -369,6 +369,11 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   let confirmedBy: [String: EpisodeConfirmationBasis]
   /// 按季号集号的对应，只留没有确定文件的集。
   let uncertain: [Int: [UncertainFile]]
+  /// 每个文件按季号集号对上的集（服务器条目 ID → TMDB 单集 ID → 依据），含因为那一集已有确定文件、不进 `uncertain` 的：
+  /// 「这份文件是哪一集」（详情页的「继续播放」）要知道它对上过哪一集、有没有反证。多集文件对上几集。
+  let numberMatches: [String: [Int: UncertainEpisodeMatch]]
+  /// 外部编号在 TMDB 指向别的剧的文件（服务器条目 ID）：不管对没对上集，都是它不是这部剧这一集的反证。
+  let conflictingFileIDs: Set<String>
   /// 认不出是哪一集的文件数：没有 TMDB 单集编号，季号集号缺失或认不出，也没对上整理记录。这部剧没找到的集可能就是其中之一
   /// （见 `availability(of:)`）。有季号集号、只是集列表里没有那一集的文件不算在内：按它自己的编号不会是别的集。
   let unidentifiedFileCount: Int
@@ -522,6 +527,12 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     for (file, id, _) in lateMatches { confirm(file, as: id) }
     confirmedBy = Dictionary(lateMatches.map { ($0.file.id, $0.basis) }, uniquingKeysWith: { first, _ in first })
     self.confirmed = confirmed
+    var numberMatches: [String: [Int: UncertainEpisodeMatch]] = [:]
+    for (id, files) in uncertain {
+      for file in files { numberMatches[file.item.id, default: [:]][id] = file.match }
+    }
+    self.numberMatches = numberMatches
+    conflictingFileIDs = Set(plan.files.filter { evidence.conflicts($0) }.map(\.id))
     // 同一集有几份时，编号指向别的剧的排在后面：面板说明、起播和接着播都先用没有冲突的那份（保持服务器原来的顺序）。
     self.uncertain = uncertain.filter { confirmed[$0.key] == nil }.mapValues { files in
       files.filter { !$0.match.identityConflict } + files.filter(\.match.identityConflict)

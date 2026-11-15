@@ -19,8 +19,8 @@ final class SessionScope {
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
   let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
   let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
-  /// 详情页集列表与播放队列共用的季集列表。
-  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 20)
+  /// 详情页集列表、播放队列与「继续播放」对集共用的季集列表。「继续播放」每次读一部剧的全部季，季多的剧也要放得下。
+  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 64)
   let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
   let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
     ttl: 30,

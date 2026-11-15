@@ -254,7 +254,15 @@ private struct EpisodeBrowser: View {
   }
 
   private var needsSeasonLookup: Bool {
-    groupID != nil || MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media)
+    groupID != nil || MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media) || hintsUnlistedSeason
+  }
+
+  /// 「继续播放」要停或要打开面板的那一季不在详情的季里（比如刚出的新季，详情缓存里还没有）：
+  /// 读 MoviePilot 的全部季，让那一季能显示（「继续播放」按的也是全部季）。
+  private var hintsUnlistedSeason: Bool {
+    guard groupID == nil else { return false }
+    let listed = Set(detailSeasons.compactMap(\.season_number))
+    return [pendingPanel?.season, appliedHint?.season].contains { $0.map { !listed.contains($0) } ?? false }
   }
 
   private var seasons: [TmdbSeason] {
@@ -296,6 +304,16 @@ private struct EpisodeBrowser: View {
   private var pendingPanelLoaded: Bool {
     guard let hint = pendingPanel, case .loaded = group.episodeStates[hint.season] else { return false }
     return true
+  }
+
+  /// 要打开面板的那一集打不开了：那一季的集列表读失败，或全部季读完了也没有那一季。
+  private var pendingPanelUnreachable: Bool {
+    guard let hint = pendingPanel else { return false }
+    if case .failed? = group.episodeStates[hint.season] { return true }
+    switch group.seasonLoad {
+    case .loaded?, .failed?: return !seasons.contains { $0.season_number == hint.season }
+    default: return false
+    }
   }
 
   /// 换到 `hint` 那一季，集列表到了打开那一集的面板。
@@ -475,6 +493,10 @@ private struct EpisodeBrowser: View {
       openPanel(hint)
     }
     .onChange(of: pendingPanelLoaded) { _, _ in openPendingPanel() }
+    // 打不开就作罢，不留着等之后重试成功时突然弹出来（集行上照常显示读取失败和重试）。
+    .onChange(of: pendingPanelUnreachable) { _, unreachable in
+      if unreachable { pendingPanel = nil }
+    }
     .onChange(of: rowHint, initial: true) { _, hint in
       guard hint != appliedHint, focus == nil, focusedSeason == nil, group.selectedSeason == nil else { return }
       appliedHint = hint
