@@ -464,10 +464,12 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let runtimeSeconds: Double?
   /// 这个版本的章节，服务器没有时为空。播放界面怎么用见 `PlaybackChapters`。
   let chapters: [ServerChapter]
+  /// 服务器检测出的片尾字幕起点（秒）；没检测或服务器不提供时为 nil。看完的判定见 `PlaybackResumePolicy`。
+  let creditsStartSeconds: Double?
 
   init(
     id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
-    runtimeSeconds: Double? = nil, chapters: [ServerChapter] = []
+    runtimeSeconds: Double? = nil, chapters: [ServerChapter] = [], creditsStartSeconds: Double? = nil
   ) {
     self.id = id
     self.name = name
@@ -475,6 +477,7 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
     self.unsupportedReason = unsupportedReason
     self.runtimeSeconds = runtimeSeconds
     self.chapters = chapters
+    self.creditsStartSeconds = creditsStartSeconds
   }
 
   var isDirectlyPlayable: Bool { unsupportedReason == nil }
@@ -823,14 +826,24 @@ nonisolated enum PlaybackChapters {
   private static func name(at index: Int) -> String { "章节 \(index + 1)" }
 }
 
-/// 续播点：太靠前或接近片尾时直接从头播放。时长见 `PlaybackDuration`。
+/// 已保存的续播点按原有进度规则解释。片尾标记仅用于判断正在观看的条目是否看完。
 nonisolated enum PlaybackResumePolicy {
   static let minimumSeconds: Double = 60
   static let maximumProgress: Double = 0.9
 
+  /// 有效的片尾标记可以把看完提前到片尾起点。没有时长就无法判断看完。
+  static func completionSeconds(durationSeconds: Double?, creditsStartSeconds: Double? = nil) -> Double? {
+    guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return nil }
+    let fallback = durationSeconds * maximumProgress
+    guard let credits = creditsStartSeconds, credits.isFinite, credits >= durationSeconds / 2,
+      credits < durationSeconds
+    else { return fallback }
+    return min(credits, fallback)
+  }
+
   static func resumePosition(positionSeconds: Double, durationSeconds: Double?) -> Double? {
     guard positionSeconds >= minimumSeconds else { return nil }
-    if let durationSeconds, durationSeconds > 0, positionSeconds / durationSeconds >= maximumProgress {
+    if isCompleted(positionSeconds: positionSeconds, durationSeconds: durationSeconds) {
       return nil
     }
     return positionSeconds
@@ -845,9 +858,11 @@ nonisolated enum PlaybackResumePolicy {
     return min(1, max(0, position / durationSeconds))
   }
 
-  /// 播放结束位置达到时长的 90% 视为看完；没有时长就不算看完。
-  static func isCompleted(positionSeconds: Double, durationSeconds: Double?) -> Bool {
-    guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return false }
-    return positionSeconds / durationSeconds >= maximumProgress
+  /// 播放结束位置到了看完的位置（见 `completionSeconds`）视为看完；没有时长就不算看完。
+  static func isCompleted(positionSeconds: Double, durationSeconds: Double?, creditsStartSeconds: Double? = nil) -> Bool {
+    guard
+      let completion = completionSeconds(durationSeconds: durationSeconds, creditsStartSeconds: creditsStartSeconds)
+    else { return false }
+    return positionSeconds >= completion
   }
 }

@@ -617,7 +617,7 @@ final class MediaSession {
     case .statusChanged, .updated:
       refreshPlaybackState()
       syncPlaybackRequestStatus()
-    case .failed:
+    case .failed, .seekStarted, .positionConfirmed:
       break
     }
   }

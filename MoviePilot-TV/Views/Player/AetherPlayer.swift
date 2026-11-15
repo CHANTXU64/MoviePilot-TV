@@ -122,8 +122,9 @@ nonisolated struct SubtitleSpan: Equatable, Sendable {
 // MARK: - 播放器
 
 /// 一次全屏播放用的播放器：包着一个 AetherEngine（每个播放会话一个，会话结束时 `stop()`）。
-/// 状态由引擎的发布值同步过来；播放会话和播放界面经 `observe` 收事件。事件都在下一轮主线程发出：
+/// 状态由引擎的发布值同步过来；播放会话和播放界面经 `observe` 收事件。状态、刷新和失败事件在下一轮主线程发出：
 /// 引擎的发布值在赋值前通知，这时同步处理（比如播完就退出、停掉引擎）会重入引擎正在进行的赋值。
+/// 「开始跳转」和「位置已确认」同步发出，处理方只记位置、不碰引擎，退出时读得到最后一次采样。
 /// 事件带发生时所属载入的 `generation`，换条目后才处理到的上一条目的事件按它丢弃。
 @MainActor
 @Observable
@@ -147,6 +148,10 @@ final class AetherPlayer {
     case updated
     /// 播放失败。载入期间的失败在载入返回时报，之后的失败在状态变成出错时报，每次载入只报一次。
     case failed(PlaybackFailure)
+    /// 包含引擎接到的系统拖动和应用内跳转。
+    case seekStarted
+    /// 已出画面且未处于跳转中的位置。同步交给进度上报，退出时可以读到最后一次采样。
+    case positionConfirmed(Double, isPlaying: Bool)
   }
 
   /// 字幕偏移能调到的最大幅度（秒），与播放界面的调节范围一致。
@@ -174,7 +179,6 @@ final class AetherPlayer {
   @ObservationIgnored private(set) var generation: UInt64 = 0
   /// 最近一次交给引擎的地址，可能含密钥，不得写入日志。
   @ObservationIgnored private(set) var loadedURL: URL?
-
   @ObservationIgnored private let engine: AetherEngine?
   @ObservationIgnored private let events = PassthroughSubject<(Event, UInt64), Never>()
   @ObservationIgnored private let positions = PassthroughSubject<Double, Never>()
@@ -369,11 +373,12 @@ final class AetherPlayer {
         isAwaitingSeekStart = true
         awaitedSeekEventID = nil
         Task {
-          await engine.seek(to: seconds)
+          // 与原先 mpv 的 absolute+exact 一致：AV1 软件解码时引擎默认落在附近的关键帧上，章节、片头和快进快退都会偏。
+          await engine.seek(to: seconds, exact: true)
         }
-        // 跳转事件总会到；万一没到，不让调用方一直等。
+        // 成败以引擎的跳转结果为准：慢速片源的原生跳转最坏约 44 秒才报卡住。这里只防引擎一直不回事件。
         Task { [weak self] in
-          try? await Task.sleep(for: .seconds(20))
+          try? await Task.sleep(for: .seconds(60))
           guard let self, self.seekWaiterID == id else { return }
           self.resolveSeekWaiter(false)
         }
@@ -414,7 +419,12 @@ final class AetherPlayer {
       publisher.sink { [weak self] in self?.scheduleUpdate() }.store(in: &subscriptions)
     }
     engine.seekEvents.sink { [weak self] in self?.seekDidChange($0) }.store(in: &subscriptions)
-    engine.clock.$currentTime.sink { [weak self] in self?.positions.send($0) }.store(in: &subscriptions)
+    engine.clock.$currentTime.sink { [weak self] time in
+      guard let self else { return }
+      self.positions.send(time)
+      self.confirmPosition(time)
+    }
+    .store(in: &subscriptions)
     engine.clock.$sourceTime.sink { [weak self] in self?.subtitles.update(time: $0) }.store(in: &subscriptions)
     engine.$subtitleCues.sink { [weak self] in self?.subtitles.update(cues: $0.map(TimedSubtitle.init)) }
       .store(in: &subscriptions)
@@ -436,6 +446,16 @@ final class AetherPlayer {
         self.restoreVideo(playing: false)
       }
       .store(in: &subscriptions)
+  }
+
+  /// 载入和跳转时引擎也会更新时钟，等画面就绪才把位置交给观看记录。
+  private func confirmPosition(_ time: Double) {
+    guard let engine, time.isFinite, engine.hasFirstFrameReadyForDisplay, !engine.isSeeking else { return }
+    switch status {
+    case .playing, .paused, .ended:
+      events.send((.positionConfirmed(max(0, time), isPlaying: status == .playing && !engine.isBuffering), generation))
+    case .idle, .loading, .seeking, .failed: break
+    }
   }
 
   private func setStatus(_ next: Status) {
@@ -523,6 +543,7 @@ final class AetherPlayer {
   /// 只认正在等的那次跳转的事件。引擎先给上一次还没收尾的跳转发「被取代」，再给新跳转发「开始」；
   /// 卡住的跳转之后还可能落定。被拒的跳转没有「开始」，只有一条「被拒」。
   private func seekDidChange(_ event: SeekEvent) {
+    if event.outcome == .began { events.send((.seekStarted, generation)) }
     guard seekWaiter != nil, event.origin != .nativeScrub else { return }
     if isAwaitingSeekStart {
       switch event.outcome {
@@ -705,5 +726,25 @@ enum PlaybackEngineLog {
 
   static func detach(_ session: PlaybackSession) {
     if sink === session { sink = nil }
+  }
+
+  /// 引擎写系统日志时只认得出 `api_key` 这类常见密钥名，服务器主机名和设备标识会原样留下。
+  /// 起播时把流地址里这几样登记给引擎遮盖，返回登记成功的值，停止或换条目时交回 `unregister`。
+  static func register(secretsIn url: URL) -> [String] {
+    secrets(in: url).filter { EngineLog.registerSecret($0) }
+  }
+
+  static func unregister(_ secrets: [String]) {
+    secrets.forEach { EngineLog.unregisterSecret($0) }
+  }
+
+  /// 流地址里不该进系统日志的值：主机名、设备标识和访问密钥。
+  nonisolated static func secrets(in url: URL) -> [String] {
+    let sensitiveKeys: Set<String> = ["deviceid", "api_key", "x-emby-token", "x-mediabrowser-token", "token"]
+    let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    let values = query.filter { sensitiveKeys.contains($0.name.lowercased()) }.compactMap(\.value)
+    var seen = Set<String>()
+    return ([url.host(percentEncoded: false)].compactMap { $0 } + values)
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 }

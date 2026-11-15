@@ -172,6 +172,28 @@ final class InAppPlaybackModelTests: XCTestCase {
       SubtitlePresentation.pictureFrame(of: same, canvas: CGSize(width: 1920, height: 1080), codedVideo: .zero), same)
   }
 
+  func testReportedPositionWaitsForThePlayerToConfirmIt() {
+    XCTAssertEqual(
+      PlaybackSession.reportedPosition(confirmed: nil, startPosition: 1800), 1800,
+      "首帧出来前（引擎的时钟这时是 0）按起播位置上报，不把续播点写成 0")
+    XCTAssertEqual(PlaybackSession.reportedPosition(confirmed: 1834.5, startPosition: 1800), 1834.5)
+    XCTAssertEqual(PlaybackSession.reportedPosition(confirmed: 0, startPosition: 1800), 0, "确认过的 0 照常上报")
+    XCTAssertEqual(PlaybackSession.reportedPosition(confirmed: .nan, startPosition: 1800), 0)
+    XCTAssertEqual(PlaybackSession.reportedPosition(confirmed: -3, startPosition: 1800), 0)
+  }
+
+  func testStreamHostDeviceAndKeyAreMaskedInEngineLogs() throws {
+    let url = try XCTUnwrap(
+      URL(
+        string:
+          "https://emby.home.example:8920/emby/Videos/m1/stream.mkv?Static=true&MediaSourceId=src1&DeviceId=dev-123&api_key=k-456&PlaySessionId=ps1"
+      ))
+    XCTAssertEqual(PlaybackEngineLog.secrets(in: url), ["emby.home.example", "dev-123", "k-456"])
+    XCTAssertEqual(
+      PlaybackEngineLog.secrets(in: try XCTUnwrap(URL(string: "http://192.168.1.2:8096/Videos/m1/stream?Static=true"))),
+      ["192.168.1.2"], "没有设备标识和密钥时只遮主机")
+  }
+
   @MainActor
   func testSubtitleAlignmentFollowsASSNumpad() {
     XCTAssertEqual(SubtitleAnchor.alignment(nil), 2, "没给对齐时放在底部居中")
@@ -326,6 +348,44 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(
       PlaybackLog.redacted("lavf: Static=true&api_key=abc123&DeviceId=d"),
       "lavf: Static=true&api_key=<redacted>&DeviceId=d")
+  }
+
+  func testCompletionFollowsCreditsStartButNeverLaterThanNinetyPercent() {
+    let twoHours: Double = 7200
+    typealias P = PlaybackResumePolicy
+    // 片尾从 80% 开始，只影响这次观看的看完判定。
+    XCTAssertEqual(P.completionSeconds(durationSeconds: twoHours, creditsStartSeconds: 5760), 5760)
+    XCTAssertTrue(P.isCompleted(positionSeconds: 5800, durationSeconds: twoHours, creditsStartSeconds: 5760))
+    XCTAssertFalse(P.isCompleted(positionSeconds: 5700, durationSeconds: twoHours, creditsStartSeconds: 5760))
+    XCTAssertFalse(P.isCompleted(positionSeconds: 5800, durationSeconds: twoHours), "没有片尾起点时仍按 90%")
+
+    // 片尾从 97% 才开始：仍是 90% 算看完，和 Emby 服务器一致，不写出「已看完但还有续播点」。
+    XCTAssertEqual(P.completionSeconds(durationSeconds: twoHours, creditsStartSeconds: 6984), 6480)
+    XCTAssertTrue(P.isCompleted(positionSeconds: 6500, durationSeconds: twoHours, creditsStartSeconds: 6984))
+
+    // 不在后半段、或不在片长之内的片尾起点当作误检。
+    XCTAssertEqual(P.completionSeconds(durationSeconds: twoHours, creditsStartSeconds: 1200), 6480)
+    XCTAssertEqual(P.completionSeconds(durationSeconds: twoHours, creditsStartSeconds: 7200), 6480)
+    XCTAssertEqual(P.completionSeconds(durationSeconds: twoHours, creditsStartSeconds: .nan), 6480)
+    XCTAssertNil(P.completionSeconds(durationSeconds: nil, creditsStartSeconds: 5760), "没有时长不判看完")
+    XCTAssertFalse(P.isCompleted(positionSeconds: 7000, durationSeconds: nil, creditsStartSeconds: 5760))
+  }
+
+  func testEmbyCreditsMarkerBecomesTheSourceCreditsStart() throws {
+    let source = try decode(
+      EmbyMediaSource.self,
+      #"""
+      {"Id":"src1","Container":"mkv","Protocol":"File","MediaStreams":[],"Chapters":[
+        {"StartPositionTicks":0,"Name":"开场","MarkerType":"Chapter"},
+        {"StartPositionTicks":58000000000,"Name":"","MarkerType":"CreditsStart"},
+        {"StartPositionTicks":57600000000,"Name":"","MarkerType":"CreditsStart"},
+        {"StartPositionTicks":900000000,"Name":"","MarkerType":"IntroEnd"}]}
+      """#)
+    let server = source.serverSource()
+    XCTAssertEqual(server.creditsStartSeconds, 5760, "有多个片尾标记时取最早的")
+    XCTAssertEqual(server.chapters.map(\.name), ["开场"], "片尾标记不当章节")
+    let plain = try decode(EmbyMediaSource.self, #"{"Id":"src2","Container":"mkv","MediaStreams":[]}"#)
+    XCTAssertNil(plain.serverSource().creditsStartSeconds)
   }
 
   func testResumePolicySkipsStartAndNearEnd() {
@@ -1184,6 +1244,152 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.play(.serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNil(coordinator.resolveTaskForTesting, "播放期间不重复开始解析")
     coordinator.endCurrentSession()
+  }
+
+  private func configureMovieWithCredits(resumeAt seconds: Int64) {
+    let credits = #","RunTimeTicks":72000000000,"Chapters":[{"StartPositionTicks":57600000000,"MarkerType":"CreditsStart"}]"#
+    let movie = #"{"Id":"m1","Name":"测试电影","Type":"Movie","RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":\#(seconds * 10_000_000),"Played":false}}"#
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": movie]
+      $0.playbackInfo =
+        #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"mkv","Protocol":"File","MediaStreams":[]\#(credits)}]}"#
+    }
+  }
+
+  func testExistingResumePointInCreditsMatchesDetailProgressAndSurvivesExit() async throws {
+    configureMovieWithCredits(resumeAt: 5800)
+    let target = PlaybackTarget.serverItem(serverName: "emby", itemID: "m1")
+    let coordinator = makeCoordinator(makeService())
+    let progress = await coordinator.movieProgress(for: target)
+    XCTAssertEqual(try XCTUnwrap(progress), 5800.0 / 7200, accuracy: 0.0001)
+    await run(coordinator, target)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.startSeconds, 5800)
+    session.start()
+    coordinator.endSession(session)
+    await coordinator.reporterForTesting.waitForQueued()
+    let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 58_000_000_000)
+    XCTAssertEqual(saved["Played"] as? Bool, false)
+  }
+
+  func testPreviewingCreditsKeepsTheLastWatchedPositionWhenBackgroundingAndExiting() async throws {
+    configureMovieWithCredits(resumeAt: 1800)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    session.onFailure = { _ in }
+    session.start()
+    let generation = try XCTUnwrap(session.player).generation
+    session.handle(.positionConfirmed(3600, isPlaying: true), generation: generation)
+    // 跳到片尾里预览了 7 秒（不到 10 秒），切到后台。
+    session.handle(.seekStarted, generation: generation)
+    session.handle(.positionConfirmed(5800, isPlaying: false), generation: generation)
+    session.handle(.positionConfirmed(5801, isPlaying: true), generation: generation)
+    session.handle(.positionConfirmed(5808, isPlaying: true), generation: generation)
+    coordinator.saveProgressForBackground()
+    await coordinator.reporterForTesting.waitForQueued()
+    let background = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(background["PlaybackPositionTicks"] as? Int64, 36_000_000_000)
+    XCTAssertEqual(background["Played"] as? Bool, false)
+
+    // 跳到片尾前几秒并播过片尾点，也保留跳转前的进度。
+    session.handle(.seekStarted, generation: generation)
+    session.handle(.positionConfirmed(5757, isPlaying: true), generation: generation)
+    session.handle(.positionConfirmed(5762, isPlaying: true), generation: generation)
+    coordinator.endSession(session)
+    await coordinator.reporterForTesting.waitForQueued()
+    let stopped = try lastPlaybackRequestBody(path: "/Sessions/Playing/Stopped")
+    XCTAssertEqual(stopped["PositionTicks"] as? Int64, 36_000_000_000)
+    let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 36_000_000_000)
+    XCTAssertEqual(saved["Played"] as? Bool, false)
+  }
+
+  func testContinuingThroughCreditsAfterWatchingTheMovieMarksItPlayed() async throws {
+    configureMovieWithCredits(resumeAt: 1800)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    session.start()
+    let generation = try XCTUnwrap(session.player).generation
+    session.handle(.positionConfirmed(3600, isPlaying: true), generation: generation)
+    session.handle(.seekStarted, generation: generation)
+    session.handle(.positionConfirmed(5740, isPlaying: true), generation: generation)
+    session.handle(.positionConfirmed(5751, isPlaying: true), generation: generation)
+    session.handle(.positionConfirmed(5761, isPlaying: true), generation: generation)
+    coordinator.endSession(session)
+    await coordinator.reporterForTesting.waitForQueued()
+    let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 0)
+    XCTAssertEqual(saved["Played"] as? Bool, true)
+  }
+
+  /// 看到一半后跳过尾声、跳进片尾（或 90% 之后），接着连续看满 10 秒：是在看，不是预览，算看完。
+  func testWatchingOnAfterSkippingIntoTheEndMarksItPlayed() async throws {
+    for (name, landing) in [("跳进片尾（80% 起）", 5800.0), ("跳到 90% 之后", 6600.0)] {
+      PlaybackURLProtocol.stub.reset()
+      configureMovieWithCredits(resumeAt: 1800)
+      let coordinator = makeCoordinator(makeService())
+      await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+      let session = try XCTUnwrap(coordinator.session)
+      session.onFailure = { _ in }
+      session.start()
+      let generation = try XCTUnwrap(session.player).generation
+      session.handle(.positionConfirmed(3600, isPlaying: true), generation: generation)
+      session.handle(.seekStarted, generation: generation)
+      session.handle(.positionConfirmed(landing, isPlaying: true), generation: generation)
+      session.handle(.positionConfirmed(landing + 6, isPlaying: true), generation: generation)
+      session.handle(.positionConfirmed(landing + 11, isPlaying: true), generation: generation)
+      coordinator.endSession(session)
+      await coordinator.reporterForTesting.waitForQueued()
+      let stopped = try lastPlaybackRequestBody(path: "/Sessions/Playing/Stopped")
+      XCTAssertEqual(stopped["PositionTicks"] as? Int64, Int64((landing + 11) * 10_000_000), name)
+      let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+      XCTAssertEqual(saved["Played"] as? Bool, true, name)
+      XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 0, name)
+    }
+  }
+
+  private func lastPlaybackRequestBody(path: String) throws -> [String: Any] {
+    let request = try XCTUnwrap(PlaybackURLProtocol.stub.requests().last { $0.method == "POST" && $0.url.path == path })
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+  }
+
+  /// 续播时首帧还没出来就退出：引擎这时的时钟是 0，停止上报和写回仍是原来的续播点。
+  /// 走真实的播放界面和播放器；测试地址打不开，引擎始终到不了首帧，正好是这种情况。
+  func testLeavingBeforeTheFirstFrameKeepsTheResumePoint() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie(positionSeconds: 1800)]
+      $0.playbackInfo = Self.playbackInfo(container: "mkv")
+    }
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.startSeconds, 1800)
+    session.onFailure = { _ in }
+    let screen = MediaSession(
+      session: session, onExit: { _ in }, onSwitchItem: { _, _, _, _, completion in completion(.discarded) })
+    let before = PlaybackURLProtocol.stub.requests().count
+    screen.start()
+    XCTAssertEqual(session.player?.position, 0, "引擎载入时把时钟清零")
+
+    coordinator.endSession(session)
+    await reporter.waitForQueued()
+    let requests = PlaybackURLProtocol.stub.requests().dropFirst(before)
+    func body(_ path: String) throws -> [String: Any] {
+      let request = try XCTUnwrap(requests.last { "\($0.method) \($0.url.path)" == path }, path)
+      return try XCTUnwrap(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+    }
+    XCTAssertEqual(try body("POST /Sessions/Playing/Stopped")["PositionTicks"] as? Int64, 18_000_000_000)
+    XCTAssertEqual(
+      try body("POST /Users/u-admin/Items/m1/UserData")["PlaybackPositionTicks"] as? Int64, 18_000_000_000,
+      "续播点不被写成 0")
   }
 
   func testMKVPlaysDirectlyWithoutTranscoding() async throws {

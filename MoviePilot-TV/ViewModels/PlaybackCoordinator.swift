@@ -2360,12 +2360,20 @@ final class PlaybackSession: Identifiable {
   nonisolated deinit {}
 
   static let progressInterval: Double = 10
+  private static let minimumPlaybackAfterSeek: Double = 10
+
+  private enum ViewingState {
+    case watching
+    case afterSeek(firstPlayingPosition: Double?)
+  }
 
   let id = UUID()
   /// 在播放界面出现时创建，未展示就不启动解码。
   private(set) var player: AetherPlayer?
   /// 当前条目已经记进日志的 FFmpeg 警告和错误条数（见 `recordEngineLog`）。
   private var loggedEngineMessages = 0
+  /// 登记给引擎在系统日志里遮盖的值（见 `PlaybackEngineLog.register`），换条目或停止时注销。
+  private var registeredLogSecrets: [String] = []
   /// FFmpeg 打开当前文件时报过有轨道的封装压缩解不开（MKV 的 zlib 压缩轨：这版 FFmpeg 没编 zlib）。
   /// 只是字幕轨压缩时字幕不显示；画面或声音压缩时解不出来，播放失败时据此说明原因。
   private var sawUnsupportedTrackEncoding = false
@@ -2376,6 +2384,8 @@ final class PlaybackSession: Identifiable {
 
   private var prepared: PreparedPlayback
   private var startPosition: Double
+  private var confirmedPosition: Double?
+  private var viewingState: ViewingState = .watching
   /// 当前条目已交给播放器；换条目后等播放界面再次调用 `start()`。
   private var isItemLoaded = false
   private(set) var isStopped = false
@@ -2428,7 +2438,12 @@ final class PlaybackSession: Identifiable {
   static let engineLogLimit = 50
 
   private var currentSeconds: Double {
-    let seconds = player?.position ?? 0
+    Self.reportedPosition(confirmed: confirmedPosition, startPosition: startPosition)
+  }
+
+  /// 首帧前退出时，继续使用起播位置作为观看进度。
+  nonisolated static func reportedPosition(confirmed: Double?, startPosition: Double) -> Double {
+    let seconds = confirmed ?? startPosition
     return seconds.isFinite ? max(0, seconds) : 0
   }
 
@@ -2438,6 +2453,8 @@ final class PlaybackSession: Identifiable {
     let player = makePlayer()
     if playerObservation == nil { observe(player) }
     PlaybackEngineLog.attach(self)
+    PlaybackEngineLog.unregister(registeredLogSecrets)
+    registeredLogSecrets = PlaybackEngineLog.register(secretsIn: streamURL)
     player.load(streamURL, startTime: startPosition > 0 ? startPosition : nil)
     guard !isStopped else { return }
     itemDidLoad()
@@ -2462,6 +2479,8 @@ final class PlaybackSession: Identifiable {
     sawUnsupportedTrackEncoding = false
     prepared = next
     self.startPosition = startPosition
+    confirmedPosition = nil
+    viewingState = .watching
     lastReportedPause = false
   }
 
@@ -2474,6 +2493,8 @@ final class PlaybackSession: Identifiable {
     progressTask = nil
     player?.stop()
     PlaybackEngineLog.detach(self)
+    PlaybackEngineLog.unregister(registeredLogSecrets)
+    registeredLogSecrets = []
     onFailure = nil
   }
 
@@ -2505,11 +2526,34 @@ final class PlaybackSession: Identifiable {
   /// 停在 `position` 时要写回的观看进度（测试也直接调用：测试里播放器不会真的播到这个位置）。
   func watchProgress(at position: Double) -> WatchProgress {
     let duration = prepared.durationSeconds(playerSeconds: player?.duration)
+    let completion = completionSeconds(duration: duration)
+    // 从服务端记录的片尾位置续播时，按通常的 90% 判定，避免一打开就清掉续播点。
+    let hasReachedCredits = completion.map { startPosition < $0 && position >= $0 } ?? false
     return WatchProgress(
       itemID: prepared.item.id,
-      completed: PlaybackResumePolicy.isCompleted(positionSeconds: position, durationSeconds: duration),
+      completed: hasReachedCredits || PlaybackResumePolicy.isCompleted(positionSeconds: position, durationSeconds: duration),
       positionSeconds: position,
       playedAt: Date())
+  }
+
+  private func completionSeconds(duration: Double?) -> Double? {
+    PlaybackResumePolicy.completionSeconds(
+      durationSeconds: duration, creditsStartSeconds: prepared.stream.source.creditsStartSeconds)
+  }
+
+  private func confirmViewingPosition(_ position: Double, isPlaying: Bool) {
+    if case .afterSeek(let firstPlayingPosition) = viewingState {
+      guard isPlaying else { return }
+      // 跳转后连续播满一小段才采用新位置，落在片尾里也一样：跳到片尾看几秒就退出、拖到最后几秒直接播完，
+      // 都保留跳转前的进度；跳过尾声后接着看下去（含看完片尾）照常算看完。
+      let first = min(firstPlayingPosition ?? position, position)
+      guard position - first >= Self.minimumPlaybackAfterSeek else {
+        viewingState = .afterSeek(firstPlayingPosition: first)
+        return
+      }
+      viewingState = .watching
+    }
+    confirmedPosition = position
   }
 
   // MARK: - 播放器
@@ -2544,6 +2588,10 @@ final class PlaybackSession: Identifiable {
       handlePauseChange(isPaused: true)
     case .statusChanged(.playing):
       handlePauseChange(isPaused: false)
+    case .seekStarted:
+      if isItemLoaded { viewingState = .afterSeek(firstPlayingPosition: nil) }
+    case .positionConfirmed(let position, let isPlaying):
+      if isItemLoaded { confirmViewingPosition(position, isPlaying: isPlaying) }
     case .statusChanged, .updated:
       break
     }

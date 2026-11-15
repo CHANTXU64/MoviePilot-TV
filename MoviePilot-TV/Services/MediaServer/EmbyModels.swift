@@ -312,7 +312,13 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
-      chapters: serverChapters(itemID: trimmedNonEmpty([itemID, fallbackItemID]), image: chapterImage))
+      chapters: serverChapters(itemID: trimmedNonEmpty([itemID, fallbackItemID]), image: chapterImage),
+      creditsStartSeconds: creditsStartSeconds)
+  }
+
+  /// Emby 4.8 起检测出的片尾字幕起点，放在章节列表里的 `CreditsStart` 标记；有多个时取最早的。
+  var creditsStartSeconds: Double? {
+    chapters.filter { $0.markerType == "CreditsStart" }.compactMap(\.startPositionTicks).min().map(EmbyTicks.seconds)
   }
 
   /// 只取普通章节。Emby 把片头、片尾检测的标记（`IntroStart`、`CreditsStart` 等）也放在章节列表里，它们不是章节。
