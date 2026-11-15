@@ -165,6 +165,7 @@ final class AetherPlayer {
   let subtitles = SubtitlePresentation()
 
   private(set) var audioTracks: [PlayerTrack] = []
+  private(set) var hasDroppedAudio = false
   private(set) var subtitleTracks: [PlayerTrack] = []
   private(set) var selectedAudioTrackID: Int?
   /// 正在显示的字幕轨；字幕关闭时为 nil。
@@ -190,12 +191,14 @@ final class AetherPlayer {
   @ObservationIgnored private var isUpdateScheduled = false
   @ObservationIgnored private var rate: Double = 1
   @ObservationIgnored private var audioDelay: Double = 0
-  @ObservationIgnored private var seekWaiter: CheckedContinuation<Bool, Never>?
+  private struct SeekWaiter {
+    let continuation: CheckedContinuation<Bool, Never>
+    let timeout: Task<Void, Never>
+    /// 为 nil 时等首次开始，或等 deferred 交接后的实际跳转。
+    var eventID: UInt64?
+  }
+  @ObservationIgnored private var seekWaiter: SeekWaiter?
   @ObservationIgnored private var seekWaiterID: UInt64 = 0
-  /// 正在等的跳转还没收到引擎的「开始」：这期间到的上一次跳转的收尾事件不算它的。
-  @ObservationIgnored private var isAwaitingSeekStart = false
-  /// 正在等的跳转在引擎里的编号，只认这个编号的收尾事件。
-  @ObservationIgnored private var awaitedSeekEventID: UInt64?
 
   init() {
     do {
@@ -207,8 +210,8 @@ final class AetherPlayer {
     guard let engine else { return }
     // 应用自己不放别的声音：停止播放时交还音频会话，功放不会一直循环最后一帧 Atmos。
     engine.deactivatesAudioSessionOnStop = true
-    // 字幕偏移只往后的部分要保留已过的字幕；往前偏移不预读，免得为字幕把远端文件再下载一遍（主读取够覆盖几秒的提前量）。
-    // 代价：往前跳转后，落点时正在显示的那句文字字幕不出现，等下一句；用户已接受（Emby 等客户端同样如此）。
+    // 关闭持续的字幕提前预读，避免重复读取远端文件。文字靠主读取，跳转可能错过落点前已开始的那句。
+    // PGS 等图片轨仍会在起播和跳转落点补读，远端可能为此额外传输一个 32 MiB 的 Range。
     engine.maximumSubtitleDelaySeconds = Self.subtitleOffsetLimit
     engine.maximumSubtitleAdvanceSeconds = 0
     subscribe(to: engine)
@@ -282,6 +285,7 @@ final class AetherPlayer {
     setStatus(.loading)
     subtitles.reset()
     audioDelay = 0
+    hasDroppedAudio = false
     resolveSeekWaiter(false)
     guard let engine else {
       reportFailure(
@@ -291,6 +295,7 @@ final class AetherPlayer {
     }
     var options = LoadOptions()
     options.preferredSubtitleLanguages = Self.preferredSubtitleLanguages
+    options.skipsContainerAttachments = true
     options.matchContentEnabled = DisplayModeGate.currentDisplay?.isDisplayCriteriaMatchingEnabled ?? true
     loadTask = Task { [weak self] in
       do {
@@ -311,6 +316,7 @@ final class AetherPlayer {
     loadTask = nil
     generation += 1
     returnedLoadGeneration = nil
+    hasDroppedAudio = false
     resolveSeekWaiter(false)
     subtitles.reset()
     engine?.stop(resetDisplayCriteria: !keepsDisplayMode, finalTeardown: !keepsDisplayMode)
@@ -363,24 +369,30 @@ final class AetherPlayer {
 
   /// 跳到 `seconds`，等跳转落定（或被拒、卡住、被取代）后返回是否成功。一次只等一个跳转。
   func seek(to seconds: Double) async -> Bool {
-    guard let engine, seconds.isFinite else { return false }
-    resolveSeekWaiter(true)
+    guard let engine else { return false }
+    return await seek(to: seconds) { target in
+      // AV1 软件路径需要指定精确模式，章节、片头和快进快退才能按指定位置落点。
+      await engine.seek(to: target, exact: true)
+    }
+  }
+
+  /// 回调可由测试驱动引擎事件的发布顺序。
+  func seek(to seconds: Double, request: @escaping @MainActor (Double) async -> Void) async -> Bool {
+    guard seconds.isFinite, !Task.isCancelled else { return false }
+    resolveSeekWaiter(false)
     seekWaiterID &+= 1
     let id = seekWaiterID
     return await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
-        seekWaiter = continuation
-        isAwaitingSeekStart = true
-        awaitedSeekEventID = nil
-        Task {
-          // 与原先 mpv 的 absolute+exact 一致：AV1 软件解码时引擎默认落在附近的关键帧上，章节、片头和快进快退都会偏。
-          await engine.seek(to: seconds, exact: true)
-        }
-        // 成败以引擎的跳转结果为准：慢速片源的原生跳转最坏约 44 秒才报卡住。这里只防引擎一直不回事件。
-        Task { [weak self] in
-          try? await Task.sleep(for: .seconds(60))
-          guard let self, self.seekWaiterID == id else { return }
+        // 原生跳转最坏约 44 秒才报卡住。只在引擎一直没有给出结果时使用这个兜底。
+        let timeout = Task { [weak self] in
+          guard (try? await Task.sleep(for: .seconds(60))) != nil, let self, self.seekWaiterID == id else { return }
           self.resolveSeekWaiter(false)
+        }
+        seekWaiter = SeekWaiter(continuation: continuation, timeout: timeout)
+        Task { [weak self] in
+          guard let self, self.seekWaiterID == id, self.seekWaiter != nil else { return }
+          await request(seconds)
         }
       }
     } onCancel: {
@@ -392,11 +404,10 @@ final class AetherPlayer {
   }
 
   private func resolveSeekWaiter(_ succeeded: Bool) {
-    isAwaitingSeekStart = false
-    awaitedSeekEventID = nil
     guard let waiter = seekWaiter else { return }
     seekWaiter = nil
-    waiter.resume(returning: succeeded)
+    waiter.timeout.cancel()
+    waiter.continuation.resume(returning: succeeded)
   }
 
   // MARK: 引擎回调
@@ -419,15 +430,17 @@ final class AetherPlayer {
       publisher.sink { [weak self] in self?.scheduleUpdate() }.store(in: &subscriptions)
     }
     engine.seekEvents.sink { [weak self] in self?.seekDidChange($0) }.store(in: &subscriptions)
-    engine.clock.$currentTime.sink { [weak self] time in
-      guard let self else { return }
-      self.positions.send(time)
-      self.confirmPosition(time)
+    engine.clock.$currentTime.sink { [weak self, weak engine] time in
+      guard let self, let engine else { return }
+      self.clockDidChange(
+        time, status: self.status, hasFirstFrame: engine.hasFirstFrameReadyForDisplay,
+        isSeeking: engine.isSeeking, isBuffering: engine.isBuffering)
     }
     .store(in: &subscriptions)
     engine.clock.$sourceTime.sink { [weak self] in self?.subtitles.update(time: $0) }.store(in: &subscriptions)
     engine.$subtitleCues.sink { [weak self] in self?.subtitles.update(cues: $0.map(TimedSubtitle.init)) }
       .store(in: &subscriptions)
+    engine.$audioDelivery.sink { [weak self] in self?.audioDeliveryDidChange($0) }.store(in: &subscriptions)
     engine.$audioTracks.sink { [weak self] in self?.audioTracks = $0.map(PlayerTrack.init) }
       .store(in: &subscriptions)
     engine.$subtitleTracks.sink { [weak self] in self?.subtitleTracks = $0.map(PlayerTrack.init) }
@@ -448,12 +461,18 @@ final class AetherPlayer {
       .store(in: &subscriptions)
   }
 
-  /// 载入和跳转时引擎也会更新时钟，等画面就绪才把位置交给观看记录。
-  private func confirmPosition(_ time: Double) {
-    guard let engine, time.isFinite, engine.hasFirstFrameReadyForDisplay, !engine.isSeeking else { return }
+  func audioDeliveryDidChange(_ delivery: AudioDelivery) {
+    let dropped = delivery == .droppedNoPipeline
+    if hasDroppedAudio != dropped { hasDroppedAudio = dropped }
+  }
+
+  /// 跳转目标照常给进度条。引擎可能先发布 deferred 目标再发「开始」，观看记录从请求发出时就开始等。
+  func clockDidChange(_ time: Double, status: Status, hasFirstFrame: Bool, isSeeking: Bool, isBuffering: Bool) {
+    positions.send(time)
+    guard time.isFinite, hasFirstFrame, !isSeeking, seekWaiter == nil else { return }
     switch status {
     case .playing, .paused, .ended:
-      events.send((.positionConfirmed(max(0, time), isPlaying: status == .playing && !engine.isBuffering), generation))
+      events.send((.positionConfirmed(max(0, time), isPlaying: status == .playing && !isBuffering), generation))
     case .idle, .loading, .seeking, .failed: break
     }
   }
@@ -540,16 +559,14 @@ final class AetherPlayer {
     if videoSize != size { videoSize = size }
   }
 
-  /// 只认正在等的那次跳转的事件。引擎先给上一次还没收尾的跳转发「被取代」，再给新跳转发「开始」；
-  /// 卡住的跳转之后还可能落定。被拒的跳转没有「开始」，只有一条「被拒」。
-  private func seekDidChange(_ event: SeekEvent) {
+  /// Deferred 交接会结束旧编号，随后才开始实际跳转。只有实际落定才向命令调用方返回成功。
+  func seekDidChange(_ event: SeekEvent) {
     if event.outcome == .began { events.send((.seekStarted, generation)) }
-    guard seekWaiter != nil, event.origin != .nativeScrub else { return }
-    if isAwaitingSeekStart {
+    guard let waiter = seekWaiter, event.origin != .nativeScrub else { return }
+    guard let awaitedEventID = waiter.eventID else {
       switch event.outcome {
       case .began:
-        isAwaitingSeekStart = false
-        awaitedSeekEventID = event.id
+        seekWaiter?.eventID = event.id
       case .rejected:
         resolveSeekWaiter(false)
       case .landed, .stalled, .superseded:
@@ -557,10 +574,11 @@ final class AetherPlayer {
       }
       return
     }
-    guard event.id == awaitedSeekEventID else { return }
+    guard event.id == awaitedEventID else { return }
     switch event.outcome {
-    case .landed, .superseded: resolveSeekWaiter(true)
-    case .stalled, .rejected: resolveSeekWaiter(false)
+    case .landed: resolveSeekWaiter(true)
+    case .superseded where event.origin == .deferred: seekWaiter?.eventID = nil
+    case .stalled, .rejected, .superseded: resolveSeekWaiter(false)
     case .began: break
     }
   }

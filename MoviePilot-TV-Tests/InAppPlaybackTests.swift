@@ -1,3 +1,5 @@
+import enum AetherEngine.AudioDelivery
+import struct AetherEngine.SeekEvent
 import Combine
 import CoreGraphics
 import SwiftUI
@@ -1236,9 +1238,15 @@ final class PlaybackCoordinatorTests: XCTestCase {
       $0.playbackInfo = Self.playbackInfo()
     }
     let coordinator = makeCoordinator(makeService())
+    var returnedToIdle = false
+    let phaseObserver = coordinator.$phase.dropFirst().sink {
+      if case .idle = $0 { returnedToIdle = true }
+    }
+    defer { phaseObserver.cancel() }
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
 
     let session = try XCTUnwrap(coordinator.session, "有续播点也直接起播，不询问")
+    XCTAssertFalse(returnedToIdle, "准备成功后直接交给播放器，中途不能撤下详情页遮罩")
     XCTAssertEqual(session.startSeconds, 1800, "从上次的位置接着播")
 
     coordinator.play(.serverItem(serverName: "emby", itemID: "m1"))
@@ -1306,6 +1314,82 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
     XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 36_000_000_000)
     XCTAssertEqual(saved["Played"] as? Bool, false)
+  }
+
+  func testDeferredSeekPublishesItsTargetBeforeBeganWithoutSavingIt() async throws {
+    configureMovieWithCredits(resumeAt: 1800)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    session.onFailure = { _ in }
+    session.start()
+    let player = try XCTUnwrap(session.player)
+
+    func tick(_ position: Double, isBuffering: Bool = false) {
+      player.clockDidChange(position, status: .playing, hasFirstFrame: true, isSeeking: false, isBuffering: isBuffering)
+    }
+
+    var scrubberPosition: Double?
+    let positions = player.observePosition { scrubberPosition = $0 }
+    defer { positions.cancel() }
+    tick(3600)
+    let succeeded = await player.seek(to: 5800) { target in
+      tick(target)
+      XCTAssertEqual(scrubberPosition, target, "进度条照常立即显示目标")
+      player.seekDidChange(.init(id: 1, origin: .deferred, outcome: .began, target: target))
+      player.seekDidChange(.init(id: 1, origin: .deferred, outcome: .superseded, target: target))
+      player.seekDidChange(.init(id: 2, origin: .programmatic, outcome: .began, target: target))
+      player.seekDidChange(.init(id: 2, origin: .programmatic, outcome: .stalled, target: target))
+    }
+    XCTAssertFalse(succeeded, "deferred 交接后，仍以实际跳转结果为准")
+
+    tick(5800, isBuffering: true)
+    coordinator.saveProgressForBackground()
+    await coordinator.reporterForTesting.waitForQueued()
+    let background = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(background["PlaybackPositionTicks"] as? Int64, 36_000_000_000)
+    XCTAssertEqual(background["Played"] as? Bool, false)
+
+    // 引擎放弃原目标后可从别处继续播放，此路径不会再发该跳转的 landed。
+    tick(3602)
+    tick(3613)
+    coordinator.endSession(session)
+    await coordinator.reporterForTesting.waitForQueued()
+    let stopped = try lastPlaybackRequestBody(path: "/Sessions/Playing/Stopped")
+    XCTAssertEqual(stopped["PositionTicks"] as? Int64, 36_130_000_000)
+    let saved = try lastPlaybackRequestBody(path: "/Users/u-admin/Items/m1/UserData")
+    XCTAssertEqual(saved["PlaybackPositionTicks"] as? Int64, 36_130_000_000)
+    XCTAssertEqual(saved["Played"] as? Bool, false)
+  }
+
+  func testDeferredSeekWaitsForActualLandingAndRejectsSupersededProgrammaticSeek() async {
+    let player = AetherPlayer()
+    let landed = await player.seek(to: 200) { target in
+      player.seekDidChange(.init(id: 1, origin: .deferred, outcome: .began, target: target))
+      player.seekDidChange(.init(id: 1, origin: .deferred, outcome: .superseded, target: target))
+      player.seekDidChange(.init(id: 2, origin: .programmatic, outcome: .began, target: target))
+      player.seekDidChange(.init(id: 2, origin: .programmatic, outcome: .landed(renderedTime: target), target: target))
+    }
+    XCTAssertTrue(landed)
+
+    let superseded = await player.seek(to: 300) { target in
+      player.seekDidChange(.init(id: 3, origin: .programmatic, outcome: .began, target: target))
+      player.seekDidChange(.init(id: 3, origin: .programmatic, outcome: .superseded, target: target))
+    }
+    XCTAssertFalse(superseded)
+  }
+
+  func testAudioWarningFollowsPipelineDropAndRecovery() {
+    let player = AetherPlayer()
+    player.audioDeliveryDidChange(.noAudioInSource)
+    XCTAssertFalse(player.hasDroppedAudio)
+    player.audioDeliveryDidChange(.droppedNoPipeline)
+    XCTAssertTrue(player.hasDroppedAudio)
+    player.audioDeliveryDidChange(.bridged)
+    XCTAssertFalse(player.hasDroppedAudio)
+    player.audioDeliveryDidChange(.droppedNoPipeline)
+    player.stop()
+    XCTAssertFalse(player.hasDroppedAudio)
   }
 
   func testContinuingThroughCreditsAfterWatchingTheMovieMarksItPlayed() async throws {

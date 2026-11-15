@@ -20,6 +20,8 @@ nonisolated enum L10n {
     static let audio = "音频"
     static let audioBitrate = "音频码率"
     static let audioCodec = "音频编码"
+    static let audioDropped = "此片源的音频无法播放，可尝试其他版本或媒体服务器 App。"
+    static let audioDroppedWithTracks = "当前音频无法播放，可在「音频」菜单切换音轨。"
     static let audioOffset = "音频偏移"
     static let audioSampleRate = "音频采样率"
     static let auto = "自动"

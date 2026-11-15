@@ -216,7 +216,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 留着做增量读的剧数，超出时丢掉最久没用的。
   static let transferRecordHistoryCapacity = 32
   /// 起播前最多等这么久，让上一次播放的停止上报和进度写回先发完，续播才读得到刚保存的位置。
-  /// 服务器连不上时不会一直卡在“正在准备播放”。
+  /// 服务器连不上时不会一直停在起播前的黑屏上。
   static let pendingReportWait: Duration = .seconds(5)
 
   @Published private(set) var phase: Phase = .idle
@@ -321,9 +321,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       ttl: Self.transferRecordTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
   }
 
-  var isResolving: Bool {
-    guard case .resolving = phase else { return false }
-    return true
+  var resolvingTask: Task<Void, Never>? {
+    guard case .resolving(let task) = phase else { return nil }
+    return task
   }
 
   var session: PlaybackSession? {
@@ -337,10 +337,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   }
 
   #if TESTING
-    var resolveTaskForTesting: Task<Void, Never>? {
-      guard case .resolving(let task) = phase else { return nil }
-      return task
-    }
+    var isResolving: Bool { resolvingTask != nil }
+    var resolveTaskForTesting: Task<Void, Never>? { resolvingTask }
     var switchTaskForTesting: Task<Void, Never>? { switchTask }
     var reporterForTesting: PlaybackReporter { reporter }
   #endif
@@ -401,13 +399,16 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
       // 取消来自取消按钮或作用域拆除，阶段已由取消方复位。
       guard let self, !Task.isCancelled else { return }
-      self.phase = .idle
-      guard self.apiService?.isSessionUnchanged(from: snapshot) == true else { return }
+      guard self.apiService?.isSessionUnchanged(from: snapshot) == true else {
+        self.phase = .idle
+        return
+      }
       switch outcome {
       case .success(let prepared):
         // 有续播点就直接从那里接着播，不询问（HIG「Playing video」：能续播就自动续播）。
         self.start(prepared, at: prepared.resumePosition ?? 0)
       case .failure(let error):
+        self.phase = .idle
         if !(error is CancellationError) { self.fail(error) }
       }
     }

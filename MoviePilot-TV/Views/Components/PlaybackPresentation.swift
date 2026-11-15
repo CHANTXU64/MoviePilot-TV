@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// 挂在主界面上的播放呈现：解析中的遮罩、全屏播放器和失败提示。有续播点时直接接着播，不询问。
+/// 挂在主界面上的播放呈现：起播前的黑屏、全屏播放器和失败提示。有续播点时直接接着播，不询问。
 struct PlaybackPresentationModifier: ViewModifier {
   @ObservedObject var coordinator: PlaybackCoordinator
   @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
+  /// 准备超过 `loadingIndicatorDelay` 的那次解析，黑屏上显示转圈。
+  @State private var resolveWithVisibleProgress: Task<Void, Never>?
+  @FocusState private var isLoadingScreenFocused: Bool
   /// 全屏播放器正在显示的会话，播放界面出现时记下。
   @State private var presented = PresentedSession()
 
@@ -15,21 +18,37 @@ struct PlaybackPresentationModifier: ViewModifier {
     weak var session: PlaybackSession?
   }
 
+  /// 准备超过这么久才显示转圈（HIG「Playing video › Loading content」：加载超过两秒才考虑显示加载画面）。
+  static let loadingIndicatorDelay: Duration = .seconds(2)
+
   func body(content: Content) -> some View {
+    let resolvingTask = coordinator.resolvingTask
+    let showsIndicator = resolvingTask != nil && resolvingTask == resolveWithVisibleProgress
+    let showsBlackScreen = coordinator.isBusy
     content
-      .disabled(coordinator.isResolving)
-      .accessibilityHidden(coordinator.isResolving)
+      .disabled(coordinator.isBusy)
+      .accessibilityHidden(coordinator.isBusy)
       .overlay {
-        if coordinator.isResolving {
-          ZStack {
-            Color.black.opacity(0.75).ignoresSafeArea()
-            VStack(spacing: 32) {
-              ProgressView("正在准备播放…")
-              Button("取消") { coordinator.cancelResolving() }
-            }
+        // HIG「Playing video」：按下播放立即换成黑屏，一直黑到播放器出画面；很快就绪时不显示任何加载内容，
+        // 超过两秒才在黑底正中显示转圈，不带文字和其他内容。返回键取消。
+        ZStack {
+          if showsBlackScreen {
+            loadingScreen(isPreparing: resolvingTask != nil, showsIndicator: showsIndicator)
+              .transition(.asymmetric(insertion: .identity, removal: .opacity))
           }
-          .onExitCommand { coordinator.cancelResolving() }
         }
+        .animation(.easeOut(duration: 0.2), value: showsBlackScreen)
+      }
+      .task(id: resolvingTask) {
+        resolveWithVisibleProgress = nil
+        guard let resolvingTask else { return }
+        do {
+          try await Task.sleep(for: Self.loadingIndicatorDelay)
+        } catch {
+          return
+        }
+        guard !Task.isCancelled, coordinator.resolvingTask == resolvingTask else { return }
+        withAnimation(.easeIn(duration: 0.3)) { resolveWithVisibleProgress = resolvingTask }
       }
       .fullScreenCover(
         item: Binding(
@@ -70,6 +89,26 @@ struct PlaybackPresentationModifier: ViewModifier {
         notificationManager.show(message: notice.message, type: .info)
         coordinator.notice = nil
       }
+  }
+
+  /// 准备期间底下的页面已禁用，焦点落在黑屏上，返回键由这里接住、取消准备。播放器出现后黑屏只是垫在下面，
+  /// 不再可聚焦，退出播放时焦点直接回到页面。
+  private func loadingScreen(isPreparing: Bool, showsIndicator: Bool) -> some View {
+    ZStack {
+      Color.black.ignoresSafeArea()
+      if showsIndicator {
+        ProgressView()
+          .transition(.opacity)
+      }
+    }
+    .environment(\.colorScheme, .dark)
+    .focusable(isPreparing)
+    .focusEffectDisabled()
+    .focused($isLoadingScreenFocused)
+    .onAppear { isLoadingScreenFocused = isPreparing }
+    .onExitCommand { coordinator.cancelResolving() }
+    .accessibilityElement()
+    .accessibilityLabel("正在准备播放")
   }
 }
 
