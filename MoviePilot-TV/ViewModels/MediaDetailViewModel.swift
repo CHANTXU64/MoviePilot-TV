@@ -52,6 +52,9 @@ class MediaDetailViewModel: ObservableObject {
   @Published private(set) var movieProgress: Double?
   /// 集列表默认显示的季和停在哪一集：看过的剧停在接着看的那一集；没看过时是服务器上最新入库的那一季。
   @Published private(set) var episodeRowHint: EpisodeRowHint?
+  /// 「继续播放」用的默认顺序季目录（读到 MoviePilot 的全部季时才有）：集列表行按它显示季，
+  /// 结论指向的季集列表行一定有（见 `MediaDetailEpisodeSeasons.catalog`）。
+  @Published private(set) var episodeSeasons: [TmdbSeason]?
   /// 「继续播放」指向服务器上还没有的下一集时，按下请集列表打开那一集的面板（每次按下一个新请求）。
   @Published private(set) var episodePanelRequest: EpisodePanelRequest?
 
@@ -614,14 +617,15 @@ class MediaDetailViewModel: ObservableObject {
   // MARK: - 剧的观看进度
 
   /// 读观看进度：剧算「继续播放」和集列表默认的位置，电影算按钮上的已播放进度。
-  private func startWatchProgressLoad(_ target: PlaybackTarget) {
+  /// `forceRefresh`：集列表、季列表和集索引都不用缓存（按下「播放」重试上次说明过原因的结论时）。
+  private func startWatchProgressLoad(_ target: PlaybackTarget, forceRefresh: Bool = false) {
     seriesProgressTask?.cancel()
     // 重读期间上次的结论可能已经过时（刚播完、从别的 App 回来）：按钮照常显示上次的，头部「播放」等这次读完（见 `playFromHeader`）。
     seriesProgressDecided = false
     seriesProgressTask = Task { [weak self] in
       guard let self else { return }
       switch self.detail.type {
-      case "电视剧": await self.loadSeriesProgress(target)
+      case "电视剧": await self.loadSeriesProgress(target, forceRefresh: forceRefresh)
       case "电影": await self.loadMovieProgress(target)
       default: break
       }
@@ -659,8 +663,8 @@ class MediaDetailViewModel: ObservableObject {
         self?.startWatchProgressLoad(target)
       }
       .store(in: &playbackEndObservations)
-    // 起播后台核对出新的整理记录、集对应改了：集卡片会跟着变，「继续播放」也按新的集索引重算。
-    coordinator.evidenceUpdates
+    // 集索引重建了（起播后台核对出新的整理记录、集列表行强制重查）：集卡片会跟着变，「继续播放」也按新的集索引重算。
+    coordinator.evidenceUpdates.merge(with: coordinator.episodeIndexRefreshes)
       .sink { [weak self] tmdbID in
         guard let self, self.inAppPlaybackTarget == target,
           tmdbID == MediaIdentifier.validNumericIdentifier(self.detail.tmdb_id)
@@ -672,7 +676,7 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 读这部剧的观看进度，算出「继续播放」和集列表默认的位置。读不到时保留上次的结果。
   /// 「这份文件是哪一集」只认集索引，按下做什么见 `SeriesContinuation.choose`。
-  private func loadSeriesProgress(_ target: PlaybackTarget) async {
+  private func loadSeriesProgress(_ target: PlaybackTarget, forceRefresh: Bool = false) async {
     let snapshot = apiService.sessionSnapshot()
     let coordinator = apiService.sessionScope.playbackCoordinator
     // 每次 await 之后复核：没被取消、账号没变、还是这个播放目标，才写回。
@@ -717,18 +721,25 @@ class MediaDetailViewModel: ObservableObject {
       }
       return
     }
-    async let lookups = coordinator.episodeLookups(for: context)
-    let lists = await moviePilotSeasons(tmdbID: context.tmdbID, selectable: selectable)
+    async let lookups = coordinator.episodeLookups(for: context, forceRefresh: forceRefresh)
+    let lists = await moviePilotSeasons(tmdbID: context.tmdbID, selectable: selectable, forceRefresh: forceRefresh)
     let loaded = await lookups
     guard isCurrent() else { return }
+    if let catalog = lists.catalog, episodeSeasons != catalog { episodeSeasons = catalog }
     let choice = SeriesContinuation.choose(
       upNext: progress.upNext, lastWatched: progress.lastWatched, serverName: progress.serverName,
-      lookups: loaded ?? [], seasons: lists.seasons, knownSeasons: lists.known, catalogComplete: lists.catalogComplete)
+      // 读不到服务器配置时当成集索引读不到（不是服务器上没有这些集）。
+      lookups: loaded ?? [.failed(server: progress.serverName, message: "没能读取媒体服务器配置")], seasons: lists.seasons, knownSeasons: lists.known, catalogComplete: lists.catalogComplete)
     func explain(_ message: String) {
       publish(SeriesPlayAction(title: "播放", accessibilityLabel: "播放", action: .explain(message)), latestSeason)
     }
+    // 播放器里接着播下一集的季顺序用同一份季目录（集列表行显示的季）。
+    let queueContext =
+      lists.catalog.flatMap {
+        episodePlayback?.context(media: detail, episodeGroup: nil, seasons: $0.compactMap(\.season_number))
+      } ?? context
     func queued(_ episode: MoviePilotEpisode, _ season: [MoviePilotEpisode], resumeFile: ServerMediaItem?) -> PlaybackTarget {
-      var queued = QueuedEpisode(context: context, episode: episode, seasonEpisodes: season)
+      var queued = QueuedEpisode(context: queueContext, episode: episode, seasonEpisodes: season)
       if let resumeFile { queued.preferredFile = ServerFileRef(server: progress.serverName, itemID: resumeFile.id) }
       return .episode(queued, accepting: .consistentNumberMatches)
     }
@@ -756,11 +767,13 @@ class MediaDetailViewModel: ObservableObject {
       playServerFile(file, resumes: resumes)
     case .explain(.fileContradicted(let file)):
       let name = SeriesPlayAction.episodeText(season: file.seasonNumber, episode: file.episodeNumber).map { "「\($0)」" } ?? ""
-      explain("媒体服务器上\(name)的单集编号或播出日期和集列表对不上，没法确定是哪一集，请在集列表里选择要播的集")
+      explain("媒体服务器上\(name)和集列表对不上（播出日期、单集编号或外部编号），没法确定是哪一集，请在集列表里选择要播的集")
     case .explain(.seasonListUnreadable):
       explain("有一季的集列表没读到，暂时没法确定接着看哪一集，请稍后再试，或在集列表里选择要播的集")
     case .explain(.nextUnknown):
       explain("看完的那一集对不上集列表，没法确定下一集，请在集列表里选择要播的集")
+    case .explain(.episodesUnreadable):
+      explain("读不到媒体服务器上这部剧的集，暂时没法确定下一集，请稍后再试，或在集列表里选择要播的集")
     case nil:
       // MoviePilot 的集列表一集都没读到，服务器上也没有接着看的那份：没法确定从哪一集开始。
       explain("读不到 MoviePilot 的集列表，暂时没法确定从哪一集开始，请稍后再试")
@@ -770,17 +783,20 @@ class MediaDetailViewModel: ObservableObject {
   /// MoviePilot 集列表（默认顺序）的每一季：季号取 MoviePilot 给的全部季（含新出的季和特别篇，和集索引用的一样），
   /// 并上详情里的季（`known`，不含一集都还没有的季）。读不到或 MoviePilot 读 TMDB 失败返回空列表的季不放进 `seasons`；
   /// 季列表本身没读到时 `catalogComplete` 为 false。各季同时读，走会话缓存。
-  private func moviePilotSeasons(tmdbID: Int, selectable: [Int]) async
-    -> (seasons: [SeriesContinuation.Season], known: [Int], catalogComplete: Bool)
+  private func moviePilotSeasons(tmdbID: Int, selectable: [Int], forceRefresh: Bool) async
+    -> (seasons: [SeriesContinuation.Season], known: [Int], catalogComplete: Bool, catalog: [TmdbSeason]?)
   {
     let media = MediaInfo(
-      tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), title: detail.title, type: "电视剧")
-    let all = try? await apiService.getMediaSeasons(media: media, allSeasons: true)
+      tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), title: detail.title, type: "电视剧",
+      season_info: detail.season_info)
+    let all = try? await apiService.getMediaSeasons(media: media, allSeasons: true, forceRefresh: forceRefresh)
     let catalogComplete = !(all ?? []).isEmpty
+    // 和集列表行同一份季目录（读不到全部季时只有详情里的季，集列表行自己补读、重试）。
+    let catalog = catalogComplete ? MediaDetailEpisodeSeasons.catalog(all ?? [], media: media) : nil
     // TMDB 已公布、但还一集都没有的季（`episode_count` 为 0）不算应有的季：它的集列表本来就是空的，不是没读到。
     // 只要有一处说有集（或没给集数）就照常读。
     let reported = (detail.season_info ?? []) + (all ?? [])
-    var numbers = Set(selectable).union((all ?? []).compactMap(\.season_number))
+    var numbers = catalog.map { Set($0.compactMap(\.season_number)) } ?? Set(selectable)
     numbers = numbers.filter { number in
       let counts = reported.filter { $0.season_number == number }.map(\.episode_count)
       return counts.isEmpty || counts.contains { $0 != 0 }
@@ -788,7 +804,9 @@ class MediaDetailViewModel: ObservableObject {
     let apiService = apiService
     let reads = numbers.map { number in
       Task { @MainActor () -> SeriesContinuation.Season? in
-        let list = (try? await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: number, episodeGroup: nil)) ?? []
+        let list =
+          (try? await apiService.fetchTmdbEpisodes(
+            tmdbID: tmdbID, season: number, episodeGroup: nil, forceRefresh: forceRefresh)) ?? []
         if list.isEmpty { return nil }
         return SeriesContinuation.Season(number: number, episodes: MoviePilotEpisode.list(list, season: number))
       }
@@ -800,7 +818,7 @@ class MediaDetailViewModel: ObservableObject {
     } onCancel: {
       reads.forEach { $0.cancel() }
     }
-    return (seasons, numbers.sorted(), catalogComplete)
+    return (seasons, numbers.sorted(), catalogComplete, catalog)
   }
 
   /// 头部「播放」按下。剧只按这一次读出的「继续播放」结论做（按集起播、打开那一集的面板、说明为什么没法播；
@@ -811,6 +829,10 @@ class MediaDetailViewModel: ObservableObject {
     guard detail.type == "电视剧" else {
       coordinator.play(target, media: detail)
       return
+    }
+    // 上次的结论是说明原因（读不到、对不上）：情况可能已经变了，按下时重读一次再定，不只重复上次的说明。
+    if seriesProgressDecided, case .explain? = seriesPlayAction?.action, inAppPlaybackTarget == target {
+      startWatchProgressLoad(target, forceRefresh: true)
     }
     if seriesProgressDecided {
       if let seriesPlayAction {

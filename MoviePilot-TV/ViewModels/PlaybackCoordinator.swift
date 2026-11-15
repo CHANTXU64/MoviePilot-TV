@@ -268,6 +268,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 一轮补查结束时发出这部剧的 TMDB 编号（集索引已作废，结果在本机缓存里），详情页据此重读播放状态：
   /// 查到的集变成能播，“正在核对”的集按查完的结果显示。
   let evidenceUpdates = PassthroughSubject<Int, Never>()
+  /// 这部剧（TMDB 编号）的集索引刚强制重读完（集列表行按了重试、试看提交前复查）：详情页的「继续播放」按新的集索引重算。
+  /// 和 `evidenceUpdates`（补查一轮结束）分开：等补查结束的地方不会被它提前叫醒。
+  let episodeIndexRefreshes = PassthroughSubject<Int, Never>()
   /// 一次播放结束、观看进度写回发完（最多等 `pendingReportWait`）后发出刚播的是哪部（见 `WatchStateChange`）：
   /// 集索引已作废，这部片的详情页据此重读每集的已播放进度和「继续播放」，别的详情页不动。
   /// 从后台回到前台时也发一次 `WatchStateChange.unknown`，每个详情页都重读。
@@ -794,6 +797,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let lookups = await episodeLookups(
       context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, forceRefresh: forceRefresh)
     guard !Task.isCancelled else { return nil }
+    // 集列表行强制重查（用户按了重试、试看提交前复查）：集索引重建了，通知详情页按新的重算「继续播放」。
+    if forceRefresh { episodeIndexRefreshes.send(context.tmdbID) }
     return EpisodePlaybackLookup(
       availability: episodes.map { EpisodeAvailability.resolve($0, lookups: lookups) },
       serverRuntimeSeconds: episodes.map { EpisodeAvailability.serverRuntimeSeconds($0, lookups: lookups) },
@@ -803,11 +808,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   /// 这部剧在各台可播放服务器上的集索引（和集卡片、起播同一份，走集索引缓存），详情页的「继续播放」按它对集。
   /// 不提供应用内播放或读不到媒体服务器配置时为 nil。
-  func episodeLookups(for context: EpisodePlaybackContext) async -> [ServerEpisodeLookup]? {
+  func episodeLookups(for context: EpisodePlaybackContext, forceRefresh: Bool = false) async -> [ServerEpisodeLookup]? {
     guard !isTornDown, allowsPlayback, let apiService,
       let servers = try? await apiService.fetchCachedMediaServers(), servers.contains(where: \.supportsInAppPlayback)
     else { return nil }
-    let lookups = await episodeLookups(context, servers: servers, preferredUserName: apiService.currentOrStoredUserName)
+    let lookups = await episodeLookups(
+      context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, forceRefresh: forceRefresh)
     return Task.isCancelled ? nil : lookups
   }
 

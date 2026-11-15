@@ -15,8 +15,11 @@ final class SeriesContinuationTests: XCTestCase {
   private let season2: [TmdbEpisode] = (1...2).map {
     TmdbEpisode(id: 200 + $0, episodeNumber: $0, seasonNumber: 2, airDate: "2025-02-0\($0)")
   }
-  /// 特别篇第 1 集是 901。
-  private let specials = [TmdbEpisode(id: 901, episodeNumber: 1, seasonNumber: 0, airDate: "2024-12-01")]
+  /// 特别篇第 1、2 集是 901、902。
+  private let specials = [
+    TmdbEpisode(id: 901, episodeNumber: 1, seasonNumber: 0, airDate: "2024-12-01"),
+    TmdbEpisode(id: 902, episodeNumber: 2, seasonNumber: 0, airDate: "2024-12-02"),
+  ]
   /// 剧集组 g1 第 1 季：组内第 1、2 集是默认顺序的第 4、5 集（104、105）。
   private let groupSeason1: [TmdbEpisode] = [
     TmdbEpisode(id: 104, episodeNumber: 1, seasonNumber: 1, airDate: "2025-01-04"),
@@ -206,11 +209,11 @@ final class SeriesContinuationTests: XCTestCase {
   func testNextEpisodeCrossesIntoTheNextRegularSeasonButNotIntoSpecials() {
     let watched = file("w", episode: 6, tmdb: 106)
     XCTAssertEqual(choose([watched], watched: watched), .openPanel(episode(2, 1)))
-    let special = file("s", season: 0, episode: 1, tmdb: 901)
+    let special = file("s", season: 0, episode: 2, tmdb: 902)
     let first = file("e1", episode: 1, tmdb: 101)
     XCTAssertEqual(
       choose([special, first], watched: special), .start(episode(1, 1), season: seasonList(1)),
-      "特别篇看完不接到正片：从头")
+      "最后一集特别篇看完，服务器上也没有接着看的正片：从头")
   }
 
   func testNextEpisodeAfterAMultiEpisodeFileSkipsTheEpisodesItContains() {
@@ -349,6 +352,31 @@ final class SeriesContinuationTests: XCTestCase {
   func testUnwatchedSeriesDoesNotSkipAnUnreadFirstSeason() {
     let s2e1 = file("a", season: 2, episode: 1, tmdb: 201)
     XCTAssertEqual(choose([s2e1], unread: [1]), .explain(.seasonListUnreadable))
+    // 正片季一季都没读到、只读到特别篇：不从特别篇开始播。
+    let special = file("s", season: 0, episode: 2, tmdb: 902)
+    XCTAssertEqual(choose([special], unread: [1, 2]), .explain(.seasonListUnreadable))
+    XCTAssertEqual(choose([special, s2e1], watched: special, unread: [1, 2]), .explain(.seasonListUnreadable))
+  }
+
+  func testUnplacedServerFileBeyondAnUnreadSeasonIsNotPlayed() {
+    // 第 2、3 季的集列表都没读到，服务器上接着看的那份标着第 3 季第 1 集（对不到集列表）：按服务器季号跨过了第 2 季，说明原因。
+    let watched = file("w", episode: 6, tmdb: 106)
+    let next = file("n", season: 3, episode: 1)
+    XCTAssertEqual(
+      choose([watched, next], next: next, watched: watched, unread: [2, 3]), .explain(.seasonListUnreadable))
+  }
+
+  func testContradictedFileFindsItsEpisodeByTheNumberingTheIndexUses() {
+    // 按剧集组 g1 整理：服务器上标着第 1 季第 2 集的文件，在 g1 里是默认顺序的第 1 季第 5 集（105）。
+    // 它的外部编号指向别的剧：能从别的副本播的是第 5 集，不是默认顺序的第 2 集。
+    let doubtful = file("f", episode: 2)
+    let e2 = file("e2", episode: 2, tmdb: 102)
+    let e5 = file("e5", episode: 5, tmdb: 105)
+    let record = EpisodeTransferRecord(
+      mediaID: "100", seasons: "S01", episodes: "E01", episodeGroup: "g1", path: "/media/tv/某剧/其他.mkv", date: nil)
+    let lookup = index([doubtful, e2, e5], records: [record], evidence: pointingElsewhere("f"))
+    XCTAssertEqual(
+      choose([], resuming: doubtful, lookups: [lookup]), .play(episode(1, 5), season: seasonList(1), resumeFile: nil))
   }
 
   func testWatchedFileWithContraryEvidenceFollowsACleanNextFileWithoutSkipping() {
@@ -377,7 +405,7 @@ final class SeriesContinuationTests: XCTestCase {
     let failed: [ServerEpisodeLookup] = [.failed(server: "emby", message: "读取失败")]
     XCTAssertEqual(
       choose([], next: next, watched: watched, lookups: failed), .playServerFile(next, resumes: false, episode: nil))
-    XCTAssertEqual(choose([], watched: watched, lookups: failed), .explain(.nextUnknown))
+    XCTAssertEqual(choose([], watched: watched, lookups: failed), .explain(.episodesUnreadable))
   }
 
   func testUnwatchedSeriesStopsAtAnEpisodeThatIsNotKnownToBeAbsent() {
@@ -407,6 +435,121 @@ final class SeriesContinuationTests: XCTestCase {
     let first = file("e1", episode: 1, tmdb: 101)
     let last = file("last", season: 2, episode: 2, tmdb: 202)
     XCTAssertEqual(choose([first, last], watched: last), .start(episode(1, 1), season: seasonList(1)))
+  }
+
+  func testNewServerEpisodeAfterTheLastListedOneIsPlayedInsteadOfStartingOver() {
+    // 看完集列表里正片的最后一集，服务器上已经有下一集、TMDB 还没更新到：播服务器上的那份（不写集号），不从头。
+    let first = file("e1", episode: 1, tmdb: 101)
+    let last = file("last", season: 2, episode: 2, tmdb: 202)
+    let unnumbered = file("new", season: 2, episode: 3)
+    XCTAssertEqual(
+      choose([first, last, unnumbered], next: unnumbered, watched: last),
+      .playServerFile(unnumbered, resumes: false, episode: nil))
+    // 带着集列表里还没有的单集编号：同样没有反证。
+    let numbered = file("new", season: 2, episode: 3, tmdb: 203)
+    XCTAssertEqual(
+      choose([first, last, numbered], next: numbered, watched: last),
+      .playServerFile(numbered, resumes: false, episode: nil))
+    // 服务器上接着看的那份对到集列表里前面的集（跳着看过）：按全看完从头。
+    XCTAssertEqual(
+      choose([first, last], next: first, watched: last), .start(episode(1, 1), season: seasonList(1)))
+    // 看完的是最后一集特别篇、服务器上的下一份对不到集列表：不接到它，从头。
+    let special = file("s", season: 0, episode: 2, tmdb: 902)
+    XCTAssertEqual(
+      choose([special, first, unnumbered], next: unnumbered, watched: special),
+      .start(episode(1, 1), season: seasonList(1)))
+  }
+
+  // MARK: 决策表：集列表说的下一集 × 服务器上接着看的那份，每一格一条
+
+  func testEveryCellOfTheNextEpisodeTable() {
+    let rows = ["下一集在集列表里", "正片看完", "特别篇看完", "下一季没读到", "看完的对不上", "没看过", "看完特别篇中间一集"]
+    let columns = ["没有", "对上集列表", "对不到、无反证", "有反证"]
+    let e1 = file("e1", episode: 1, tmdb: 101)
+    let e2 = file("e2", episode: 2, tmdb: 102)
+    let e3 = file("e3", episode: 3, tmdb: 103)
+    let unplaced = file("u", season: 3, episode: 1)
+    let doubtful = file("c", episode: 3, premiere: "2024-06-01")
+    let play3 = SeriesContinuation.Choice.play(episode(1, 3), season: seasonList(1), resumeFile: nil)
+    let fromStart = SeriesContinuation.Choice.start(episode(1, 1), season: seasonList(1))
+    let playUnplaced = SeriesContinuation.Choice.playServerFile(unplaced, resumes: false, episode: nil)
+
+    struct Cell {
+      let row: String, column: String
+      let files: [ServerMediaItem], watched: ServerMediaItem?, next: ServerMediaItem?
+      var unread: [Int] = []
+      let expected: SeriesContinuation.Choice
+    }
+    let watchedE2 = e2, last = file("last", season: 2, episode: 2, tmdb: 202)
+    let special = file("s", season: 0, episode: 2, tmdb: 902), e6 = file("e6", episode: 6, tmdb: 106)
+    let midSpecial = file("m", season: 0, episode: 1, tmdb: 901), special2 = file("s2", season: 0, episode: 2, tmdb: 902)
+    let playSpecial2 = SeriesContinuation.Choice.play(episode(0, 2), season: seasonList(0), resumeFile: nil)
+    let unknown = file("w", episode: 9)
+    let inUnreadSeason = file("u2", season: 2, episode: 1)
+    let cells: [Cell] = [
+      // 集列表说了下一集（第 3 集）：以集列表为准，服务器上的那份是什么都一样。
+      Cell(row: rows[0], column: columns[0], files: [watchedE2, e3], watched: watchedE2, next: nil, expected: play3),
+      Cell(row: rows[0], column: columns[1], files: [watchedE2, e3, e1], watched: watchedE2, next: e1, expected: play3),
+      Cell(row: rows[0], column: columns[2], files: [watchedE2, e3, unplaced], watched: watchedE2, next: unplaced, expected: play3),
+      Cell(row: rows[0], column: columns[3], files: [watchedE2, e3, doubtful], watched: watchedE2, next: doubtful, expected: play3),
+      // 正片看完：只有集列表还没更新到的下一份（对不到、无反证）接着播，其余从头。
+      Cell(row: rows[1], column: columns[0], files: [e1, last], watched: last, next: nil, expected: fromStart),
+      Cell(row: rows[1], column: columns[1], files: [e1, last], watched: last, next: e1, expected: fromStart),
+      Cell(row: rows[1], column: columns[2], files: [e1, last, unplaced], watched: last, next: unplaced, expected: playUnplaced),
+      Cell(row: rows[1], column: columns[3], files: [e1, last, doubtful], watched: last, next: doubtful, expected: fromStart),
+      // 最后一集特别篇看完：服务器上接着看的那份对上了正片就按它走（前一集不在服务器上时停在前一集），否则从头。
+      Cell(row: rows[2], column: columns[0], files: [e1, special], watched: special, next: nil, expected: fromStart),
+      Cell(row: rows[2], column: columns[1], files: [e2, special, e3], watched: special, next: e3, expected: play3),
+      Cell(row: rows[2], column: columns[2], files: [e1, special, unplaced], watched: special, next: unplaced, expected: fromStart),
+      Cell(row: rows[2], column: columns[3], files: [e1, special, doubtful], watched: special, next: doubtful, expected: fromStart),
+      // 下一季（第 2 季）没读到：对不到集列表的那份接着播；对到的集按它走（没跨过没读到的季时），有反证的按反证处理。
+      Cell(
+        row: rows[3], column: columns[0], files: [e6], watched: e6, next: nil, unread: [2],
+        expected: .explain(.seasonListUnreadable)),
+      Cell(
+        row: rows[3], column: columns[1], files: [e6, e2, e3], watched: e6, next: e3, unread: [2], expected: play3),
+      Cell(
+        row: rows[3], column: columns[2], files: [e6, inUnreadSeason], watched: e6, next: inUnreadSeason, unread: [2],
+        expected: .playServerFile(inUnreadSeason, resumes: false, episode: nil)),
+      Cell(
+        row: rows[3], column: columns[3], files: [e6, doubtful], watched: e6, next: doubtful, unread: [2],
+        expected: .openPanel(episode(1, 3))),
+      // 看完的那一集对不上：没有反证就按服务器上接着看的那份走。
+      Cell(row: rows[4], column: columns[0], files: [unknown], watched: unknown, next: nil, expected: .explain(.nextUnknown)),
+      Cell(row: rows[4], column: columns[1], files: [unknown, e2, e3], watched: unknown, next: e3, expected: play3),
+      Cell(row: rows[4], column: columns[2], files: [unknown, unplaced], watched: unknown, next: unplaced, expected: playUnplaced),
+      Cell(
+        row: rows[4], column: columns[3], files: [unknown, doubtful], watched: unknown, next: doubtful,
+        expected: .openPanel(episode(1, 3))),
+      // 没有看完的记录：服务器上有接着看的那份就按它走，否则从头。
+      Cell(row: rows[5], column: columns[0], files: [e1], watched: nil, next: nil, expected: fromStart),
+      Cell(row: rows[5], column: columns[1], files: [e2, e3], watched: nil, next: e3, expected: play3),
+      Cell(row: rows[5], column: columns[2], files: [e1, unplaced], watched: nil, next: unplaced, expected: playUnplaced),
+      Cell(row: rows[5], column: columns[3], files: [doubtful], watched: nil, next: doubtful, expected: .openPanel(episode(1, 3))),
+      // 看完特别篇中间一集：服务器上接着看的那份对上了正片就按它走，否则播下一集特别篇。
+      Cell(
+        row: rows[6], column: columns[0], files: [midSpecial, special2], watched: midSpecial, next: nil,
+        expected: playSpecial2),
+      Cell(
+        row: rows[6], column: columns[1], files: [midSpecial, special2, e2, e3], watched: midSpecial, next: e3,
+        expected: play3),
+      Cell(
+        row: rows[6], column: columns[2], files: [midSpecial, special2, unplaced], watched: midSpecial, next: unplaced,
+        expected: playSpecial2),
+      Cell(
+        row: rows[6], column: columns[3], files: [midSpecial, special2, doubtful], watched: midSpecial, next: doubtful,
+        expected: playSpecial2),
+    ]
+
+    let covered = Set(cells.map { "\($0.row)｜\($0.column)" })
+    let all = Set(rows.flatMap { row in columns.map { "\(row)｜\($0)" } })
+    XCTAssertEqual(covered, all, "决策表每一格都要有")
+    XCTAssertEqual(cells.count, all.count, "每一格只写一次")
+    for cell in cells {
+      XCTAssertEqual(
+        choose(cell.files, next: cell.next, watched: cell.watched, unread: cell.unread), cell.expected,
+        "\(cell.row)｜\(cell.column)")
+    }
   }
 
   func testNoEpisodeListMeansNoDecision() {

@@ -521,6 +521,7 @@ struct MediaDetailView: View {
                   playback: viewModel.episodePlayback,
                   rowHint: viewModel.episodeRowHint,
                   panelRequest: viewModel.episodePanelRequest,
+                  defaultSeasons: viewModel.episodeSeasons,
                   allowsRequests: allowsRequests,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",

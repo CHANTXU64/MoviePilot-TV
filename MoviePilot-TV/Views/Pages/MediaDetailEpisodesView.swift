@@ -13,6 +13,8 @@ struct MediaDetailEpisodesView: View {
   var rowHint: EpisodeRowHint? = nil
   /// 详情页「继续播放」指向服务器上还没有的下一集时，请本行打开那一集的面板。
   var panelRequest: EpisodePanelRequest? = nil
+  /// 「继续播放」用的默认顺序季目录（`MediaDetailViewModel.episodeSeasons`）：有时本行按它显示季，两边看到的季一样。
+  var defaultSeasons: [TmdbSeason]? = nil
   let allowsRequests: Bool
   let isContentVisible: Bool
   /// 第一页底部只露出卡片：本行是第二页首行时，行头在翻到第二页后才出现，与其他行一致。
@@ -44,6 +46,7 @@ struct MediaDetailEpisodesView: View {
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand),
       rowHint: rowHint,
       panelRequest: panelRequest,
+      defaultSeasons: defaultSeasons,
       showDefaultSeasons: showDefaultSeasons
     )
   }
@@ -65,7 +68,8 @@ struct MediaEpisodeGridView: View {
         trial: APIService.shared.sessionScope.episodeTrial,
         layout: .grid(imageLifecycle),
         initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
-        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil
+        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil,
+        defaultSeasons: request.defaultSeasons
       )
     }
   }
@@ -163,6 +167,8 @@ private struct EpisodeBrowser: View {
   var rowHint: EpisodeRowHint? = nil
   /// 请本行打开某一集的面板（默认顺序下）：先换到那一季，集列表到了再打开。
   var panelRequest: EpisodePanelRequest? = nil
+  /// 默认顺序的季目录（和「继续播放」用的同一份）；有时优先用它，不再自己补读季列表。
+  var defaultSeasons: [TmdbSeason]? = nil
   /// 切回默认分季（不选剧集组）：`panelRequest` 指的是默认顺序里的集，选着剧集组时先切回来。
   var showDefaultSeasons: (() -> Void)? = nil
 
@@ -254,31 +260,23 @@ private struct EpisodeBrowser: View {
   }
 
   private var needsSeasonLookup: Bool {
-    groupID != nil || MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media) || hintsUnlistedSeason
-  }
-
-  /// 「继续播放」要停或要打开面板的那一季不在详情的季里（比如刚出的新季，详情缓存里还没有）：
-  /// 读 MoviePilot 的全部季，让那一季能显示（「继续播放」按的也是全部季）。
-  private var hintsUnlistedSeason: Bool {
-    guard groupID == nil else { return false }
-    let listed = Set(detailSeasons.compactMap(\.season_number))
-    return [pendingPanel?.season, appliedHint?.season].contains { $0.map { !listed.contains($0) } ?? false }
+    groupID != nil || (defaultSeasons == nil && MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media))
   }
 
   private var seasons: [TmdbSeason] {
     if let groupID {
       return MediaDetailEpisodeSeasons.selectable(catalog.seasonsByGroup[groupID] ?? [])
     }
-    return group.loadedSeasons ?? detailSeasons
+    return defaultSeasons ?? group.loadedSeasons ?? detailSeasons
   }
 
   private var defaultMenuSeasons: [TmdbSeason]? {
-    let defaults = groupID == nil ? seasons : MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
+    let defaults = groupID == nil ? seasons : defaultSeasons ?? MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
     return MediaDetailEpisodeSeasons.needsLookup(defaults, media: media) ? nil : defaults
   }
 
   private var showsSupplementalSeasonRetry: Bool {
-    guard !detailSeasons.isEmpty else { return false }
+    guard !detailSeasons.isEmpty, groupID != nil || defaultSeasons == nil else { return false }
     switch group.seasonLoad {
     case .failed: return true
     case .loaded: return MediaDetailEpisodeSeasons.needsLookup(seasons, media: media)
@@ -519,7 +517,8 @@ private struct EpisodeBrowser: View {
           Button("展开") {
             onExpand(MediaEpisodeGridRequest(
               mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
-              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
+              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback,
+              defaultSeasons: defaultSeasons
             ))
           }
           .accessibilityLabel("展开剧集")
@@ -1053,7 +1052,12 @@ enum MediaDetailEpisodeSeasons {
     let seasons = try await apiService.getMediaSeasons(
       media: media, allSeasons: true, forceRefresh: forceRefresh
     )
-    return selectable(seasons + (media.season_info ?? []))
+    return catalog(seasons, media: media)
+  }
+
+  /// 默认顺序的季目录：MoviePilot 给的全部季并上详情里的季。集列表行和「继续播放」共用这一份。
+  static func catalog(_ all: [TmdbSeason], media: MediaInfo) -> [TmdbSeason] {
+    selectable(all + (media.season_info ?? []))
   }
 
   static func canExpand(seasons: [TmdbSeason], loadedEpisodeCount: Int) -> Bool {

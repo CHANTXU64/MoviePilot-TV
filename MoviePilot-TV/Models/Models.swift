@@ -2471,6 +2471,8 @@ struct MediaEpisodeGridRequest: Hashable, Codable {
   let initialEpisodeOffset: Int?
   /// 详情页打开展开页时的按集播放和试看；没有应用内播放时为 nil。
   var playback: EpisodePlaybackSource? = nil
+  /// 详情页的默认顺序季目录（见 `MediaDetailEpisodesView.defaultSeasons`），展开页和详情页的集列表行看到的季一样。
+  var defaultSeasons: [TmdbSeason]? = nil
 }
 
 // MARK: - Transfer History Models
