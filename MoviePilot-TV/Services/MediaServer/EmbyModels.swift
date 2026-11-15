@@ -218,39 +218,17 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
-  /// 文件外的流（外挂字幕等），不是文件里的轨道。
-  var isExternal: Bool?
-  /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
-  var width: Int?
-  var height: Int?
-  /// Emby 读到的帧率，如 23.976025。
-  var frameRate: Double?
-  /// `SDR`、`HDR 10`、`HLG`、`DolbyVision` 等。
-  var videoRange: String?
-  /// `Hdr10`、`Hdr10Plus`、`HyperLogGamma`、`DolbyVision` 等。
-  var extendedVideoType: String?
-  /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
-  var extendedVideoSubType: String?
 
-  init(type: String?, codec: String?, isDefault: Bool? = nil, isExternal: Bool? = nil) {
+  init(type: String?, codec: String?, isDefault: Bool? = nil) {
     self.type = type
     self.codec = codec
     self.isDefault = isDefault
-    self.isExternal = isExternal
   }
 
   private enum CodingKeys: String, CodingKey {
     case type = "Type"
     case codec = "Codec"
     case isDefault = "IsDefault"
-    case isExternal = "IsExternal"
-    case width = "Width"
-    case height = "Height"
-    case realFrameRate = "RealFrameRate"
-    case averageFrameRate = "AverageFrameRate"
-    case videoRange = "VideoRange"
-    case extendedVideoType = "ExtendedVideoType"
-    case extendedVideoSubType = "ExtendedVideoSubType"
   }
 
   init(from decoder: Decoder) throws {
@@ -258,15 +236,6 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     type = try? container.decodeIfPresent(String.self, forKey: .type)
     codec = try? container.decodeIfPresent(String.self, forKey: .codec)
     isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
-    isExternal = try? container.decodeIfPresent(Bool.self, forKey: .isExternal)
-    width = try? container.decodeIfPresent(Int.self, forKey: .width)
-    height = try? container.decodeIfPresent(Int.self, forKey: .height)
-    frameRate =
-      (try? container.decodeIfPresent(Double.self, forKey: .realFrameRate))
-      ?? (try? container.decodeIfPresent(Double.self, forKey: .averageFrameRate))
-    videoRange = try? container.decodeIfPresent(String.self, forKey: .videoRange)
-    extendedVideoType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoType)
-    extendedVideoSubType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoSubType)
   }
 }
 
@@ -277,8 +246,6 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
-  /// `MediaStreams` 里有读不出的条目：数不准文件里有几条轨道。
-  let hasUnreadableStreams: Bool
   /// 这个版本的片长。条目上的 `RunTimeTicks` 只对应其中一个版本。
   let runTimeTicks: Int64?
   /// 这个版本对应的条目（多版本时各版本是不同条目），章节截图挂在它上面。
@@ -294,7 +261,6 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.container = container
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
-    hasUnreadableStreams = false
     self.runTimeTicks = runTimeTicks
     itemID = nil
     chapters = []
@@ -319,7 +285,6 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
     let streams = try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams)
     mediaStreams = streams?.compactMap(\.value) ?? []
-    hasUnreadableStreams = streams?.contains { $0.value == nil } ?? false
     runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
     itemID = try? container.decodeIfPresent(String.self, forKey: .itemID)
     // 没有 `ChapterIndex` 时截图序号按服务器列表里的位置，要在丢掉读不出的条目之前记下。
@@ -333,29 +298,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
   }
 
-  /// 文件里音视频和字幕轨的条数（不含外挂字幕等文件外的流）。没有流信息、有条目读不出或类型认不出、
-  /// 或一条音视频流都没有时为 nil：数不准。封面图、字体等附件不是轨道，不算。
-  var embeddedTrackCount: Int? {
-    guard !hasUnreadableStreams else { return nil }
-    var count = 0
-    var hasAudioOrVideo = false
-    for stream in mediaStreams where stream.isExternal != true {
-      switch stream.type?.lowercased() {
-      case "video", "audio":
-        count += 1
-        hasAudioOrVideo = true
-      case "subtitle":
-        count += 1
-      case "embeddedimage", "attachment":
-        continue
-      default:
-        return nil
-      }
-    }
-    return hasAudioOrVideo ? count : nil
-  }
-
-  /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
+  /// 转成与服务器无关的片源：能否直连在这里按 Emby 的数据算好。
   /// `chapterImage` 按条目 ID、章节序号和版本标签给出章节截图地址；不传时章节不带截图。
   /// 片源没给 `ItemId` 时截图挂在 `fallbackItemID` 上：只有一个版本时它就是正在播的条目。
   func serverSource(
@@ -368,7 +311,6 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
-      displayModeHint: DisplayModeHint(source: self), embeddedTrackCount: embeddedTrackCount,
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       chapters: serverChapters(itemID: trimmedNonEmpty([itemID, fallbackItemID]), image: chapterImage))
   }
@@ -411,34 +353,6 @@ nonisolated struct EmbyChapter: Decodable, Sendable, Equatable {
     markerType = try? container.decodeIfPresent(String.self, forKey: .markerType)
     chapterIndex = try? container.decodeIfPresent(Int.self, forKey: .chapterIndex)
     imageTag = try? container.decodeIfPresent(String.self, forKey: .imageTag)
-  }
-}
-
-nonisolated extension DisplayModeHint {
-  /// Emby 片源的第一条视频流。
-  init?(source: EmbyMediaSource) {
-    guard let video = source.mediaStreams.first(where: { $0.type?.lowercased() == "video" }) else { return nil }
-    self.init(
-      width: video.width, height: video.height, framesPerSecond: video.frameRate, codec: video.codec,
-      range: Self.dynamicRange(of: video))
-  }
-
-  /// Emby 的 `VideoRange`、`ExtendedVideoType`、`ExtendedVideoSubType` 对应的动态范围；认不准时为 nil。
-  private static func dynamicRange(of video: EmbyMediaStream) -> DynamicRange? {
-    let extended = video.extendedVideoType?.lowercased() ?? ""
-    let range = video.videoRange?.lowercased() ?? ""
-    if extended == "dolbyvision" || range == "dolbyvision" {
-      switch video.extendedVideoSubType?.lowercased() {
-      case "doviprofile50": return .dolbyVision(profile: 5, compatibilityID: 0)
-      case "doviprofile81": return .dolbyVision(profile: 8, compatibilityID: 1)
-      case "doviprofile84": return .dolbyVision(profile: 8, compatibilityID: 4)
-      default: return nil
-      }
-    }
-    if extended.hasPrefix("hdr10") || range.contains("hdr 10") || range.contains("hdr10") { return .hdr10 }
-    if extended == "hyperloggamma" || extended == "hlg" || range.contains("hlg") { return .hlg }
-    if range == "sdr" || extended == "none" || (extended.isEmpty && range.isEmpty) { return .sdr }
-    return nil
   }
 }
 
@@ -632,7 +546,7 @@ nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodabl
 
 // MARK: - 直接播放判定
 
-/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由 mpv 播放。
+/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由应用内播放器（AetherEngine）播放。
 nonisolated enum EmbyDirectPlay {
   struct Selection: Equatable, Sendable {
     let source: EmbyMediaSource

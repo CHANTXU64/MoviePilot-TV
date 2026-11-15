@@ -188,7 +188,7 @@ struct EmbyClient {
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，
+  /// 声明任何视频都可以直接播放（播放器直连原文件），并关闭重新封装和转码，
   /// Emby 不会为此启动转码任务。
   func playbackInfo(itemID: String, userID: String) async throws -> EmbyPlaybackInfo {
     let bitrate = "200000000"

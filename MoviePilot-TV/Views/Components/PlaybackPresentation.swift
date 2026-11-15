@@ -41,7 +41,7 @@ struct PlaybackPresentationModifier: ViewModifier {
             coordinator.endSession(session)
           })
       ) { session in
-        MPVPlaybackScreen(
+        InAppPlaybackScreen(
           session: session,
           onExit: { notice in coordinator.endSession(session, notice: notice) },
           onSwitchItem: { itemID, sourceID, position, episode, completion in

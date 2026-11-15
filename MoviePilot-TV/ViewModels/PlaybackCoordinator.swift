@@ -1,7 +1,5 @@
-import AVFoundation
 import Combine
 import Foundation
-import MPVUI
 import UIKit
 
 /// 刚播完的是哪部片：详情页据此判断要不要重读观看进度（见 `PlaybackCoordinator.watchStateUpdates`）。
@@ -162,7 +160,7 @@ struct PreparedPlayback {
       positionSeconds: item.resumePositionSeconds, durationSeconds: durationSeconds(playerSeconds: nil))
   }
 
-  /// 所播文件的时长（秒），见 `PlaybackDuration`。`playerSeconds` 是 mpv 读到的时长，还没读到时传 nil。
+  /// 所播文件的时长（秒），见 `PlaybackDuration`。`playerSeconds` 是播放器读到的时长，还没读到时传 nil。
   func durationSeconds(playerSeconds: Double?) -> Double? {
     PlaybackDuration.seconds(
       player: playerSeconds, source: stream.source.runtimeSeconds, item: item.runtimeSeconds)
@@ -2204,7 +2202,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   // MARK: - 播放中换集、换版本
 
-  /// 在当前 mpv 播放界面里改播另一集或另一个版本（对应 Swiftfin 的 `playNewItem`）。
+  /// 在当前播放界面里改播另一集或另一个版本（对应 Swiftfin 的 `playNewItem`）。
   /// 沿用当前会话的服务器连接，为新条目重新取播放信息、选版本；成功后会话换成新条目，
   /// 上一条目照常上报停止，播放界面随后起播新条目。新的切换会取代仍在进行的切换，被取代的不再回报。
   /// `episode` 是详情页集列表里的那一集和它所在那一季的列表（按集播放时），上下文沿用当前会话冻结的。
@@ -2354,7 +2352,7 @@ nonisolated enum PreferredReachability {
   }
 }
 
-/// 一次全屏播放：持有 mpv 播放器，负责起播位置、进度上报和收尾。播放中换集、换版本只替换条目，界面不重新弹出。
+/// 一次全屏播放：持有播放器（`AetherPlayer`），负责起播位置、进度上报和收尾。播放中换集、换版本只替换条目，界面不重新弹出。
 /// `stop()` 可重复调用。
 @MainActor
 final class PlaybackSession: Identifiable {
@@ -2363,59 +2361,27 @@ final class PlaybackSession: Identifiable {
 
   static let progressInterval: Double = 10
 
-  /// mpv 默认优先选中文字幕；没有中文字幕时按片源默认轨道。杜比数字的解码方式见 `dolbyDecoding(for:)`。
-  static func mpvConfiguration(dolbyDecoding: MPVAudioConfiguration.DolbyDecoding) -> MPVPlayerConfiguration {
-    MPVPlayerConfiguration(
-      additionalOptions: ["slang": "chi,zho,zh,chs,cht,sc,tc,cn,zh-Hans,zh-Hant"].merging(
-        subtitleFontOptions, uniquingKeysWith: { current, _ in current }),
-      audio: MPVAudioConfiguration(dolbyDecoding: dolbyDecoding),
-      automaticallyPlays: true
-    )
-  }
-
-  /// 杜比数字（AC-3 / E-AC-3）按创建播放器时的音频输出决定怎么解码。经 HDMI（电视、功放、回音壁）原样交给系统，
-  /// 保留 Atmos；其他输出（HomePod 等 AirPlay、蓝牙）和读不到输出时由 mpv 解码成 PCM：MPVUI 原样输出带 Atmos 的
-  /// E-AC-3 时，经 HomePod 没有声音，也不回退。播放中途换输出不会重新判断。
-  nonisolated static func dolbyDecoding(for outputs: [AVAudioSession.Port]) -> MPVAudioConfiguration.DolbyDecoding {
-    outputs.contains(.HDMI) ? .automatic : .software
-  }
-
-  /// ASS 等由 mpv（libass）绘制的字幕用内置的思源黑体（Noto Sans SC）。
-  /// libass 自带的 FreeType 打不开 tvOS 的系统中文字体（PingFang 是 `hvgl` 字形，Hiragino 是 CFF 字形），
-  /// 按系统字体回退只会画出方块；因此不查系统字体，只用内置字体和片源 MKV 附带的字体，找不到的字体名一律落到内置字体。
-  /// SRT 等文字字幕由界面用系统字体绘制，不经过这里。
-  private static var subtitleFontOptions: [String: String] {
-    guard let directory = Bundle.main.url(forResource: "SubtitleFonts", withExtension: "bundle") else {
-      return [:]
-    }
-    return [
-      "sub-fonts-dir": directory.path(percentEncoded: false),
-      "sub-font": "Noto Sans SC",
-      "sub-font-provider": "none",
-    ]
-  }
-
   let id = UUID()
   /// 在播放界面出现时创建，未展示就不启动解码。
-  private(set) var mpvPlayer: MPVPlayer?
-  /// 当前条目已经记进日志的 mpv 警告和错误条数（见 `record`）。
-  private var loggedMPVMessages = 0
-  /// mpv 打开当前文件时跳过的 zlib 压缩轨道（MPVUI 的 libmpv 没编 zlib，解不开），按 mpv 报的轨道号记。
-  /// 只是字幕轨压缩时字幕不显示；画面和声音都压缩时一帧都解不出来，播放失败时据此说明原因。
-  private var skippedCompressedTracks: Set<String> = []
-  /// mpv 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
+  private(set) var player: AetherPlayer?
+  /// 当前条目已经记进日志的 FFmpeg 警告和错误条数（见 `recordEngineLog`）。
+  private var loggedEngineMessages = 0
+  /// FFmpeg 打开当前文件时报过有轨道的封装压缩解不开（MKV 的 zlib 压缩轨：这版 FFmpeg 没编 zlib）。
+  /// 只是字幕轨压缩时字幕不显示；画面或声音压缩时解不出来，播放失败时据此说明原因。
+  private var sawUnsupportedTrackEncoding = false
+  /// 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
   var onFailure: ((String) -> Void)?
   /// 按集播放时，播放界面的队列从这里取上一集、下一集和同季列表。
   weak var episodeQueue: (any EpisodeQueueProviding)?
 
   private var prepared: PreparedPlayback
   private var startPosition: Double
-  /// 当前条目已交给 mpv；换条目后等播放界面再次调用 `start()`。
+  /// 当前条目已交给播放器；换条目后等播放界面再次调用 `start()`。
   private var isItemLoaded = false
   private(set) var isStopped = false
   private var lastReportedPause = false
-  private var mpvEventTask: Task<Void, Never>?
-  private var mpvProgressTask: Task<Void, Never>?
+  private var playerObservation: AnyCancellable?
+  private var progressTask: Task<Void, Never>?
   /// 开始、进度、停止和观看进度写回都排进协调器的队列，按顺序发送，见 `PlaybackReporter`。
   private let reporter: PlaybackReporter
 
@@ -2438,74 +2404,62 @@ final class PlaybackSession: Identifiable {
   var mediaSources: [ServerMediaSource] { prepared.stream.sources }
   var startSeconds: Double { startPosition }
 
-  func makeMPVPlayer() -> MPVPlayer {
-    if let mpvPlayer { return mpvPlayer }
-    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
-    let player = MPVPlayer(configuration: Self.mpvConfiguration(dolbyDecoding: Self.dolbyDecoding(for: outputs)))
-    player.logHandler = { [weak self] message in self?.record(message) }
-    mpvPlayer = player
+  func makePlayer() -> AetherPlayer {
+    if let player { return player }
+    let player = AetherPlayer()
+    self.player = player
     return player
   }
 
-  /// mpv 自己的警告和错误（MPVUI 默认只转发这两级）写进日志：播放失败时看得出卡在哪一步，比如读不到数据、解不了码。
-  /// 解码出错时可能每帧都报，每个条目只记前 `mpvLogLimit` 条。流地址和密钥照常隐去。测试也直接调用它模拟 mpv。
-  func record(_ message: MPVLogMessage) {
-    if message.prefix == "mkv", message.message.contains("compressed with zlib") {
-      skippedCompressedTracks.insert(Self.compressedTrackNumber(in: message.message) ?? message.message)
-    }
-    guard loggedMPVMessages < Self.mpvLogLimit else { return }
-    loggedMPVMessages += 1
-    let text = message.message.trimmingCharacters(in: .whitespacesAndNewlines)
-    let line = "[Playback] mpv[\(message.prefix)] \(PlaybackLog.redacted(text))"
-    switch message.level {
-    case .fatal, .error: Logger.error(line)
-    default: Logger.warning(line)
-    }
-    if loggedMPVMessages == Self.mpvLogLimit {
-      Logger.warning("[Playback] mpv 在这个条目上已经记了 \(Self.mpvLogLimit) 条警告和错误，后面的不再记")
+  /// FFmpeg 的警告和错误写进日志：播放失败时看得出卡在哪一步，比如读不到数据、解不了码。
+  /// 解码出错时可能每帧都报，每个条目只记前 `engineLogLimit` 条。流地址和密钥照常隐去。测试也直接调用它模拟引擎。
+  func recordEngineLog(_ line: String) {
+    guard !isStopped else { return }
+    if line.contains("Unsupported encoding type") { sawUnsupportedTrackEncoding = true }
+    guard loggedEngineMessages < Self.engineLogLimit else { return }
+    loggedEngineMessages += 1
+    let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    Logger.warning("[Playback] ffmpeg \(PlaybackLog.redacted(text))")
+    if loggedEngineMessages == Self.engineLogLimit {
+      Logger.warning("[Playback] FFmpeg 在这个条目上已经记了 \(Self.engineLogLimit) 条警告和错误，后面的不再记")
     }
   }
 
-  static let mpvLogLimit = 50
-
-  /// mpv 警告「Track 3 was compressed with zlib …」里的轨道号；认不出时为 nil。
-  private static func compressedTrackNumber(in text: String) -> String? {
-    guard let range = text.range(of: #"Track \d+ was compressed"#, options: .regularExpression) else { return nil }
-    return text[range].split(separator: " ").dropFirst().first.map(String.init)
-  }
+  static let engineLogLimit = 50
 
   private var currentSeconds: Double {
-    let seconds = mpvPlayer?.position.seconds ?? 0
+    let seconds = player?.position ?? 0
     return seconds.isFinite ? max(0, seconds) : 0
   }
 
   /// 起播当前条目：播放界面出现时，以及换条目后各调用一次。
   func start() {
     guard !isStopped, !isItemLoaded else { return }
-    let player = makeMPVPlayer()
-    if mpvEventTask == nil { observe(player) }
-    player.load(
-      streamURL, playAutomatically: true,
-      startTime: startPosition > 0 ? .milliseconds(Int64(startPosition * 1000)) : nil)
+    let player = makePlayer()
+    if playerObservation == nil { observe(player) }
+    PlaybackEngineLog.attach(self)
+    player.load(streamURL, startTime: startPosition > 0 ? startPosition : nil)
+    guard !isStopped else { return }
     itemDidLoad()
   }
 
-  /// 当前条目已交给 mpv：上报开始，之后的暂停、进度和停止也要上报。
+  /// 当前条目已交给播放器：上报开始，之后的暂停、进度和停止也要上报。
   private func itemDidLoad() {
     isItemLoaded = true
     report(.start, isPaused: false, position: startPosition)
   }
 
-  /// 测试用：不启动 mpv，直接进入条目已交给 mpv 之后的上报流程。
+  /// 测试用：不启动播放器，直接进入条目已交给播放器之后的上报流程。
   func itemDidLoadForTesting() { itemDidLoad() }
 
   /// 换成另一集或另一个版本：当前条目照常上报停止并保存进度，新条目等播放界面调用 `start()` 后起播。
+  /// 电视保持当前显示模式，下一集格式相同时不再切换。
   func replaceItem(with next: PreparedPlayback, startPosition: Double) {
     guard !isStopped else { return }
     endCurrentItem()
-    mpvPlayer?.stop()
-    loggedMPVMessages = 0
-    skippedCompressedTracks = []
+    player?.stop(keepsDisplayMode: true)
+    loggedEngineMessages = 0
+    sawUnsupportedTrackEncoding = false
     prepared = next
     self.startPosition = startPosition
     lastReportedPause = false
@@ -2515,15 +2469,15 @@ final class PlaybackSession: Identifiable {
     guard !isStopped else { return }
     isStopped = true
     endCurrentItem()
-    mpvEventTask?.cancel()
-    mpvEventTask = nil
-    mpvProgressTask?.cancel()
-    mpvProgressTask = nil
-    mpvPlayer?.stop()
+    playerObservation = nil
+    progressTask?.cancel()
+    progressTask = nil
+    player?.stop()
+    PlaybackEngineLog.detach(self)
     onFailure = nil
   }
 
-  /// 上报当前条目停止并保存观看进度；位置和时长须在 mpv 停止前读取。
+  /// 上报当前条目停止并保存观看进度；位置和时长须在播放器停止前读取。
   private func endCurrentItem() {
     guard isItemLoaded else { return }
     isItemLoaded = false
@@ -2548,9 +2502,9 @@ final class PlaybackSession: Identifiable {
       server: prepared.connection.reportingServer, userID: prepared.connection.userID, itemID: prepared.item.id)
   }
 
-  /// 停在 `position` 时要写回的观看进度（测试也直接调用：测试里 mpv 不会真的播到这个位置）。
+  /// 停在 `position` 时要写回的观看进度（测试也直接调用：测试里播放器不会真的播到这个位置）。
   func watchProgress(at position: Double) -> WatchProgress {
-    let duration = prepared.durationSeconds(playerSeconds: mpvPlayer.map { $0.duration.seconds })
+    let duration = prepared.durationSeconds(playerSeconds: player?.duration)
     return WatchProgress(
       itemID: prepared.item.id,
       completed: PlaybackResumePolicy.isCompleted(positionSeconds: position, durationSeconds: duration),
@@ -2558,61 +2512,51 @@ final class PlaybackSession: Identifiable {
       playedAt: Date())
   }
 
-  // MARK: - mpv
+  // MARK: - 播放器
 
-  private func observe(_ player: MPVPlayer) {
-    let events = player.makeEventStream()
-    mpvEventTask = Task { [weak self] in
-      for await event in events {
-        guard let self, !self.isStopped else { return }
-        self.handle(event.change, generation: event.generation)
-      }
+  private func observe(_ player: AetherPlayer) {
+    playerObservation = player.observe { [weak self] event, generation in
+      guard let self, !self.isStopped else { return }
+      self.handle(event, generation: generation)
     }
-    mpvProgressTask = Task { [weak self] in
+    progressTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(for: .seconds(Self.progressInterval))
         guard let self, !self.isStopped, !Task.isCancelled else { return }
-        if self.isItemLoaded, self.mpvPlayer?.state == .playing {
+        if self.isItemLoaded, self.player?.status == .playing {
           self.report(.progress(.timeUpdate), isPaused: false, position: self.currentSeconds)
         }
       }
     }
   }
 
-  /// 处理 mpv 事件（测试也直接调用它模拟 mpv）。`generation` 是事件所属的那次载入（`MPVPlayer.generation`）。
-  /// 事件流会留着还没读的事件，换条目后才读到的上一条目的失败或暂停不能算到新条目头上，直接丢弃。
-  func handle(_ change: MPVPlaybackEvent.Change, generation: UInt64) {
-    guard generation == mpvPlayer?.generation else { return }
-    switch change {
-    case .stateChanged(.failed(let error)), .error(let error, fatal: true):
-      Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
-      onFailure?(
-        Self.failureMessage(
-          for: error, skippedCompressedTracks: skippedCompressedTracks.count,
-          embeddedTrackCount: prepared.stream.source.embeddedTrackCount))
-    case .pauseChanged(let isPaused):
-      handlePauseChange(isPaused: isPaused)
-    default:
+  /// 处理播放器事件（测试也直接调用它模拟播放器）。`generation` 是事件所属的那次载入（`AetherPlayer.generation`）：
+  /// 换条目后才处理到的上一条目的失败或暂停不能算到新条目头上，直接丢弃。
+  func handle(_ event: AetherPlayer.Event, generation: UInt64) {
+    guard generation == player?.generation else { return }
+    switch event {
+    case .failed(let failure):
+      Logger.error(
+        "[Playback] 播放失败: \(failure.kind ?? "unknown") \(failure.underlyingDomain ?? "") "
+          + "\(failure.underlyingCode.map(String.init) ?? "") \(PlaybackLog.redacted(failure.message))")
+      onFailure?(Self.failureMessage(for: failure, sawUnsupportedTrackEncoding: sawUnsupportedTrackEncoding))
+    case .statusChanged(.paused):
+      handlePauseChange(isPaused: true)
+    case .statusChanged(.playing):
+      handlePauseChange(isPaused: false)
+    case .statusChanged, .updated:
       break
     }
   }
 
-  /// 播放失败时给用户的说明。mpv 跳过过 zlib 压缩的轨道、又一帧画面一段声音都没播出来时单独说，
-  /// 只说有依据的：mpv 的警告不说跳过的是哪类轨道，跳过的条数不少于文件里音视频和字幕轨的总数
-  /// （`embeddedTrackCount`，数不准时为 nil）时，才能确定画面和声音都在里面；否则只说有轨道压缩、解不开，不断言是失败原因。
-  /// 只比音视频条数不够：字幕轨压缩、音视频因别的原因没播出来时条数也可能凑够。
-  /// 其他失败按错误类别说明（见 `PlaybackFailureMessage`）。提示在全局通知里单行显示，同样不超过 30 字。
-  static func failureMessage(
-    for error: MPVPlayerError, skippedCompressedTracks: Int, embeddedTrackCount: Int?
-  ) -> String {
-    guard skippedCompressedTracks > 0, case .playbackFailed(let code, _) = error, code == LibmpvError.nothingToPlay
-    else {
-      return PlaybackFailureMessage.message(for: error)
+  /// 播放失败时给用户的说明。FFmpeg 报过有轨道的封装压缩解不开、失败又出在解码和出画面阶段时单独说：
+  /// FFmpeg 只说解不开，不说是哪条、哪类轨道，所以只说有轨道压缩，不断言画面和声音都在里面。
+  /// 其他失败按类别说明（见 `PlaybackFailureMessage`）。提示在全局通知里单行显示，同样不超过 30 字。
+  static func failureMessage(for failure: PlaybackFailure, sawUnsupportedTrackEncoding: Bool) -> String {
+    if sawUnsupportedTrackEncoding, PlaybackFailureMessage.mayBeCausedByCompressedTracks(failure) {
+      return "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App"
     }
-    if let embeddedTrackCount, skippedCompressedTracks >= embeddedTrackCount {
-      return "音视频用了 zlib 压缩，无法解码，请用媒体服务器 App"
-    }
-    return "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App"
+    return PlaybackFailureMessage.message(for: failure)
   }
 
   private func handlePauseChange(isPaused: Bool) {

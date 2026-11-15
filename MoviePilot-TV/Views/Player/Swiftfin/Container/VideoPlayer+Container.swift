@@ -16,7 +16,7 @@
 // - 托管控制器根视图的环境注入移进 `HostedEnvironment` 视图的 `body`（行为相同；原写法在 lazy 初始化闭包里产生 Swift 6 隔离一致性警告）。
 // - `updateProperties()` 是 tvOS 26 的 UIKit 观察回调，部署到 tvOS 18 改用 `ObservationToken` 在可见元素变化时同步补充面板的交互开关。
 // - 日志改用工程的 `Logger`；关闭确认（Swiftfin 设置项 `confirmClose`，默认关）换成常量 `VideoPlayerDefaults.confirmClose`。
-// - MoviePilot-TV 的 mpv 播放不提供画中画，收尾时不再判断 PiP，直接 `mediaSession.stop()`。
+// - MoviePilot-TV 的应用内播放不提供画中画，收尾时不再判断 PiP，直接 `mediaSession.stop()`。
 // - 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 

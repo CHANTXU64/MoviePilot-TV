@@ -9,8 +9,8 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：
-// - 播放画面直接用（同样移植自 Swiftfin 的）`MPVVideoPlayerView`：MoviePilot-TV 只把 mpv 内核交给这个界面，
-//   不再经由 `VideoMediaPlayer` 协议；视频尺寸取自 `MediaSession.videoSize`。
+// - 播放画面直接用 `AetherVideoPlayerView`（改自 Swiftfin 的 `MPVVideoPlayerView`）：MoviePilot-TV 只把 AetherEngine
+//   播放器交给这个界面，不再经由 `VideoMediaPlayer` 协议；视频尺寸取自 `MediaSession.videoSize`。
 // - 原版 `onAppear` 里 `attach(player:)` 换成 `mediaSession.start()`（起播与上报由 `PlaybackSession` 负责）。
 // - 不用 Router：会话停止时由 `MediaSession` 调外部传入的退出闭包，去掉 `router.dismiss()`。
 // - 起播失败由 `PlaybackSession` 结束会话并在外层提示，去掉原版的错误重试弹窗；去掉投屏、iOS 状态栏与屏幕方向相关修饰。
@@ -18,7 +18,6 @@
 // - 等电视切换显示模式（`MediaSession.isCoveringForDisplay`）时整屏盖黑，画面和控制层切好后一起出现。
 //
 
-import MPVUI
 import SwiftUI
 
 struct VideoPlayer: View {
@@ -34,11 +33,9 @@ struct VideoPlayer: View {
             mediaSession: mediaSession,
             videoSize: { mediaSession.videoSize }
         ) { videoLayout in
-            MPVVideoPlayerView(
-                player: mediaSession.mpvPlayer,
-                textSubtitles: mediaSession.textSubtitles,
-                layout: videoLayout,
-                isPictureInPictureActive: mediaSession.mpvPlayer.pictureInPicture.isActive
+            AetherVideoPlayerView(
+                player: mediaSession.enginePlayer,
+                layout: videoLayout
             )
         } playbackControls: {
             PlaybackControls()

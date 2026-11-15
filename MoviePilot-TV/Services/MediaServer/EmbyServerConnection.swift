@@ -105,7 +105,7 @@ struct EmbyServerConnection: MediaServerConnection {
     { [client] itemID, index, tag in client.chapterImageURL(itemID: itemID, index: index, tag: tag) }
   }
 
-  /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。
+  /// 声明任何视频都可以直接播放（播放器直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。
   func prepareStream(for item: ServerMediaItem, preferredSourceID: String?) async throws -> PreparedStream {
     let info = try await perform(.readPlaybackInfo) { try await client.playbackInfo(itemID: item.id, userID: userID) }
     if let code = info.errorCode, !code.isEmpty, info.mediaSources.isEmpty {

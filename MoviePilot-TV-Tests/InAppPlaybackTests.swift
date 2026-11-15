@@ -1,6 +1,6 @@
-import AVFoundation
 import Combine
-import MPVUI
+import CoreGraphics
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -106,12 +106,80 @@ final class InAppPlaybackModelTests: XCTestCase {
       "只搜 Emby 刮削器会写的来源")
   }
 
-  func testDolbyDecodingDependsOnAudioOutput() {
-    // 经 HDMI 原样输出、保留 Atmos；HomePod（AirPlay）、蓝牙和读不到输出时由 mpv 解码，避免带 Atmos 的 E-AC-3 无声。
-    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.HDMI]), .automatic)
-    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.airPlay]), .software)
-    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.bluetoothA2DP]), .software)
-    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: []), .software)
+  @MainActor
+  func testEngineGeneratedTrackNamesAreNotUsedAsTitles() {
+    // 片源没写标题时引擎自己拼名字，不能当成片源写的标题显示（否则界面会出现「CHI (subrip)」这种名字）。
+    XCTAssertNil(PlayerTrack.title(fromEngineName: "CHI (subrip)", language: "chi", codec: "subrip"))
+    XCTAssertNil(PlayerTrack.title(fromEngineName: "Track 3 (hdmv_pgs_subtitle)", language: nil, codec: "hdmv_pgs_subtitle"))
+    XCTAssertNil(PlayerTrack.title(fromEngineName: "  ", language: nil, codec: "aac"))
+    XCTAssertEqual(PlayerTrack.title(fromEngineName: "简体中文", language: "chi", codec: "ass"), "简体中文")
+    XCTAssertEqual(
+      PlayerTrack.title(fromEngineName: "Track 3 (Director)", language: nil, codec: "aac"), "Track 3 (Director)",
+      "片源自己写的标题恰好以 Track 开头时照常显示")
+
+    let untitled = PlayerTrack(id: 2, language: "chi", codec: "subrip", isForced: true)
+    XCTAssertTrue(PlayerTrackLabel.text(for: untitled, index: 0).hasSuffix("SUBRIP · 强制"))
+    let titled = PlayerTrack(id: 3, title: "国语 5.1", language: "chi", codec: "eac3", isExternal: true)
+    XCTAssertEqual(PlayerTrackLabel.text(for: titled, index: 1), "国语 5.1 · 外挂", "写了标题就只用标题")
+    XCTAssertEqual(PlayerTrackLabel.text(for: PlayerTrack(id: 4, codec: "aac"), index: 2), "轨道 3 · AAC")
+  }
+
+  @MainActor
+  func testOnlySubtitlesCoveringThePictureTimeAreShownAndOffsetShiftsThem() {
+    let presentation = SubtitlePresentation()
+    func text(_ id: Int, _ value: String, alignment: Int? = nil) -> SubtitleSnapshot.TextCue {
+      SubtitleSnapshot.TextCue(id: id, spans: [SubtitleSpan(text: value)], alignment: alignment, position: nil)
+    }
+    do {
+      presentation.update(cues: [
+        TimedSubtitle(start: 10, end: 12, content: .text(text(1, "第一句"))),
+        TimedSubtitle(start: 11.5, end: 14, content: .text(text(2, "第二句", alignment: 8))),
+      ])
+      presentation.update(time: 9.9)
+      XCTAssertNil(presentation.snapshot, "还没到第一句")
+      presentation.update(time: 10)
+      XCTAssertEqual(presentation.snapshot?.texts.map(\.id), [1])
+      presentation.update(time: 11.6)
+      XCTAssertEqual(presentation.snapshot?.texts.map(\.id), [1, 2], "重叠时两句都显示")
+      XCTAssertEqual(presentation.snapshot?.text, "第一句\n第二句")
+      presentation.update(time: 12)
+      XCTAssertEqual(presentation.snapshot?.texts.map(\.id), [2], "结束时间不含在内")
+
+      presentation.delay = 2
+      XCTAssertEqual(presentation.snapshot?.texts.map(\.id), [1], "字幕偏移 +2 秒：12 秒时显示 10 秒那句")
+      presentation.reset()
+      XCTAssertNil(presentation.snapshot, "换条目时清空")
+      presentation.update(time: 11)
+      XCTAssertNil(presentation.snapshot, "清空后没有字幕可显示")
+    }
+  }
+
+  func testBitmapSubtitleCanvasIsMappedOntoThePicture() {
+    // 1920x1080 的 PGS 画布放到裁过黑边的 1920x800 画面上：按宽度对齐、上下居中，底部黑边里的字幕落到画面之外。
+    let frame = SubtitlePresentation.pictureFrame(
+      of: CGRect(x: 0.25, y: 0.9, width: 0.5, height: 0.05), canvas: CGSize(width: 1920, height: 1080),
+      codedVideo: CGSize(width: 1920, height: 800))
+    XCTAssertEqual(frame.minX, 0.25, accuracy: 0.0001)
+    XCTAssertEqual(frame.width, 0.5, accuracy: 0.0001)
+    XCTAssertEqual(frame.minY, (-140 + 0.9 * 1080) / 800, accuracy: 0.0001)
+    XCTAssertEqual(frame.height, 0.05 * 1080 / 800, accuracy: 0.0001)
+
+    let same = CGRect(x: 0.1, y: 0.8, width: 0.3, height: 0.1)
+    XCTAssertEqual(
+      SubtitlePresentation.pictureFrame(of: same, canvas: .zero, codedVideo: CGSize(width: 1920, height: 1080)), same,
+      "画布未知时当作画布就是画面")
+    XCTAssertEqual(
+      SubtitlePresentation.pictureFrame(of: same, canvas: CGSize(width: 1920, height: 1080), codedVideo: .zero), same)
+  }
+
+  @MainActor
+  func testSubtitleAlignmentFollowsASSNumpad() {
+    XCTAssertEqual(SubtitleAnchor.alignment(nil), 2, "没给对齐时放在底部居中")
+    XCTAssertEqual(SubtitleAnchor.alignment(0), 2)
+    XCTAssertEqual(SubtitleAnchor.frameAlignment(8), .top)
+    XCTAssertEqual(SubtitleAnchor.frameAlignment(1), .bottomLeading)
+    XCTAssertEqual(SubtitleAnchor.frameAlignment(6), .trailing)
+    XCTAssertEqual(SubtitleAnchor.textAlignment(7), .leading)
   }
 
   func testLibraryItemExpectationIgnoresInvalidExternalIDs() throws {
@@ -276,13 +344,13 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 
   func testDurationPrefersPlayerThenSelectedSourceThenItem() {
-    // 起播后 mpv 读到的就是正在播的文件：服务器的片源记录过时（文件被洗版换成 3 小时的加长版，Emby 还记 2 小时）也不受影响。
+    // 起播后播放器读到的就是正在播的文件：服务器的片源记录过时（文件被洗版换成 3 小时的加长版，Emby 还记 2 小时）也不受影响。
     XCTAssertEqual(PlaybackDuration.seconds(player: 10_800, source: 7200, item: 7200), 10_800)
     // 起播前还没有实测值：条目记的是 2 小时的版本，选的是 3 小时的加长版，以所选片源为准。
     XCTAssertEqual(PlaybackDuration.seconds(player: nil, source: 10_800, item: 7200), 10_800)
     // 刚入库、Emby 还没分析出片源时长：退回条目的。
     XCTAssertEqual(PlaybackDuration.seconds(player: nil, source: nil, item: 7200), 7200)
-    // 0、负数、非有限值都跳过（mpv 还没读到时长时报 0）。
+    // 0、负数、非有限值都跳过（播放器还没读到时长时报 0）。
     XCTAssertEqual(PlaybackDuration.seconds(player: 0, source: .infinity, item: 7200), 7200)
     XCTAssertEqual(PlaybackDuration.seconds(player: .nan, source: -1, item: 0), nil)
     XCTAssertNil(PlaybackDuration.seconds(player: nil, source: nil, item: nil))
@@ -692,61 +760,50 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(itemID(try item("电影"), backendVersion: "v3.2.6-1"), "m1")
   }
 
-  func testPlaybackFailureMessageFollowsErrorCategoryAndLibmpvCode() {
+  func testPlaybackFailureMessageFollowsEngineErrorKind() {
     typealias M = PlaybackFailureMessage
-    func message(_ error: MPVPlayerError) -> String { M.message(for: error) }
-
-    // 原生输出拒绝：原因文本取自 MPVUI 补丁原文。
-    for reason in [
-      "software Dolby Vision needs libplacebo reshaping",
-      "decoder supplied no validated native Dolby Vision sample metadata",
-      "P7 conversion was not explicitly enabled for this output",
-      "missing, malformed, duplicate, or unconvertible current-frame RPU",
-    ] {
-      XCTAssertEqual(message(.nativeVideoOutputUnavailable(reason)), M.dolbyVisionUnavailable, reason)
+    func message(_ kind: String?, domain: String? = nil, code: Int? = nil, ffmpeg: Int? = nil) -> String {
+      M.message(
+        for: PlaybackFailure(
+          kind: kind, underlyingDomain: domain, underlyingCode: code, ffmpegErrorCode: ffmpeg, message: "engine text"))
     }
-    XCTAssertEqual(
-      message(.nativeVideoOutputUnavailable("no color space for native CI overlay")), M.nativeOutputUnavailable,
-      "非杜比视界的画面格式不说杜比视界")
-    XCTAssertEqual(
-      message(.nativeVideoOutputUnavailable("software color signal cannot be represented by CoreVideo metadata")),
-      M.nativeOutputUnavailable)
 
-    // 读取阶段：只有 LOADING_FAILED（片源流打不开）才提网络。
-    XCTAssertEqual(message(.loadFailed(code: -13, message: "loading failed")), M.sourceUnreachable)
-    XCTAssertEqual(message(.loadFailed(code: -17, message: "unrecognized file format")), M.unknownFormat)
-    XCTAssertEqual(message(.loadFailed(code: -16, message: "no audio or video data played")), M.nothingToPlay)
-    XCTAssertEqual(message(.loadFailed(code: -15, message: "vo init failed")), M.videoOutputFailed)
-    XCTAssertEqual(message(.loadFailed(code: -14, message: "audio output initialization failed")), M.audioOutputFailed)
-    XCTAssertEqual(message(.loadFailed(code: -12, message: "error running command")), M.loadFailedGeneric, "命令被拒不是网络问题")
-    XCTAssertEqual(message(.loadFailed(code: -20, message: "something happened")), M.loadFailedGeneric)
+    XCTAssertEqual(message("dolbyVisionRequiresHardware"), M.dolbyVisionUnavailable)
+    // 打不开片源：只有底层是网络错误时才提网络；FFmpeg 认不出数据是格式问题。
+    XCTAssertEqual(message("sourceOpenFailed", domain: NSURLErrorDomain, code: -1004), M.sourceUnreachable)
+    XCTAssertEqual(message("sourceOpenFailed", domain: "AetherEngine.DemuxerError", code: 0, ffmpeg: -1_094_995_529), M.unknownFormat)
+    XCTAssertEqual(message("sourceOpenFailed", domain: "AetherEngine.DemuxerError", code: 1), M.loadFailedGeneric)
+    // 服务器的 HTTP 回答。
+    XCTAssertEqual(message("sourceRefused", code: 403), M.sourceRefused)
+    XCTAssertEqual(message("sourceRateLimited", code: 429), M.sourceRateLimited)
+    XCTAssertEqual(message("sourceCertificateRejected", domain: NSURLErrorDomain, code: -1202), M.certificateRejected)
+    // 播放中：系统播放器失败时，底层是网络错误才提网络，否则是格式问题（错误原文按设备语言翻译过，不拿来分类）。
+    XCTAssertEqual(message("nativeItemFailed", domain: NSURLErrorDomain, code: -1005), M.sourceInterrupted)
+    XCTAssertEqual(message("nativeItemFailed", domain: "AVFoundationErrorDomain", code: -11821), M.formatUnsupported)
+    XCTAssertEqual(message("vodSourceFailed", domain: NSURLErrorDomain, code: -1001), M.sourceInterrupted)
+    XCTAssertEqual(message("vodSourceFailed", code: 5), M.playbackInterrupted)
+    XCTAssertEqual(message("softwarePipelineFailed"), M.decodeFailed)
+    XCTAssertEqual(message("audioBridgeProducedNoOutput"), M.audioUndecodable)
+    XCTAssertEqual(message("storageExhausted", code: -28), M.storageExhausted)
+    XCTAssertEqual(message(M.initializationKind), M.playerInitializationFailed)
+    XCTAssertEqual(message(nil), M.playbackFailedGeneric, "引擎没给类别时给通用提示")
+    XCTAssertEqual(message("someKindAddedLater"), M.playbackFailedGeneric, "引擎以后新增的类别不会让提示出错")
 
-    // 播放阶段：起播后 mpv 清零错误码，残留的 -13 也不当成网络问题。
-    XCTAssertEqual(message(.playbackFailed(code: -13, message: "loading failed")), M.playbackInterrupted)
-    XCTAssertEqual(message(.playbackFailed(code: -20, message: "something happened")), M.playbackInterrupted)
-    XCTAssertEqual(message(.playbackFailed(code: -15, message: "vo init failed")), M.videoOutputFailed)
-
-    for error: MPVPlayerError in [
-      .clientCreationFailed, .clientUnavailable,
-      .initializationFailed(context: "Initialize mpv", code: -1, message: "event queue full"),
-    ] {
-      XCTAssertEqual(message(error), M.playerInitializationFailed, "\(error)")
-    }
-    XCTAssertEqual(message(.seekTimedOut), M.playbackFailedGeneric)
-
-    let all: [MPVPlayerError] = [
-      .nativeVideoOutputUnavailable("software Dolby Vision needs libplacebo reshaping"),
-      .nativeVideoOutputUnavailable("no color space for native CI overlay"),
-      .loadFailed(code: -17, message: ""), .loadFailed(code: -12, message: ""), .loadFailed(code: -20, message: ""),
-      .playbackFailed(code: -13, message: ""), .playbackFailed(code: -20, message: ""),
-      .clientCreationFailed, .clientUnavailable, .initializationFailed(context: "", code: -1, message: ""),
-      .seekTimedOut,
+    let withoutNetworkEvidence: [String?] = [
+      "dolbyVisionRequiresHardware", "nativeItemFailed", "softwarePipelineFailed", "audioBridgeProducedNoOutput",
+      "storageExhausted", "vodSourceFailed", "reloadFailed", "masterPlaylistRejected", nil,
     ]
-    for error in all {
-      XCTAssertFalse(message(error).contains("网络"), "没有指向网络的证据时不提网络：\(error)")
-      XCTAssertLessThanOrEqual(message(error).count, 30, "提示在全局通知里单行显示")
+    for kind in withoutNetworkEvidence {
+      XCTAssertFalse(message(kind).contains("网络"), "没有指向网络的证据时不提网络：\(String(describing: kind))")
     }
-    XCTAssertLessThanOrEqual(M.sourceUnreachable.count, 30)
+    for text in [
+      M.dolbyVisionUnavailable, M.sourceUnreachable, M.sourceInterrupted, M.sourceRefused, M.sourceRateLimited,
+      M.certificateRejected, M.unknownFormat, M.formatUnsupported, M.decodeFailed, M.audioUndecodable,
+      M.audioSwitchFailed, M.storageExhausted, M.loadFailedGeneric, M.playbackInterrupted, M.playerInitializationFailed,
+      M.playbackFailedGeneric,
+    ] {
+      XCTAssertLessThanOrEqual(text.count, 30, "提示在全局通知里单行显示：\(text)")
+    }
   }
 }
 
@@ -1129,7 +1186,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endCurrentSession()
   }
 
-  func testMKVPlaysThroughMPVWithoutTranscoding() async throws {
+  func testMKVPlaysDirectlyWithoutTranscoding() async throws {
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
       $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
@@ -1140,7 +1197,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNil(coordinator.failure)
     let session = try XCTUnwrap(coordinator.session)
-    XCTAssertNil(session.mpvPlayer, "mpv 等播放界面出现再创建")
+    XCTAssertNil(session.player, "播放器等播放界面出现再创建")
     XCTAssertEqual(session.streamURL.path, "/Videos/m1/stream.mkv")
     let query = URLComponents(url: session.streamURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
     XCTAssertTrue(query.contains(URLQueryItem(name: "Static", value: "true")))
@@ -1883,14 +1940,17 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endCurrentSession()
   }
 
-  /// mpv 报错经会话的 `onFailure` 交到协调器，提示按错误类别给出，不再一律说网络连接。
-  func testMPVFailureShowsMessageMatchingErrorCategory() async throws {
+  /// 播放器报错经会话的 `onFailure` 交到协调器，提示按错误类别给出，不再一律说网络连接。
+  func testPlayerFailureShowsMessageMatchingErrorKind() async throws {
     let coordinator = makeCoordinator(makeService())
     let session = try await startEpisodeSession(coordinator)
 
-    // 模拟器上杜比视界 P5 被原生输出拒绝时 mpv 实际发来的错误。
+    // 软件解码路径上杜比视界 Profile 5（没有兼容的基础层）时引擎给的失败。
     session.handleCurrent(
-      .stateChanged(.failed(.nativeVideoOutputUnavailable("software Dolby Vision needs libplacebo reshaping"))))
+      .failed(
+        PlaybackFailure(
+          kind: "dolbyVisionRequiresHardware",
+          message: "Dolby Vision Profile 5 has no compatible base layer and cannot be color-correctly decoded")))
 
     XCTAssertEqual(coordinator.failure?.message, "该片源为杜比视界格式，这台设备无法硬件解码")
     XCTAssertNil(coordinator.session, "播放失败后结束会话")
@@ -1899,13 +1959,22 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let next = try await startEpisodeSession(other)
     var received: [String] = []
     next.onFailure = { received.append($0) }
-    next.handleCurrent(.error(.loadFailed(code: -17, message: "unrecognized file format"), fatal: true))
-    next.handleCurrent(.error(.loadFailed(code: -13, message: "loading failed"), fatal: true))
-    next.handleCurrent(.error(.seekTimedOut, fatal: false))
+    next.handleCurrent(
+      .failed(
+        PlaybackFailure(
+          kind: "sourceOpenFailed", underlyingDomain: "AetherEngine.DemuxerError", underlyingCode: 0,
+          ffmpegErrorCode: PlaybackFailureMessage.invalidDataCode, message: "Invalid data found when processing input")))
+    next.handleCurrent(
+      .failed(
+        PlaybackFailure(
+          kind: "sourceOpenFailed", underlyingDomain: NSURLErrorDomain, underlyingCode: -1004,
+          message: "Could not connect to the server.")))
+    next.handleCurrent(.statusChanged(.paused))
+    next.handleCurrent(.updated)
 
     XCTAssertEqual(
       received, ["无法识别该片源的格式，文件可能已损坏", "无法从媒体服务器读取片源，请检查网络和服务器状态"],
-      "格式无法识别不说网络；片源打不开才提网络；非致命错误不提示")
+      "格式无法识别不说网络；连不上服务器才提网络；其他事件不提示")
     other.endCurrentSession()
   }
 
@@ -2103,13 +2172,13 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(unknown, 0, "片源没给时长时退回条目的 2 小时：已过 90%，直接从头播放")
   }
 
-  /// 从播放界面换集：界面发起，协调器解析并替换会话条目，界面再起播新条目。走真实的 `MediaSession` 和 mpv 播放器，
-  /// 只证明三者交接正确；测试地址 mpv 打不开，画面能否真正播出来要在模拟器或真机上看。
+  /// 从播放界面换集：界面发起，协调器解析并替换会话条目，界面再起播新条目。走真实的 `MediaSession` 和 AetherEngine 播放器，
+  /// 只证明三者交接正确；测试地址打不开，画面能否真正播出来要在模拟器或真机上看。
   func testSwitchFromPlayerScreenLoadsNewItemOnceAndDropsOldEvents() async throws {
     let coordinator = makeCoordinator(makeService())
     let reporter = coordinator.reporterForTesting
     let session = try await startEpisodeSession(coordinator)
-    // mpv 打不开测试地址时会异步报失败，这里接住，免得结束会话；下面只在同步代码里比较前后次数。
+    // 播放器打不开测试地址时会异步报失败，这里接住，免得结束会话；下面只在同步代码里比较前后次数。
     var failures: [String] = []
     session.onFailure = { failures.append($0) }
     let screen = MediaSession(
@@ -2120,7 +2189,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
           to: itemID, mediaSourceID: sourceID, startPosition: position, episode: episode, in: session,
           completion: completion)
       })
-    let player = try XCTUnwrap(session.mpvPlayer, "界面创建时建好播放器")
+    let player = try XCTUnwrap(session.player, "界面创建时建好播放器")
     let before = PlaybackURLProtocol.stub.requests().count
 
     screen.start()
@@ -2134,7 +2203,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(screen.item.id, "e2", "界面的条目跟着换了")
     XCTAssertNotEqual(screen.state, .loadingItem, "新条目已起播，不再停在加载中")
     XCTAssertEqual(player.generation, firstGeneration + 2, "旧条目停止一次、新条目载入一次，没有重复载入")
-    XCTAssertEqual(player.mediaInformation.sourceURL, session.streamURL, "交给 mpv 的是新条目的地址")
+    XCTAssertEqual(player.loadedURL, session.streamURL, "交给播放器的是新条目的地址")
     let started = PlaybackURLProtocol.stub.requests().dropFirst(before)
       .filter { "\($0.method) \($0.url.path)" == "POST /Sessions/Playing" }
       .compactMap { (try? JSONSerialization.jsonObject(with: $0.body) as? [String: Any])?["ItemId"] as? String }
@@ -2142,16 +2211,16 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     // 上一条目还没读到的事件：播完、播放失败都不能算到新条目头上。
     let failuresBefore = failures.count
-    screen.handlePlayerEvent(.stateChanged(.ended), generation: firstGeneration)
+    screen.handlePlayerEvent(.statusChanged(.ended), generation: firstGeneration)
     XCTAssertNotEqual(screen.state, .stopped, "上一条目的播完不让新条目退出")
     XCTAssertNotEqual(screen.state, .loadingItem, "也不让新条目去接下一集")
-    session.handle(.stateChanged(.failed(.playbackFailed(code: -16, message: "old"))), generation: firstGeneration)
+    session.handle(.failed(PlaybackFailure(kind: "nativeItemFailed", message: "old")), generation: firstGeneration)
     XCTAssertEqual(failures.count, failuresBefore, "上一条目的失败不结束新条目")
 
     // 同样的事件属于当前条目时照常处理，说明上面确实是按代号丢弃的。
-    session.handle(.stateChanged(.failed(.playbackFailed(code: -16, message: "now"))), generation: player.generation)
+    session.handle(.failed(PlaybackFailure(kind: "nativeItemFailed", message: "now")), generation: player.generation)
     XCTAssertEqual(failures.count, failuresBefore + 1)
-    screen.handlePlayerEvent(.stateChanged(.ended), generation: player.generation)
+    screen.handlePlayerEvent(.statusChanged(.ended), generation: player.generation)
     XCTAssertTrue([.stopped, .loadingItem].contains(screen.state), "当前条目播完后退出或接下一集")
 
     screen.stop()
@@ -2190,72 +2259,62 @@ final class PlaybackCoordinatorTests: XCTestCase {
     return session
   }
 
-  /// mpv 跳过一条 zlib 压缩的轨道时的警告（mpv 在中间换行，日志回调分两条收到）。
-  private func recordSkippedTrack(_ track: Int, in session: PlaybackSession) {
-    session.record(
-      MPVLogMessage(
-        prefix: "mkv", level: .warning, message: "Track \(track) was compressed with zlib but mpv has not been compiled"))
-    session.record(MPVLogMessage(prefix: "mkv", level: .warning, message: "with support for zlib compression. Skipping track."))
+  /// FFmpeg 打开 MKV 时遇到解不开的封装压缩（zlib 压缩轨）报的错误。FFmpeg 只说解不开，不说是哪条轨道。
+  private func recordUnsupportedTrackEncoding(in session: PlaybackSession) {
+    session.recordEngineLog("[matroska,webm @ 0x10a8c4000] Unsupported encoding type")
   }
 
-  /// Emby 片源只有这些流时的 PlaybackInfo。
-  private static func playbackInfo(streams: String) -> String {
-    #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"mkv","Protocol":"File","MediaStreams":[\#(streams)]}]}"#
-  }
-
-  func testFailureFromZlibCompressedTracksSaysSoInsteadOfBlamingTheNetwork() async throws {
-    // MPVUI 的 libmpv 没编 zlib：画面和声音都压缩了的 MKV 一帧都解不出来。mpv 先警告跳过轨道，最后报什么都没播出来。
-    // 片源只有一条视频、一条音频，两条都被跳过：确定是画面和声音压缩了。
+  func testDecodeFailureAfterCompressedTrackWarningSaysSoInsteadOfBlamingTheNetwork() async throws {
+    // 这版 FFmpeg 没编 zlib：画面和声音压缩了的 MKV 解不出来。FFmpeg 先报解不开，之后系统播放器解码失败。
     let coordinator = makeCoordinator(makeService())
     let session = try await startEpisodeSession(coordinator)
-    recordSkippedTrack(1, in: session)
-    recordSkippedTrack(2, in: session)
-    session.handleCurrent(.stateChanged(.failed(.playbackFailed(code: -16, message: "no audio or video data played"))))
+    recordUnsupportedTrackEncoding(in: session)
+    session.handleCurrent(
+      .failed(
+        PlaybackFailure(
+          kind: "nativeItemFailed", underlyingDomain: "AVFoundationErrorDomain", underlyingCode: -11821,
+          message: "Cannot Decode")))
 
-    XCTAssertEqual(
-      coordinator.failure?.message, "音视频用了 zlib 压缩，无法解码，请用媒体服务器 App")
+    XCTAssertEqual(coordinator.failure?.message, "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App")
     XCTAssertNil(coordinator.session, "播放失败后结束会话")
   }
 
-  func testZlibIsOnlyBlamedForPictureAndSoundWhenEveryTrackInTheFileWasSkipped() async throws {
-    // mpv 的警告不说跳过的是哪类轨道：只有跳过的条数不少于文件里音视频和字幕轨的总数，才能确定画面和声音都在里面。
-    let video = #"{"Type":"Video","Codec":"h264"}"#
-    let audio = #"{"Type":"Audio","Codec":"aac"}"#
-    let subtitle = #"{"Type":"Subtitle","Codec":"PGSSUB"}"#
-    let external = #"{"Type":"Subtitle","Codec":"srt","IsExternal":true}"#
-    let certain = "音视频用了 zlib 压缩，无法解码，请用媒体服务器 App"
-    let possible = "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App"
-    let cases: [(name: String, streams: String, skipped: [Int], expected: String)] = [
-      ("跳过两条，文件里还有一条字幕：可能只是字幕压缩、音视频因别的原因没播出来", [video, audio, subtitle].joined(separator: ","), [1, 2], possible),
-      ("跳过三条，文件里一共三条", [video, audio, subtitle].joined(separator: ","), [1, 2, 3], certain),
-      ("外挂字幕不在文件里，不算", [video, audio, external].joined(separator: ","), [1, 2], certain),
-      ("同一条轨道报了两次只算一条", [video, audio].joined(separator: ","), [1, 1], possible),
-      ("服务器没给流信息：数不准", "", [1, 2, 3], possible),
-      ("有流的类型认不出：数不准", [video, audio, #"{"Codec":"x"}"#].joined(separator: ","), [1, 2], possible),
-    ]
-    for item in cases {
-      PlaybackURLProtocol.stub.reset()
-      let coordinator = makeCoordinator(makeService())
-      let session = try await startEpisodeSession(coordinator, playbackInfo: Self.playbackInfo(streams: item.streams))
-      for track in item.skipped { recordSkippedTrack(track, in: session) }
-      session.handleCurrent(.stateChanged(.failed(.playbackFailed(code: -16, message: "no audio or video data played"))))
-      XCTAssertEqual(coordinator.failure?.message, item.expected, item.name)
+  func testCompressedTrackWarningOnlyExplainsDecodeFailures() {
+    // 解不开的压缩轨只会让解码失败；打不开片源、服务器拒绝、网络中断另有原因，照常按类别说。
+    let zlib = "有轨道用了 zlib 压缩，无法解码，请用媒体服务器 App"
+    func message(_ kind: String, domain: String? = nil) -> String {
+      PlaybackSession.failureMessage(
+        for: PlaybackFailure(kind: kind, underlyingDomain: domain, message: ""), sawUnsupportedTrackEncoding: true)
     }
-    for message in [certain, possible] {
-      XCTAssertLessThanOrEqual(message.count, 30, "提示在全局通知里单行显示：\(message)")
-    }
+    XCTAssertEqual(message("softwarePipelineFailed"), zlib)
+    XCTAssertEqual(message("nativeItemFailed"), zlib)
+    XCTAssertEqual(message("audioBridgeProducedNoOutput"), zlib)
+    XCTAssertEqual(message("nativeItemFailed", domain: NSURLErrorDomain), PlaybackFailureMessage.sourceInterrupted)
+    XCTAssertEqual(message("sourceRefused"), PlaybackFailureMessage.sourceRefused)
+    XCTAssertEqual(message("sourceOpenFailed", domain: NSURLErrorDomain), PlaybackFailureMessage.sourceUnreachable)
+    XCTAssertEqual(message("dolbyVisionRequiresHardware"), PlaybackFailureMessage.dolbyVisionUnavailable)
+    XCTAssertLessThanOrEqual(zlib.count, 30, "提示在全局通知里单行显示")
   }
 
-  func testFailuresWithoutZlibEvidenceUseTheCategoryMessage() {
+  func testFailuresWithoutCompressedTrackWarningUseTheCategoryMessage() async throws {
     XCTAssertEqual(
       PlaybackSession.failureMessage(
-        for: .playbackFailed(code: -16, message: "no audio or video data played"), skippedCompressedTracks: 0,
-        embeddedTrackCount: 2),
-      PlaybackFailureMessage.nothingToPlay, "没看到 zlib 警告时不猜原因，按错误类别说")
-    XCTAssertEqual(
-      PlaybackSession.failureMessage(
-        for: .loadFailed(code: -13, message: "loading failed"), skippedCompressedTracks: 2, embeddedTrackCount: 2),
-      PlaybackFailureMessage.sourceUnreachable, "失败不是“什么都没播出来”时，另有原因，不说成 zlib")
+        for: PlaybackFailure(kind: "softwarePipelineFailed", message: ""), sawUnsupportedTrackEncoding: false),
+      PlaybackFailureMessage.decodeFailed, "没看到解不开的压缩轨时不猜原因，按错误类别说")
+
+    // 上一集报过解不开的压缩轨，换到下一集后不再算到它头上。
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSession(coordinator)
+    recordUnsupportedTrackEncoding(in: session)
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e2", startPosition: 0, in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应切到下一集，实际 \(String(describing: result))") }
+    var received: [String] = []
+    session.onFailure = { received.append($0) }
+    session.handleCurrent(.failed(PlaybackFailure(kind: "softwarePipelineFailed", message: "")))
+    XCTAssertEqual(received, [PlaybackFailureMessage.decodeFailed])
+    coordinator.endCurrentSession()
   }
 
   func testReportsOfOnePlaybackAreSentInOrderWithEventNames() async throws {
@@ -2266,9 +2325,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     session.itemDidLoadForTesting()
     await reporter.waitForQueued()
-    session.handleCurrent(.pauseChanged(true))
+    session.handleCurrent(.statusChanged(.paused))
     await reporter.waitForQueued()
-    session.handleCurrent(.pauseChanged(false))
+    session.handleCurrent(.statusChanged(.playing))
     await reporter.waitForQueued()
     coordinator.endSession(session)
     await reporter.waitForQueued()
@@ -2292,9 +2351,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     // “开始”上报卡在网络上时连续暂停、继续，再退出。
     session.itemDidLoadForTesting()
-    session.handleCurrent(.pauseChanged(true))
-    session.handleCurrent(.pauseChanged(false))
-    session.handleCurrent(.pauseChanged(true))
+    session.handleCurrent(.statusChanged(.paused))
+    session.handleCurrent(.statusChanged(.playing))
+    session.handleCurrent(.statusChanged(.paused))
     coordinator.endSession(session)
     try await waitUntilBlocked(on: "POST /Sessions/Playing", after: before)
     let whileBlocked = requestPaths(after: before)
@@ -2321,7 +2380,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
     session.itemDidLoadForTesting()
     for isPaused in [true, false, true, false] {
-      session.handleCurrent(.pauseChanged(isPaused))
+      session.handleCurrent(.statusChanged(isPaused ? .paused : .playing))
     }
     gate.signal()
     await reporter.waitForQueued()
@@ -2427,7 +2486,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
   func testSwitchingEpisodeReplacesItemAndKeepsPlayerScreen() async throws {
     let coordinator = makeCoordinator(makeService())
     let session = try await startEpisodeSession(coordinator)
-    let player = session.makeMPVPlayer()
+    let player = session.makePlayer()
     var result: PlaybackCoordinator.SwitchResult?
 
     coordinator.switchItem(to: "e2", startPosition: 0, in: session) { result = $0 }
@@ -2436,7 +2495,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     guard case .switched = result else { return XCTFail("应切到下一集，实际 \(String(describing: result))") }
     XCTAssertTrue(coordinator.session === session, "同一个会话，全屏界面不重新弹出")
     XCTAssertFalse(session.isStopped)
-    XCTAssertTrue(session.mpvPlayer === player, "复用同一个 mpv 播放器")
+    XCTAssertTrue(session.player === player, "复用同一个播放器")
     XCTAssertEqual(session.streamURL.path, "/Videos/e2/stream.mkv")
     XCTAssertEqual(session.item.id, "e2")
     XCTAssertNil(coordinator.failure)
@@ -6389,7 +6448,7 @@ extension PlaybackCoordinatorTests {
   }
 
   /// 条目记 2 小时、所选片源 3 小时：播放界面显示的片长、跳转上限读的片长和写回的看完判定都按 3 小时。
-  /// 跳转本身要等 mpv 就绪才发，测试里 mpv 打不开测试地址，只能断言跳转上限读的那个值（`MediaSession.item.runtime`）。
+  /// 跳转本身要等播放器就绪才发，测试里播放器打不开测试地址，只能断言跳转上限读的那个值（`MediaSession.item.runtime`）。
   func testExtendedCutUsesSourceRuntimeForDisplaySeekAndWriteBack() async throws {
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
@@ -6408,8 +6467,8 @@ extension PlaybackCoordinatorTests {
     XCTAssertTrue(session.watchProgress(at: 9800).completed, "按 3 小时的 90%")
 
     // 信息面板和选集里的当前一集读播放界面建条目时的那份，片长在建条目时就按所选片源；
-    // 起播后 mpv 读出的时长经 `runtime` 给出（测试里 mpv 打不开测试地址，读不到时长，取值顺序见 `PlaybackDuration` 的测试）。
-    // mpv 的失败与这里无关，接住免得结束会话。
+    // 起播后播放器读出的时长经 `runtime` 给出（测试里播放器打不开测试地址，读不到时长，取值顺序见 `PlaybackDuration` 的测试）。
+    // 播放器的失败与这里无关，接住免得结束会话。
     session.onFailure = { _ in }
     let reporter = coordinator.reporterForTesting
     screen.start()
@@ -6446,8 +6505,8 @@ extension PlaybackCoordinatorTests {
     }
   }
 
-  /// 按播放界面的入口起播，读出 mpv 读完文件前、后（交来 `embedded`）的章节。
-  /// 测试里 mpv 打不开测试地址、读不到文件，由测试交来它读到的内嵌章节；片长按片源或条目的。
+  /// 按播放界面的入口起播，读出播放器读完文件前、后（交来 `embedded`）的章节。
+  /// 测试里播放器打不开测试地址、读不到文件，由测试交来它读到的内嵌章节；片长按片源或条目的。
   private func playerChapters(
     _ coordinator: PlaybackCoordinator, _ session: PlaybackSession, embedded: [ServerChapter] = []
   ) async throws -> (beforeRead: ShownChapters, afterRead: ShownChapters) {
@@ -6486,7 +6545,7 @@ extension PlaybackCoordinatorTests {
     return try await playerChapters(coordinator, try XCTUnwrap(coordinator.session), embedded: embedded)
   }
 
-  /// Emby 的章节在所播版本的片源里：一起播就有，不等 mpv。按起点排好，片头片尾检测的标记不算章节，
+  /// Emby 的章节在所播版本的片源里：一起播就有，不等播放器。按起点排好，片头片尾检测的标记不算章节，
   /// 起点在片尾之后的（文件换了更短的版本、Emby 还没重新分析）不列，有截图的带上截图地址。
   func testEmbyChaptersOfThePlayedSourceShowInThePlayer() async throws {
     let shown = try await movieChapters(
@@ -6512,7 +6571,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(shown.beforeRead.slider.map(\.name), ["片头", "正片", "片尾"], "进度条的章节刻度和面板同一份")
     XCTAssertEqual(
       shown.afterRead.panel?.chapters.map(\.displayTitle), ["片头", "正片", "片尾"],
-      "mpv 读到的内嵌章节不替换服务器的")
+      "播放器读到的内嵌章节不替换服务器的")
   }
 
   /// 老版本 Emby 不给 `ChapterIndex`、片源也不给 `ItemId`：截图序号按章节在服务器列表里的位置（读不出的条目也占位），
@@ -6532,13 +6591,13 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(chapters[1].imageSource?.url?.path, "/Items/m1/Images/Chapter/2")
   }
 
-  /// 服务器没有章节：「章节」先转圈，等 mpv 读完文件。文件里有章节就用，没有就按片长每 10 分钟分一段。
+  /// 服务器没有章节：「章节」先转圈，等播放器读完文件。文件里有章节就用，没有就按片长每 10 分钟分一段。
   func testWithoutServerChaptersThePlayerWaitsForEmbeddedChaptersThenSplitsEveryTenMinutes() async throws {
     let embedded = try await movieChapters(embedded: [
       ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: nil, startSeconds: 1800),
       ServerChapter(name: "终章", startSeconds: 5400),
     ])
-    let waiting = try XCTUnwrap(embedded.beforeRead.panel, "mpv 读完文件前就显示「章节」，告诉用户会有章节")
+    let waiting = try XCTUnwrap(embedded.beforeRead.panel, "播放器读完文件前就显示「章节」，告诉用户会有章节")
     XCTAssertTrue(waiting.isLoading)
     XCTAssertTrue(waiting.chapters.isEmpty, "转圈时还没有章节")
     XCTAssertTrue(embedded.beforeRead.slider.isEmpty)
@@ -6557,7 +6616,7 @@ extension PlaybackCoordinatorTests {
 
     // 服务器只给了一个章节：没有可跳的位置，按没有章节处理。
     let single = try await movieChapters(chapters: #"[{"StartPositionTicks":0,"Name":"Chapter 1","MarkerType":"Chapter"}]"#)
-    XCTAssertTrue(try XCTUnwrap(single.beforeRead.panel).isLoading, "一个章节不算有章节，等 mpv")
+    XCTAssertTrue(try XCTUnwrap(single.beforeRead.panel).isLoading, "一个章节不算有章节，等播放器")
     XCTAssertEqual(try XCTUnwrap(single.afterRead.panel).chapters.count, 12)
   }
 
@@ -6629,9 +6688,9 @@ private final class QueryGate {
 }
 
 private extension PlaybackSession {
-  /// 模拟 mpv 发来属于当前这次载入的事件。
-  func handleCurrent(_ change: MPVPlaybackEvent.Change) {
-    handle(change, generation: makeMPVPlayer().generation)
+  /// 模拟播放器发来属于当前这次载入的事件。
+  func handleCurrent(_ event: AetherPlayer.Event) {
+    handle(event, generation: makePlayer().generation)
   }
 }
 

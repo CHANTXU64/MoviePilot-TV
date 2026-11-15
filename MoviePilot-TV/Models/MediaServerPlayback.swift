@@ -112,7 +112,7 @@ nonisolated enum MediaServerHTTP {
   }()
 }
 
-/// 播放相关日志去掉地址和密钥：mpv 等组件的错误信息可能带出含密钥的流地址。
+/// 播放相关日志去掉地址和密钥：播放器等组件的错误信息可能带出含密钥的流地址。
 nonisolated enum PlaybackLog {
   static func redacted(_ text: String) -> String {
     text
@@ -460,11 +460,6 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let container: String?
   /// 不能直连原文件的原因；nil 表示可以直连。
   let unsupportedReason: PlaybackUnsupported?
-  /// 开了「匹配内容」时开播前向电视申请的显示模式；读不准片源格式时为 nil，交给 MPVUI 开播后自己申请。
-  let displayModeHint: DisplayModeHint?
-  /// 文件里音视频和字幕轨的条数（不含外挂字幕），取自起播时已经读到的片源信息；数不准时为 nil。
-  /// 播放失败时据此判断 mpv 跳过的 zlib 压缩轨道是不是包括了全部画面和声音（见 `PlaybackSession.failureMessage`）。
-  let embeddedTrackCount: Int?
   /// 这个版本的片长（秒）；服务器没给时为 nil。同一条目的各版本可能长短不一（如加长版）。
   let runtimeSeconds: Double?
   /// 这个版本的章节，服务器没有时为空。播放界面怎么用见 `PlaybackChapters`。
@@ -472,15 +467,12 @@ nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
 
   init(
     id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
-    displayModeHint: DisplayModeHint? = nil, embeddedTrackCount: Int? = nil, runtimeSeconds: Double? = nil,
-    chapters: [ServerChapter] = []
+    runtimeSeconds: Double? = nil, chapters: [ServerChapter] = []
   ) {
     self.id = id
     self.name = name
     self.container = container
     self.unsupportedReason = unsupportedReason
-    self.displayModeHint = displayModeHint
-    self.embeddedTrackCount = embeddedTrackCount
     self.runtimeSeconds = runtimeSeconds
     self.chapters = chapters
   }
@@ -757,7 +749,7 @@ nonisolated enum PlaybackEpisodeProgress {
 /// 正在播放的那个文件有多长。续播点、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
 nonisolated enum PlaybackDuration {
   /// 依次取播放器读到的时长、所选片源的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
-  /// 起播后 mpv 读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
+  /// 起播后播放器读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
   /// 起播前（算续播点时）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
   static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
     [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
@@ -766,12 +758,12 @@ nonisolated enum PlaybackDuration {
 
 /// 播放界面的章节，依次取：
 /// 1. 媒体服务器给所播片源的章节；
-/// 2. 文件里内嵌、mpv 读到的章节（服务器还没分析出章节时）。要等 mpv 读完文件，之前界面先显示「正在读取」；
+/// 2. 文件里内嵌、播放器读到的章节（服务器还没分析出章节时）。要等播放器读完文件，之前界面先显示「正在读取」；
 /// 3. 都没有时按片长每 10 分钟分一段，名字和 Emby 自动分段的一样（「章节 N」），没有截图。几个小时的片子只靠进度条很难定位。
-/// 片长取 `PlaybackDuration`：起播后以 mpv 读到的为准，章节随之重算。
+/// 片长取 `PlaybackDuration`：起播后以播放器读到的为准，章节随之重算。
 nonisolated enum PlaybackChapters {
   enum Resolution: Equatable {
-    /// 服务器没有章节，mpv 还没读完文件。
+    /// 服务器没有章节，播放器还没读完文件。
     case waitingForPlayer
     /// 空表示不显示章节。
     case chapters([ServerChapter])
@@ -785,7 +777,7 @@ nonisolated enum PlaybackChapters {
   /// 起点超过这个值（约 3 年）的章节当作坏数据，片长未知时也能挡住。
   static let maximumStartSeconds: Double = 100_000_000
 
-  /// `embedded` 为 nil 表示 mpv 还没读完文件。
+  /// `embedded` 为 nil 表示播放器还没读完文件。
   static func resolve(
     server: [ServerChapter], embedded: [ServerChapter]?, durationSeconds: Double?
   ) -> Resolution {

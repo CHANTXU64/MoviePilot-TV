@@ -499,7 +499,7 @@ extension VideoPlayer {
 
                     fitVideo()
                 },
-                // 章节可能在播放中途从有变成没有（mpv 读出的片长更短、读完发现文件里也没有章节），「章节」面板随之消失。
+                // 章节可能在播放中途从有变成没有（播放器读出的片长更短、读完发现文件里也没有章节），「章节」面板随之消失。
                 ObservationToken { [weak mediaSession] in
                     mediaSession?.chapters.isShown
                 } onChange: { [weak self] _ in
