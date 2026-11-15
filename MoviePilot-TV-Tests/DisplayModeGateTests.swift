@@ -2,7 +2,8 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// 开播前等电视切显示模式的规则：播放器就绪后，没开始切换就很快放行，在切换就等切完，卡住了到时间也放行。
+/// 起播遮挡的规则：播放器就绪后，没开始切换就很快放行，在切换就等切完，卡住了到时间也放行；
+/// 准备期间转圈，切换期间纯黑，切完很快就绪时直接揭开、不再转圈。
 @MainActor
 final class DisplayModeGateTests: XCTestCase {
   private final class FakeDisplay: DisplayModeSwitching {
@@ -14,8 +15,14 @@ final class DisplayModeGateTests: XCTestCase {
     var value = false
   }
 
+  /// 记下遮挡样子的每次变化。
+  private final class Covers {
+    var shown: [StartupCover] = []
+  }
+
   private let timing = DisplayModeGate.Timing(
-    settle: .milliseconds(150), timeout: .seconds(3), poll: .milliseconds(10))
+    settle: .milliseconds(150), loadingResumeDelay: .milliseconds(300), switchTimeout: .seconds(3),
+    loadingTimeout: .seconds(3), poll: .milliseconds(10))
   private let clock = ContinuousClock()
 
   func testWaitsForPlayerThenReturnsWhenNoSwitchStarts() async {
@@ -31,7 +38,78 @@ final class DisplayModeGateTests: XCTestCase {
 
     XCTAssertTrue(settled.value, "播放器就绪前不放行")
     XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(250), "就绪后还要留出系统开始切换的时间")
-    XCTAssertLessThan(elapsed, timing.timeout, "不用切换时不等到超时")
+    XCTAssertLessThan(elapsed, timing.loadingTimeout, "不用切换时不等到超时")
+  }
+
+  /// 没开「匹配内容」不会切换，就绪就揭开，不留等切换的时间。
+  func testReturnsOnceSettledWithoutContentMatching() async {
+    let display = FakeDisplay()
+    display.isDisplayCriteriaMatchingEnabled = false
+    let slowSettle = DisplayModeGate.Timing(
+      settle: .seconds(2), switchTimeout: .seconds(3), loadingTimeout: .seconds(3), poll: .milliseconds(10))
+    let covers = Covers()
+    let start = clock.now
+    await DisplayModeGate.wait(for: display, timing: slowSettle, show: { covers.shown.append($0) }) { true }
+
+    XCTAssertLessThan(start.duration(to: clock.now), .seconds(1))
+    XCTAssertEqual(covers.shown, [], "一直是准备中的转圈")
+
+    let startWithoutDisplay = clock.now
+    await DisplayModeGate.wait(for: nil, timing: slowSettle) { true }
+    XCTAssertLessThan(startWithoutDisplay.duration(to: clock.now), .seconds(1), "拿不到显示管理器时同样不等")
+  }
+
+  /// 切换期间纯黑；切完播放器已就绪就直接揭开，中间不再出转圈。
+  func testSwitchBlanksThenRevealsWithoutSpinner() async {
+    let display = FakeDisplay()
+    let covers = Covers()
+    Task {
+      try? await Task.sleep(for: .milliseconds(50))
+      display.isDisplayModeSwitchInProgress = true
+      try? await Task.sleep(for: .milliseconds(200))
+      display.isDisplayModeSwitchInProgress = false
+    }
+    await DisplayModeGate.wait(for: display, timing: timing, show: { covers.shown.append($0) }) { true }
+
+    XCTAssertFalse(display.isDisplayModeSwitchInProgress)
+    XCTAssertEqual(covers.shown, [.blank])
+  }
+
+  /// 切完了播放器还没就绪（远端慢），过一会儿纯黑换回转圈，不让人对着纯黑干等。
+  func testSpinnerReturnsWhenStillLoadingAfterSwitch() async {
+    let display = FakeDisplay()
+    let covers = Covers()
+    let settled = Flag()
+    Task {
+      display.isDisplayModeSwitchInProgress = true
+      try? await Task.sleep(for: .milliseconds(100))
+      display.isDisplayModeSwitchInProgress = false
+      try? await Task.sleep(for: .milliseconds(600))
+      settled.value = true
+    }
+    await DisplayModeGate.wait(for: display, timing: timing, show: { covers.shown.append($0) }) { settled.value }
+
+    XCTAssertTrue(settled.value)
+    XCTAssertEqual(covers.shown, [.blank, .loading])
+  }
+
+  /// 切完很快就绪，不换回转圈。
+  func testNoSpinnerWhenSettlingSoonAfterSwitch() async {
+    let display = FakeDisplay()
+    let covers = Covers()
+    let settled = Flag()
+    var timing = timing
+    timing.loadingResumeDelay = .seconds(1)
+    Task {
+      display.isDisplayModeSwitchInProgress = true
+      try? await Task.sleep(for: .milliseconds(100))
+      display.isDisplayModeSwitchInProgress = false
+      try? await Task.sleep(for: .milliseconds(50))
+      settled.value = true
+    }
+    await DisplayModeGate.wait(for: display, timing: timing, show: { covers.shown.append($0) }) { settled.value }
+
+    XCTAssertEqual(covers.shown, [.blank])
   }
 
   func testWaitsUntilSwitchEnds() async {
@@ -52,18 +130,22 @@ final class DisplayModeGateTests: XCTestCase {
   func testGivesUpWhenSwitchNeverEnds() async {
     let display = FakeDisplay()
     display.isDisplayModeSwitchInProgress = true
-    let short = DisplayModeGate.Timing(settle: .milliseconds(50), timeout: .milliseconds(300), poll: .milliseconds(10))
+    let short = DisplayModeGate.Timing(
+      settle: .milliseconds(50), switchTimeout: .milliseconds(300), loadingTimeout: .seconds(30),
+      poll: .milliseconds(10))
     let start = clock.now
     await DisplayModeGate.wait(for: display, timing: short) { true }
     let elapsed = start.duration(to: clock.now)
 
     XCTAssertTrue(display.isDisplayModeSwitchInProgress)
     XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(300), "到超时才放行")
-    XCTAssertLessThan(elapsed, .seconds(2), "超时后不再等，不能一直黑屏")
+    XCTAssertLessThan(elapsed, .seconds(2), "超时后不再等，不能一直纯黑")
   }
 
   func testGivesUpWhenPlayerNeverSettles() async {
-    let short = DisplayModeGate.Timing(settle: .milliseconds(50), timeout: .milliseconds(300), poll: .milliseconds(10))
+    let short = DisplayModeGate.Timing(
+      settle: .milliseconds(50), switchTimeout: .seconds(30), loadingTimeout: .milliseconds(300),
+      poll: .milliseconds(10))
     let start = clock.now
     await DisplayModeGate.wait(for: FakeDisplay(), timing: short) { false }
 
@@ -88,7 +170,8 @@ final class DisplayModeGateTests: XCTestCase {
   func testCancellationStopsWaiting() async {
     let display = FakeDisplay()
     display.isDisplayModeSwitchInProgress = true
-    let slow = DisplayModeGate.Timing(settle: .milliseconds(50), timeout: .seconds(30), poll: .milliseconds(10))
+    let slow = DisplayModeGate.Timing(
+      settle: .milliseconds(50), switchTimeout: .seconds(30), loadingTimeout: .seconds(30), poll: .milliseconds(10))
     let start = clock.now
     let task = Task { await DisplayModeGate.wait(for: display, timing: slow) { true } }
     try? await Task.sleep(for: .milliseconds(100))

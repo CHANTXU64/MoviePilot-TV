@@ -25,12 +25,22 @@ struct InAppPlaybackScreen: View {
     self.onSwitchItem = onSwitchItem
   }
 
+  /// 起播遮挡；会话建好前也算在准备。
+  private var startupCover: StartupCover? {
+    guard let mediaSession else { return .loading }
+    return mediaSession.startupCover
+  }
+
   var body: some View {
-    Group {
+    ZStack {
       if let mediaSession {
         VideoPlayer(mediaSession: mediaSession)
-      } else {
-        Color.black.ignoresSafeArea()
+      }
+      // 和外层起播前的黑屏是同一个样子，播放器盖上来时看不出换了一层；从第一帧起就在，中途不换视图。
+      // 揭开不带过渡，直接出画面。
+      if let startupCover {
+        PlaybackLoadingScreen(showsIndicator: startupCover == .loading)
+          .transition(.asymmetric(insertion: .opacity, removal: .identity))
       }
     }
     .onAppear {
@@ -191,8 +201,8 @@ final class MediaSession {
   private var hasStarted = false
   /// 正在为换集、换版本解析新条目。
   private var isSwitchingItem = false
-  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑（见 `coverUntilDisplaySettles`）。只是遮挡，不影响播放。
-  private(set) var isCoveringForDisplay: Bool
+  /// 起播遮挡：从起播到首帧备好整屏盖住（见 `coverUntilStartupSettles`），nil 是已揭开。只是遮挡，不影响播放。
+  private(set) var startupCover: StartupCover? = .loading
 
   @ObservationIgnored private let playerAdapter: AetherPlayerAdapter
   @ObservationIgnored private let onExit: Exit
@@ -221,7 +231,6 @@ final class MediaSession {
     enginePlayer = player
     playerAdapter = AetherPlayerAdapter(player: player)
     userSession = UserSession(session: session)
-    isCoveringForDisplay = DisplayModeGate.currentDisplay?.isDisplayCriteriaMatchingEnabled == true
   }
 
   var player: (any MediaPlayer)? { playerAdapter }
@@ -339,28 +348,33 @@ final class MediaSession {
     prepareItem()
     enginePlayer.setRate(effectiveRate)
     session.start()
-    coverUntilDisplaySettles()
+    coverUntilStartupSettles()
     refreshPlaybackState()
   }
 
-  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑：切换时 HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下。
-  /// 只是遮挡，播放照常进行。引擎在交给系统播放器之前申请显示模式、切换期间压住起播，首帧备好且不再等切换时就揭开。
-  private func coverUntilDisplaySettles() {
+  /// 从起播到首帧备好整屏盖住（Apple TV App 的做法）：准备期间黑底转圈；开了「匹配内容」时电视切换显示模式期间纯黑
+  /// （HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下），切好直接揭开。只是遮挡，播放照常进行。
+  /// 播放中换集、换版本时从正在显示的画面淡入。
+  private func coverUntilStartupSettles() {
     displayTask?.cancel()
-    guard let display = DisplayModeGate.currentDisplay, display.isDisplayCriteriaMatchingEnabled else {
-      isCoveringForDisplay = false
-      return
+    if startupCover == nil {
+      withAnimation(PlaybackLoadingScreen.fadeIn) { startupCover = .loading }
+    } else {
+      startupCover = .loading
     }
-    isCoveringForDisplay = true
+    let display = DisplayModeGate.currentDisplay
     displayTask = Task { [weak self] in
-      await DisplayModeGate.wait(for: display) { [weak self] in
-        guard let self else { return true }
-        return DisplayModeGate.isSettled(
-          status: self.enginePlayer.status, hasFirstFrame: self.enginePlayer.hasFirstFrame,
-          isAwaitingDisplaySwitch: self.enginePlayer.isAwaitingDisplaySwitch)
-      }
+      await DisplayModeGate.wait(
+        for: display,
+        show: { [weak self] cover in self?.startupCover = cover },
+        isPlayerSettled: { [weak self] in
+          guard let self else { return true }
+          return DisplayModeGate.isSettled(
+            status: self.enginePlayer.status, hasFirstFrame: self.enginePlayer.hasFirstFrame,
+            isAwaitingDisplaySwitch: self.enginePlayer.isAwaitingDisplaySwitch)
+        })
       guard let self, !Task.isCancelled else { return }
-      self.isCoveringForDisplay = false
+      self.startupCover = nil
     }
   }
 
@@ -383,6 +397,8 @@ final class MediaSession {
     positionObservation = nil
     itemObservations.removeAll()
     queueObservation = nil
+    // 起播遮挡还在时退出：播放器收起期间只留纯黑，不再转圈。
+    if startupCover != nil { startupCover = .blank }
     onExit(notice)
   }
 
