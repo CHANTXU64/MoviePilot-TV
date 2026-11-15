@@ -6,6 +6,9 @@ import UIKit
 
 /// 刚播完的是哪部片：详情页据此判断要不要重读观看进度（见 `PlaybackCoordinator.watchStateUpdates`）。
 nonisolated struct WatchStateChange: Equatable, Sendable {
+  /// 不知道是哪部：从后台回来，期间可能在媒体服务器 App 里看过任何片，每个详情页都重读。
+  static let unknown = WatchStateChange(tmdbID: nil, itemIDs: [])
+
   /// 电影或剧的 TMDB 编号（按集播放时是剧的）；不知道时为 nil。
   let tmdbID: Int?
   /// 播的条目和它所属的剧在服务器上的 ID。
@@ -267,10 +270,15 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   let evidenceUpdates = PassthroughSubject<Int, Never>()
   /// 一次播放结束、观看进度写回发完（最多等 `pendingReportWait`）后发出刚播的是哪部（见 `WatchStateChange`）：
   /// 集索引已作废，这部片的详情页据此重读每集的已播放进度和「继续播放」，别的详情页不动。
+  /// 从后台回到前台时也发一次 `WatchStateChange.unknown`，每个详情页都重读。
   let watchStateUpdates = PassthroughSubject<WatchStateChange, Never>()
   private var watchStateRefreshTask: Task<Void, Never>?
   /// 结束了、还没发出 `watchStateUpdates` 的播放（见 `refreshWatchStateAfterReports`）。
   private var pendingWatchStateChanges: [WatchStateChange] = []
+  /// App 进过后台、还没重读观看进度（见 `refreshWatchStateAfterReturningToForeground`）。
+  private var returnsFromBackground = false
+  /// App 在后台。
+  private var isInBackground = false
   /// 一轮补查结束后，这么久之内不再开下一轮。
   static let lookupRoundRetryInterval: TimeInterval = 600
   /// 一轮补查最多多久（见 `TmdbEpisodeEvidence.roundBudget`），测试可以改短。
@@ -394,6 +402,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     session.stop()
     if let notice { self.notice = Failure(message: notice) }
     refreshWatchStateAfterReports(WatchStateChange(session.item, episode: session.episode))
+    // 播放期间进过后台、已经回到前台：期间可能在媒体服务器 App 里看过别的片，每个详情页都重读。还在后台时等回到前台再读。
+    if returnsFromBackground, !isInBackground {
+      returnsFromBackground = false
+      refreshWatchStateAfterReports(.unknown)
+    }
   }
 
   /// 停止上报和进度写回由 `session.stop()` 排进上报队列；发完后作废集索引（里面记的续播点、已看完是旧的），再通知详情页重读。
@@ -410,6 +423,22 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       self.pendingWatchStateChanges = []
       changes.forEach(self.watchStateUpdates.send)
     }
+  }
+
+  /// App 进了后台：可能去了媒体服务器 App 看片，回来时重读观看进度。
+  func noteEnteredBackground() {
+    returnsFromBackground = true
+    isInBackground = true
+  }
+
+  /// 从后台回到前台：期间可能在媒体服务器 App 里看过（本应用收不到），作废集索引、通知每个详情页重读每集的已播放进度
+  /// 和「继续播放」。只是短暂不活跃（没进后台）时不读；正在应用内播放时等播完一起通知（见 `endSession`）。
+  func refreshWatchStateAfterReturningToForeground() {
+    isInBackground = false
+    guard returnsFromBackground, session == nil else { return }
+    returnsFromBackground = false
+    guard !isTornDown else { return }
+    refreshWatchStateAfterReports(.unknown)
   }
 
   /// App 离开前台（回主屏、打开 App 切换器）时保存正在播放条目的观看进度，播放不结束。

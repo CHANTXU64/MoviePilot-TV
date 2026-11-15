@@ -54,6 +54,11 @@ struct PlaybackPresentationModifier: ViewModifier {
       }
       .onChange(of: scenePhase) { _, phase in
         if phase != .active { coordinator.saveProgressForBackground() }
+        switch phase {
+        case .background: coordinator.noteEnteredBackground()
+        case .active: coordinator.refreshWatchStateAfterReturningToForeground()
+        default: break
+        }
       }
       .onChange(of: coordinator.failure) { _, failure in
         guard let failure else { return }

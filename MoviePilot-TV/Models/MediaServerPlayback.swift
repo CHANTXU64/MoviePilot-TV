@@ -678,9 +678,13 @@ nonisolated enum PlaybackEpisodeProgress {
     var isReached: Bool { watched || covered || resumable }
   }
 
-  /// 有文件的正片集；没有正片时用全部（只有特别篇）。
+  /// 有文件的正片集；有季号集号齐全的正片时只用这些：缺编号的排不进顺序，混进来会被当成最后一集，
+  /// 看过它就以为整部看完了，没看过又会被当成最后一集的下一集。没有编号齐全的正片时退回不排除缺编号的，
+  /// 再没有时用全部（只有特别篇）。
   private static func episodePool(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
     let available = items.filter { $0.kind == .episode && $0.hasFile }
+    let numbered = available.filter { ($0.seasonNumber ?? 0) > 0 && $0.episodeNumber != nil }
+    if !numbered.isEmpty { return numbered }
     let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
     return regular.isEmpty ? available : regular
   }

@@ -700,8 +700,10 @@ class MediaDetailViewModel: ObservableObject {
     // 对到 MoviePilot 集列表（默认顺序）里的那一集：按集起播带着同季列表，播放器里能接着播下一集。
     var episodes: [MoviePilotEpisode] = []
     var matched: MoviePilotEpisode?
-    /// 服务器这份和集列表里同号的那一集播出日期对不上：读集索引失败、只能播服务器这份时也不直接播它。
-    var serverFileDateDiffers = false
+    /// 服务器这份和集列表里同号的那一集对不上（单集编号不同，或播出日期不同）：读集索引失败、只能播服务器这份时也不直接播它。
+    var serverFileContradicts = false
+    /// 服务器这份的单集编号指向别的集（MoviePilot 哪一季都没有这个编号）：按同号那一集起播时不会是它，不先试它、不显示它的进度。
+    var serverFileIsAnotherEpisode = false
     if let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail) {
       let list = try? await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil)
       // 读失败（含会话切换导致的取消）也要复核，不把旧目标的结果写回来。
@@ -711,20 +713,32 @@ class MediaDetailViewModel: ObservableObject {
         if let hit = PlaybackMetadataLookup.episode(matching: upNext.episode, in: list) {
           matched = episodes.first { $0.tmdbEpisodeID != nil && $0.tmdbEpisodeID == hit.id }
             ?? episodes.first { $0.episodeNumber == hit.episodeNumber }
-        } else if upNext.episode.tmdbEpisodeID == nil {
-          // 集号相同、只是播出日期对不上（见 `PlaybackMetadataLookup.episode`）：仍是这一集，交给下面按单集对应判断，
-          // 整理记录确定了就直接播，有迹象是别的集才打开面板；不按服务器条目直接播。
+        } else if let id = upNext.episode.tmdbEpisodeID,
+          case let search = await episode(withTMDBID: id, tmdbID: tmdbID, in: seasons.filter { $0 != season }),
+          search != .absent
+        {
+          guard isCurrent() else { return }
+          if case .found(let episode, let list) = search {
+            // 单集编号在 MoviePilot 的另一季里（服务器按别的顺序分季）：这份文件就是那一集的确定副本，接着看那一集。
+            (matched, episodes) = (episode, list)
+          }
+          // `.unknown`：有一季没读到，不知道编号是不是在那一季，不当作对不上：没有 matched，播服务器上接着看的这份。
+        } else {
+          guard isCurrent() else { return }
+          // 服务器这份的单集编号 MoviePilot 哪一季都没有，或集号相同、播出日期对不上（见 `PlaybackMetadataLookup.episode`）：
+          // 按集列表里同号的那一集交给下面按单集对应判断，那一集确定能播就播它，否则打开面板；不按服务器条目直接播。
           matched = episodes.first { $0.episodeNumber == upNext.episode.episodeNumber }
-          serverFileDateDiffers = matched != nil
+          serverFileContradicts = matched != nil
+          serverFileIsAnotherEpisode = serverFileContradicts && upNext.episode.tmdbEpisodeID != nil
         }
       }
     }
-    var decision = SeriesPlayAction.decision(nil, hasServerFile: true, serverFileHasContraryEvidence: serverFileDateDiffers)
+    var decision = SeriesPlayAction.decision(nil, hasServerFile: true, serverFileHasContraryEvidence: serverFileContradicts)
     if let matched, let context {
       let availability = await coordinator.episodeAvailability(for: [matched], context: context)
       guard isCurrent() else { return }
       decision = SeriesPlayAction.decision(
-        availability?.first, hasServerFile: true, serverFileHasContraryEvidence: serverFileDateDiffers)
+        availability?.first, hasServerFile: true, serverFileHasContraryEvidence: serverFileContradicts)
     }
     if decision == .openPanel, let matched {
       openPanel(matched)
@@ -733,9 +747,10 @@ class MediaDetailViewModel: ObservableObject {
     // 按集起播时接着看到一半的那一集先试有续播点的那一份（`QueuedEpisode.preferredFile`）。
     seriesPlayAction = SeriesPlayAction.make(
       upNext: upNext, serverName: progress.serverName, matched: decision == .play ? matched : nil,
+      serverFileIsAnotherEpisode: serverFileIsAnotherEpisode,
       accepting: .consistentNumberMatches, seasonEpisodes: episodes, context: context)
     episodeRowHint = EpisodeRowHint(
-      season: season, tmdbEpisodeID: matched?.tmdbEpisodeID,
+      season: matched?.seasonNumber ?? season, tmdbEpisodeID: matched?.tmdbEpisodeID,
       episodeNumber: matched?.episodeNumber ?? upNext.episode.episodeNumber)
   }
 
@@ -743,6 +758,31 @@ class MediaDetailViewModel: ObservableObject {
   static func isSameEpisode(_ item: ServerMediaItem, _ episode: MoviePilotEpisode) -> Bool {
     if let id = item.tmdbEpisodeID, let expected = episode.tmdbEpisodeID { return id == expected }
     return item.seasonNumber == episode.seasonNumber && item.episodeNumber == episode.episodeNumber
+  }
+
+  /// 在 MoviePilot 集列表（默认顺序）`seasons` 这几季里按 TMDB 单集编号找到的结果。
+  enum EpisodeSearch: Equatable {
+    /// 找到了：那一集和它所在季的列表。
+    case found(MoviePilotEpisode, [MoviePilotEpisode])
+    /// 每一季都读到了，都没有这个编号。
+    case absent
+    /// 没找到，但有一季没读到（或被取消），不知道在不在那一季。
+    case unknown
+  }
+
+  private func episode(withTMDBID id: Int, tmdbID: Int, in seasons: [Int]) async -> EpisodeSearch {
+    var complete = true
+    for season in seasons {
+      guard !Task.isCancelled,
+        let list = try? await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil)
+      else {
+        complete = false
+        continue
+      }
+      let episodes = MoviePilotEpisode.list(list, season: season)
+      if let hit = episodes.first(where: { $0.tmdbEpisodeID == id }) { return .found(hit, episodes) }
+    }
+    return complete ? .absent : .unknown
   }
 
   /// MoviePilot 集列表（默认顺序）里服务器上 `watched` 这一集的下一集：同一季的下一集，这一季看完了是下一个正片季的第一集。
@@ -1091,17 +1131,22 @@ struct SeriesPlayAction: Equatable {
 
   /// `matched` 是单集对应能播的 MoviePilot 集（调用方查过 `episodeAvailability`，`acceptance` 是允许试的文件），按集起播：
   /// 与按下那一集的卡片相同，能接着播下一集。没有时直接播服务器上的这份文件（没有上一集、下一集）。
+  /// `serverFileIsAnotherEpisode`：服务器上接着看的那份带的单集编号指向别的集，按 `matched` 起播时不会是它：
+  /// 不先试它（试不到还会多重建一次集索引），按钮也不显示它的进度。
   static func make(
     upNext: PlaybackEpisodeProgress.UpNext, serverName: String, matched: MoviePilotEpisode?,
+    serverFileIsAnotherEpisode: Bool = false,
     accepting acceptance: EpisodeMatchAcceptance = .confirmedOnly,
     seasonEpisodes: [MoviePilotEpisode], context: EpisodePlaybackContext?
   ) -> SeriesPlayAction {
     let server = upNext.episode
     let target: PlaybackTarget
+    var resumes = upNext.resumes
     if let matched, let context {
+      if serverFileIsAnotherEpisode { resumes = false }
       // 接着看到一半的：先试有续播点的那一份文件。
       var queued = QueuedEpisode(context: context, episode: matched, seasonEpisodes: seasonEpisodes)
-      if upNext.resumes { queued.preferredFile = ServerFileRef(server: serverName, itemID: server.id) }
+      if resumes { queued.preferredFile = ServerFileRef(server: serverName, itemID: server.id) }
       target = .episode(queued, accepting: acceptance)
     } else {
       target = .serverItem(serverName: serverName, itemID: server.id)
@@ -1109,11 +1154,11 @@ struct SeriesPlayAction: Equatable {
     let season = matched?.seasonNumber ?? server.seasonNumber
     let episode = matched?.episodeNumber ?? server.episodeNumber
     let progress =
-      upNext.resumes
+      resumes
       ? PlaybackResumePolicy.progressFraction(
         positionSeconds: server.resumePositionSeconds, durationSeconds: server.runtimeSeconds)
       : nil
-    let spoken = title(resumes: upNext.resumes, season: season, episode: episode)
+    let spoken = title(resumes: resumes, season: season, episode: episode)
     return SeriesPlayAction(
       title: progress == nil ? spoken : episodeText(season: season, episode: episode) ?? spoken,
       progress: progress, accessibilityLabel: spoken, action: .play(target))

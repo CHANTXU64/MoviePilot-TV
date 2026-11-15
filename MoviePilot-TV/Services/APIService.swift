@@ -365,6 +365,9 @@ class APIService: ObservableObject {
     var storedCredentialsForTesting: (username: String?, password: String?) {
       (storedUsername, storedPassword)
     }
+
+    /// 测试用：会话作用域里的播放协调器由测试创建（连媒体服务器、查 TMDB 走测试替身），详情页等经 `sessionScope` 拿到的就是它。
+    var makePlaybackCoordinatorForTesting: (@MainActor (APIService) -> PlaybackCoordinator)?
   #endif
 
   var baseURL: String { session.baseURL }

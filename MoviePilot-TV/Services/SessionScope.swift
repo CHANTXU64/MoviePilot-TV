@@ -43,7 +43,11 @@ final class SessionScope {
     self.uiIdentity = uiIdentity
     imageWarmer = MPImageWarmer(apiService: apiService)
     mediaPreloader = MediaPreloader(apiService: apiService)
-    let playback = PlaybackCoordinator(apiService: apiService)
+    #if TESTING
+      let playback = apiService.makePlaybackCoordinatorForTesting?(apiService) ?? PlaybackCoordinator(apiService: apiService)
+    #else
+      let playback = PlaybackCoordinator(apiService: apiService)
+    #endif
     playbackCoordinator = playback
     episodeTrial = EpisodeTrialService(
       api: apiService,
