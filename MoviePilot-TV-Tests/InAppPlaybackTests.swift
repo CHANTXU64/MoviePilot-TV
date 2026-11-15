@@ -5083,7 +5083,8 @@ extension PlaybackCoordinatorTests {
   /// 默认顺序第 1 季两集（TMDB 单集 11、12），带 `withSeason2` 时还有第 2 季两集（21、22）；Emby 上的集由 `episodes` 给出。
   /// 详情页带季信息，能按集对应。
   private func makeContinueWatchingDetailViewModel(
-    _ episodes: String..., withSeason2: Bool = false, season2Readable: Bool = true
+    _ episodes: String..., withSeason2: Bool = false, season2Readable: Bool = true,
+    configure: (inout PlaybackStub.Scenario) -> Void = { _ in }
   ) throws
     -> (MediaDetailViewModel, APIService)
   {
@@ -5097,6 +5098,7 @@ extension PlaybackCoordinatorTests {
       $0.tmdbEpisodes = ["/api/v1/tmdb/100/1": Self.twoEpisodeSeason1]
       if season2Readable { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = Self.twoEpisodeSeason2 }
       $0.mediaServerExists = #"{"success":true,"data":{"item":{"id":"s1","server":"emby"}}}"#
+      configure(&$0)
     }
     let service = makeService()
     services.append(service)
@@ -5159,15 +5161,103 @@ extension PlaybackCoordinatorTests {
     viewModel.cancelForPop()
   }
 
-  func testContinueResumesTheServerFileWhenAnotherSeasonCannotBeRead() async throws {
-    // 编号不在第 1 季，第 2 季没读到：不知道是不是那一季的集，不当作对不上，接着播用户看到一半的这份。
+  func testContinueOpensThePanelWhenAnotherSeasonCannotBeReadToPlaceTheServerFile() async throws {
+    // 看到一半的那份带的编号（22）不在第 1 季，第 2 季没读到：它肯定不是第 1 季第 2 集，但可能是别的季的哪一集。
+    // 不直接续播它，也不替用户从另一份播第 1 季第 2 集，打开第 2 集的面板。
     let (viewModel, _) = try makeContinueWatchingDetailViewModel(
       Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
       Self.watchedEpisode("e2", episode: 2, tmdb: 22, position: 1800),
       Self.watchedEpisode("e2b", episode: 2, tmdb: 12), withSeason2: true, season2Readable: false)
     try await waitUntil { viewModel.seriesPlayAction != nil }
-    XCTAssertEqual(viewModel.seriesPlayAction?.action, .play(.serverItem(serverName: "emby", itemID: "e2")))
-    XCTAssertNotNil(viewModel.seriesPlayAction?.progress)
+    XCTAssertEqual(viewModel.seriesPlayAction?.action, .openEpisode)
+    XCTAssertEqual(viewModel.episodeRowHint, EpisodeRowHint(season: 1, tmdbEpisodeID: 12, episodeNumber: 2))
+    viewModel.cancelForPop()
+  }
+
+  func testHeaderPlayPressedBeforeWatchProgressLoadsFollowsTheContinueDecision() async throws {
+    // 观看进度还没读完时按头部「播放」：不按服务器的观看记录直接播看到一半的那份（编号 999，不是第 2 集），
+    // 先显示正在准备播放，读完按结论打开第 2 集的面板。
+    let gate = DispatchSemaphore(value: 0)
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 999, position: 1800)
+    ) {
+      $0.episodesGates[Self.lan] = gate
+      $0.items["\(Self.lan)|e2"] = Self.watchedEpisode("e2", episode: 2, tmdb: 999, position: 1800)
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertNil(viewModel.seriesPlayAction, "观看进度还没读完")
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    XCTAssertTrue(coordinator.isResolving, "先显示正在准备播放")
+
+    for _ in 0..<20 { gate.signal() }
+    try await waitUntil { viewModel.episodePanelRequest != nil }
+    XCTAssertEqual(viewModel.episodePanelRequest?.hint, EpisodeRowHint(season: 1, tmdbEpisodeID: 12, episodeNumber: 2))
+    try await waitUntil { !coordinator.isBusy }
+    XCTAssertNil(coordinator.session, "不播编号对不上的那份")
+    viewModel.cancelForPop()
+  }
+
+  func testHeaderPlayPressedWhileWatchProgressRereadsWaitsForTheNewDecision() async throws {
+    // 上次读到的是「没看过」（整剧播放）。在 Emby App 里看了一部分编号 999 的那份再回来，重读还没完时按「播放」：
+    // 不按上次的结论整剧播放（那会直接续播 999 那份），等这次读完，按结论打开第 2 集的面板。
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 999)
+    ) {
+      $0.items["\(Self.lan)|e2"] = Self.watchedEpisode("e2", episode: 2, tmdb: 999, position: 1800)
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    try await waitUntil { viewModel.episodeRowHint != nil }
+    XCTAssertNil(viewModel.seriesPlayAction, "没看过：整剧播放")
+
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure {
+      $0.episodesGates[Self.lan] = gate
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
+        Self.watchedEpisode("e2", episode: 2, tmdb: 999, position: 1800))
+    }
+    let coordinator = service.sessionScope.playbackCoordinator
+    let reads = PlaybackURLProtocol.stub.requests().count
+    coordinator.noteEnteredBackground()
+    coordinator.refreshWatchStateAfterReturningToForeground()
+    try await waitUntil { PlaybackURLProtocol.stub.requests().count > reads }
+    XCTAssertNil(viewModel.seriesPlayAction, "重读还没完")
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    XCTAssertTrue(coordinator.isResolving, "等这次读完")
+
+    for _ in 0..<20 { gate.signal() }
+    try await waitUntil { viewModel.episodePanelRequest != nil }
+    XCTAssertEqual(viewModel.episodePanelRequest?.hint, EpisodeRowHint(season: 1, tmdbEpisodeID: 12, episodeNumber: 2))
+    try await waitUntil { !coordinator.isBusy }
+    XCTAssertNil(coordinator.session, "不播编号对不上的那份")
+    viewModel.cancelForPop()
+  }
+
+  func testHeaderPlayPressedBeforeWatchProgressLoadsStartsTheDecidedEpisode() async throws {
+    // 同上，读完的结论是按集续播第 2 集：等到结论后直接起播，播的是有续播点的那份。
+    let gate = DispatchSemaphore(value: 0)
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 12, position: 1800)
+    ) {
+      $0.episodesGates[Self.lan] = gate
+      $0.items["\(Self.lan)|e2"] = Self.watchedEpisode("e2", episode: 2, tmdb: 12, position: 1800)
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    XCTAssertTrue(coordinator.isResolving)
+
+    for _ in 0..<20 { gate.signal() }
+    try await waitUntil { coordinator.session != nil }
+    XCTAssertEqual(coordinator.session?.item.id, "e2")
+    XCTAssertEqual(coordinator.session?.episode?.episode.tmdbEpisodeID, 12, "按集起播，能接着播下一集")
+    coordinator.endCurrentSession()
     viewModel.cancelForPop()
   }
 

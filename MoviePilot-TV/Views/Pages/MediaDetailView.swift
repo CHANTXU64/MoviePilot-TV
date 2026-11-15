@@ -1060,13 +1060,7 @@ struct MediaDetailView: View {
               let seriesAction = viewModel.seriesPlayAction
               let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
               let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
-              Button(action: {
-                if let seriesAction {
-                  viewModel.performSeriesPlayAction(seriesAction)
-                } else {
-                  apiService.sessionScope.playbackCoordinator.play(playbackTarget, media: viewModel.detail)
-                }
-              }) {
+              Button(action: { viewModel.playFromHeader(playbackTarget) }) {
                 HStack(spacing: 14) {
                   Image(systemName: AppSymbol.play)
                   if let progress {

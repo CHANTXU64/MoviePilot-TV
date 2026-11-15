@@ -347,6 +347,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   /// `media` 是详情页的 MoviePilot 详情（从详情页起播时）：播放界面的信息直接用它，不再按服务器条目查。
   func play(_ target: PlaybackTarget, media: MediaInfo? = nil) {
+    play(media: media) { target }
+  }
+
+  /// 先等调用方定下播什么再起播（详情页剧的「播放」在观看进度读完前按下时），期间同样显示「正在准备播放」、可以取消。
+  /// `decide` 返回 nil 时不起播：调用方改做了别的（比如打开那一集的面板）。
+  func play(media: MediaInfo? = nil, deciding decide: @escaping @MainActor () async -> PlaybackTarget?) {
     guard !isTornDown, !isBusy, let apiService else { return }
     guard apiService.canRequestSuperUserEndpoints else {
       fail(PlaybackError.notAllowed)
@@ -364,6 +370,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     let snapshot = apiService.sessionSnapshot()
     let userName = apiService.currentOrStoredUserName
     let task = Task { [weak self] in
+      guard let target = await decide() else {
+        if let self, !Task.isCancelled { self.phase = .idle }
+        return
+      }
       let outcome: Result<PreparedPlayback, Error>
       do {
         guard let self else { return }
