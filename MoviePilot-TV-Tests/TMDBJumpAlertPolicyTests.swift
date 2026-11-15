@@ -58,17 +58,16 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
     return try String(contentsOf: repositoryRoot.appendingPathComponent(relativePath))
   }
 
-  func testHomeSearchResourcesSkipsNotificationWhileDetailJumpKeepsIt() throws {
+  func testHomeSearchResourcesSkipsNotification() throws {
     let homeView = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
 
     XCTAssertTrue(
       homeView.contains("for: info, notifyWhenUnrecognized: false)"),
       "Home「搜索资源」识别失败会自愈为标题搜索，必须显式不弹提示"
     )
-    XCTAssertTrue(
-      homeView.contains("getTMDBJumpTarget(for: info)"),
-      "Home「TMDB详情页」找不到就该告知用户，必须保持默认弹提示"
-    )
+    // 首页卡片按下即打开详情页，长按菜单不再有「TMDB详情页」，也就不再有默认弹提示的调用。
+    XCTAssertFalse(homeView.contains("Label(\"TMDB详情页\""))
+    XCTAssertFalse(homeView.contains("getTMDBJumpTarget(for: info)"))
   }
 
   func testOtherTMDBJumpEntryPointsKeepDefaultNotification() throws {
