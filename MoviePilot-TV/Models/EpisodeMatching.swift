@@ -810,9 +810,14 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     return unnumberedFileUnchanged(fresh, recorded) ? .same : .changed
   }
 
-  /// 没有 TMDB 单集编号的文件：仍然没有编号，季号集号和文件路径都没变。
+  /// 还在同一部剧的条目下（两次都读到所属剧时要一致）：同一个条目被归到别的剧，之前的对应就不算数。
+  private static func sameSeries(_ fresh: ServerMediaItem, _ recorded: ServerMediaItem) -> Bool {
+    fresh.seriesID == nil || recorded.seriesID == nil || fresh.seriesID == recorded.seriesID
+  }
+
+  /// 没有 TMDB 单集编号的文件：仍然没有编号，还在同一部剧下，季号集号和文件路径都没变。
   private static func unnumberedFileUnchanged(_ fresh: ServerMediaItem, _ recorded: ServerMediaItem) -> Bool {
-    fresh.tmdbEpisodeID == nil && fresh.seasonNumber == recorded.seasonNumber
+    fresh.tmdbEpisodeID == nil && sameSeries(fresh, recorded) && fresh.seasonNumber == recorded.seasonNumber
       && fresh.episodeNumber == recorded.episodeNumber && fresh.episodeNumberEnd == recorded.episodeNumberEnd
       && (fresh.path == nil || recorded.path == nil || fresh.path == recorded.path)
   }
@@ -821,13 +826,13 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 「继续播放」按服务器上这份续播（`PlaybackTarget.seriesFile`）都按这一处：
   /// - 当成某一集播的（`judgement.tmdbEpisodeID`）：条目还是对应表里记的那一集（`recheck`）；按季号集号对上、
   ///   要核对日期的（`airDateReference`），重新读到的播出日期也不能和那一集对不上（日期可能刚补上或改了）。
-  /// - 对不到集列表、照常播的：判断它时用到的编号信息都没变（有编号的编号和季号集号不变，没编号的同 `recheck`）。
+  /// - 对不到集列表、照常播的：判断它时用到的信息都没变（还在同一部剧下；有编号的编号和季号集号不变，没编号的同 `recheck`）。
   static func admit(_ fresh: ServerMediaItem, as judgement: EpisodeFileJudgement) -> Admission {
     guard let tmdbEpisodeID = judgement.tmdbEpisodeID else {
       guard let recorded = judgement.file else { return .changed }
       if let recordedID = recorded.tmdbEpisodeID {
         guard let freshID = fresh.tmdbEpisodeID else { return .lostEpisodeID }
-        guard freshID == recordedID, fresh.seasonNumber == recorded.seasonNumber,
+        guard freshID == recordedID, sameSeries(fresh, recorded), fresh.seasonNumber == recorded.seasonNumber,
           fresh.episodeNumber == recorded.episodeNumber, fresh.episodeNumberEnd == recorded.episodeNumberEnd
         else { return .changed }
         return .same

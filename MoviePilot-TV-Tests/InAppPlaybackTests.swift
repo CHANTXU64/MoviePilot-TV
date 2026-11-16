@@ -393,6 +393,47 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertNil(try first([]))
   }
 
+  func testUpNextResumesACopyRewatchedAfterAnotherCopyWasFinished() throws {
+    // 同一集在两个媒体库各有一份：一份看完了，另一份看到一半。看到一半那份播得更晚（重新在看）就接着播它；
+    // 更早（旧续播点）或读不到时间时以看完为准，接着看下一集。被看完的合集包含的那一集也一样。
+    func episode(
+      _ id: String, episode: Int, end: Int? = nil, played: Bool = false, position: Int = 0, lastPlayed: String? = nil
+    ) -> String {
+      let ticks = Int64(position) * 10_000_000
+      let end = end.map { #","IndexNumberEnd":\#($0)"# } ?? ""
+      let date = lastPlayed.map { #","LastPlayedDate":"\#($0)""# } ?? ""
+      return #"{"Id":"\#(id)","Type":"Episode","ParentIndexNumber":1,"IndexNumber":\#(episode)\#(end),"RunTimeTicks":72000000000,"UserData":{"Played":\#(played),"PlaybackPositionTicks":\#(ticks)\#(date)}}"#
+    }
+    func upNext(_ episodes: [String]) throws -> (String, Bool)? {
+      let items = try decode(EmbyItemsPage.self, #"{"Items":[\#(episodes.joined(separator: ","))]}"#).items
+        .map { $0.serverItem(defaultKind: .episode) }
+      return PlaybackEpisodeProgress.upNext(in: items).map { ($0.episode.id, $0.resumes) }
+    }
+    let first = episode("e1", episode: 1, played: true, lastPlayed: "2026-01-01T10:00:00.0000000Z")
+    let finished = episode("e2a", episode: 2, played: true, lastPlayed: "2026-01-02T10:00:00.0000000Z")
+    let next = episode("e3", episode: 3)
+    let rewatching = episode("e2b", episode: 2, position: 1800, lastPlayed: "2026-02-01T21:30:00.1234567Z")
+    XCTAssertEqual(try upNext([first, finished, rewatching, next])?.0, "e2b", "重新在看的那份")
+    XCTAssertEqual(try upNext([first, finished, rewatching, next])?.1, true)
+    let stale = episode("e2b", episode: 2, position: 1800, lastPlayed: "2025-12-31T10:00:00Z")
+    XCTAssertEqual(try upNext([first, finished, stale, next])?.0, "e3", "旧续播点不盖掉看完")
+    let undated = episode("e2b", episode: 2, position: 1800)
+    XCTAssertEqual(try upNext([first, finished, undated, next])?.0, "e3", "读不到时间时以看完为准")
+    // 看完了 E01–E02 的合集，之后又单独看了一半 E02。
+    let pack = episode("pack", episode: 1, end: 2, played: true, lastPlayed: "2026-01-02T10:00:00Z")
+    XCTAssertEqual(try upNext([pack, rewatching, next])?.0, "e2b")
+    XCTAssertEqual(try upNext([pack, stale, next])?.0, "e3")
+  }
+
+  func testEmbyLastPlayedDateIsRead() throws {
+    XCTAssertEqual(
+      EmbyDate.parse("2026-02-01T21:30:00.1234567Z")?.timeIntervalSince1970 ?? 0,
+      ISO8601DateFormatter().date(from: "2026-02-01T21:30:00Z")!.timeIntervalSince1970 + 0.1234567, accuracy: 0.0001)
+    XCTAssertEqual(EmbyDate.parse("2026-02-01T21:30:00Z"), ISO8601DateFormatter().date(from: "2026-02-01T21:30:00Z"))
+    XCTAssertEqual(EmbyDate.parse("2026-02-01T21:30:00"), ISO8601DateFormatter().date(from: "2026-02-01T21:30:00Z"))
+    XCTAssertNil(EmbyDate.parse("昨天"))
+  }
+
   func testUpNextContinuesTheFurthestWatchedEpisode() throws {
     // 每集 2 小时（72000000000 tick）；`position` 是续播点（秒）。
     func episode(
@@ -5376,6 +5417,29 @@ extension PlaybackCoordinatorTests {
     try await Task.sleep(for: .milliseconds(800))
     XCTAssertEqual(Set(secondaryListRequests()), initial, "\(secondaryListRequests())")
     XCTAssertNil(viewModel.seriesPlayAction)
+  }
+
+  func testServerFileMovedToAnotherSeriesIsNotResumedAsIs() async throws {
+    // 按钮定下要续播那份对不到集列表的文件之后，服务器把这个条目归到了另一部剧（季号集号、路径都没变）：
+    // 起播前复核认出所属剧变了，不原样播。
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true), Self.unlistedHalfWatched
+    ) {
+      $0.items["\(Self.lan)|e3"] = Self.unlistedHalfWatched
+      $0.playbackInfo = Self.playbackInfo()
+      $0.transferHistory = "[]"
+    }
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    XCTAssertEqual(Self.judgedServerFileID(viewModel), "e3")
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e3"] = Self.unlistedHalfWatched.replacingOccurrences(of: #""SeriesId":"s1""#, with: #""SeriesId":"other""#)
+    }
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    try await waitUntil { coordinator.failure != nil || coordinator.session != nil }
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, PlaybackCoordinator.seriesFileChangedMessage)
   }
 
   func testServerFileRenumberedAfterTheDecisionIsNotPlayedAsIs() async throws {

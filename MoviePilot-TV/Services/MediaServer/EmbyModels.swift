@@ -140,6 +140,12 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     }
   }
 
+  /// 这个用户最后一次播放的时间（`UserData.LastPlayedDate`，如 `2025-01-05T12:34:56.1234567Z`）；没有或读不出时为 nil。
+  var lastPlayedAt: Date? {
+    guard case .string(let text) = userData?["LastPlayedDate"] else { return nil }
+    return EmbyDate.parse(text)
+  }
+
   /// 这个用户已看完。读不到时当作没看完。
   var isPlayed: Bool {
     if case .bool(let value) = userData?["Played"] { return value }
@@ -170,6 +176,7 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
       played: isPlayed,
+      lastPlayedAt: lastPlayedAt,
       hasFile: locationType?.lowercased() != "virtual",
       externalIDs: ExternalMediaID.normalizedTable(providerIDs),
       path: path,
@@ -680,4 +687,22 @@ nonisolated enum EmbyTicks {
 
   static func from(seconds: Double) -> Int { Int(seconds * perSecond) }
   static func seconds(_ ticks: Int64) -> Double { Double(ticks) / perSecond }
+}
+
+/// Emby/Jellyfin 的时间（ISO 8601，小数秒常有 7 位，系统的解析器认不了那么多位）：去掉小数秒再按 UTC 解析，小数秒另加上。
+/// 没写时区的按 UTC。
+nonisolated enum EmbyDate {
+  static func parse(_ text: String) -> Date? {
+    var value = text.trimmingCharacters(in: .whitespaces)
+    var fraction = 0.0
+    if let dot = value.firstIndex(of: ".") {
+      let digits = value[value.index(after: dot)...].prefix { $0.isNumber }
+      fraction = Double("0." + digits) ?? 0
+      value.removeSubrange(dot..<value.index(dot, offsetBy: digits.count + 1))
+    }
+    if value.count == 19 { value += "Z" }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value).map { $0.addingTimeInterval(fraction) }
+  }
 }

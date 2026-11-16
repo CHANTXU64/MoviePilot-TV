@@ -256,6 +256,9 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   let resumePositionSeconds: Double
   /// 服务器上这个用户已看完（标记为已播放）。详情页「继续播放」据此找接着看的那一集，见 `PlaybackEpisodeProgress.upNext`。
   let played: Bool
+  /// 这个用户最后一次播放它的时间；服务器没给或读不出时为 nil。同一集的两份文件一份看完、一份看到一半时，
+  /// 据此分辨是重新在看还是旧续播点（见 `PlaybackEpisodeProgress`）。
+  let lastPlayedAt: Date?
   /// 服务器上只有元数据、没有文件（缺失的集）时为 false。
   let hasFile: Bool
   /// 外部编号：规范来源（见 `ExternalMediaID.normalizedSource`）→ 有效编号。
@@ -282,7 +285,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   init(
     id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
     episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
-    resumePositionSeconds: Double = 0, played: Bool = false, hasFile: Bool = true,
+    resumePositionSeconds: Double = 0, played: Bool = false, lastPlayedAt: Date? = nil, hasFile: Bool = true,
     externalIDs: [String: String] = [:],
     path: String? = nil, premiereDate: String? = nil, seriesID: String? = nil, overview: String? = nil,
     communityRating: Double? = nil, officialRating: String? = nil, posterURL: URL? = nil, thumbnailURL: URL? = nil
@@ -297,6 +300,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     self.runtimeSeconds = runtimeSeconds
     self.resumePositionSeconds = resumePositionSeconds
     self.played = played
+    self.lastPlayedAt = lastPlayedAt
     self.hasFile = hasFile
     self.externalIDs = externalIDs
     self.path = trimmedNonEmpty([path])
@@ -691,14 +695,16 @@ nonisolated enum PlaybackEpisodeProgress {
 
   /// 有文件的正片集按季号集号排好。先把看完的文件包含的集都记下来，再逐集判断看完、看到一半，
   /// 不让同一集的另一份文件（单独的 E02 带着旧续播点、单独的 E01 排在合集前面）盖掉合集已看完的范围。
+  /// 例外是重新在看：看到一半的那份比看完的（同一集的另一份、包含这一集的合集）都播得晚，这一集算看到一半，接着播它；
+  /// 读不到最后播放时间时以看完为准（另一份常带着更早的续播点）。
   private static func orderedSlots(_ items: [ServerMediaItem]) -> [Slot] {
     let pool = episodePool(items)
-    // 按季记看完的集号区间，不逐集展开：服务器给的结束集号异常大时也不会卡住。
-    var covered: [Int: [ClosedRange<Int>]] = [:]
+    // 按季记看完的集号区间（和最后播放时间），不逐集展开：服务器给的结束集号异常大时也不会卡住。
+    var covered: [Int: [(range: ClosedRange<Int>, playedAt: Date?)]] = [:]
     for item in pool where isWatched(item) {
       guard let season = item.seasonNumber, let first = item.episodeNumber, let last = lastEpisode(item), last >= first
       else { continue }
-      covered[season, default: []].append(first...last)
+      covered[season, default: []].append((first...last, item.lastPlayedAt))
     }
     var keys: [String: Int] = [:]
     var groups: [[ServerMediaItem]] = []
@@ -716,14 +722,25 @@ nonisolated enum PlaybackEpisodeProgress {
     }
     let slots = groups.map { copies -> Slot in
       let first = copies[0]
-      let isCovered = first.seasonNumber.flatMap { season in
-        first.episodeNumber.map { episode in covered[season]?.contains { $0.contains(episode) } ?? false }
-      } ?? false
+      // 看完的文件里包含这一集的（同一集看完的那份也在内）。
+      let coveringWatched = first.seasonNumber.flatMap { season in
+        first.episodeNumber.map { episode in covered[season]?.filter { $0.range.contains(episode) } ?? [] }
+      } ?? []
+      let isCovered = !coveringWatched.isEmpty
+      let resumable = copies.filter { resumePosition($0) != nil }
+      // 重新在看：看到一半的那份比每一份看完的都播得晚（时间都读得到）。
+      let rewatched = resumable.filter { copy in
+        guard let resumedAt = copy.lastPlayedAt, isCovered || copies.contains(where: isWatched) else { return false }
+        return coveringWatched.allSatisfy { $0.playedAt.map { resumedAt > $0 } ?? false }
+          && copies.filter(isWatched).allSatisfy { $0.lastPlayedAt.map { resumedAt > $0 } ?? false }
+      }
+      if let latest = rewatched.max(by: { ($0.lastPlayedAt ?? .distantPast) < ($1.lastPlayedAt ?? .distantPast) }) {
+        return Slot(item: latest, watched: false, covered: false, resumable: true)
+      }
       if let watched = copies.filter(isWatched).max(by: { (lastEpisode($0) ?? 0) < (lastEpisode($1) ?? 0) }) {
         return Slot(item: watched, watched: true, covered: false, resumable: false)
       }
       if isCovered { return Slot(item: first, watched: false, covered: true, resumable: false) }
-      let resumable = copies.filter { resumePosition($0) != nil }
       if let resumed = resumable.max(by: { $0.resumePositionSeconds < $1.resumePositionSeconds }) {
         return Slot(item: resumed, watched: false, covered: false, resumable: true)
       }

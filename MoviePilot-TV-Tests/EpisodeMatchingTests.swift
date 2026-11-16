@@ -332,6 +332,26 @@ final class EpisodeMatchingTests: XCTestCase {
       EpisodeQueueStatus.resolve(episode, current: .loaded(index), others: []), .absent, "队列照常当作没有、跳过")
   }
 
+  func testAFileMovedToAnotherSeriesNoLongerPassesTheLaunchRecheck() {
+    // 同一个条目（季号集号、路径、外部编号都没变）被服务器归到了另一部剧：之前按季号集号或「对不到集列表、照常续播」的判断
+    // 都不算数。两次都读到所属剧时才比，读不到的不当成变了。
+    let recorded = file("e1", episode: 2, path: "/data/Season 1/a.mkv", seriesID: "s1")
+    let moved = file("e1", episode: 2, path: "/data/Season 1/a.mkv", seriesID: "s2")
+    XCTAssertEqual(ServerEpisodeIndex.recheck(moved, recorded: recorded, tmdbEpisodeID: 102), .changed)
+    XCTAssertEqual(
+      ServerEpisodeIndex.admit(moved, as: EpisodeFileJudgement(file: recorded, tmdbEpisodeID: 102)), .changed)
+    XCTAssertEqual(ServerEpisodeIndex.admit(moved, as: EpisodeFileJudgement(file: recorded, tmdbEpisodeID: nil)), .changed)
+    let numbered = file("e1", episode: 2, tmdb: 999, seriesID: "s1")
+    let numberedMoved = file("e1", episode: 2, tmdb: 999, seriesID: "s2")
+    XCTAssertEqual(
+      ServerEpisodeIndex.admit(numberedMoved, as: EpisodeFileJudgement(file: numbered, tmdbEpisodeID: nil)), .changed)
+    let unknownSeries = file("e1", episode: 2, path: "/data/Season 1/a.mkv")
+    XCTAssertEqual(
+      ServerEpisodeIndex.admit(unknownSeries, as: EpisodeFileJudgement(file: recorded, tmdbEpisodeID: nil)), .same)
+    // 按 TMDB 单集编号确认的：编号全局唯一，不看所属剧。
+    XCTAssertEqual(ServerEpisodeIndex.recheck(file("e1", episode: 2, tmdb: 102, seriesID: "s2"), recorded: recorded, tmdbEpisodeID: 102), .same)
+  }
+
   func testRecheckOfAFileMatchedWithoutAnID() {
     let recorded = file("e1", episode: 2, path: "/data/Season 1/a.mkv")
     XCTAssertEqual(ServerEpisodeIndex.recheck(recorded, recorded: recorded, tmdbEpisodeID: 102), .same)
