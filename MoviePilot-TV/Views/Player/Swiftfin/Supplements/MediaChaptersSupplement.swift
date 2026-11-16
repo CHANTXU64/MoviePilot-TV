@@ -10,7 +10,7 @@
 //
 // 修改：去掉 `import JellyfinAPI`；Jellyfin 类型换成 MoviePilot-TV 的同名 Emby 适配类型（见 Views/Player/SwiftfinPlayerModels.swift）。
 // Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
-// 新增 `isLoading`：服务器没有章节、mpv 还在读文件里的章节时，面板先转圈。
+// 新增 `isLoading`：服务器没有章节、播放器还在读文件里的章节时，面板先转圈。
 //
 
 import SwiftUI
@@ -21,7 +21,7 @@ struct MediaChaptersSupplement {
     let displayTitle: String = L10n.chapters
     let id: String
     let chapters: [ChapterInfo.FullInfo]
-    /// mpv 还在读文件里的章节，读完后换成章节列表（见 `PlaybackChapters`）。
+    /// 播放器还在读文件里的章节，读完后换成章节列表（见 `PlaybackChapters`）。
     var isLoading = false
 
     func chapterID(at seconds: Duration) -> ChapterInfo.FullInfo.ID? {

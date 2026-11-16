@@ -12,7 +12,7 @@
 		7EEC86612F27DE58001AD31C /* Flow in Frameworks */ = {isa = PBXBuildFile; productRef = 7EEC86602F27DE58001AD31C /* Flow */; };
 		C0D3A0032F9A000100000008 /* MoviePilot-TV-TopShelf.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0D3A0032F9A000100000003 /* MoviePilot-TV-TopShelf.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C0D3A0042F9A000100000001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 7E925C002F377CCF006AA4B3 /* Kingfisher */; };
-		D1A0B0C02FB0000100000003 /* MPVUI in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0B0C02FB0000100000002 /* MPVUI */; };
+		D1A0B0C02FB0000100000003 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0B0C02FB0000100000002 /* AetherEngine */; };
 		D1A0B0C02FB0000100000006 /* MediaAccessibilityKit in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0B0C02FB0000100000005 /* MediaAccessibilityKit */; };
 /* End PBXBuildFile section */
 
@@ -91,7 +91,7 @@
 				7E925C012F377CCF006AA4B3 /* Kingfisher in Frameworks */,
 				7EEC86612F27DE58001AD31C /* Flow in Frameworks */,
 				7EEC865E2F27CB99001AD31C /* SwiftDate in Frameworks */,
-				D1A0B0C02FB0000100000003 /* MPVUI in Frameworks */,
+				D1A0B0C02FB0000100000003 /* AetherEngine in Frameworks */,
 				D1A0B0C02FB0000100000006 /* MediaAccessibilityKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -176,7 +176,7 @@
 				7EEC865D2F27CB99001AD31C /* SwiftDate */,
 				7EEC86602F27DE58001AD31C /* Flow */,
 				7E925C002F377CCF006AA4B3 /* Kingfisher */,
-				D1A0B0C02FB0000100000002 /* MPVUI */,
+				D1A0B0C02FB0000100000002 /* AetherEngine */,
 				D1A0B0C02FB0000100000005 /* MediaAccessibilityKit */,
 			);
 			productName = "MoviePilot-TV";
@@ -267,7 +267,7 @@
 				7EEC865C2F27CB99001AD31C /* XCRemoteSwiftPackageReference "SwiftDate" */,
 				7EEC865F2F27DE58001AD31C /* XCRemoteSwiftPackageReference "SwiftUI-Flow" */,
 				7E925BFF2F377CCF006AA4B3 /* XCRemoteSwiftPackageReference "Kingfisher" */,
-				D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "MPVUI" */,
+				D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "AetherEngine" */,
 				D1A0B0C02FB0000100000004 /* XCRemoteSwiftPackageReference "MediaAccessibilityKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -499,12 +499,12 @@
 				minimumVersion = 3.1.1;
 			};
 		};
-		D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "MPVUI" */ = {
+		D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "AetherEngine" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/LePips/MPVUI";
+			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
 				kind = exactVersion;
-				version = 0.10.0;
+				version = 7.67.0;
 			};
 		};
 		D1A0B0C02FB0000100000004 /* XCRemoteSwiftPackageReference "MediaAccessibilityKit" */ = {
@@ -533,10 +533,10 @@
 			package = 7EEC865F2F27DE58001AD31C /* XCRemoteSwiftPackageReference "SwiftUI-Flow" */;
 			productName = Flow;
 		};
-		D1A0B0C02FB0000100000002 /* MPVUI */ = {
+		D1A0B0C02FB0000100000002 /* AetherEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "MPVUI" */;
-			productName = MPVUI;
+			package = D1A0B0C02FB0000100000001 /* XCRemoteSwiftPackageReference "AetherEngine" */;
+			productName = AetherEngine;
 		};
 		D1A0B0C02FB0000100000005 /* MediaAccessibilityKit */ = {
 			isa = XCSwiftPackageProductDependency;

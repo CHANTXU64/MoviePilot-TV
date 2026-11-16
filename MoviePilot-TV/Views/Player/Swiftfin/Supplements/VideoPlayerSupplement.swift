@@ -9,7 +9,7 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：去掉 `import JellyfinAPI`；条目、章节、演职员来自 MoviePilot-TV 的 Emby 适配类型（同名）。
-// 章节不在条目上，由调用方传入 `MediaSession.chapters`；mpv 还在读文件时也显示「章节」（转圈）。
+// 章节不在条目上，由调用方传入 `MediaSession.chapters`；播放器还在读文件时也显示「章节」（转圈）。
 //
 
 import SwiftUI

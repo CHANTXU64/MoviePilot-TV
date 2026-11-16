@@ -4,7 +4,7 @@ import SwiftUI
 
 // 移植自 Swiftfin 的播放界面读取的是 Jellyfin SDK 的数据类型（BaseItemDto、ChapterInfo、BaseItemPerson、MediaStream…）。
 // 这里按同名提供只含界面用到成员的适配类型，移植文件不用改类型名；数据来自与服务器无关的 `ServerMediaItem`、`ServerMediaSource`。
-// 目前只填播放本身已有的数据（标题、季集号、片长、章节、mpv 的音轨字幕、可选的版本）。演职员、片源详情、
+// 目前只填播放本身已有的数据（标题、季集号、片长、章节、播放器读到的音轨字幕、可选的版本）。演职员、片源详情、
 // 片头片尾等元数据暂不接入，保持为空，界面大多按 Swiftfin 原逻辑自然隐藏。
 // 从详情页按集播放时，标题、季集号用 MoviePilot 集列表的，上一集/下一集和同季列表也按它走（见 `UserSession`）；
 // 其他入口（首页“最近添加”、整剧从第一集播）没有集列表，队列为空。
@@ -128,7 +128,7 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   /// 正在播的条目。片长按所播文件（所选片源的，见 `PlaybackDuration`），信息面板、选集里的当前一集都读这份；
-  /// 起播后 mpv 读出的时长由 `MediaSession.runtime` 给出。
+  /// 起播后播放器读出的时长由 `MediaSession.runtime` 给出。
   @MainActor
   static func playback(_ prepared: PreparedPlayback) -> BaseItemDto {
     var dto = BaseItemDto(item: prepared.item, metadata: prepared.metadata, episode: prepared.episode)
@@ -384,7 +384,7 @@ nonisolated struct ChapterInfo: Hashable {
 
 /// 播放界面当前的章节（见 `MediaSession.chapters`）。
 enum PlaybackChapterList {
-  /// 服务器没有章节，mpv 还在读文件：「章节」照样显示，先转圈，让用户知道会有章节可跳。
+  /// 服务器没有章节，播放器还在读文件：「章节」照样显示，先转圈，让用户知道会有章节可跳。
   case loading
   /// 空表示不显示「章节」。
   case chapters([ChapterInfo.FullInfo])
@@ -422,8 +422,8 @@ nonisolated enum MediaStreamType {
   case video, audio, subtitle, other
 }
 
-/// 与 Jellyfin `MediaStream` 同名的轨道适配。`index` 是 mpv 的轨道编号（播放器用它切换）；
-/// 编码取 mpv 报告的值，码率、声道、分辨率等详情暂不接入。
+/// 与 Jellyfin `MediaStream` 同名的轨道适配。`index` 是播放器的轨道编号（文件里的流序号，播放器用它切换）；
+/// 编码取播放器报告的值，码率、声道、分辨率等详情暂不接入。
 nonisolated struct MediaStream: Hashable {
   var index: Int?
   var type: MediaStreamType = .other

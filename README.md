@@ -127,6 +127,8 @@ UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并�
 
 本项目原创代码基于 **[CC0 1.0 Universal](LICENSE)** 协议发布（公有领域）。可自由复制、修改、发布和商业使用。
 
+播放界面的部分代码改自 [Swiftfin](https://github.com/jellyfin/Swiftfin)，这些文件按 MPL-2.0 提供。应用还内置了播放内核 [AetherEngine](https://github.com/superuser404notfound/AetherEngine)、FFmpeg 等第三方组件，各自遵循原有许可，完整列表和许可原文见应用内「设置 → 第三方软件许可」。
+
 ## 鸣谢
 
 界面及交互设计参考了 **[MoviePilot-Frontend](https://github.com/jxxghp/MoviePilot-Frontend)** 与 Apple TV 官方应用，对相关开发者表示感谢。原项目的相关参考代码和逻辑遵循原作者的 **MIT License**。
