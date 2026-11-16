@@ -104,6 +104,8 @@ private struct BadgeOverlay: View, Equatable {
   let bottomLeftText: String?
   let bottomLeftSecondaryText: String?
   let source: MediaSource?
+  /// 左下角最前面的图标（如按下会跳到媒体服务器 App 的跳转图标）。
+  var bottomLeftIcon: String? = nil
 
   private var hasRating: Bool {
     guard let ratingText, !ratingText.isEmpty, let score = Double(ratingText) else { return false }
@@ -121,9 +123,10 @@ private struct BadgeOverlay: View, Equatable {
       let statusLabel = context.resolveSymbol(id: "statusText")
       let secondaryLabel = context.resolveSymbol(id: "secondaryText")
       let sourceIcon = context.resolveSymbol(id: "sourceIcon")
+      let leadingIcon = context.resolveSymbol(id: "bottomLeftIcon")
 
       let hasTop = typeSymbol != nil || (starSymbol != nil && ratingLabel != nil)
-      let hasBottom = statusLabel != nil || secondaryLabel != nil || sourceIcon != nil
+      let hasBottom = statusLabel != nil || secondaryLabel != nil || sourceIcon != nil || leadingIcon != nil
 
       // 渐变托底：只画有徽标的那一边。
       if hasTop {
@@ -174,11 +177,16 @@ private struct BadgeOverlay: View, Equatable {
         let rowHeight = max(
           statusLabel?.size.height ?? 0,
           secondaryLabel?.size.height ?? 0,
-          sourceIcon?.size.height ?? 0
+          sourceIcon?.size.height ?? 0,
+          leadingIcon?.size.height ?? 0
         )
         let midY = size.height - inset - rowHeight / 2
         var x = inset
 
+        if let leadingIcon {
+          context.draw(leadingIcon, at: CGPoint(x: x, y: midY), anchor: .leading)
+          x += leadingIcon.size.width + 10
+        }
         if let statusLabel {
           context.draw(statusLabel, at: CGPoint(x: x, y: midY), anchor: .leading)
           x += statusLabel.size.width + 12
@@ -233,6 +241,13 @@ private struct BadgeOverlay: View, Equatable {
           .tag("secondaryText")
       }
 
+      if let bottomLeftIcon {
+        Image(systemName: bottomLeftIcon)
+          .font(.caption.bold())
+          .foregroundStyle(.white)
+          .tag("bottomLeftIcon")
+      }
+
       if let source {
         Image(source.assetName)
           .resizable()
@@ -249,7 +264,7 @@ private struct BadgeOverlay: View, Equatable {
     lhs.typeText == rhs.typeText && lhs.ratingText == rhs.ratingText
       && lhs.bottomLeftText == rhs.bottomLeftText
       && lhs.bottomLeftSecondaryText == rhs.bottomLeftSecondaryText
-      && lhs.source == rhs.source
+      && lhs.source == rhs.source && lhs.bottomLeftIcon == rhs.bottomLeftIcon
   }
 }
 
@@ -274,6 +289,8 @@ struct MediaCard: View {
   let bottomLeftText: String?  // 左下角：主要状态 (例如 "已订阅")
   let bottomLeftSecondaryText: String?  // 左下角：次要状态 (例如 "更新至 10 集")
   let source: MediaSource?  // 右下角：数据源图标
+  /// 左下角最前面的图标：按下会离开本 App（跳到媒体服务器 App）时显示跳转图标。
+  var bottomLeftIcon: String? = nil
 
   var showBadges: Bool = true
   var loadsImage: Bool = true
@@ -291,13 +308,11 @@ struct MediaCard: View {
   /// 是否对背景图片应用模糊效果。主要用于类似“查看全部”等特殊展示。
   var isBackgroundBlurred: Bool = false
 
-  /// 聚焦时显示的标签，通常用于“点击订阅”等操作。
-  /// 如果提供，则始终保留空间以防止布局抖动。
-  var footerLabel: (icon: String, text: String)? = nil
-
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
   var onFocus: ((Bool) -> Void)? = nil
+  /// 海报读不出来（没有地址或加载失败）时调用一次，调用方可以找一张替代的海报，从 `posterFallbackUrl` 传进来。
+  var onPosterUnavailable: (() -> Void)? = nil
 
   init(
     title: String = "",
@@ -308,15 +323,16 @@ struct MediaCard: View {
     bottomLeftText: String? = nil,
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
+    bottomLeftIcon: String? = nil,
     showBadges: Bool = true,
     loadsImage: Bool = true,
     width: CGFloat = defaultPosterSize.width,
     height: CGFloat = defaultPosterSize.height,
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
-    footerLabel: (icon: String, text: String)? = nil,
     action: (() -> Void)? = nil,
-    onFocus: ((Bool) -> Void)? = nil
+    onFocus: ((Bool) -> Void)? = nil,
+    onPosterUnavailable: (() -> Void)? = nil
   ) {
     self.title = title
     self.posterUrl = posterUrl
@@ -326,15 +342,16 @@ struct MediaCard: View {
     self.bottomLeftText = bottomLeftText
     self.bottomLeftSecondaryText = bottomLeftSecondaryText
     self.source = source
+    self.bottomLeftIcon = bottomLeftIcon
     self.showBadges = showBadges
     self.loadsImage = loadsImage
     self.width = width
     self.height = height
     self.subTitleBelow = subTitleBelow
     self.isBackgroundBlurred = isBackgroundBlurred
-    self.footerLabel = footerLabel
     self.action = action
     self.onFocus = onFocus
+    self.onPosterUnavailable = onPosterUnavailable
   }
 
   var body: some View {
@@ -376,17 +393,6 @@ struct MediaCard: View {
             .font(.caption2)
             .foregroundStyle(isFocused ? .secondary : .tertiary)
         }
-
-        // 页脚标签 (保留空间以避免布局抖动)
-        if let footer = footerLabel {
-          HStack(spacing: 4) {
-            Image(systemName: footer.icon)
-            Text(footer.text)
-          }
-          .font(.caption)
-          .foregroundStyle(.primary)
-          .opacity(isFocused ? 1 : 0)
-        }
       }
       .lineLimit(1)
       .compositingGroup()
@@ -412,20 +418,28 @@ struct MediaCard: View {
         )
 
       PageManagedImage(
-        url: posterLoadFailed ? posterFallbackUrl : posterUrl,
+        url: posterLoadFailed || posterUrl == nil ? posterFallbackUrl : posterUrl,
         processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
         isEnabled: loadsImage,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
         onFailure: {
           // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+          guard !posterLoadFailed, posterUrl != nil else { return }
           posterLoadFailed = true
+          onPosterUnavailable?()
         }
       )
     }
     .frame(width: width, height: height)
     .onChange(of: posterUrl) { _, _ in
       posterLoadFailed = false
+    }
+    .onAppear {
+      if posterUrl == nil, loadsImage { onPosterUnavailable?() }
+    }
+    .onChange(of: loadsImage) { _, loads in
+      if posterUrl == nil, loads { onPosterUnavailable?() }
     }
     .overlay {
       if showBadges {
@@ -435,7 +449,8 @@ struct MediaCard: View {
           ratingText: ratingText,
           bottomLeftText: bottomLeftText,
           bottomLeftSecondaryText: bottomLeftSecondaryText,
-          source: source
+          source: source,
+          bottomLeftIcon: bottomLeftIcon
         )
         .equatable()
       }

@@ -348,6 +348,7 @@ private struct MediaDetailContainerContent: View {
       if let detail = preloadTask.fullDetail {
         MediaDetailView(
           detail: detail,
+          libraryItemHint: media.libraryItemHint,
           preloadTask: preloadTask,
           isContentReady: $isContentReady,
           routeID: routeID,

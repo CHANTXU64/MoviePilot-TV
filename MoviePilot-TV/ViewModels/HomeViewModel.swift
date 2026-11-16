@@ -31,6 +31,14 @@ class HomeViewModel: ObservableObject {
   @Published var isLoading = true
   /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
   @Published private(set) var inAppPlayableServers: Set<String> = []
+  /// 能在应用内播放的服务器上，「最近添加」各条目按下做什么（有没有 TMDB 编号），键见 `itemKey`。每次读列表时一起重读。
+  @Published private(set) var libraryLinks: [String: LibraryItemLink] = [:]
+  private var libraryLinksTask: Task<Void, Never>?
+  /// 「最近添加」里海报读不出来的条目改用的 TMDB 海报，键见 `itemKey`。
+  @Published private(set) var posterFallbacks: [String: URL] = [:]
+  /// 报过海报读不出来的卡片，和找回退海报时用的身份（`libraryLinks` 里的，nil 表示还不知道、按标题找）。
+  /// 身份变了（读到编号、识别结果变了）就按新身份重找，结果写回前复核身份没再变。
+  private var posterRequests: [String: (item: MediaServerPlayItem, server: String, link: LibraryItemLink?)] = [:]
 
   private let apiService: APIService
   private var latestMediaSelectedServerKey: String? {
@@ -176,6 +184,7 @@ class HomeViewModel: ObservableObject {
         nextByServer[serverName] = items
       }
       self.latestMediaByServer = nextByServer
+      loadLibraryLinks(latestByServer, playableServers: playableServers, session: sessionSnapshot)
       let newServerNames = enabledServers.map(\.name)
       if self.latestMediaServers != newServerNames {
         self.latestMediaServers = newServerNames
@@ -372,6 +381,209 @@ class HomeViewModel: ObservableObject {
         backendVersion: backendVersion)
     else { return nil }
     return trimmedNonEmpty([item.item_id?.value])
+  }
+
+  /// 按下「最近添加」卡片是跳到媒体服务器 App（卡片左下角有跳转图标），还是打开详情页。卡片不直接播放：
+  /// 播放在详情页里（电影按「播放」、剧按单集卡片）。能在应用内播放且设置里选了在应用内打开时打开详情页；
+  /// 否则这类服务器支持跳转就跳过去，不支持跳转（如 Jellyfin）的也打开详情页。
+  static func opensMediaServerApp(canOpenMediaLibrary: Bool, canPlayInApp: Bool, prefersInApp: Bool) -> Bool {
+    canOpenMediaLibrary && !(canPlayInApp && prefersInApp)
+  }
+
+  func opensMediaServerApp(_ item: MediaServerPlayItem) -> Bool {
+    Self.opensMediaServerApp(
+      canOpenMediaLibrary: Self.supportsMediaLibraryDeepLink(serverType: item.server_type),
+      canPlayInApp: inAppPlaybackItemID(item) != nil,
+      prefersInApp: SystemViewModel.shouldPlayHomeMediaInApp)
+  }
+
+  /// 读列表后一次读出各台能在应用内播放的服务器上这些条目的 TMDB 编号（见 `PlaybackCoordinator.libraryItemLinks`），
+  /// 没有编号的再按标题、年份识别（见 `resolve`），卡片据此决定按下打开详情页还是直接播放。
+  /// 还没读到、识别请求失败的不写，按下时现读；读不到的服务器保留上一次的结果。
+  private func loadLibraryLinks(
+    _ latestByServer: [String: [MediaServerPlayItem]], playableServers: Set<String>, session: APIServiceSessionSnapshot
+  ) {
+    libraryLinksTask?.cancel()
+    let requests: [(server: String, items: [String: MediaServerPlayItem])] = latestByServer.compactMap { server, items in
+      var byID: [String: MediaServerPlayItem] = [:]
+      for item in items {
+        guard
+          let id = Self.inAppPlaybackItemID(
+            item, server: server, playableServers: playableServers,
+            canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+            backendVersion: apiService.settings?.BACKEND_VERSION)
+        else { continue }
+        byID[id] = item
+      }
+      return byID.isEmpty ? nil : (server, byID)
+    }
+    guard !requests.isEmpty else { return }
+    let coordinator = apiService.sessionScope.playbackCoordinator
+    libraryLinksTask = Task { [weak self] in
+      for request in requests {
+        let raw = await coordinator.libraryItemLinks(serverName: request.server, itemIDs: Array(request.items.keys))
+        guard let self, !Task.isCancelled else { return }
+        guard let raw else { continue }
+        var links: [String: LibraryItemLink] = [:]
+        await withTaskGroup(of: (String, LibraryItemLink?).self) { group in
+          for (id, link) in raw {
+            guard let item = request.items[id] else { continue }
+            group.addTask { (id, await self.resolve(link, for: item)) }
+          }
+          for await (id, link) in group { links[id] = link }
+        }
+        guard !Task.isCancelled, self.apiService.isSessionUnchanged(from: session) else { return }
+        var next = self.libraryLinks.filter { !$0.key.hasPrefix("\(request.server)|") }
+        for (id, link) in links { next[Self.itemKey(server: request.server, itemID: id)] = link }
+        self.libraryLinks = next
+        self.refreshPosterFallbacks(on: request.server)
+      }
+    }
+  }
+
+  /// 条目上没有 TMDB 编号时按标题、年份识别（结果在会话里记住，见 `APIService.cachedRecognizedTmdbId`）：
+  /// 识别出来就打开那部片的详情页，认不出才直接播放。识别请求失败时为 nil（不知道）。
+  private func resolve(_ link: LibraryItemLink, for item: MediaServerPlayItem) async -> LibraryItemLink? {
+    guard link == .libraryOnly else { return link }
+    do {
+      guard
+        let tmdbID = try await apiService.cachedRecognizedTmdbId(title: item.title, year: item.subtitle, type: item.type)
+      else { return .libraryOnly }
+      return .detail(tmdbID: tmdbID, mediaType: item.type ?? "")
+    } catch {
+      return nil
+    }
+  }
+
+  private static func itemKey(server: String, itemID: String) -> String { "\(server)|\(itemID)" }
+
+  /// 这张卡对应的条目按下做什么；还没读到或不能在应用内播放时为 nil。
+  func libraryLink(for item: MediaServerPlayItem) -> LibraryItemLink? {
+    inAppPlaybackItemID(item).flatMap { libraryLinks[Self.itemKey(server: selectedLatestMediaServer, itemID: $0)] }
+  }
+
+  /// 没跳到媒体服务器 App 时，这张卡按下是不是直接播放：条目没有 TMDB 编号、按标题也识别不出，MoviePilot 没有它的详情页。
+  func playsDirectly(_ item: MediaServerPlayItem) -> Bool {
+    libraryLink(for: item) == .libraryOnly
+  }
+
+  /// 「最近添加」卡片按下（没跳到媒体服务器 App 时）去哪里。
+  enum CardDestination {
+    case detail(MediaInfo)
+    /// 没有 TMDB 编号、也识别不出：在应用内直接播放这个条目。
+    case play(PlaybackTarget)
+  }
+
+  /// 按下卡片去哪里。能在应用内播放的服务器上按条目自己的 TMDB 编号（与这份文件一一对应）打开详情页，没有编号的按标题识别，
+  /// 认不出才直接播放；读列表时没读到的现读一次（期间显示「正在识别」）。服务器读不到时按标题、年份识别（识别不出时
+  /// `handler` 会提示）。
+  func cardDestination(for item: MediaServerPlayItem, using handler: MediaActionHandler) async -> CardDestination? {
+    let snapshot = apiService.sessionSnapshot()
+    let server = selectedLatestMediaServer
+    if let itemID = inAppPlaybackItemID(item) {
+      let key = Self.itemKey(server: server, itemID: itemID)
+      var link = libraryLinks[key]
+      if link == nil {
+        handler.isRecognizingTmdb = true
+        var resolved: LibraryItemLink?
+        var hasEntry = false
+        if let raw = await apiService.sessionScope.playbackCoordinator.libraryItemLinks(
+          serverName: server, itemIDs: [itemID])?[itemID]
+        {
+          hasEntry = true
+          resolved = await resolve(raw, for: item)
+        }
+        handler.isRecognizingTmdb = false
+        guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+        // 只记下确定的结果；识别请求失败的这次照样直接播放（打不开详情页，至少能看），下次再识别。
+        if let resolved { libraryLinks[key] = resolved }
+        link = resolved ?? (hasEntry ? .libraryOnly : nil)
+      }
+      switch link {
+      case .detail(let tmdbID, let mediaType):
+        let typed = MediaInfo(title: item.title, type: mediaType, year: item.subtitle)
+        var target = MediaActionHandler.tmdbJumpTarget(for: typed, tmdbId: tmdbID)
+        // 带上这份文件：MoviePilot 还没同步到它时，详情页仍能播放。
+        target.libraryItemHint = MediaServerItemRef(itemID: itemID, server: server)
+        return .detail(target)
+      case .libraryOnly:
+        return .play(.serverItem(serverName: server, itemID: itemID))
+      case nil:
+        break
+      }
+    }
+    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+    guard var target = await handler.getTMDBJumpTarget(for: info) else { return nil }
+    // 服务器暂时读不到时也带上这份文件：MoviePilot 还没同步到它、之后服务器恢复时，详情页仍能播放（起播前按编号核对）。
+    if let itemID = inAppPlaybackItemID(item) {
+      target.libraryItemHint = MediaServerItemRef(itemID: itemID, server: server)
+    }
+    return .detail(target)
+  }
+
+  func posterFallbackURL(for item: MediaServerPlayItem, server: String) -> URL? {
+    posterFallbacks[Self.itemKey(server: server, itemID: item.id)]
+  }
+
+  /// 海报读不出来（媒体服务器上没有封面，或者图片读不到）时改用这部片的 TMDB 海报：TMDB 编号按读列表时读到、识别到的
+  /// （见 `libraryLinks`），不知道时按标题、年份识别；确认没有 TMDB 编号的不找。识别结果和海报路径都在会话里记住
+  /// （`APIService.cachedRecognizedTmdbId`、`cachedTmdbPosterPath`），请求失败的下次再找。
+  /// `server` 是卡片所在的服务器（建卡片时取），不用回调到达时选中的：条目 ID 只在它自己的服务器上有意义。
+  func loadPosterFallback(for item: MediaServerPlayItem, server: String) {
+    let key = Self.itemKey(server: server, itemID: item.id)
+    let link = posterLink(for: item, server: server)
+    // 同一身份已经找到了就不再找（卡片滚回来会再报一次）。
+    if let request = posterRequests[key], request.link == link, posterFallbacks[key] != nil { return }
+    posterRequests[key] = (item, server, link)
+    let snapshot = apiService.sessionSnapshot()
+    Task { [weak self] in
+      guard let self else { return }
+      let url = await self.tmdbPosterURL(for: item, link: link)
+      // 找的期间身份变了（编号读到了）：以按新身份找的为准。
+      guard self.apiService.isSessionUnchanged(from: snapshot), self.posterRequests[key]?.link == link else { return }
+      if let url {
+        self.posterFallbacks[key] = url
+      } else if link != nil {
+        // 按确定的身份找不到海报：之前按别的身份找到的不对，去掉。
+        self.posterFallbacks[key] = nil
+      }
+    }
+  }
+
+  /// 卡片对应条目在 `libraryLinks` 里的身份；不能在应用内播放或还没读到时为 nil。
+  private func posterLink(for item: MediaServerPlayItem, server: String) -> LibraryItemLink? {
+    Self.inAppPlaybackItemID(
+      item, server: server, playableServers: inAppPlayableServers,
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    ).flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
+  }
+
+  /// `server` 上的条目身份读到或变了以后，对报过缺图、当时身份不同的卡片按新身份重找海报。
+  private func refreshPosterFallbacks(on server: String) {
+    for request in posterRequests.values where request.server == server {
+      guard posterLink(for: request.item, server: server) != request.link else { continue }
+      loadPosterFallback(for: request.item, server: server)
+    }
+  }
+
+  private func tmdbPosterURL(for item: MediaServerPlayItem, link: LibraryItemLink?) async -> URL? {
+    let tmdbID: Int?
+    var mediaType = item.type
+    switch link {
+    case .detail(let id, let type):
+      tmdbID = id
+      mediaType = type
+    case .libraryOnly:
+      return nil
+    case nil:
+      tmdbID = (try? await apiService.cachedRecognizedTmdbId(title: item.title, year: item.subtitle, type: item.type))
+        ?? nil
+    }
+    guard let tmdbID, !Task.isCancelled,
+      let path = (try? await apiService.cachedTmdbPosterPath(tmdbID: tmdbID, type: mediaType)) ?? nil
+    else { return nil }
+    return apiService.getPosterImageUrl(posterPath: path)
   }
 
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）

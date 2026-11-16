@@ -30,14 +30,6 @@ struct MoreCard: View {
           // 对齐 title
           Text(" ")
             .font(.caption)
-
-          // 固定占位对齐 footerLabel
-          HStack(spacing: 4) {
-            Image(systemName: AppSymbol.subscribe)
-            Text(" ")
-          }
-          .font(.caption)
-          .opacity(0)
         }
         .lineLimit(1)
         .compositingGroup()

@@ -242,14 +242,20 @@ private struct MediaSectionView: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { entry in
               let index = entry.offset
               let item = entry.element
+              let opensApp = viewModel.opensMediaServerApp(item)
+              let playsDirectly = !opensApp && viewModel.playsDirectly(item)
               MediaCard(
                 title: item.title,
                 posterUrl: item.imageURLs.image,
+                posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
                 typeText: item.type,
                 ratingText: nil,
                 bottomLeftText: nil,
                 bottomLeftSecondaryText: nil,
                 source: nil,
+                // 左下角标出按下不是打开详情页的卡片：跳到媒体服务器 App 的是跳转图标；没有 TMDB 编号、
+                // MoviePilot 没有详情页的，按下直接播放，是播放图标（和单集卡片一样）。其余的按下打开详情页。
+                bottomLeftIcon: opensApp ? AppSymbol.openInLibrary : playsDirectly ? AppSymbol.play : nil,
                 loadsImage: loadsPageImages
                   && ImageLoadWindow.containsHorizontalItem(
                     at: index,
@@ -260,43 +266,36 @@ private struct MediaSectionView: View {
                     cardKind: .media,
                     usesFocusWindow: memoryOptimization.isEnabled
                   ),
-                action: canPlayInApp(item) || canOpenMediaLibrary(item)
-                  ? { activateMediaItem(item) }
-                  : nil
+                action: { opensApp ? openMediaItem(item) : openDetail(item) },
+                // 媒体服务器上没有封面或读不到时，改用 TMDB 海报。
+                onPosterUnavailable: { [selectedServer] in viewModel.loadPosterFallback(for: item, server: selectedServer) }
               )
+              .accessibilityHint(opensApp ? "在媒体服务器 App 中打开" : playsDirectly ? "播放" : "打开详情")
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
-                if canPlayInApp(item) {
-                  Button {
-                    playInApp(item)
-                  } label: {
-                    Label("播放", systemImage: AppSymbol.play)
+                // 按下打开的那一种不再重复列出；有详情页的不在这里直接播放，播放从详情页开始。
+                if opensApp {
+                  // 没有详情页的条目，在应用内打开就是直接播放。
+                  if viewModel.playsDirectly(item) {
+                    Button {
+                      openDetail(item)
+                    } label: {
+                      Label("在应用内播放", systemImage: AppSymbol.play)
+                    }
+                  } else {
+                    Button {
+                      openDetail(item)
+                    } label: {
+                      Label("详情", systemImage: AppSymbol.details)
+                    }
                   }
-                }
-                if canOpenMediaLibrary(item) {
+                } else if canOpenMediaLibrary(item) {
                   Button {
                     openMediaItem(item)
                   } label: {
                     Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
                   }
-                }
-                Button {
-                  let navigationSource = navigationCoordinator.sourceToken()
-                  let loadingPosterURL = item.imageURLs.image
-                  Task {
-                    // 使用实际的标题、年份和类型进行识别
-                    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
-                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                      navigationCoordinator.push(
-                        target,
-                        loadingPosterURL: loadingPosterURL,
-                        ifCurrent: navigationSource
-                      )
-                    }
-                  }
-                } label: {
-                  Label("TMDB详情页", systemImage: AppSymbol.link)
                 }
                 if canSearchResources {
                   Button {
@@ -385,24 +384,22 @@ private struct MediaSectionView: View {
     HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type)
   }
 
-  /// 管理员看到的、MoviePilot 已配置好的 Emby 上的电影和剧集可以在应用内直接播放。
-  private func canPlayInApp(_ item: MediaServerPlayItem) -> Bool {
-    viewModel.inAppPlaybackItemID(item) != nil
-  }
-
-  /// 点击卡片：按设置决定在应用内播放还是跳转媒体服务器 App。
-  private func activateMediaItem(_ item: MediaServerPlayItem) {
-    if canPlayInApp(item), SystemViewModel.shouldPlayHomeMediaInApp || !canOpenMediaLibrary(item) {
-      playInApp(item)
-    } else {
-      openMediaItem(item)
+  /// 在应用内打开条目（见 `HomeViewModel.cardDestination`）：打开详情页，没有 TMDB 编号的直接播放。
+  /// 期间页面变了（已经进了别的页）就不再推入、不再起播。
+  private func openDetail(_ item: MediaServerPlayItem) {
+    let navigationSource = navigationCoordinator.sourceToken()
+    let loadingPosterURL = item.imageURLs.image
+    Task {
+      switch await viewModel.cardDestination(for: item, using: mediaActionHandler) {
+      case .detail(let target):
+        navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
+      case .play(let target):
+        guard navigationCoordinator.isCurrent(navigationSource) else { return }
+        APIService.shared.sessionScope.playbackCoordinator.play(target)
+      case nil:
+        break
+      }
     }
-  }
-
-  private func playInApp(_ item: MediaServerPlayItem) {
-    guard let itemID = viewModel.inAppPlaybackItemID(item) else { return }
-    APIService.shared.sessionScope.playbackCoordinator.play(
-      .serverItem(serverName: selectedServer, itemID: itemID))
   }
 
   private func openMediaItem(_ item: MediaServerPlayItem) {

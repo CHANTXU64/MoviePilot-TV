@@ -9,6 +9,12 @@ struct MediaDetailEpisodesView: View {
   let subscriptionSeasons: SubscribeSeasonViewModel?
   /// 按集播放和试看；没有应用内播放时为 nil，按下单集只看简介。
   let playback: EpisodePlaybackSource?
+  /// 默认显示的季和停在哪一集（看过的剧停在接着看的那一集），见 `MediaDetailViewModel.episodeRowHint`。
+  var rowHint: EpisodeRowHint? = nil
+  /// 详情页「继续播放」指向服务器上还没有的下一集时，请本行打开那一集的面板。
+  var panelRequest: EpisodePanelRequest? = nil
+  /// 「继续播放」用的默认顺序季目录（`MediaDetailViewModel.episodeSeasons`）：有时本行按它显示季，两边看到的季一样。
+  var defaultSeasons: [TmdbSeason]? = nil
   let allowsRequests: Bool
   let isContentVisible: Bool
   /// 第一页底部只露出卡片：本行是第二页首行时，行头在翻到第二页后才出现，与其他行一致。
@@ -18,24 +24,30 @@ struct MediaDetailEpisodesView: View {
   var body: some View {
     if let subscriptionSeasons {
       SharedEpisodeGroupView(seasons: subscriptionSeasons) { groupID in
-        shelf(groupID: groupID, groupMenu: nil, catalog: subscriptionSeasons.episodeGroupCatalog)
+        shelf(groupID: groupID, groupMenu: nil, catalog: subscriptionSeasons.episodeGroupCatalog) {
+          subscriptionSeasons.selectedGroupId = ""
+        }
       }
     } else {
       LocalEpisodeGroupView(tmdbID: tmdbID, isActive: allowsRequests && isContentVisible) {
         groupID, groupMenu, catalog in
-        shelf(groupID: groupID, groupMenu: groupMenu, catalog: catalog)
+        shelf(groupID: groupID, groupMenu: groupMenu, catalog: catalog) { groupMenu.selection.wrappedValue = "" }
       }
     }
   }
 
   private func shelf(
-    groupID: String?, groupMenu: EpisodeGroupMenu?, catalog: EpisodeGroupCatalog
+    groupID: String?, groupMenu: EpisodeGroupMenu?, catalog: EpisodeGroupCatalog, showDefaultSeasons: @escaping () -> Void
   ) -> some View {
     EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
       catalog: catalog, allowsRequests: allowsRequests, playback: playback,
       trial: APIService.shared.sessionScope.episodeTrial,
-      layout: .shelf(showsHeader: showsHeader, onExpand: onExpand)
+      layout: .shelf(showsHeader: showsHeader, onExpand: onExpand),
+      rowHint: rowHint,
+      panelRequest: panelRequest,
+      defaultSeasons: defaultSeasons,
+      showDefaultSeasons: showDefaultSeasons
     )
   }
 }
@@ -56,7 +68,8 @@ struct MediaEpisodeGridView: View {
         trial: APIService.shared.sessionScope.episodeTrial,
         layout: .grid(imageLifecycle),
         initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
-        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil
+        initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil,
+        defaultSeasons: request.defaultSeasons
       )
     }
   }
@@ -150,8 +163,22 @@ private struct EpisodeBrowser: View {
   let layout: EpisodeBrowserLayout
   var initialSeason: Int? = nil
   var initialEpisodeOffset: Int? = nil
+  /// 默认显示的季和停在哪一集，只用于默认顺序（剧集组的季号不同）。只在用户还没碰过本行时采用（见 `appliedHint`）。
+  var rowHint: EpisodeRowHint? = nil
+  /// 请本行打开某一集的面板（默认顺序下）：先换到那一季，集列表到了再打开。
+  var panelRequest: EpisodePanelRequest? = nil
+  /// 默认顺序的季目录（和「继续播放」用的同一份）；有时优先用它，不再自己补读季列表。
+  var defaultSeasons: [TmdbSeason]? = nil
+  /// 切回默认分季（不选剧集组）：`panelRequest` 指的是默认顺序里的集，选着剧集组时先切回来。
+  var showDefaultSeasons: (() -> Void)? = nil
 
   @State private var storedGroup = GroupState(id: nil)
+  /// 等集列表到了再打开面板的那一集。
+  @State private var pendingPanel: EpisodeRowHint?
+  /// 选着剧集组时来的 `panelRequest`：切回默认分季后再打开。
+  @State private var panelAfterGroupReset: EpisodeRowHint?
+  /// 采用了的提示：观看进度晚到或刷新时，本行没有焦点、用户也没选过季才换过去，不在用户操作时改季、跳位置。
+  @State private var appliedHint: EpisodeRowHint?
   @FocusState private var focus: EpisodeRowFocus?
   @FocusState private var focusedSeason: Int?
   /// 打开着单集面板的那一集。面板由本行弹出，内容随本行的播放状态和试看进度实时变化。
@@ -185,6 +212,8 @@ private struct EpisodeBrowser: View {
     var results: [MoviePilotEpisode.ID: EpisodeAvailability]?
     /// 能播的集在服务器上的文件时长（秒），TMDB 没给时长时用来补上。
     var serverRuntimes: [MoviePilotEpisode.ID: Double] = [:]
+    /// 看过一部分的集看到了哪里（0…1），卡片上画已播放进度条。
+    var watchProgress: [MoviePilotEpisode.ID: Double] = [:]
     /// 应用内播放不可用（不是管理员、版本不支持、设置里关了、没有能播放的服务器）：不显示播放和试看。
     var isOffered = true
     /// 重查期间沿用上次的结果，按钮显示加载中，焦点不跳。
@@ -231,23 +260,23 @@ private struct EpisodeBrowser: View {
   }
 
   private var needsSeasonLookup: Bool {
-    groupID != nil || MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media)
+    groupID != nil || (defaultSeasons == nil && MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media))
   }
 
   private var seasons: [TmdbSeason] {
     if let groupID {
       return MediaDetailEpisodeSeasons.selectable(catalog.seasonsByGroup[groupID] ?? [])
     }
-    return group.loadedSeasons ?? detailSeasons
+    return defaultSeasons ?? group.loadedSeasons ?? detailSeasons
   }
 
   private var defaultMenuSeasons: [TmdbSeason]? {
-    let defaults = groupID == nil ? seasons : MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
+    let defaults = groupID == nil ? seasons : defaultSeasons ?? MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
     return MediaDetailEpisodeSeasons.needsLookup(defaults, media: media) ? nil : defaults
   }
 
   private var showsSupplementalSeasonRetry: Bool {
-    guard !detailSeasons.isEmpty else { return false }
+    guard !detailSeasons.isEmpty, groupID != nil || defaultSeasons == nil else { return false }
     switch group.seasonLoad {
     case .failed: return true
     case .loaded: return MediaDetailEpisodeSeasons.needsLookup(seasons, media: media)
@@ -264,9 +293,47 @@ private struct EpisodeBrowser: View {
   private var seasonNumber: Int? {
     MediaDetailEpisodeSeasons.current(
       selected: group.selectedSeason ?? initialSeason,
-      preferred: groupID == nil ? media.season : nil,
+      preferred: groupID == nil ? media.season ?? appliedHint?.season : nil,
       available: seasons.compactMap(\.season_number)
     )
+  }
+
+  /// 要打开面板的那一集所在季的集列表到了没有。
+  private var pendingPanelLoaded: Bool {
+    guard let hint = pendingPanel, case .loaded = group.episodeStates[hint.season] else { return false }
+    return true
+  }
+
+  /// 要打开面板的那一集打不开了：那一季的集列表读失败，或全部季读完了也没有那一季。
+  private var pendingPanelUnreachable: Bool {
+    guard let hint = pendingPanel else { return false }
+    if case .failed? = group.episodeStates[hint.season] { return true }
+    switch group.seasonLoad {
+    case .loaded?, .failed?: return !seasons.contains { $0.season_number == hint.season }
+    default: return false
+    }
+  }
+
+  /// 换到 `hint` 那一季，集列表到了打开那一集的面板。
+  private func openPanel(_ hint: EpisodeRowHint) {
+    if seasonNumber != hint.season { group.selectedSeason = hint.season }
+    pendingPanel = hint
+    openPendingPanel()
+  }
+
+  private func openPendingPanel() {
+    guard let hint = pendingPanel, case .loaded(let episodes) = group.episodeStates[hint.season] else { return }
+    // 集列表到了：找得到就打开，找不到（列表变了）就作罢，不留着等以后突然弹出来。
+    pendingPanel = nil
+    if let episode = hint.episode(in: episodes) { panelEpisode = episode }
+  }
+
+  /// 本行要停的那一集（提示指向的、在当前显示的季里的那一集）。
+  private var hintedEpisode: MoviePilotEpisode? {
+    guard groupID == nil, let hint = appliedHint, hint.season == seasonNumber,
+      case .loaded(let episodes) = group.episodeStates[hint.season]
+    else { return nil }
+    return hint.episode(in: episodes)
   }
 
   private func seasonName(_ season: TmdbSeason, number: Int) -> String {
@@ -314,7 +381,8 @@ private struct EpisodeBrowser: View {
   }
 
   private func episodePage(count: Int, season: Int) -> Range<Int> {
-    let initialOffset = season == initialSeason ? initialEpisodeOffset : nil
+    let hintedOffset = hintedEpisode.flatMap { $0.seasonNumber == season ? $0.index : nil }
+    let initialOffset = season == initialSeason ? initialEpisodeOffset : hintedOffset
     return DetailPageRanges.current(
       count: count, size: layout.episodePageSize,
       offset: group.episodePageOffsets[season] ?? initialOffset ?? 0
@@ -390,14 +458,46 @@ private struct EpisodeBrowser: View {
       guard updated == tmdbID else { return }
       group.availabilityUpdates += 1
     }
+    // 播放结束、进度写回之后重读：卡片上的已播放进度跟着更新。播的是别的片时不动。
+    .onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates) { change in
+      guard change.concerns(tmdbID: tmdbID, itemID: playback?.libraryItem?.itemID) else { return }
+      group.availabilityUpdates += 1
+    }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       afterPanelDismiss = nil
+      pendingPanel = nil
       panelEpisode = nil
     }
     // 焦点停在状态卡上时集列表到了：交给第一集，状态卡被移除时焦点不会跳出本行。
     .onChange(of: firstEpisodeID) { _, firstID in
       guard let firstID, focus == .status else { return }
       focus = .episode(firstID)
+    }
+    .onChange(of: panelRequest?.id) { _, _ in
+      guard let request = panelRequest else { return }
+      guard groupID == nil else {
+        panelAfterGroupReset = request.hint
+        showDefaultSeasons?()
+        return
+      }
+      openPanel(request.hint)
+    }
+    .onChange(of: groupID) { _, id in
+      guard id == nil, let hint = panelAfterGroupReset else {
+        panelAfterGroupReset = nil
+        return
+      }
+      panelAfterGroupReset = nil
+      openPanel(hint)
+    }
+    .onChange(of: pendingPanelLoaded) { _, _ in openPendingPanel() }
+    // 打不开就作罢，不留着等之后重试成功时突然弹出来（集行上照常显示读取失败和重试）。
+    .onChange(of: pendingPanelUnreachable) { _, unreachable in
+      if unreachable { pendingPanel = nil }
+    }
+    .onChange(of: rowHint, initial: true) { _, hint in
+      guard hint != appliedHint, focus == nil, focusedSeason == nil, group.selectedSeason == nil else { return }
+      appliedHint = hint
     }
   }
 
@@ -417,7 +517,8 @@ private struct EpisodeBrowser: View {
           Button("展开") {
             onExpand(MediaEpisodeGridRequest(
               mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber,
-              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback
+              initialEpisodeGroup: groupID, initialEpisodeOffset: visibleEpisodeOffset, playback: playback,
+              defaultSeasons: defaultSeasons
             ))
           }
           .accessibilityLabel("展开剧集")
@@ -578,7 +679,9 @@ private struct EpisodeBrowser: View {
     case .episodes(let episodes):
       let page = visibleEpisodes(episodes)
       let focusedID: MoviePilotEpisode.ID? = if case .episode(let id) = focus { id } else { nil }
-      EpisodeShelfRow(episodes: page, focusedEpisodeID: focusedID) { episode, loadsImage in
+      EpisodeShelfRow(
+        episodes: page, focusedEpisodeID: focusedID, scrollTargetID: hintedEpisode?.id
+      ) { episode, loadsImage in
         episodeCard(episode, stillSize: EpisodeCardLayout.stillSize, loadsImage: loadsImage)
       }
       .id(page.first?.id)
@@ -634,6 +737,7 @@ private struct EpisodeBrowser: View {
       stillSize: stillSize,
       loadsImage: loadsImage,
       status: entry?.cardStatus,
+      watchProgress: entry == nil ? nil : currentAvailability(season: episode.seasonNumber)?.watchProgress[episode.id],
       accessibilityStatus: entry?.accessibilityStatus,
       // 没有应用内播放时长按只有「详情」，和有播放时一样都有长按菜单。
       menuActions: entry?.menuActions ?? [.details],
@@ -891,6 +995,9 @@ private struct EpisodeBrowser: View {
       state.serverRuntimes = Dictionary(
         zip(episodes.map(\.id), lookup.serverRuntimeSeconds).compactMap { id, seconds in seconds.map { (id, $0) } },
         uniquingKeysWith: { first, _ in first })
+      state.watchProgress = Dictionary(
+        zip(episodes.map(\.id), lookup.watchProgress).compactMap { id, value in value.map { (id, $0) } },
+        uniquingKeysWith: { first, _ in first })
       let rechecked = zip(episodes, results).compactMap { episode, availability in
         trialKey(for: episode).map { ($0, availability) }
       }
@@ -923,9 +1030,9 @@ private struct EpisodeBrowser: View {
 
 /// 剧集行的季列表规则，单独拆出便于测试。
 enum MediaDetailEpisodeSeasons {
-  /// 胶囊最多放几季、标题总字数上限。超过任一项改用下拉菜单，免得胶囊一行滚不完。
-  static let maxChipCount = 8
-  static let maxChipCharacters = 48
+  /// 胶囊最多放几季（含特别篇）、标题总字数上限。超过任一项改用下拉菜单：行头一排按钮太长不好看，也不好扫。
+  static let maxChipCount = 4
+  static let maxChipCharacters = 24
 
   static func tmdbID(for media: MediaInfo) -> Int? {
     guard media.type == "电视剧", media.identity?.source == "themoviedb" else { return nil }
@@ -945,20 +1052,25 @@ enum MediaDetailEpisodeSeasons {
     let seasons = try await apiService.getMediaSeasons(
       media: media, allSeasons: true, forceRefresh: forceRefresh
     )
-    return selectable(seasons + (media.season_info ?? []))
+    return catalog(seasons, media: media)
+  }
+
+  /// 默认顺序的季目录：MoviePilot 给的全部季并上详情里的季。集列表行和「继续播放」共用这一份。
+  static func catalog(_ all: [TmdbSeason], media: MediaInfo) -> [TmdbSeason] {
+    selectable(all + (media.season_info ?? []))
   }
 
   static func canExpand(seasons: [TmdbSeason], loadedEpisodeCount: Int) -> Bool {
     seasons.count > 1 || loadedEpisodeCount > 10 || (seasons.first?.episode_count ?? 0) > 10
   }
 
-  /// 去掉缺季号、负季号和重复季号，按季号升序（特别篇第 0 季在最前，与分季订阅一致）。
+  /// 去掉缺季号、负季号和重复季号，按 `SeasonDisplayOrder` 排（特别篇第 0 季在最后，与分季订阅一致）。
   static func selectable(_ seasons: [TmdbSeason]) -> [TmdbSeason] {
     var seen: Set<Int> = []
-    return seasons.filter {
+    return SeasonDisplayOrder.sorted(seasons.filter {
       guard let number = $0.season_number, number >= 0 else { return false }
       return seen.insert(number).inserted
-    }.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+    })
   }
 
   /// 当前显示的季：用户选过的 → 详情指定的季 → 第一个正片季 → 第一季（只有特别篇时）。
@@ -976,16 +1088,17 @@ enum MediaDetailEpisodeSeasons {
     let size = 50
     guard options.count > size else { return [] }
 
-    let regular = Array(options.drop(while: { $0.value == 0 }))
+    // 特别篇在最后（见 `SeasonDisplayOrder`），单独成组，不计入季号范围。
+    let regular = options.filter { $0.value != 0 }
     var groups: [ShelfMenuOptionGroup<Int>] = []
-    if let specials = options.first, specials.value == 0 {
-      groups.append(ShelfMenuOptionGroup(id: specials.value, title: nil, options: [specials]))
-    }
     for range in DetailPageRanges.ranges(count: regular.count, size: size) {
       let first = regular[range.lowerBound].value
       let last = regular[range.upperBound - 1].value
       let title = first == last ? "第 \(first) 季" : "第 \(first)–\(last) 季"
       groups.append(ShelfMenuOptionGroup(id: first, title: title, options: Array(regular[range])))
+    }
+    if let specials = options.first(where: { $0.value == 0 }) {
+      groups.append(ShelfMenuOptionGroup(id: specials.value, title: nil, options: [specials]))
     }
     return groups
   }
@@ -1018,6 +1131,14 @@ enum EpisodeCardLayout {
   /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐（剧照聚焦时左右各多出 `focusedGrowth`）。
   static let platterHorizontalInset = PosterCardFocus.focusedGrowth
 
+  /// 把一张卡滚到行的最左边、留出与第一张卡相同的 81pt 安全边距：`scrollTo` 让卡片上 x 比例为 `anchor.x` 的点
+  /// 对齐行上同一比例的点，卡片左边 = anchor.x ×（行宽 − 卡宽）。
+  static func leadingScrollAnchor(cardWidth: CGFloat, rowWidth: CGFloat = UIScreen.main.bounds.width) -> UnitPoint {
+    let travel = rowWidth - cardWidth
+    guard travel > 0 else { return .leading }
+    return UnitPoint(x: min(1, 81 / travel), y: 0.5)
+  }
+
   /// 聚焦时文字下移多少：让底板顶边落在放大后剧照下方 `platterGap` 处。
   static func focusedTextOffset(stillSize: CGSize) -> CGFloat {
     PosterCardFocus.focusedVerticalGrowth(forImageSize: stillSize) + platterGap + platterVerticalInset - textGap
@@ -1027,14 +1148,18 @@ enum EpisodeCardLayout {
 private struct EpisodeShelfRow<Card: View>: View {
   let episodes: ArraySlice<MoviePilotEpisode>
   let focusedEpisodeID: MoviePilotEpisode.ID?
+  /// 本行没有焦点时要滚到最左边的那一集（看过的剧接着看的那一集）。只滚动，不移动焦点。
+  /// 图片按它为中心加载，前面的集先不下载。
+  var scrollTargetID: MoviePilotEpisode.ID? = nil
   @ViewBuilder let card: (MoviePilotEpisode, Bool) -> Card
   private var memoryOptimization = MemoryOptimizationSettings()
   @State private var imageAnchorID: MoviePilotEpisode.ID?
 
   var body: some View {
-    let anchorID = focusedEpisodeID ?? imageAnchorID
+    let anchorID = focusedEpisodeID ?? imageAnchorID ?? scrollTargetID
     let anchorIndex = episodes.firstIndex { $0.id == anchorID }
       .map { $0 - episodes.startIndex }
+    ScrollViewReader { proxy in
     ScrollView(.horizontal, showsIndicators: false) {
       LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
         ForEach(Array(episodes.enumerated()), id: \.element.id) { offset, episode in
@@ -1053,6 +1178,16 @@ private struct EpisodeShelfRow<Card: View>: View {
     .onChange(of: focusedEpisodeID, initial: true) { _, id in
       if let id { imageAnchorID = id }
     }
+    .onChange(of: scrollTargetID, initial: true) { _, id in
+      // 只在要停的那一集变了（观看进度到了、刷新了）时滚一次；用户自己翻过本行、焦点离开后不再拉回去。
+      guard let id, focusedEpisodeID == nil else { return }
+      imageAnchorID = id
+      // 等这一轮布局提交后再滚，惰性横排才认得出目标。不加动画：直接停在那一集，不从第一集滑过去。
+      Task { @MainActor in
+        proxy.scrollTo(id, anchor: EpisodeCardLayout.leadingScrollAnchor(cardWidth: EpisodeCardLayout.stillSize.width))
+      }
+    }
+    }
   }
 }
 
@@ -1062,6 +1197,8 @@ private struct EpisodeCard: View {
   let stillSize: CGSize
   let loadsImage: Bool
   let status: EpisodeEntry.CardStatus?
+  /// 看过一部分时的已播放进度（0…1）。
+  let watchProgress: Double?
   let accessibilityStatus: String?
   /// 长按菜单，至少有「详情」。
   let menuActions: [EpisodeEntry.MenuAction]
@@ -1076,7 +1213,7 @@ private struct EpisodeCard: View {
     Button(action: onSelect) {
       EpisodeCardContent(
         episode: episode, stillURL: stillURL, isFocused: isFocused,
-        stillSize: stillSize, loadsImage: loadsImage, status: status
+        stillSize: stillSize, loadsImage: loadsImage, status: status, watchProgress: watchProgress
       )
       .contentShape(.rect)
     }
@@ -1096,7 +1233,9 @@ private struct EpisodeCard: View {
       }
     }
     .accessibilityLabel(episode.cardTitle)
-    .accessibilityValue((episode.metadata + [accessibilityStatus].compactMap { $0 }).joined(separator: "，"))
+    .accessibilityValue(
+      (episode.metadata + [accessibilityStatus, watchProgress.map { "已播放 \(Int(($0 * 100).rounded()))%" }]
+        .compactMap { $0 }).joined(separator: "，"))
     .accessibilityActions {
       ForEach(menuActions, id: \.menuID) { action in
         Button(action.title) { onMenuAction(action) }
@@ -1145,6 +1284,8 @@ struct EpisodeCardContent: View {
   var loadsImage = true
   /// 能不能播、试看到哪一步，画在剧照上（见 `EpisodeCardStatusOverlay`）。
   var status: EpisodeEntry.CardStatus?
+  /// 能播放、看过一部分时的已播放进度（0…1）。
+  var watchProgress: Double? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1183,7 +1324,8 @@ struct EpisodeCardContent: View {
       }
       if let status {
         EpisodeCardStatusOverlay(
-          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, isFocused: isFocused)
+          status: status, stillSize: stillSize, runtimeText: episode?.runtimeText, watchProgress: watchProgress,
+          isFocused: isFocused)
           .transition(.opacity)
       }
     }

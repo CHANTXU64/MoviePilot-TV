@@ -14,6 +14,9 @@ import Foundation
 /// - 每次读取前与拿到成功结果后都执行调用方的 `validate`；它抛错时立即停止，不返回任何值。
 /// - 调用方被取消时立即以 `CancellationError` 退出，不再等待它所跟随的加载链；
 ///   共享加载本身不随之取消，仍为其他等待者完成并写缓存。
+/// - `cancelsAbandonedLoads`：加载本身会接着发很多请求（比如分批读集列表）时打开。同 key 最后一个等待者离开、
+///   加载还没完成时取消它（没人要结果了，不再往下派发）；被强制刷新取代的加载也立即取消（结果不会被用）。
+///   之后再来的读取不跟被放弃的加载，重新发起。加载里已经发出的单次请求由它们自己的缓存决定是否读完。
 @MainActor
 final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private final class Flight {
@@ -28,8 +31,18 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
 
     var isFinished: Bool { result != nil }
 
+    /// 执行加载的任务（`cancelsAbandonedLoads` 时用来取消）。
+    var task: Task<Void, Never>?
+    /// 没人等它了（或被取代），已取消；之后的读取不再跟它。
+    private(set) var isAbandoned = false
+
     init(generation: UInt64) {
       self.generation = generation
+    }
+
+    func abandon() {
+      isAbandoned = true
+      task?.cancel()
     }
 
     func addWaiter(
@@ -66,6 +79,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private let ttl: TimeInterval
   private let capacity: Int
   private let renewsTTLOnAccess: Bool
+  private let cancelsAbandonedLoads: Bool
   private let now: () -> Date
   private var entries: [Key: Entry] = [:]
   /// 每个 key 最近发起的加载（取代链的链尾）；运行中或该 key 仍有调用者等待时保留。
@@ -82,11 +96,13 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     ttl: TimeInterval,
     capacity: Int,
     renewsTTLOnAccess: Bool = true,
+    cancelsAbandonedLoads: Bool = false,
     now: @escaping () -> Date = Date.init
   ) {
     self.ttl = ttl
     self.capacity = max(1, capacity)
     self.renewsTTLOnAccess = renewsTTLOnAccess
+    self.cancelsAbandonedLoads = cancelsAbandonedLoads
     self.now = now
   }
 
@@ -107,7 +123,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       }
 
       var flight: Flight
-      if !startsNewLoad, let running = latestFlights[key], !running.isFinished {
+      if !startsNewLoad, let running = latestFlights[key], !running.isFinished, !running.isAbandoned {
         flight = running
       } else {
         flight = startFlight(for: key, load: load)
@@ -166,7 +182,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     load: @escaping @MainActor () async throws -> Value
   ) -> Flight {
     let flight = Flight(generation: generation)
-    Task { [weak self] in
+    flight.task = Task { [weak self] in
       let result: Result<Value, Error>
       do {
         result = .success(try await load())
@@ -177,6 +193,8 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       self?.finish(key: key, flight: flight, result: result)
     }
     // 普通读取只在链尾已完成时才会新发加载，因此无论是否强刷，都接在链尾之后。
+    // 被取代的加载结果不会被用：打开 `cancelsAbandonedLoads` 时直接取消它（它的等待者沿链走到新的这次）。
+    if cancelsAbandonedLoads, let previous = latestFlights[key], !previous.isFinished { previous.abandon() }
     latestFlights[key]?.successor = flight
     latestFlights[key] = flight
     return flight
@@ -215,6 +233,8 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       activeCallers[key] = remaining
     } else {
       activeCallers.removeValue(forKey: key)
+      // 最后一个等待者走了、加载还没完成：没人要结果了，取消它，不再往下派发。
+      if cancelsAbandonedLoads, let running = latestFlights[key], !running.isFinished { running.abandon() }
     }
     releaseLatestIfSettled(for: key)
   }

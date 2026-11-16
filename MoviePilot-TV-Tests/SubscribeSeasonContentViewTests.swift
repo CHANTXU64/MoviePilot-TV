@@ -871,7 +871,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let seasons = try await MediaDetailEpisodeSeasons.fetch(
       media: media, forceRefresh: false, apiService: service
     )
-    XCTAssertEqual(seasons.compactMap(\.season_number), [0, 1, 2])
+    XCTAssertEqual(seasons.compactMap(\.season_number), [1, 2, 0])
     XCTAssertFalse(MediaDetailEpisodeSeasons.needsLookup(seasons, media: media))
     let scopedSeasons = try await service.getMediaSeasons(media: media)
     XCTAssertEqual(scopedSeasons.compactMap(\.season_number), [1])

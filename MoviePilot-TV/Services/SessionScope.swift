@@ -19,8 +19,8 @@ final class SessionScope {
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
   let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
   let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
-  /// 详情页集列表与播放队列共用的季集列表。
-  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 20)
+  /// 详情页集列表、播放队列与「继续播放」对集共用的季集列表。「继续播放」每次读一部剧的全部季，季多的剧也要放得下。
+  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 64)
   let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
   let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
     ttl: 30,
@@ -33,12 +33,21 @@ final class SessionScope {
     ttl: 300, capacity: 1, renewsTTLOnAccess: false)
   /// TMDB 的 key、接口地址和代理（单集对应补查用），同样只在内存里，读取不续期。
   let tmdbAccessCache = CoalescingCache<String, TmdbAccessSettings>(ttl: 300, capacity: 1, renewsTTLOnAccess: false)
+  /// 媒体库条目按标题、年份识别出的 TMDB 编号（认不出的记为 nil），首页「最近添加」每次刷新不再重新识别。
+  let libraryRecognitionCache = CoalescingCache<String, Int?>(
+    ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
+  /// TMDB 条目的海报路径（没有海报的记为 nil），首页海报读不出来时替用。
+  let tmdbPosterPathCache = CoalescingCache<String, String?>(ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
     imageWarmer = MPImageWarmer(apiService: apiService)
     mediaPreloader = MediaPreloader(apiService: apiService)
-    let playback = PlaybackCoordinator(apiService: apiService)
+    #if TESTING
+      let playback = apiService.makePlaybackCoordinatorForTesting?(apiService) ?? PlaybackCoordinator(apiService: apiService)
+    #else
+      let playback = PlaybackCoordinator(apiService: apiService)
+    #endif
     playbackCoordinator = playback
     episodeTrial = EpisodeTrialService(
       api: apiService,
@@ -67,6 +76,8 @@ final class SessionScope {
     mediaSourceCatalogCache.invalidateAll()
     mediaServerConfigCache.invalidateAll()
     tmdbAccessCache.invalidateAll()
+    libraryRecognitionCache.invalidateAll()
+    tmdbPosterPathCache.invalidateAll()
   }
 
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。

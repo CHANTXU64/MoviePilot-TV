@@ -174,7 +174,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
           "let navigationSource = navigationCoordinator.sourceToken()",
           "let loadingPosterURL = item.imageURLs.image",
           "Task {",
-          "Label(\"TMDB详情页\"",
+          "navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)",
         ]
       )
     )

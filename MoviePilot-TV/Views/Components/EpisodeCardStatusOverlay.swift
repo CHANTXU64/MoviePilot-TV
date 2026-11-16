@@ -2,7 +2,8 @@ import SwiftUI
 
 /// 单集卡片剧照上的状态，画在剧照里面，随聚焦一起放大。
 ///
-/// - 能播放：左下角播放图标，后面跟这一集的时长；个别集没法对应：左下角一个警告图标。
+/// - 能播放：左下角播放图标，后面跟这一集的时长；看过一部分时两者中间是已播放进度条（`PlaybackProgressBar`）。
+///   个别集没法对应：左下角一个警告图标。
 ///   没聚焦时用次一级的亮度，聚焦时才全亮。已入库的剧可能整季都能播，不能每张都大大地标。
 ///   托底的浅渐变由卡片每张都铺（见 `EpisodeCardContent`），不随能不能播出现或消失。
 /// - 试看进行中：剧照压暗，正中是进度（拿得到下载进度时是逐渐填满的圆环，否则只转圈），下面是这一步的短字和几步的进度点。
@@ -13,12 +14,14 @@ struct EpisodeCardStatusOverlay: View {
   let stillSize: CGSize
   /// 能播放时跟在播放图标后面的时长，例如「45 分钟」。
   var runtimeText: String? = nil
+  /// 能播放、看过一部分时的已播放进度（0…1），画在播放图标和时长中间。
+  var watchProgress: Double? = nil
   var isFocused = false
 
   var body: some View {
     switch status {
     case .playable:
-      cornerBadge(AppSymbol.play, tint: .white, text: runtimeText)
+      cornerBadge(AppSymbol.play, tint: .white, text: runtimeText, progress: watchProgress)
     case .attention:
       cornerBadge(AppSymbol.warning, tint: .yellow)
     case .trialInProgress(let indicator):
@@ -62,11 +65,15 @@ struct EpisodeCardStatusOverlay: View {
   }
 
   /// 左下角的小图标（和可选的短字）直接压在剧照上，不垫底座。
-  private func cornerBadge(_ symbol: String, tint: Color, text: String? = nil) -> some View {
+  private func cornerBadge(_ symbol: String, tint: Color, text: String? = nil, progress: Double? = nil) -> some View {
     HStack(spacing: 10) {
       Image(systemName: symbol)
         .imageScale(.small)
         .foregroundStyle(tint)
+      if let progress {
+        PlaybackProgressBar(fraction: progress)
+          .foregroundStyle(.white)
+      }
       if let text {
         Text(text)
           .foregroundStyle(.white)

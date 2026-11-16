@@ -74,6 +74,8 @@ nonisolated enum AppSymbol {
   static let site = "globe"
   /// 搜索来源、媒体数据源。
   static let mediaSource = "server.rack"
+  /// 入库状态（已入库、部分缺失、缺失）。
+  static let libraryStatus = "film.stack"
   static let language = "character.bubble"
   static let rating = "star.fill"
   static let ratingHalf = "star.leadinghalf.filled"

@@ -233,6 +233,21 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertNil(EpisodeAvailability.serverRuntimeSeconds(episode(nil), lookups: lookups))
   }
 
+  func testWatchProgressComesFromTheFileThatWouldPlay() {
+    let lookups: [ServerEpisodeLookup] = [
+      index("a", [
+        ServerMediaItem(id: "a1", kind: .episode, runtimeSeconds: 2400, resumePositionSeconds: 600, externalIDs: ["tmdb": "1"]),
+        ServerMediaItem(id: "a2", kind: .episode, runtimeSeconds: 2400, externalIDs: ["tmdb": "2"]),
+      ]),
+      index("b", [
+        ServerMediaItem(id: "b2", kind: .episode, runtimeSeconds: 2400, resumePositionSeconds: 1200, externalIDs: ["tmdb": "2"])
+      ]),
+    ]
+    XCTAssertEqual(EpisodeAvailability.watchProgress(episode(1), lookups: lookups), 0.25)
+    XCTAssertNil(EpisodeAvailability.watchProgress(episode(2), lookups: lookups), "和能不能播选同一台：第一台的这份没看过")
+    XCTAssertNil(EpisodeAvailability.watchProgress(episode(3), lookups: lookups), "服务器上没有这一集")
+  }
+
   func testServerRuntimeOnlyFillsWhenTMDBHasNone() {
     let withoutTMDB = MoviePilotEpisode(TmdbEpisode(id: 42, episodeNumber: 42), season: 1, index: 41)
     XCTAssertEqual(withoutTMDB.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 24)

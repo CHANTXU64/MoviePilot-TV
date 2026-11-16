@@ -254,6 +254,11 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   let runtimeSeconds: Double?
   /// 服务器记录的续播位置（秒），没有时为 0。
   let resumePositionSeconds: Double
+  /// 服务器上这个用户已看完（标记为已播放）。详情页「继续播放」据此找接着看的那一集，见 `PlaybackEpisodeProgress.upNext`。
+  let played: Bool
+  /// 这个用户最后一次播放它的时间；服务器没给或读不出时为 nil。同一集的两份文件一份看完、一份看到一半时，
+  /// 据此分辨是重新在看还是旧续播点（见 `PlaybackEpisodeProgress`）。
+  let lastPlayedAt: Date?
   /// 服务器上只有元数据、没有文件（缺失的集）时为 false。
   let hasFile: Bool
   /// 外部编号：规范来源（见 `ExternalMediaID.normalizedSource`）→ 有效编号。
@@ -280,7 +285,8 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   init(
     id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
     episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
-    resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:],
+    resumePositionSeconds: Double = 0, played: Bool = false, lastPlayedAt: Date? = nil, hasFile: Bool = true,
+    externalIDs: [String: String] = [:],
     path: String? = nil, premiereDate: String? = nil, seriesID: String? = nil, overview: String? = nil,
     communityRating: Double? = nil, officialRating: String? = nil, posterURL: URL? = nil, thumbnailURL: URL? = nil
   ) {
@@ -293,6 +299,8 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
     self.episodeNumberEnd = episodeNumberEnd
     self.runtimeSeconds = runtimeSeconds
     self.resumePositionSeconds = resumePositionSeconds
+    self.played = played
+    self.lastPlayedAt = lastPlayedAt
     self.hasFile = hasFile
     self.externalIDs = externalIDs
     self.path = trimmedNonEmpty([path])
@@ -325,7 +333,7 @@ nonisolated struct ServerMediaItem: Equatable, Sendable {
   }
 }
 
-/// 播放界面、续播询问显示的条目信息：标题、季集号、简介、日期、评分和图片。
+/// 播放界面显示的条目信息：标题、季集号、简介、日期、评分和图片。
 /// 以 MoviePilot 的为准（详情页、集列表，或按服务器条目的外部编号查到的 MoviePilot 详情）；MoviePilot 没有这个条目，
 /// 或缺某一项时，用媒体服务器适配器给的（`ServerMediaItem.metadata`），不限于哪一类服务器。
 nonisolated struct PlaybackMetadata: Equatable, Sendable {
@@ -495,6 +503,34 @@ nonisolated struct ServerChapter: Equatable, Sendable {
   }
 }
 
+/// 首页「最近添加」的卡片按下做什么（见 `PlaybackCoordinator.libraryItemLinks`）。
+nonisolated enum LibraryItemLink: Equatable, Sendable {
+  /// 刮到了 TMDB 编号：打开这部片的详情页。`mediaType` 是「电影」或「电视剧」。
+  case detail(tmdbID: Int, mediaType: String)
+  /// 没有 TMDB 编号，MoviePilot 没有它的详情：直接在应用内播放，播放界面用媒体服务器的信息。
+  case libraryOnly
+
+  /// 不是电影或整部剧时为 nil。
+  init?(item: ServerMediaItem) {
+    let mediaType: String
+    switch item.kind {
+    case .movie: mediaType = "电影"
+    case .series: mediaType = "电视剧"
+    case .episode, .other: return nil
+    }
+    if let id = MediaIdentifier.validNumericIdentifier(item.externalID(for: "tmdb").flatMap { Int($0) }) {
+      self = .detail(tmdbID: id, mediaType: mediaType)
+    } else {
+      self = .libraryOnly
+    }
+  }
+
+  var tmdbID: Int? {
+    guard case .detail(let id, _) = self else { return nil }
+    return id
+  }
+}
+
 /// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
 /// 详情页只拿到 MoviePilot 入库表里的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
@@ -574,11 +610,155 @@ nonisolated enum PlaybackEpisodeOrder {
   }
 }
 
-/// 正在播放的那个文件有多长。续播询问、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
+/// 一部剧接着看哪一集（详情页的「继续播放」和集列表默认停的位置）。
+/// 只看有文件的正片集（全是特别篇时才看特别篇），按季号、集号排：
+/// 最靠后的一集看过或看了一部分的为准：看了一部分（续播点有效，见 `PlaybackResumePolicy`）就接着看它，
+/// 看完了就看它后面的一集。前面集上留着的续播点不算（比如整季看完后又回头看了几分钟）。
+/// 一集都没看过、或最后一集已经看完时为 nil。
+nonisolated enum PlaybackEpisodeProgress {
+  struct UpNext: Equatable, Sendable {
+    let episode: ServerMediaItem
+    /// 接着看到一半的这一集（有续播点）；false 表示上一集看完了，这一集从头看。
+    let resumes: Bool
+  }
+
+  static func upNext(in items: [ServerMediaItem]) -> UpNext? {
+    let slots = orderedSlots(items)
+    guard let last = slots.lastIndex(where: \.isReached) else { return nil }
+    if slots[last].resumable { return UpNext(episode: slots[last].item, resumes: true) }
+    let next = slots.index(after: last)
+    return slots.indices.contains(next) ? UpNext(episode: slots[next].item, resumes: false) : nil
+  }
+
+  /// 看完了的最靠后一集（详情页按 MoviePilot 集列表找它紧接着的下一集，核对服务器上的 `upNext` 是不是它）。
+  /// 它后面还有看过一部分的集时为 nil（那时 `upNext` 接着看那一集）。
+  /// 只在真正看完的文件里取：几份看完的文件范围重叠时（E01–E05 和 E02–E03）取看完范围到得最远的那一份；
+  /// 没看过、只是起始集被看完的合集覆盖的文件（看完 E01–E05 后的 E02–E07）不算，免得把看完的位置推远。
+  static func lastWatched(in items: [ServerMediaItem]) -> ServerMediaItem? {
+    let slots = orderedSlots(items)
+    guard let last = slots.lastIndex(where: \.isReached), !slots[last].resumable else { return nil }
+    let reached = position(slots[last].item)
+    return episodePool(items).filter { isWatched($0) && position($0) <= reached }.max { lhs, rhs in
+      (lhs.seasonNumber ?? 0, lastEpisode(lhs) ?? 0) < (rhs.seasonNumber ?? 0, lastEpisode(rhs) ?? 0)
+    }
+  }
+
+  /// 文件在剧里的位置（季号、起始集号），缺编号的排最后。
+  private static func position(_ item: ServerMediaItem) -> (Int, Int) {
+    (item.seasonNumber ?? Int.max, item.episodeNumber ?? Int.max)
+  }
+
+  private static func resumePosition(_ item: ServerMediaItem) -> Double? {
+    PlaybackResumePolicy.resumePosition(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
+  }
+
+  private static func isWatched(_ item: ServerMediaItem) -> Bool {
+    item.played
+      || PlaybackResumePolicy.isCompleted(positionSeconds: item.resumePositionSeconds, durationSeconds: item.runtimeSeconds)
+  }
+
+  /// 文件最后包含到第几集（一个文件含多集时是 `episodeNumberEnd`）。
+  private static func lastEpisode(_ item: ServerMediaItem) -> Int? {
+    item.episodeNumberEnd ?? item.episodeNumber
+  }
+
+  /// 服务器上有文件的正片集里最新的一季，集列表没看过时默认显示它。
+  static func latestSeason(in items: [ServerMediaItem]) -> Int? {
+    items.filter { $0.kind == .episode && $0.hasFile }.compactMap(\.seasonNumber).filter { $0 > 0 }.max()
+  }
+
+  /// 一集（同一季同一个起始集号的几份文件合成一份）。
+  private struct Slot {
+    /// 代表这一集的文件：看完了用看完的那份（含的集最多的）；没看完用有续播点、看得最远的那份；都没看过用第一份。
+    let item: ServerMediaItem
+    /// 有一份文件真正看完了。
+    let watched: Bool
+    /// 没有哪份看完，但起始集包含在别的看完的文件里（看完 E01–E02 后单独的 E02）：接着看时跳过它，
+    /// 但它自己没看过，不能拿它的结束集号算看到了哪里（见 `lastWatched`）。
+    let covered: Bool
+    let resumable: Bool
+
+    /// 已经看到这里（看完、被覆盖，或看到一半）。
+    var isReached: Bool { watched || covered || resumable }
+  }
+
+  /// 有文件的正片集；有季号集号齐全的正片时只用这些：缺编号的排不进顺序，混进来会被当成最后一集，
+  /// 看过它就以为整部看完了，没看过又会被当成最后一集的下一集。没有编号齐全的正片时退回不排除缺编号的，
+  /// 再没有时用全部（只有特别篇）。
+  private static func episodePool(_ items: [ServerMediaItem]) -> [ServerMediaItem] {
+    let available = items.filter { $0.kind == .episode && $0.hasFile }
+    let numbered = available.filter { ($0.seasonNumber ?? 0) > 0 && $0.episodeNumber != nil }
+    if !numbered.isEmpty { return numbered }
+    let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
+    return regular.isEmpty ? available : regular
+  }
+
+  /// 有文件的正片集按季号集号排好。先把看完的文件包含的集都记下来，再逐集判断看完、看到一半，
+  /// 不让同一集的另一份文件（单独的 E02 带着旧续播点、单独的 E01 排在合集前面）盖掉合集已看完的范围。
+  /// 例外是重新在看：看到一半的那份比看完的（同一集的另一份、包含这一集的合集）都播得晚，这一集算看到一半，接着播它；
+  /// 读不到最后播放时间时以看完为准（另一份常带着更早的续播点）。
+  private static func orderedSlots(_ items: [ServerMediaItem]) -> [Slot] {
+    let pool = episodePool(items)
+    // 按季记看完的集号区间（和最后播放时间），不逐集展开：服务器给的结束集号异常大时也不会卡住。
+    var covered: [Int: [(range: ClosedRange<Int>, playedAt: Date?)]] = [:]
+    for item in pool where isWatched(item) {
+      guard let season = item.seasonNumber, let first = item.episodeNumber, let last = lastEpisode(item), last >= first
+      else { continue }
+      covered[season, default: []].append((first...last, item.lastPlayedAt))
+    }
+    var keys: [String: Int] = [:]
+    var groups: [[ServerMediaItem]] = []
+    for item in pool {
+      guard let season = item.seasonNumber, let episode = item.episodeNumber else {
+        groups.append([item])
+        continue
+      }
+      if let index = keys["\(season)|\(episode)"] {
+        groups[index].append(item)
+      } else {
+        keys["\(season)|\(episode)"] = groups.count
+        groups.append([item])
+      }
+    }
+    let slots = groups.map { copies -> Slot in
+      let first = copies[0]
+      // 看完的文件里包含这一集的（同一集看完的那份也在内）。
+      let coveringWatched = first.seasonNumber.flatMap { season in
+        first.episodeNumber.map { episode in covered[season]?.filter { $0.range.contains(episode) } ?? [] }
+      } ?? []
+      let isCovered = !coveringWatched.isEmpty
+      let resumable = copies.filter { resumePosition($0) != nil }
+      // 重新在看：看到一半的那份比每一份看完的都播得晚（时间都读得到）。
+      let rewatched = resumable.filter { copy in
+        guard let resumedAt = copy.lastPlayedAt, isCovered || copies.contains(where: isWatched) else { return false }
+        return coveringWatched.allSatisfy { $0.playedAt.map { resumedAt > $0 } ?? false }
+          && copies.filter(isWatched).allSatisfy { $0.lastPlayedAt.map { resumedAt > $0 } ?? false }
+      }
+      if let latest = rewatched.max(by: { ($0.lastPlayedAt ?? .distantPast) < ($1.lastPlayedAt ?? .distantPast) }) {
+        return Slot(item: latest, watched: false, covered: false, resumable: true)
+      }
+      if let watched = copies.filter(isWatched).max(by: { (lastEpisode($0) ?? 0) < (lastEpisode($1) ?? 0) }) {
+        return Slot(item: watched, watched: true, covered: false, resumable: false)
+      }
+      if isCovered { return Slot(item: first, watched: false, covered: true, resumable: false) }
+      if let resumed = resumable.max(by: { $0.resumePositionSeconds < $1.resumePositionSeconds }) {
+        return Slot(item: resumed, watched: false, covered: false, resumable: true)
+      }
+      return Slot(item: first, watched: false, covered: false, resumable: false)
+    }
+    return slots.enumerated().sorted { lhs, rhs in
+      let left = (lhs.element.item.seasonNumber ?? Int.max, lhs.element.item.episodeNumber ?? Int.max, lhs.offset)
+      let right = (rhs.element.item.seasonNumber ?? Int.max, rhs.element.item.episodeNumber ?? Int.max, rhs.offset)
+      return left < right
+    }.map(\.element)
+  }
+}
+
+/// 正在播放的那个文件有多长。续播点、进度条、跳转上限、跳过片头片尾、信息面板和看完判定都用它，不各取各的。
 nonisolated enum PlaybackDuration {
   /// 依次取播放器读到的时长、所选片源的时长、条目的时长，跳过 nil、0、负数和非有限值；都没有时为 nil。
   /// 起播后 mpv 读到的就是正在播的文件，最准：服务器的记录可能过时（文件被洗版换成更长的版本、还没重新分析）。
-  /// 起播前（续播询问）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
+  /// 起播前（算续播点时）还没有实测值，用片源的；条目的时长只对应其中一个版本，选了长短不同的版本时不准，排最后。
   static func seconds(player: Double?, source: Double?, item: Double?) -> Double? {
     [player, source, item].lazy.compactMap { $0 }.first { $0.isFinite && $0 > 0 }
   }
@@ -662,6 +842,15 @@ nonisolated enum PlaybackResumePolicy {
       return nil
     }
     return positionSeconds
+  }
+
+  /// 看到了哪里（0…1），画已播放进度条用：只在有有效续播点（见 `resumePosition`）且知道时长时给出，
+  /// 和起播时接着播的条件一致——画了进度条的，按下就从这里接着播。
+  static func progressFraction(positionSeconds: Double, durationSeconds: Double?) -> Double? {
+    guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0,
+      let position = resumePosition(positionSeconds: positionSeconds, durationSeconds: durationSeconds)
+    else { return nil }
+    return min(1, max(0, position / durationSeconds))
   }
 
   /// 播放结束位置达到时长的 90% 视为看完；没有时长就不算看完。

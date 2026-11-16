@@ -14,6 +14,8 @@ protocol MediaServerConnection: Sendable {
 
   /// 条目不在这台服务器上时返回 nil。
   func item(id: String, timeout: TimeInterval?) async throws -> ServerMediaItem?
+  /// 一次读多个条目，不在这台服务器上的不返回。
+  func items(ids: [String]) async throws -> [ServerMediaItem]
   /// 按外部编号搜索的候选条目，调用方须再用 `LibraryItemExpectation.accepts` 核对。没有能搜的编号时返回空。
   /// 服务器报错、连不上等照常抛出，不能当作搜不到：调用方据此区分“这台上没有”和“无法确认”。
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem]

@@ -71,6 +71,13 @@ struct EmbyServerConnection: MediaServerConnection {
       .serverItem(image: imageURL)
   }
 
+  func items(ids: [String]) async throws -> [ServerMediaItem] {
+    guard !ids.isEmpty else { return [] }
+    return try await perform(.readItem) {
+      try await client.items(ids: ids, userID: userID, timeout: EmbyClient.quickTimeout)
+    }.map { $0.serverItem(image: imageURL) }
+  }
+
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem] {
     let keys = Self.providerSearchKeys(for: expected)
     guard !keys.isEmpty else { return [] }
@@ -149,7 +156,7 @@ struct EmbyServerConnection: MediaServerConnection {
   }
 
   /// 写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：开播时的条目可能来自剧集列表，
-  /// Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0。
+  /// Emby 列表里的 `PlayCount` 恒为 0（最后播放时间也要点名才给），整份写回会把真实播放次数改成 0。
   /// 读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
   func saveWatchProgress(_ progress: WatchProgress) async throws {
     try await perform(.saveProgress) {

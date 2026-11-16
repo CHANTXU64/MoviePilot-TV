@@ -365,6 +365,9 @@ class APIService: ObservableObject {
     var storedCredentialsForTesting: (username: String?, password: String?) {
       (storedUsername, storedPassword)
     }
+
+    /// 测试用：会话作用域里的播放协调器由测试创建（连媒体服务器、查 TMDB 走测试替身），详情页等经 `sessionScope` 拿到的就是它。
+    var makePlaybackCoordinatorForTesting: (@MainActor (APIService) -> PlaybackCoordinator)?
   #endif
 
   var baseURL: String { session.baseURL }
@@ -1949,6 +1952,23 @@ class APIService: ObservableObject {
     if t == "电影" || t == "movie" { return "movie" }
     if t == "电视剧" || t == "剧集" || t == "tv" { return "tv" }
     return t
+  }
+
+  /// 同 `recognizeTmdbId`，结果在会话里记住（`libraryRecognitionCache`），认不出也记住；请求失败不记，下次再识别。
+  func cachedRecognizedTmdbId(title: String, year: String?, type: String?) async throws -> Int? {
+    try await sessionCachedValue(
+      sessionScope.libraryRecognitionCache, key: [type ?? "", year ?? "", title].joined(separator: "|")
+    ) {
+      try await self.recognizeTmdbId(title: title, year: year, type: type)
+    }
+  }
+
+  /// TMDB 条目的海报路径（读 MoviePilot 详情），在会话里记住（`tmdbPosterPathCache`），没有海报也记住。
+  func cachedTmdbPosterPath(tmdbID: Int, type: String?) async throws -> String? {
+    try await sessionCachedValue(sessionScope.tmdbPosterPathCache, key: "\(type ?? "")|\(tmdbID)") {
+      let media = MediaInfo(tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), type: type)
+      return try await self.fetchMediaDetail(media: media).poster_path
+    }
   }
 
   /// 优化后的 TMDB ID 识别逻辑 (移植并增强自 MediaIdSelector.vue)

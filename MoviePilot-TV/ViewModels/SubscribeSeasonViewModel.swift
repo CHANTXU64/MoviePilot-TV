@@ -154,8 +154,8 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.mediaInfo = mediaInfo
     self.apiService = apiService
     self.initialSeason = initialSeason
-    self.standardSeasonInfos = mediaInfo.season_info ?? []
-    self.defaultSeasonInfos = mediaInfo.season_info ?? []
+    self.standardSeasonInfos = SeasonDisplayOrder.sorted(mediaInfo.season_info ?? [])
+    self.defaultSeasonInfos = SeasonDisplayOrder.sorted(mediaInfo.season_info ?? [])
     self.episodeGroupCatalog = EpisodeGroupCatalog(apiService: apiService)
     let selectedGroupId =
       Self.episodeGroupTMDBID(for: mediaInfo) != nil
@@ -317,7 +317,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         loadedSeasons = mediaInfo.season_info ?? []
       }
       try validateSeasonLoad(load, snapshot: snapshot)
-      standardSeasonInfos = loadedSeasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+      standardSeasonInfos = SeasonDisplayOrder.sorted(loadedSeasons)
       if mediaInfo.season == nil, !standardSeasonInfos.isEmpty {
         defaultSeasonInfos = standardSeasonInfos
       }
