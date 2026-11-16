@@ -598,6 +598,19 @@ final class SeriesContinuationTests: XCTestCase {
     }
   }
 
+  func testNextEpisodeFromTheListDoesNotWaitForTheServerFileIdentity() {
+    // 看完第 1 季第 2 集，集列表的下一集是第 3 集；服务器上接着看的那份标着第 1 季第 4 集，单集编号却在第 2 季。
+    // 以集列表为准，不看服务器上那份：第 2 季还没读也直接定下，不为它补读。
+    let watched = file("w", episode: 2, tmdb: 102)
+    let next = file("n", episode: 4, tmdb: 202)
+    let outcome = SeriesContinuation.decide(
+      upNext: .init(episode: next, resumes: false), lastWatched: watched, serverName: "emby",
+      lookups: [index([watched, next])], seasons: seasons.filter { $0.number == 1 }, unread: [0, 2],
+      knownSeasons: [0, 1, 2], catalogComplete: true)
+    XCTAssertEqual(outcome, .decided(.openPanel(episode(1, 3))))
+    XCTAssertEqual(choose([watched, next], next: next, watched: watched), .openPanel(episode(1, 3)))
+  }
+
   func testSeasonsReadFirstAreTheOnesTheDecisionUsuallyNeeds() {
     let known = Array(0...30)
     let half = file("h", season: 12, episode: 3)

@@ -924,8 +924,8 @@ nonisolated enum SeriesContinuation {
         }
       }
 
-      // 接下来播什么由两件独立的事决定，先各自算出来，再按决策表（下面的 switch，每一格都写明）合起来：
-      // 集列表说下一集是哪一集（`ListNext`），服务器上接着看的那份对到集列表的哪一集（`ServerNext`）。
+      // 接下来播什么由两件独立的事决定，按决策表（下面的 switch，每一格都写明）合起来：
+      // 集列表说下一集是哪一集（`ListNext`），服务器上接着看的那份对到集列表的哪一集（`ServerNext`，用到时才算）。
       enum ListNext {
         /// 看完的那一集（正片）对上了，集列表里的下一集是这个位置。
         case episode(Int)
@@ -981,15 +981,14 @@ nonisolated enum SeriesContinuation {
         listNext = .notWatched
       }
 
-      let serverNext: ServerNext
-      if let next = upNext?.episode {
+      /// 服务器上接着看的那份对到集列表的哪一集。只在这一行的结论要看它时才算：算它可能要补读别的季（单集编号指向还没读的季）。
+      func serverNext() -> ServerNext {
+        guard let next = upNext?.episode else { return .none }
         switch place(next) {
-        case .placed(let covered, _): serverNext = .placed(covered[0])
-        case .contradicted(let position): serverNext = .contradicted(next, position)
-        case .unplaced: serverNext = .unplaced(next)
+        case .placed(let covered, _): return .placed(covered[0])
+        case .contradicted(let position): return .contradicted(next, position)
+        case .unplaced: return .unplaced(next)
         }
-      } else {
-        serverNext = .none
       }
 
       /// 服务器上接着看的那份对到的是正片。
@@ -1003,49 +1002,65 @@ nonisolated enum SeriesContinuation {
         crossesUnreadSeason(after: current, toSeason: position.map { entries[$0].episode.seasonNumber })
       }
 
-      // 决策表：每一格单独写，不用通配，加了情况编译器会要求补上。
-      switch (listNext, serverNext) {
-      // 集列表说了下一集：以集列表为准。
-      case (.episode(let position), .none): return playOrPanel(position)
-      case (.episode(let position), .placed): return playOrPanel(position)
-      case (.episode(let position), .unplaced): return playOrPanel(position)
-      case (.episode(let position), .contradicted): return playOrPanel(position)
+      // 决策表：按集列表的结论分行，要看服务器上那份的行再逐格写（不用通配，加了情况编译器会要求补上）。
+      switch listNext {
+      // 集列表说了下一集：以集列表为准，不看服务器上的那份（也就不为它补读别的季）。
+      case .episode(let position):
+        return playOrPanel(position)
       // 正片看完：服务器上已有集列表还没更新到的下一集（对不到、没有反证）就播它；否则从头。
-      case (.finished, .none): return start()
-      case (.finished, .placed): return start()
-      case (.finished, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-      case (.finished, .contradicted): return start()
+      case .finished:
+        switch serverNext() {
+        case .none: return start()
+        case .placed: return start()
+        case .unplaced(let file): return .playServerFile(file, resumes: false, episode: nil)
+        case .contradicted: return start()
+        }
       // 看完特别篇：服务器上接着看的那份对上了正片就按它走（按 TVDB 编号的动漫，正片里的一集可能对到特别篇）；
       // 否则按集列表播下一集特别篇，最后一集特别篇看完从头。
-      case (.special(let position), .none): return playOrPanel(position)
-      case (.special(let position), .placed(let next)): return isRegular(next) ? follow(next) : playOrPanel(position)
-      case (.special(let position), .unplaced): return playOrPanel(position)
-      case (.special(let position), .contradicted): return playOrPanel(position)
-      case (.finishedSpecials, .none): return start()
-      case (.finishedSpecials, .placed(let next)): return isRegular(next) ? follow(next) : start()
-      case (.finishedSpecials, .unplaced): return start()
-      case (.finishedSpecials, .contradicted): return start()
+      case .special(let position):
+        switch serverNext() {
+        case .none: return playOrPanel(position)
+        case .placed(let next): return isRegular(next) ? follow(next) : playOrPanel(position)
+        case .unplaced: return playOrPanel(position)
+        case .contradicted: return playOrPanel(position)
+        }
+      case .finishedSpecials:
+        switch serverNext() {
+        case .none: return start()
+        case .placed(let next): return isRegular(next) ? follow(next) : start()
+        case .unplaced: return start()
+        case .contradicted: return start()
+        }
       // 下一季没读到：服务器上的那份对不到集列表（可能就在没读到的那一季）就播它；对到的集跨过了没读到的季就说明原因。
-      case (.blockedByUnreadSeason, .none): return .explain(.seasonListUnreadable)
-      case (.blockedByUnreadSeason(let current), .placed(let position)):
-        return crossesUnreadSeason(after: current, to: position) ? .explain(.seasonListUnreadable) : follow(position)
-      case (.blockedByUnreadSeason(let current), .unplaced(let file)):
-        // 对不到集列表时按服务器上的季号看：标着更后面的季就是跨过了没读到的那一季。
-        return crossesUnreadSeason(after: current, toSeason: file.seasonNumber)
-          ? .explain(.seasonListUnreadable) : .playServerFile(file, resumes: false, episode: nil)
-      case (.blockedByUnreadSeason(let current), .contradicted(let file, let position)):
-        return crossesUnreadSeason(after: current, to: position)
-          ? .explain(.seasonListUnreadable) : contradicted(file, position)
+      case .blockedByUnreadSeason(let current):
+        switch serverNext() {
+        case .none: return .explain(.seasonListUnreadable)
+        case .placed(let position):
+          return crossesUnreadSeason(after: current, to: position) ? .explain(.seasonListUnreadable) : follow(position)
+        case .unplaced(let file):
+          // 对不到集列表时按服务器上的季号看：标着更后面的季就是跨过了没读到的那一季。
+          return crossesUnreadSeason(after: current, toSeason: file.seasonNumber)
+            ? .explain(.seasonListUnreadable) : .playServerFile(file, resumes: false, episode: nil)
+        case .contradicted(let file, let position):
+          return crossesUnreadSeason(after: current, to: position)
+            ? .explain(.seasonListUnreadable) : contradicted(file, position)
+        }
       // 看完的那一集对不上：没有反证就按服务器上接着看的那份走。
-      case (.unknown(let reason), .none): return .explain(reason)
-      case (.unknown, .placed(let position)): return follow(position)
-      case (.unknown, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-      case (.unknown, .contradicted(let file, let position)): return contradicted(file, position)
+      case .unknown(let reason):
+        switch serverNext() {
+        case .none: return .explain(reason)
+        case .placed(let position): return follow(position)
+        case .unplaced(let file): return .playServerFile(file, resumes: false, episode: nil)
+        case .contradicted(let file, let position): return contradicted(file, position)
+        }
       // 没有看完的记录：服务器上有接着看的那份就按它走，否则从头。
-      case (.notWatched, .none): return start()
-      case (.notWatched, .placed(let position)): return follow(position)
-      case (.notWatched, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-      case (.notWatched, .contradicted(let file, let position)): return contradicted(file, position)
+      case .notWatched:
+        switch serverNext() {
+        case .none: return start()
+        case .placed(let position): return follow(position)
+        case .unplaced(let file): return .playServerFile(file, resumes: false, episode: nil)
+        case .contradicted(let file, let position): return contradicted(file, position)
+        }
       }
     }
     let choice = evaluate()

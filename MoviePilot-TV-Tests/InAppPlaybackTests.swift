@@ -5381,6 +5381,21 @@ extension PlaybackCoordinatorTests {
     viewModel.cancelForPop()
   }
 
+  func testContinueDoesNotReadSeasonsForAServerFileTheDecisionIgnores() async throws {
+    // 30 季的剧，看完第 1 季第 1 集，集列表的下一集是第 1 季第 2 集；Emby 上接着看的那份标着第 1 季第 2 集，
+    // 单集编号却是第 25 季第 1 集。以集列表为准：只读先读的第 1、2 季，不为服务器上那份去找第 25 季。
+    let show = Self.manySeasons(30)
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 101, played: true),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 2501), seasonInfo: show.seasonInfo
+    ) { $0.tmdbEpisodes = show.lists }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    XCTAssertEqual(viewModel.episodeRowHint?.season, 1)
+    XCTAssertEqual(viewModel.episodeRowHint?.tmdbEpisodeID, 102)
+    XCTAssertEqual(Set(Self.seasonListRequests()), ["/api/v1/tmdb/100/1", "/api/v1/tmdb/100/2"])
+    viewModel.cancelForPop()
+  }
+
   func testContinueStopsReadingSeasonListsAtTheLimit() async throws {
     // 100 季的剧，接着看到一半的那份带的单集编号哪一季都没有（要找遍所有季才知道）：最多读上限那么多季，
     // 剩下的当成没读到，照常续播这份（没有反证），不一下子读 100 季。
