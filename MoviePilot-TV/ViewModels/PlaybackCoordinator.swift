@@ -316,8 +316,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     self.now = now
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
+    // 建集索引会分批读很多份集列表：没人等了（详情页离开）就取消，不再往下派发。
     episodeIndexes = CoalescingCache(
-      ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, now: now)
+      ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, cancelsAbandonedLoads: true, now: now)
     transferRecords = CoalescingCache(
       ttl: Self.transferRecordTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
   }

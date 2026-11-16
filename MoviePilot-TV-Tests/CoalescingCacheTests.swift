@@ -103,6 +103,94 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual(probe.loadCount, 1)
   }
 
+  /// 一直等到被取消的加载：取消时记下来并抛出取消。
+  private func loadUntilCancelled(_ probe: LoadProbe, value: String = "late") -> @MainActor () async throws -> String {
+    {
+      probe.loadCount += 1
+      do {
+        try await Task.sleep(for: .seconds(30))
+      } catch {
+        probe.cancelledCallerReturned = true
+        throw error
+      }
+      return value
+    }
+  }
+
+  func testAbandonedLoadIsCancelledWhenTheLastCallerLeaves() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10, cancelsAbandonedLoads: true)
+    let probe = LoadProbe()
+    let caller = Task { try await cache.value(for: "key", validate: {}, load: loadUntilCancelled(probe)) }
+    for _ in 0..<100 where probe.loadCount == 0 { await Task.yield() }
+    caller.cancel()
+    _ = try? await caller.value
+    for _ in 0..<200 where !probe.cancelledCallerReturned { try await Task.sleep(for: .milliseconds(5)) }
+    XCTAssertTrue(probe.cancelledCallerReturned, "没人等了，加载被取消")
+    // 之后再来的读取不跟被放弃的那次，重新加载。
+    let fresh = try await cache.value(for: "key", validate: {}, load: countingLoad("fresh", probe: probe))
+    XCTAssertEqual(fresh, "fresh")
+    XCTAssertEqual(probe.loadCount, 2)
+  }
+
+  func testCallerArrivingAfterAbandonmentStartsANewLoad() async throws {
+    // 加载不理会取消、放弃后还没结束时又来了读取：不跟被放弃的那次（它的结果没人要、可能不完整），重新加载。
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10, cancelsAbandonedLoads: true)
+    let gate = LoadGate()
+    let probe = LoadProbe()
+    let caller = Task {
+      try await cache.value(for: "key", validate: {}) {
+        probe.loadCount += 1
+        await gate.wait()
+        return "abandoned"
+      }
+    }
+    await gate.waitForArrival()
+    caller.cancel()
+    _ = try? await caller.value
+    // 稍后放开被放弃的那次：新的读取跟错了它时拿到它的结果（断言失败），不会一直等着。
+    Task {
+      try? await Task.sleep(for: .milliseconds(200))
+      gate.open()
+    }
+    let fresh = try await cache.value(for: "key", validate: {}, load: countingLoad("fresh", probe: probe))
+    XCTAssertEqual(fresh, "fresh")
+    XCTAssertEqual(probe.loadCount, 2)
+  }
+
+  func testSharedLoadContinuesWhileAnotherCallerWaits() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10, cancelsAbandonedLoads: true)
+    let gate = LoadGate()
+    let probe = LoadProbe()
+    let first = Task {
+      try await cache.value(for: "key", validate: {}) {
+        probe.loadCount += 1
+        await gate.wait()
+        return "shared"
+      }
+    }
+    await gate.waitForArrival()
+    let second = Task { try await cache.value(for: "key", validate: {}, load: countingLoad("unexpected", probe: probe)) }
+    await Task.yield()
+    first.cancel()
+    _ = try? await first.value
+    gate.open()
+    let value = try await second.value
+    XCTAssertEqual(value, "shared")
+    XCTAssertEqual(probe.loadCount, 1)
+  }
+
+  func testSupersededLoadIsCancelledWhenAbandonmentIsEnabled() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10, cancelsAbandonedLoads: true)
+    let probe = LoadProbe()
+    let old = Task { try await cache.value(for: "key", validate: {}, load: loadUntilCancelled(probe, value: "old")) }
+    for _ in 0..<100 where probe.loadCount == 0 { await Task.yield() }
+    let refreshed = try await cache.value(for: "key", forceRefresh: true, validate: {}) { "new" }
+    XCTAssertEqual(refreshed, "new")
+    let oldValue = try await old.value
+    XCTAssertEqual(oldValue, "new", "被取代的等待者沿链拿到新的结果")
+    XCTAssertTrue(probe.cancelledCallerReturned, "被取代的加载被取消")
+  }
+
   func testFreshEntryIsReusedAndAccessRenewsExpiry() async throws {
     let clock = TestClock()
     let cache = CoalescingCache<String, Int>(ttl: 10, capacity: 10, now: { clock.date })

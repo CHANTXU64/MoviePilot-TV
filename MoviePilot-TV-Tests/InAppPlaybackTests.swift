@@ -5346,6 +5346,38 @@ extension PlaybackCoordinatorTests {
     XCTAssertNil(viewModel.seriesPlayAction)
   }
 
+  func testLeavingTheDetailPageStopsDispatchingSecondaryServerSeasonListReads() async throws {
+    // 两台服务器：观看记录在第一台；第二台（集索引走共享缓存）上第 2–11 季都有没编号的文件，它的集索引读第一批 4 份时
+    // 离开详情页。没有别的页面在等这份集索引：放行这一批后，不再发出后面的季。
+    let backup = "backup.playback-tests.local"
+    let show = Self.manySeasons(11)
+    let main = Self.watchedEpisode("e1", episode: 1, tmdb: 101)
+    let files = (2...11).map { number in
+      #"{"Id":"backup-e\#(number)","Type":"Episode","SeriesId":"s1","ParentIndexNumber":\#(number),"IndexNumber":1}"#
+    }
+    let gate = DispatchSemaphore(value: 0)
+    defer { for _ in 0..<8 { gate.signal() } }
+    let initial = Set((2...5).map { "/api/v1/tmdb/100/\($0)" })
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(main, seasonInfo: show.seasonInfo) {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "backup", host: backup))]"
+      $0.providerSearch["\(backup)|tmdb.100"] = Self.series()
+      $0.episodes["\(backup)|s1"] = Self.embyEpisodes(files.joined(separator: ","))
+      $0.tmdbEpisodes = show.lists
+      $0.transferHistory = "[]"
+      $0.tmdbEpisodesGates = Dictionary(uniqueKeysWithValues: initial.map { ($0, gate) })
+    }
+    func secondaryListRequests() -> [String] {
+      Self.seasonListRequests().filter { $0 != "/api/v1/tmdb/100/1" }
+    }
+    try await waitUntil { initial.isSubset(of: Set(secondaryListRequests())) }
+    XCTAssertEqual(Set(secondaryListRequests()), initial)
+    viewModel.cancelForPop()
+    for _ in 0..<4 { gate.signal() }
+    try await Task.sleep(for: .milliseconds(800))
+    XCTAssertEqual(Set(secondaryListRequests()), initial, "\(secondaryListRequests())")
+    XCTAssertNil(viewModel.seriesPlayAction)
+  }
+
   func testServerFileRenumberedAfterTheDecisionIsNotPlayedAsIs() async throws {
     // 按钮定下要续播那份对不到集列表的文件之后，它被重新刮削成第 1 季第 2 集、编号 999（和集列表的第 2 集对不上）：
     // 起播时现读到编号变了，不原样播；详情页按新数据重新判断，认出对不上，改成打开第 2 集的面板。
