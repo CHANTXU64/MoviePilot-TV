@@ -174,6 +174,8 @@ struct SystemView: View {
       switch detail {
       case .changelog(let entry):
         changelogDetailSheet(entry)
+      case .license(let notice):
+        ThirdPartyLicenseSheet(notice: notice).equatable()
       case .log(let record):
         LogRecordDetailSheet(record: record)
       }
@@ -293,6 +295,8 @@ struct SystemView: View {
                 }
               case .changelog:
                 changelogPage
+              case .licenses:
+                licensesPage
               case .logs:
                 EmptyView()
               }
@@ -498,6 +502,13 @@ struct SystemView: View {
         .focused($focusedItem, equals: .changelog)
 
         Button {
+          push(.licenses)
+        } label: {
+          row("第三方软件许可", showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .licenses)
+
+        Button {
           push(.logs)
         } label: {
           row("查看日志", showsDisclosure: true)
@@ -611,6 +622,35 @@ struct SystemView: View {
         .focused($focusedItem, equals: .changelogVersion(entry.version))
       }
     }
+  }
+
+  private var licensesPage: some View {
+    section(nil) {
+      ForEach(ThirdPartyNotices.all) { notice in
+        Button {
+          selectedDetail = .license(notice)
+        } label: {
+          row(notice.name, value: notice.license, showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .license(notice.id))
+      }
+    }
+  }
+
+  /// 第三方许可详情的正文：说明在前，许可原文按原样分段接在后面，一个组件有多份原文时各带标题。
+  static func licenseBlocks(_ notice: ThirdPartyNotice, bundle: Bundle = .main) -> [ReadingBlock] {
+    var blocks = [ReadingBlock("许可：\(notice.license)", style: .secondary)]
+    blocks += notice.details.map { ReadingBlock($0) }
+    for text in notice.texts {
+      blocks.append(.divider)
+      if let title = text.title { blocks.append(ReadingBlock(title, style: .heading)) }
+      guard let content = ThirdPartyNotices.text(text.resource, in: bundle) else {
+        blocks.append(ReadingBlock("许可原文读取失败", style: .secondary))
+        continue
+      }
+      blocks += ReadingSheetLayout.paragraphs(content).map { ReadingBlock($0, style: .secondary) }
+    }
+    return blocks
   }
 
   private func changelogDetailSheet(_ entry: AppChangelogEntry) -> some View {
@@ -1105,6 +1145,8 @@ struct SystemView: View {
       target = .connection
     case .changelog:
       target = .changelog
+    case .licenses:
+      target = .licenses
     case .mediaSourceSelection:
       target = .mediaSourceSelection
     case .memoryOptimization:
@@ -1142,6 +1184,8 @@ struct SystemView: View {
       target = .relogin
     case .changelog:
       target = AppChangelog.latest.map { .changelogVersion($0.version) } ?? .changelog
+    case .licenses:
+      target = ThirdPartyNotices.all.first.map { .license($0.id) } ?? .licenses
     case .mediaSourceSelection:
       target = .defaultMediaSource
     case .memoryOptimization:
@@ -1185,8 +1229,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
-      .subtitleSiteSelection, .hardFilter, .playback,
+    case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
+      .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
@@ -1197,8 +1241,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
-      .subtitleSiteSelection, .hardFilter, .playback,
+    case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
+      .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
@@ -1294,12 +1338,14 @@ struct SystemView: View {
         return nil
       case .changelog:
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+      case .licenses:
+        return Self.licensesDescription
       case .logs:
         return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
       case .allSites, .site, .allSubtitleSites, .subtitleSite, .defaultMediaSource, .mediaSource,
         .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion,
+        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion, .license,
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
@@ -1318,6 +1364,8 @@ struct SystemView: View {
       return "不对资源搜索结果应用软过滤。（只影响 TV 端）"
     case (.logs, .logRecording):
       return "关闭后不再把新日志写入本机，已保存的记录仍可查看。"
+    case (.licenses, .license(let id)):
+      return ThirdPartyNotices.all.first { $0.id == id }?.details.first
     case (.playback, .inAppPlayback):
       guard viewModel.backendSupportsInAppPlayback else {
         let version = apiService.settings?.BACKEND_VERSION ?? "未读取到"
@@ -1341,6 +1389,8 @@ struct SystemView: View {
       return "查看当前登录状态、服务器地址和后端连接状态。"
     case .changelog:
       return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+    case .licenses:
+      return Self.licensesDescription
     case .logs:
       return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
     case .mediaSourceSelection:
@@ -1365,6 +1415,8 @@ struct SystemView: View {
       return "设置应用内播放。（只影响 TV 端）"
     }
   }
+
+  private static let licensesDescription = "查看本应用使用的开源软件和它们的许可。"
 
   private var memoryOptimizationDescription: String {
     "开启后，及时释放暂时看不到的图片，减少内存占用。往回滚动或返回页面时，图片可能需要重新加载。（只影响 TV 端）"
@@ -1431,12 +1483,15 @@ struct SystemView: View {
 
 private enum SystemSettingsDetailItem: Identifiable {
   case changelog(AppChangelogEntry)
+  case license(ThirdPartyNotice)
   case log(LogRecord)
 
   var id: String {
     switch self {
     case .changelog(let entry):
       return "changelog-\(entry.id)"
+    case .license(let notice):
+      return "license-\(notice.id)"
     case .log(let record):
       return "log-\(record.id.uuidString)"
     }
@@ -1447,6 +1502,7 @@ enum SystemSettingsPage: Hashable {
   case root
   case connection
   case changelog
+  case licenses
   case logs
   case mediaSourceSelection
   case memoryOptimization
@@ -1467,6 +1523,8 @@ enum SystemSettingsFocus: Hashable {
   case connection
   case changelog
   case changelogVersion(String)
+  case licenses
+  case license(String)
   case logs
   case logRecording
   case logDownRedirector
@@ -1513,6 +1571,16 @@ enum SystemSettingsFocus: Hashable {
   case topShelfExploreReset
   case topShelfSource(String)
   case recommendationShelf(String)
+}
+
+/// 一个第三方组件的许可详情。单独成一个视图并按组件比较：系统页重绘时组件没变就不重算正文，
+/// 许可原文很长（GPL v3 约 35 KB），不必每次都重新读文件、拆焦点块。
+private struct ThirdPartyLicenseSheet: View, Equatable {
+  let notice: ThirdPartyNotice
+
+  var body: some View {
+    ReadingSheet(title: notice.name, blocks: SystemView.licenseBlocks(notice))
+  }
 }
 
 private extension View {
