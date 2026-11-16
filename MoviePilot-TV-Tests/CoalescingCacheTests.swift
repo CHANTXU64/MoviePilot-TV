@@ -103,6 +103,68 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual(probe.loadCount, 1)
   }
 
+  func testFreshSinceReusesOnlyValuesLoadedFromThatMoment() async throws {
+    // 一轮重试从 round 算起：之前写的缓存不用；这一轮里第一次重新加载后，同一轮的读取都用它，不再加载。
+    let clock = TestClock()
+    let cache = CoalescingCache<String, Int>(ttl: 60, capacity: 10, now: { clock.date })
+    let probe = LoadProbe()
+    let load: @MainActor () async throws -> Int = {
+      probe.loadCount += 1
+      return probe.loadCount
+    }
+    let earlier = try await cache.value(for: "key", validate: {}, load: load)
+    clock.date += 5
+    let round = clock.date
+    let first = try await cache.value(for: "key", freshSince: round, validate: {}, load: load)
+    clock.date += 1
+    let second = try await cache.value(for: "key", freshSince: round, validate: {}, load: load)
+    let plain = try await cache.value(for: "key", validate: {}, load: load)
+    XCTAssertEqual([earlier, first, second, plain], [1, 2, 2, 2])
+  }
+
+  func testFreshSinceJoinsOnlyALoadStartedFromThatMoment() async throws {
+    let clock = TestClock()
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10, now: { clock.date })
+    let probe = LoadProbe()
+    // 这一轮之前开始、还没完成的加载：不跟它，重新加载；之后这一轮的读取跟上新的那次。
+    let oldGate = LoadGate()
+    let old = Task {
+      try await cache.value(for: "key", validate: {}) {
+        probe.loadCount += 1
+        await oldGate.wait()
+        return "old"
+      }
+    }
+    await oldGate.waitForArrival()
+    clock.date += 5
+    let round = clock.date
+    let newGate = LoadGate()
+    let first = Task {
+      try await cache.value(for: "key", freshSince: round, validate: {}) {
+        probe.loadCount += 1
+        await newGate.wait()
+        return "new"
+      }
+    }
+    // 等新的加载开始（不跟这一轮之前的那次）；等不到就失败，不一直挂着。
+    for _ in 0..<200 where probe.loadCount < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    guard probe.loadCount == 2 else {
+      XCTFail("这一轮之前开始的加载不该跟，要重新加载")
+      oldGate.open()
+      newGate.open()
+      return
+    }
+    let second = Task {
+      try await cache.value(for: "key", freshSince: round, validate: {}, load: countingLoad("unexpected", probe: probe))
+    }
+    await Task.yield()
+    oldGate.open()
+    newGate.open()
+    let values = [try await old.value, try await first.value, try await second.value]
+    XCTAssertEqual(values, ["new", "new", "new"])
+    XCTAssertEqual(probe.loadCount, 2)
+  }
+
   func testFreshEntryIsReusedAndAccessRenewsExpiry() async throws {
     let clock = TestClock()
     let cache = CoalescingCache<String, Int>(ttl: 10, capacity: 10, now: { clock.date })

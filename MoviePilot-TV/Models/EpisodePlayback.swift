@@ -833,7 +833,7 @@ nonisolated enum SeriesContinuation {
         case unplaced
       }
       func place(_ file: ServerMediaItem) -> Placement {
-        guard let index else { return .unplaced }
+        guard let index else { return unindexed(file) }
         /// 它标着的那一集，按集索引认定的那套编号找（和起播、集卡片一样）：按剧集组整理的用组内编号对到的那一集，
         /// 否则在默认顺序的集列表里按季号集号找。
         func sameNumber(_ file: ServerMediaItem) -> Int? {
@@ -866,6 +866,17 @@ nonisolated enum SeriesContinuation {
         let matched = matches.keys.compactMap { positions[$0] }.sorted()
         guard let first = matched.first, let id = entries[first].episode.tmdbEpisodeID else { return .unplaced }
         return .placed(matched, candidate: index.uncertain[id]?.contains { $0.item.id == file.id } == true)
+      }
+      /// 读不到集索引时只看文件自己的单集编号找反证：编号不在读全了的集列表里，同季号集号却有别的集，就是对不上
+      /// （和有集索引时一样，播同号那一集或打开它的面板）。其他情况照旧当成对不到、没有反证（按服务器上的那份走）。
+      func unindexed(_ file: ServerMediaItem) -> Placement {
+        guard let id = file.tmdbEpisodeID, positions[id] == nil else { return .unplaced }
+        // 编号可能在还没读的季里；集列表读全没有也要读完才知道。
+        needAny()
+        guard listsComplete, let season = file.seasonNumber, let number = file.episodeNumber,
+          let same = entries.firstIndex(where: { $0.episode.seasonNumber == season && $0.episode.episodeNumber == number })
+        else { return .unplaced }
+        return .contradicted(same)
       }
       /// 有反证的文件：对到的那一集能从别的文件播就播它，否则打开面板；对不到集列表时说明原因。
       func contradicted(_ file: ServerMediaItem, _ position: Int?) -> Choice {

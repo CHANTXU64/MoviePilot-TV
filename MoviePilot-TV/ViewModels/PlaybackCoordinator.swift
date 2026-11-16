@@ -806,15 +806,49 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     )
   }
 
-  /// 这部剧在各台可播放服务器上的集索引（和集卡片、起播同一份，走集索引缓存），详情页的「继续播放」按它对集。
-  /// 不提供应用内播放或读不到媒体服务器配置时为 nil。
-  func episodeLookups(for context: EpisodePlaybackContext, forceRefresh: Bool = false) async -> [ServerEpisodeLookup]? {
-    guard !isTornDown, allowsPlayback, let apiService,
-      let servers = try? await apiService.fetchCachedMediaServers(), servers.contains(where: \.supportsInAppPlayback)
-    else { return nil }
-    let lookups = await episodeLookups(
-      context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, forceRefresh: forceRefresh)
-    return Task.isCancelled ? nil : lookups
+  /// 详情页「继续播放」要的观看记录和集索引（见 `seriesContinuation`）。
+  struct SeriesContinuationRead {
+    let progress: SeriesProgress
+    /// 各台服务器的集索引，读到观看记录后马上开始读。不提供应用内播放或被取消时为 nil。
+    let lookups: Task<[ServerEpisodeLookup]?, Never>
+  }
+
+  /// 读这部剧的观看记录（同 `seriesProgress`），并开始读各台服务器的集索引（和集卡片、起播同一份，走集索引缓存）。
+  /// 观看记录那台的集索引按读观看记录时读到的同一批文件建：缓存里的和这批文件不一致（新入库、重新刮削过）就按这批重建，
+  /// 不再读一次服务器。判断「这份文件是哪一集」和观看记录用同一份服务器数据，不会因为旧索引里没有这份文件、或重读失败，
+  /// 就把它当成对不到集列表、没有反证。`forceRefresh` 时各台重读，MoviePilot 的集列表、季列表只用 `freshSince` 以后开始的
+  /// 读取（详情页这一轮自己读集列表时用同一个时刻，两边共用一次）。
+  func seriesContinuation(
+    _ context: EpisodePlaybackContext, forceRefresh: Bool = false, freshSince: Date? = nil
+  ) async -> SeriesContinuationRead? {
+    guard !isTornDown, allowsPlayback, let apiService else { return nil }
+    await reporter.waitForQueued(atMost: Self.pendingReportWait)
+    guard !Task.isCancelled, let servers = try? await apiService.fetchCachedMediaServers() else { return nil }
+    let strict = Self.requiresStrictMatch(servers)
+    let userName = apiService.currentOrStoredUserName
+    for server in Self.playableServers(in: servers, preferring: context.libraryItem?.server) {
+      do {
+        let read = try await withConnection(to: server, preferredUserName: userName) {
+          connection -> (SeriesProgress, SeriesRead)? in
+          let series = try await Self.readSeries(context, on: connection, strict: strict)
+          guard !series.copies.isEmpty else { return nil }
+          return (Self.seriesProgress(server: server.name, episodes: series.episodes, connection: connection), series)
+        }
+        guard let (progress, series) = read else { continue }
+        let lookups = Task { [weak self] () -> [ServerEpisodeLookup]? in
+          guard let self else { return nil }
+          let lookups = await self.episodeLookups(
+            context, servers: servers, preferredUserName: userName, forceRefresh: forceRefresh, freshSince: freshSince,
+            seeded: (server.name, series))
+          return Task.isCancelled ? nil : lookups
+        }
+        return SeriesContinuationRead(progress: progress, lookups: lookups)
+      } catch {
+        if error is CancellationError || Task.isCancelled { return nil }
+        Logger.warning("[Playback] 读观看进度失败（\(server.name)）：\(Self.message(for: error))")
+      }
+    }
+    return nil
   }
 
   /// 在每台可播放的服务器上读这部剧的集索引，单台失败只记在它自己的结果里。各台互不依赖，同时读；
@@ -822,19 +856,21 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// `forceRefresh` 时各台都重读，这部剧的整理记录只重读一次，各台共用（见 `RefreshRound`）。
   private func episodeLookups(
     _ context: EpisodePlaybackContext, servers: [MediaServerConf], preferredUserName: String?,
-    excluding excluded: String? = nil, forceRefresh: Bool = false
+    excluding excluded: String? = nil, forceRefresh: Bool = false, freshSince: Date? = nil,
+    seeded: (server: String, series: SeriesRead)? = nil
   ) async -> [ServerEpisodeLookup] {
     let strict = Self.requiresStrictMatch(servers)
     let targets = Self.playableServers(in: servers, preferring: context.libraryItem?.server)
       .filter { $0.name != excluded }
-    let round = forceRefresh ? RefreshRound() : nil
+    let round = forceRefresh ? RefreshRound(startedAt: freshSince ?? Date()) : nil
     var lookups = [ServerEpisodeLookup?](repeating: nil, count: targets.count)
     await withTaskGroup(of: (Int, ServerEpisodeLookup?).self) { group in
       for position in targets.indices {
         let server = targets[position]
         group.addTask {
           let lookup = await self.episodeLookup(
-            context, on: server, strict: strict, preferredUserName: preferredUserName, refresh: round)
+            context, on: server, strict: strict, preferredUserName: preferredUserName, refresh: round,
+            series: seeded?.server == server.name ? seeded?.series : nil)
           return (position, lookup)
         }
       }
@@ -926,11 +962,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 一台服务器上这部剧的集索引；取消时为 nil。失败的说明已写明服务器和那一步（见 `MediaServerError`）。
   private func episodeLookup(
     _ context: EpisodePlaybackContext, on server: MediaServerConf, strict: Bool, preferredUserName: String?,
-    refresh: RefreshRound?
+    refresh: RefreshRound?, series: SeriesRead? = nil
   ) async -> ServerEpisodeLookup? {
     do {
       let index = try await withConnection(to: server, preferredUserName: preferredUserName) {
-        try await self.episodeIndex(context, on: $0, strict: strict, refresh: refresh)
+        try await self.episodeIndex(context, on: $0, strict: strict, refresh: refresh, series: series)
       }
       return .loaded(index)
     } catch {
@@ -944,7 +980,13 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 不必每台都重发一遍、最后只用上一遍。那次重读成功之前缓存里的是这一轮以前的记录，后面的各台不用。
   @MainActor
   private final class RefreshRound {
+    /// 这一轮从什么时候算起：MoviePilot 的集列表、季列表只用这以后开始的读取，详情页和各台服务器的集索引共用一次。
+    let startedAt: Date
     private var transferRecordsClaimed = false
+
+    init(startedAt: Date = Date()) {
+      self.startedAt = startedAt
+    }
     private(set) var transferRecordsRefreshed = false
 
     /// 这一轮第一次要整理记录时为 true（由它强制重读），之后为 false。
@@ -963,12 +1005,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 版本还在变时抛出读取失败。
   private func episodeIndex(
     _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
-    refresh: RefreshRound? = nil
+    refresh: RefreshRound? = nil, series: SeriesRead? = nil
   ) async throws -> ServerEpisodeIndex {
     var refresh = refresh
+    var rebuild = false
     for _ in 0..<Self.evidenceFollowLimit {
       let version = evidenceVersions[context.tmdbID] ?? 0
-      let index = try await episodeIndex(context, on: connection, strict: strict, refresh: refresh, version: version)
+      let index = try await episodeIndex(
+        context, on: connection, strict: strict, refresh: refresh, version: version, series: series, rebuild: rebuild)
+      // 给了刚读到的集（读观看记录时读的）：缓存里的索引不是按这批建的（新入库、重新刮削过），按这批重建。
+      if let series, !rebuild, !index.reflects(series.episodes) {
+        rebuild = true
+        continue
+      }
       if evidenceVersions[context.tmdbID] ?? 0 == version { return index }
       refresh = nil
     }
@@ -985,19 +1034,24 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
 
   private func episodeIndex(
     _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
-    refresh: RefreshRound?, version: Int
+    refresh: RefreshRound?, version: Int, series preRead: SeriesRead? = nil, rebuild: Bool = false
   ) async throws -> ServerEpisodeIndex {
     let key = [
       connection.serverName, connection.reportingServer.absoluteString, connection.userID, context.seriesLookupKey,
       strict ? "strict" : "", "evidence\(version)",
     ].joined(separator: "|")
-    return try await episodeIndexes.value(for: key, forceRefresh: refresh != nil, validate: validateNotTornDown) {
+    return try await episodeIndexes.value(
+      for: key, forceRefresh: refresh != nil || rebuild, validate: validateNotTornDown
+    ) {
       [weak self] in
+      // 强制重读的一轮连 MoviePilot 的集列表、季列表也只用这一轮开始以后的读取：不然 MoviePilot 恢复后，详情页重试拿到了
+      // 新的集列表，集索引仍按缓存里读不到时的空列表建。和详情页同一轮时共用一次读取，两边拿到同一份。
+      let freshSince = refresh?.startedAt
       let sources = EpisodeMatchingSources(
         seasonList: { list in
           guard let apiService = self?.apiService else { throw CancellationError() }
           return try await apiService.fetchTmdbEpisodes(
-            tmdbID: context.tmdbID, season: list.season, episodeGroup: list.episodeGroup)
+            tmdbID: context.tmdbID, season: list.season, episodeGroup: list.episodeGroup, freshSince: freshSince)
         },
         seasons: { episodeGroup in
           guard let apiService = self?.apiService else { throw CancellationError() }
@@ -1009,7 +1063,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             let media = MediaInfo(
               tmdb_id: context.tmdbID, source: "themoviedb", media_id: String(context.tmdbID),
               title: context.seriesName, type: "电视剧")
-            seasons = try await apiService.getMediaSeasons(media: media, allSeasons: true)
+            seasons = try await apiService.getMediaSeasons(media: media, allSeasons: true, freshSince: freshSince)
           }
           return seasons.compactMap(\.season_number)
         },
@@ -1022,7 +1076,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           await self?.episodeEvidence(episodes: episodes, local: local, tmdbID: context.tmdbID, on: connection)
             ?? EpisodeEvidence()
         })
-      let series = try await Self.readSeries(context, on: connection, strict: strict)
+      let series: SeriesRead
+      if let preRead { series = preRead } else { series = try await Self.readSeries(context, on: connection, strict: strict) }
       return try await Self.loadEpisodeIndex(series, on: connection, sources: sources)
     }
   }

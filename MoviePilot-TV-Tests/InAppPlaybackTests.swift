@@ -5108,6 +5108,183 @@ extension PlaybackCoordinatorTests {
     return #"{"Id":"\#(id)","Type":"Episode","SeriesId":"s1","ParentIndexNumber":\#(season),"IndexNumber":\#(episode),"RunTimeTicks":\#(twoHours),"ProviderIds":{"Tmdb":"\#(tmdb)"},"UserData":{"Played":\#(played),"PlaybackPositionTicks":\#(ticks)}}"#
   }
 
+  func testContinueJudgesTheWatchedFileFromTheSameServerRead() async throws {
+    // 第一次打开时 Emby 上只有第 1 集；再打开时多了一份看到一半的第 2 集，带的 TMDB 编号是 999（别的集），而且之后再读
+    // Emby 都会失败。观看记录和集索引共用这一次读取：缓存里的旧索引没有这份文件，就按这次读到的重建，照常认出编号对不上，
+    // 打开第 2 集的面板，不把它当成对不到、没有反证直接续播；也不再读一次 Emby。
+    let e1 = Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true)
+    let e2 = Self.watchedEpisode("e2", episode: 2, tmdb: 999, position: 1800)
+    let (first, service) = try makeContinueWatchingDetailViewModel(e1)
+    try await waitUntil { first.seriesPlayAction != nil }
+    let detail = first.detail
+    first.cancelForPop()
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(e1 + "," + e2)
+      $0.items["\(Self.lan)|e2"] = e2
+      $0.playbackInfo = Self.playbackInfo()
+      $0.successfulEpisodeReadsBeforeFailure = 1
+    }
+    let before = PlaybackURLProtocol.stub.requests().count
+    let second = MediaDetailViewModel(detail: detail, apiService: service)
+    defer { second.cancelForPop() }
+    second.applyFullDetail(detail)
+    try await waitUntil { second.seriesPlayAction != nil }
+    XCTAssertEqual(second.seriesPlayAction?.action, .openEpisode)
+    XCTAssertEqual(second.episodeRowHint, EpisodeRowHint(season: 1, tmdbEpisodeID: 12, episodeNumber: 2))
+    let episodeReads = PlaybackURLProtocol.stub.requests().dropFirst(before).filter { $0.url.path.hasSuffix("/Episodes") }
+    XCTAssertEqual(episodeReads.count, 1, "观看记录和集索引共用一次读取")
+  }
+
+  func testRetryReadsEachSeasonListOnceForTheDetailPageAndTheIndex() async throws {
+    // 按「播放」重试的这一轮里，集索引和详情页都要第 1 季的集列表：只读一次，两边用同一份回包。MoviePilot 恰好在
+    // 集索引读完、详情页还没读时恢复，详情页也不另读一份，结论和集索引一致（还是读不到集列表），不只打开面板。
+    let file = #"{"Id":"e1","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1}"#
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(file) {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = "[]"
+      $0.transferHistory = "[]"
+      $0.items["\(Self.lan)|e1"] = file
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    guard case .explain? = viewModel.seriesPlayAction?.action else {
+      return XCTFail("一开始读不到集列表：\(String(describing: viewModel.seriesPlayAction?.action))")
+    }
+    // 卡住季目录：详情页读完季目录才读集列表，让集索引先读第 1 季。
+    let gate = DispatchSemaphore(value: 0)
+    defer { for _ in 0..<4 { gate.signal() } }
+    PlaybackURLProtocol.stub.configure { $0.mediaSeasonsGate = gate }
+    let before = PlaybackURLProtocol.stub.requests().count
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    func listReads() -> Int {
+      PlaybackURLProtocol.stub.requests().dropFirst(before).filter { $0.url.path == "/api/v1/tmdb/100/1" }.count
+    }
+    try await waitUntil { listReads() == 1 }
+    try await Task.sleep(for: .milliseconds(150))
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = Self.twoEpisodeSeason1 }
+    for _ in 0..<4 { gate.signal() }
+    try await waitUntil { !coordinator.isBusy }
+    XCTAssertEqual(listReads(), 1)
+    guard case .explain? = viewModel.seriesPlayAction?.action else {
+      return XCTFail("和集索引同一份回包：\(String(describing: viewModel.seriesPlayAction?.action))")
+    }
+    XCTAssertNil(viewModel.episodePanelRequest)
+    XCTAssertNil(coordinator.session)
+  }
+
+  func testRetryIndexReusesTheEpisodeListTheDetailPageJustRead() async throws {
+    // 反过来的顺序：这一轮详情页先读到第 1 季（集索引还在等整理记录），集索引随后用同一份，不再读一次。
+    let file = #"{"Id":"e1","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1}"#
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(file) {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = "[]"
+      $0.transferHistory = "[]"
+      $0.items["\(Self.lan)|e1"] = file
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    let gate = DispatchSemaphore(value: 0)
+    defer { for _ in 0..<4 { gate.signal() } }
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = Self.twoEpisodeSeason1
+      $0.transferHistoryGate = gate
+    }
+    let before = PlaybackURLProtocol.stub.requests().count
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    func listReads() -> Int {
+      PlaybackURLProtocol.stub.requests().dropFirst(before).filter { $0.url.path == "/api/v1/tmdb/100/1" }.count
+    }
+    try await waitUntil { listReads() == 1 }
+    try await Task.sleep(for: .milliseconds(150))
+    for _ in 0..<4 { gate.signal() }
+    try await waitUntil { coordinator.session != nil || coordinator.failure != nil }
+    XCTAssertEqual(coordinator.session?.item.id, "e1")
+    XCTAssertEqual(listReads(), 1)
+    coordinator.endCurrentSession()
+  }
+
+  func testRetryRebuildsTheEpisodeIndexFromTheRefreshedEpisodeList() async throws {
+    // MoviePilot 一开始读不到第 1 季的集列表（空列表）；恢复后按「播放」重试：集索引也按新的集列表重建，照常起播，
+    // 不因为索引仍用缓存里的空列表、说这一季没读全而只打开面板。
+    let unnumbered = #"{"Id":"e1","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1}"#
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(unnumbered) {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = "[]"
+      $0.transferHistory = "[]"
+      $0.items["\(Self.lan)|e1"] = unnumbered
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    guard case .explain? = viewModel.seriesPlayAction?.action else {
+      return XCTFail("一开始读不到集列表：\(String(describing: viewModel.seriesPlayAction?.action))")
+    }
+    // 卡住详情页这次重读的季目录（它读完季目录才读集列表）：集索引先重建完，不能靠详情页刚写进缓存的新列表。
+    let gate = DispatchSemaphore(value: 0)
+    defer { gate.signal() }
+    PlaybackURLProtocol.stub.configure {
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = Self.twoEpisodeSeason1
+      $0.mediaSeasonsGate = gate
+    }
+    let before = PlaybackURLProtocol.stub.requests().count
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    try await waitUntil {
+      PlaybackURLProtocol.stub.requests().dropFirst(before).contains { $0.url.path == "/api/v1/tmdb/100/1" }
+    }
+    try await Task.sleep(for: .milliseconds(250))
+    gate.signal()
+    try await waitUntil { coordinator.session != nil || coordinator.failure != nil }
+    XCTAssertEqual(coordinator.session?.item.id, "e1")
+    XCTAssertNil(viewModel.episodePanelRequest)
+    coordinator.endCurrentSession()
+  }
+
+  func testPartialSeasonCatalogIsNotTreatedAsTheWholeSeries() async throws {
+    // 详情说有 2 季，MoviePilot 的季目录只给了第 1 季：看完第 1 季最后一集，不当成全剧看完从头播，说明有一季没读到；
+    // 这份不完整的季目录也不交给集列表行（它自己补读、显示重试）。
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 12, played: true))
+    viewModel.cancelForPop()
+    let detail = try JSONDecoder().decode(
+      MediaInfo.self, from: Data("""
+        {"tmdb_id":100,"source":"themoviedb","media_id":"100","title":"长风渡","type":"电视剧",
+        "number_of_seasons":2,"season_info":[{"season_number":1,"episode_count":2}]}
+        """.utf8))
+    let partial = MediaDetailViewModel(detail: detail, apiService: service)
+    defer { partial.cancelForPop() }
+    partial.applyFullDetail(detail)
+    try await waitUntil { partial.seriesPlayAction != nil }
+    guard case .explain? = partial.seriesPlayAction?.action else {
+      return XCTFail("不从头播：\(String(describing: partial.seriesPlayAction?.action))")
+    }
+    XCTAssertNil(partial.episodeSeasons)
+  }
+
+  func testAnUnrelatedSlowSeasonDoesNotDelayTheNextEpisode() async throws {
+    // 看完第 1 季第 1 集，集列表就能定下一集是第 1 季第 2 集；服务器上接着看的那份在第 20 季，第 20 季的集列表很慢：
+    // 不等它，先定下结论。
+    let show = Self.manySeasons(30)
+    let slow = "/api/v1/tmdb/100/20"
+    let gate = DispatchSemaphore(value: 0)
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 101, played: true),
+      Self.watchedEpisode("far", season: 20, episode: 1, tmdb: 2001), seasonInfo: show.seasonInfo
+    ) {
+      $0.tmdbEpisodes = show.lists
+      $0.tmdbEpisodesGates[slow] = gate
+    }
+    defer {
+      gate.signal()
+      viewModel.cancelForPop()
+    }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    XCTAssertEqual(viewModel.seriesPlayAction?.action, .openEpisode)
+    XCTAssertEqual(viewModel.episodeRowHint?.tmdbEpisodeID, 102)
+  }
+
   func testContinueDoesNotResumeAServerFileCarryingAnotherTMDBEpisodeID() async throws {
     // MoviePilot 的第 1 季第 2 集是 TMDB 单集 12；Emby 上标着第 1 季第 2 集、看到一半的文件带的是 999（别的集）。
     // 「继续播放」不能直接续播这份文件，打开第 2 集的面板。
@@ -6169,6 +6346,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var searchStatus: [String: Int] = [:]
     /// `host|seriesID` → 读这部剧的集时回的 HTTP 错误码
     var episodesStatus: [String: Int] = [:]
+    /// 读这部剧的集（`/Episodes`）成功这么多次后，之后每次都回 500；nil 时不限。
+    var successfulEpisodeReadsBeforeFailure: Int?
     /// `host|itemID` → 读单个条目时回的 HTTP 错误码
     var itemStatus: [String: Int] = [:]
     /// 带这些密钥的 Emby 请求回 401（探测地址用的公开接口除外）
@@ -6180,12 +6359,16 @@ private final class PlaybackStub: @unchecked Sendable {
     /// MoviePilot 路径（如 `/api/v1/tmdb/100/1`，或带查询的 `/api/v1/tmdb/100/1?episode_group=g1`）→ 季集列表 JSON。
     /// 带查询的优先，没有时按路径。
     var tmdbEpisodes: [String: String] = [:]
+    /// 卡住这些集列表路径的回复，放开（或 10 秒）后才回。
+    var tmdbEpisodesGates: [String: DispatchSemaphore] = [:]
     /// MoviePilot 整理记录（`/api/v1/history/transfer`）的 `list`，不论查什么都回它；nil 时回 404。
     var transferHistory: String?
     /// 按查询回整理记录：`title|page` → `data`（`{"list":[…],"total":…}`）。不为空时优先，没列出的查询回空的一页。
     var transferHistoryPages: [String: String] = [:]
     /// MoviePilot `/api/v1/media/seasons`（默认顺序的季列表）；nil 时回 404。
     var mediaSeasons: String?
+    /// 卡住 `/api/v1/media/seasons` 的回复
+    var mediaSeasonsGate: DispatchSemaphore?
     /// MoviePilot 媒体详情（`/api/v1/media/{id}`）：路径 → 详情 JSON；没列出的回 404。
     var mediaDetails: [String: String] = [:]
     /// 卡住 MoviePilot 媒体详情的查询
@@ -6238,7 +6421,18 @@ private final class PlaybackStub: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     recorded.append(request)
-    return scenario
+    var response = scenario
+    if request.url.path.hasSuffix("/Episodes"), let host = request.url.host,
+      let remaining = scenario.successfulEpisodeReadsBeforeFailure
+    {
+      if remaining == 0 {
+        let seriesID = request.url.deletingLastPathComponent().lastPathComponent
+        response.episodesStatus["\(host)|\(seriesID)"] = 500
+      } else {
+        scenario.successfulEpisodeReadsBeforeFailure = remaining - 1
+      }
+    }
+    return response
   }
 }
 
@@ -6273,7 +6467,7 @@ private final class PlaybackURLProtocol: URLProtocol {
       } else if let episodes = url.query.flatMap({ scenario.tmdbEpisodes["\(url.path)?\($0)"] })
         ?? scenario.tmdbEpisodes[url.path]
       {
-        respond(200, episodes)
+        respond(200, episodes, after: scenario.tmdbEpisodesGates[url.path])
       } else if url.path == "/api/v1/history/transfer", !scenario.transferHistoryPages.isEmpty {
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let title = query.first { $0.name == "title" }?.value ?? ""
@@ -6283,7 +6477,7 @@ private final class PlaybackURLProtocol: URLProtocol {
       } else if url.path == "/api/v1/history/transfer", let list = scenario.transferHistory {
         respond(200, #"{"success":true,"data":{"list":\#(list),"total":null}}"#)
       } else if url.path == "/api/v1/media/seasons", let seasons = scenario.mediaSeasons {
-        respond(200, seasons)
+        respond(200, seasons, after: scenario.mediaSeasonsGate)
       } else if url.path == "/api/v1/mediaserver/exists" {
         respond(200, scenario.mediaServerExists)
       } else if let detail = scenario.mediaDetails[url.path] {

@@ -686,7 +686,18 @@ class MediaDetailViewModel: ObservableObject {
     }
     let selectable = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
     let context = episodePlayback?.context(media: detail, episodeGroup: nil, seasons: selectable)
-    guard let progress = await coordinator.seriesProgress(for: target, context: context), isCurrent() else { return }
+    // TMDB 来源的剧：观看记录和集索引一起读，观看记录那台的集索引按同一次读到的集建（见 `seriesContinuation`）。
+    let tmdbContext = MediaDetailEpisodeSeasons.tmdbID(for: detail) != nil ? context : nil
+    // 一轮重读从这一刻算起：MoviePilot 的集列表、季列表，详情页和集索引各处都只用这以后开始的读取，同一季只读一次。
+    let round = forceRefresh ? Date() : nil
+    var continuation: PlaybackCoordinator.SeriesContinuationRead?
+    if let tmdbContext {
+      continuation = await coordinator.seriesContinuation(tmdbContext, forceRefresh: forceRefresh, freshSince: round)
+    }
+    let lookupsTask = continuation?.lookups
+    defer { lookupsTask?.cancel() }
+    let read = tmdbContext == nil ? await coordinator.seriesProgress(for: target, context: context) : continuation?.progress
+    guard let progress = read, isCurrent() else { return }
     let latestSeason = progress.latestSeason.map { EpisodeRowHint(season: $0) }
 
     /// 写下结论：按钮做什么、集列表停在哪。之后头部的「播放」按它做（见 `playFromHeader`）。
@@ -721,45 +732,51 @@ class MediaDetailViewModel: ObservableObject {
       }
       return
     }
-    async let lookups = coordinator.episodeLookups(for: context, forceRefresh: forceRefresh)
-    let lists = await moviePilotSeasonCatalog(tmdbID: context.tmdbID, selectable: selectable, forceRefresh: forceRefresh)
+    let lists = await moviePilotSeasonCatalog(tmdbID: context.tmdbID, freshSince: round)
     guard isCurrent() else { return }
     if let catalog = lists.catalog, episodeSeasons != catalog { episodeSeasons = catalog }
-    // 集列表按需读：先读眼下用得到的几季（和集索引同时读），判断说还要别的季再补读（见 `SeriesContinuation.decide`），
-    // 不等不相关的季。一次最多读 `continuationSeasonReadLimit` 季，超过的当成没读到（判断按读不到的季处理）。
-    var seasons: [SeriesContinuation.Season] = []
-    var unread = Set(lists.known)
-    var budget = Self.continuationSeasonReadLimit
-    let anchor = SeriesContinuation.anchorSeason(upNext: progress.upNext, lastWatched: progress.lastWatched, known: lists.known)
-    func read(_ numbers: [Int]) async {
-      let batch = Array(numbers.filter(unread.contains).prefix(budget))
-      budget -= batch.count
-      unread.subtract(batch)
-      seasons += await readMoviePilotSeasons(batch, tmdbID: context.tmdbID, forceRefresh: forceRefresh)
+    // 集列表按需读：先读眼下用得到的几季（和集索引同时读），每读到一季就判断一次，判断说还要别的季再补读
+    // （见 `SeriesContinuation.decide`），不等不相关的季。一次最多读 `continuationSeasonReadLimit` 季，超过的当成没读到。
+    let reads = SeasonListReads(budget: Self.continuationSeasonReadLimit) { [apiService] number in
+      let list =
+        (try? await apiService.fetchTmdbEpisodes(
+          tmdbID: context.tmdbID, season: number, episodeGroup: nil, freshSince: round)) ?? []
+      return list.isEmpty ? nil : SeriesContinuation.Season(number: number, episodes: MoviePilotEpisode.list(list, season: number))
     }
-    await read(
-      SeriesContinuation.seasonsToReadFirst(upNext: progress.upNext, lastWatched: progress.lastWatched, known: lists.known))
+    defer { reads.finish() }
+    var unread = Set(lists.known)
+    let anchor = SeriesContinuation.anchorSeason(upNext: progress.upNext, lastWatched: progress.lastWatched, known: lists.known)
+    reads.start(
+      SeriesContinuation.seasonsToReadFirst(upNext: progress.upNext, lastWatched: progress.lastWatched, known: lists.known)
+        .filter(unread.contains))
     // 读不到服务器配置时当成集索引读不到（不是服务器上没有这些集）。
-    let loaded = await lookups ?? [.failed(server: progress.serverName, message: "没能读取媒体服务器配置")]
+    let lookups = await withTaskCancellationHandler {
+      await lookupsTask?.value
+    } onCancel: {
+      lookupsTask?.cancel()
+    }
+    let loaded = (lookups ?? nil) ?? [.failed(server: progress.serverName, message: "没能读取媒体服务器配置")]
     guard isCurrent() else { return }
     var choice: SeriesContinuation.Choice?
     deciding: while true {
+      unread.subtract(reads.finished)
       let outcome = SeriesContinuation.decide(
         upNext: progress.upNext, lastWatched: progress.lastWatched, serverName: progress.serverName, lookups: loaded,
-        seasons: seasons, unread: unread, knownSeasons: lists.known, catalogComplete: lists.catalogComplete)
-      switch outcome {
-      case .decided(let decided):
-        choice = decided
+        seasons: reads.seasons, unread: unread, knownSeasons: lists.known, catalogComplete: lists.catalogComplete)
+      guard case .needs(let wanted) = outcome else {
+        if case .decided(let decided) = outcome { choice = decided }
         break deciding
-      case .needs(let wanted):
-        // 读到上限了：剩下的季不再读，当成没读到。
-        guard budget > 0 else {
-          unread = []
-          continue
-        }
-        await read(SeriesContinuation.readingOrder(wanted, near: anchor))
-        guard isCurrent() else { return }
       }
+      // 要的季有还在读的：等它读完再判断。都没在读：开始读（到上限为止）；一季也开始不了、也没有在读的，
+      // 剩下的季不再读，当成没读到。
+      if wanted.isDisjoint(with: reads.inFlight) {
+        reads.start(SeriesContinuation.readingOrder(wanted, near: anchor))
+      }
+      if reads.inFlight.isEmpty {
+        unread = []
+        continue
+      }
+      guard await reads.next(), isCurrent() else { return }
     }
     func explain(_ message: String) {
       publish(SeriesPlayAction(title: "播放", accessibilityLabel: "播放", action: .explain(message)), latestSeason)
@@ -817,48 +834,27 @@ class MediaDetailViewModel: ObservableObject {
 
   /// MoviePilot 集列表（默认顺序）应有的季：季号取 MoviePilot 给的全部季（含新出的季和特别篇，和集索引用的一样），
   /// 并上详情里的季（`known`，不含一集都还没有的季）；季列表本身没读到时 `catalogComplete` 为 false。
-  private func moviePilotSeasonCatalog(tmdbID: Int, selectable: [Int], forceRefresh: Bool) async
+  private func moviePilotSeasonCatalog(tmdbID: Int, freshSince: Date?) async
     -> (known: [Int], catalogComplete: Bool, catalog: [TmdbSeason]?)
   {
     let media = MediaInfo(
       tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), title: detail.title, type: "电视剧",
       season_info: detail.season_info)
-    let all = try? await apiService.getMediaSeasons(media: media, allSeasons: true, forceRefresh: forceRefresh)
-    let catalogComplete = !(all ?? []).isEmpty
-    // 和集列表行同一份季目录（读不到全部季时只有详情里的季，集列表行自己补读、重试）。
-    let catalog = catalogComplete ? MediaDetailEpisodeSeasons.catalog(all ?? [], media: media) : nil
+    let all = try? await apiService.getMediaSeasons(media: media, allSeasons: true, freshSince: freshSince)
+    let merged = MediaDetailEpisodeSeasons.catalog(all ?? [], media: media)
+    // 和集列表行同一套完整性判断：没读到，或比详情说的季数少（MoviePilot 只给了一部分），都不算完整，
+    // 最后一个已知季后面可能还有季；这时不交给集列表行，它自己补读、显示重试。
+    let catalogComplete = !(all ?? []).isEmpty && !MediaDetailEpisodeSeasons.needsLookup(merged, media: detail)
+    let catalog = catalogComplete ? merged : nil
     // TMDB 已公布、但还一集都没有的季（`episode_count` 为 0）不算应有的季：它的集列表本来就是空的，不是没读到。
     // 只要有一处说有集（或没给集数）就照常读。
     let reported = (detail.season_info ?? []) + (all ?? [])
-    var numbers = catalog.map { Set($0.compactMap(\.season_number)) } ?? Set(selectable)
+    var numbers = Set(merged.compactMap(\.season_number))
     numbers = numbers.filter { number in
       let counts = reported.filter { $0.season_number == number }.map(\.episode_count)
       return counts.isEmpty || counts.contains { $0 != 0 }
     }
     return (numbers.sorted(), catalogComplete, catalog)
-  }
-
-  /// 同时读这几季的集列表，走会话缓存。读不到或 MoviePilot 读 TMDB 失败返回空列表的季不在结果里。
-  private func readMoviePilotSeasons(_ numbers: [Int], tmdbID: Int, forceRefresh: Bool) async
-    -> [SeriesContinuation.Season]
-  {
-    let apiService = apiService
-    let reads = numbers.map { number in
-      Task { @MainActor () -> SeriesContinuation.Season? in
-        let list =
-          (try? await apiService.fetchTmdbEpisodes(
-            tmdbID: tmdbID, season: number, episodeGroup: nil, forceRefresh: forceRefresh)) ?? []
-        if list.isEmpty { return nil }
-        return SeriesContinuation.Season(number: number, episodes: MoviePilotEpisode.list(list, season: number))
-      }
-    }
-    return await withTaskCancellationHandler {
-      var seasons: [SeriesContinuation.Season] = []
-      for read in reads { if let season = await read.value { seasons.append(season) } }
-      return seasons
-    } onCancel: {
-      reads.forEach { $0.cancel() }
-    }
   }
 
   /// 头部「播放」按下。剧只按这一次读出的「继续播放」结论做（按集起播、打开那一集的面板、说明为什么没法播；
@@ -1269,6 +1265,74 @@ struct EpisodeRowHint: Equatable {
     if let tmdbEpisodeID, let hit = episodes.first(where: { $0.tmdbEpisodeID == tmdbEpisodeID }) { return hit }
     guard let episodeNumber else { return nil }
     return episodes.first { $0.episodeNumber == episodeNumber && $0.seasonNumber == season }
+  }
+}
+
+/// 「继续播放」按需读集列表：几季同时读，读完一季交一季（`next()`），不等同一批里别的季；最多开始读 `budget` 季。
+/// 判断定下或页面离开时 `finish()` 不再等还在读的季；会话缓存里共享的那次读取照常读完写进缓存（集列表行、集索引还会用到）。
+@MainActor
+private final class SeasonListReads {
+  private let read: @MainActor (Int) async -> SeriesContinuation.Season?
+  private var budget: Int
+  private var started: Set<Int> = []
+  private var tasks: [Task<Void, Never>] = []
+  private var ready: [(number: Int, season: SeriesContinuation.Season?)] = []
+  private var waiter: CheckedContinuation<Void, Never>?
+  /// 已开始、还没交出去的季。
+  private(set) var inFlight: Set<Int> = []
+  /// 已读完的季（读到或读失败）。
+  private(set) var finished: Set<Int> = []
+  /// 读到的集列表（读失败或空列表的季不在里面）。
+  private(set) var seasons: [SeriesContinuation.Season] = []
+
+  init(budget: Int, read: @escaping @MainActor (Int) async -> SeriesContinuation.Season?) {
+    self.budget = budget
+    self.read = read
+  }
+
+  /// 按顺序开始读这几季（已开始过的跳过），到上限为止。
+  func start(_ numbers: [Int]) {
+    for number in numbers where budget > 0 && !started.contains(number) {
+      started.insert(number)
+      inFlight.insert(number)
+      budget -= 1
+      let read = read
+      tasks.append(
+        Task { [weak self] in
+          let season = await read(number)
+          self?.deliver(number, season)
+        })
+    }
+  }
+
+  private func deliver(_ number: Int, _ season: SeriesContinuation.Season?) {
+    ready.append((number, season))
+    waiter?.resume()
+    waiter = nil
+  }
+
+  /// 等下一季读完并收下。没有在读的季时返回 false；调用方被取消时取消在读的季（读取随即结束）。
+  func next() async -> Bool {
+    if ready.isEmpty {
+      guard !inFlight.isEmpty else { return false }
+      await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+          if ready.isEmpty { waiter = continuation } else { continuation.resume() }
+        }
+      } onCancel: {
+        Task { @MainActor [weak self] in self?.tasks.forEach { $0.cancel() } }
+      }
+    }
+    guard !ready.isEmpty else { return false }
+    let next = ready.removeFirst()
+    inFlight.remove(next.number)
+    finished.insert(next.number)
+    if let season = next.season { seasons.append(season) }
+    return true
+  }
+
+  func finish() {
+    tasks.forEach { $0.cancel() }
   }
 }
 

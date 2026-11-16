@@ -444,6 +444,20 @@ final class SeriesContinuationTests: XCTestCase {
       .explain(.fileContradicted(elsewhere)))
   }
 
+  func testFileContradictingTheListsIsNotPlayedEvenWithoutAnIndex() {
+    // 读不到集索引，文件自己的单集编号 999 不在读全了的集列表里，同季号集号的第 2 集却是 102：对不上，不原样播，
+    // 打开第 2 集的面板（读不到集索引，那一集也没法确定能播）。
+    let failed: [ServerEpisodeLookup] = [.failed(server: "emby", message: "读取失败")]
+    let half = file("h", episode: 2, tmdb: 999)
+    XCTAssertEqual(choose([], resuming: half, lookups: failed), .openPanel(episode(1, 2)))
+    let watched = file("w", episode: 1, tmdb: 101)
+    let next = file("n", episode: 2, tmdb: 999)
+    XCTAssertEqual(choose([], next: next, watched: watched, lookups: failed), .openPanel(episode(1, 2)))
+    // 集列表没读全：编号可能在没读到的那一季，没有反证，照常续播。
+    XCTAssertEqual(
+      choose([], resuming: half, lookups: failed, unread: [3]), .playServerFile(half, resumes: true, episode: nil))
+  }
+
   func testWatchedSeriesWithAnUnreadableIndexFollowsTheServer() {
     // 读不到集索引，看完的那份对不到集列表、也没有反证：播服务器上的下一份（不写集号）；没有下一份时说明原因。
     let watched = file("w", episode: 2, tmdb: 102)
