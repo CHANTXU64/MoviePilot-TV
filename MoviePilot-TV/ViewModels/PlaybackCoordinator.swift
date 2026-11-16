@@ -43,9 +43,10 @@ enum PlaybackTarget: Equatable {
   case libraryItem(itemID: String, expected: LibraryItemExpectation, owner: String? = nil)
   /// 已知服务器名称和这台服务器自己的条目 ID，没有身份条件可核对（首页「最近添加」里没有 TMDB 编号、直接播放的条目）。
   case serverItem(serverName: String, itemID: String)
-  /// 详情页（TMDB 来源）的「继续播放」判断按服务器上的这份播（对不到集列表、没有反证）。`file` 是判断时读到的这份：
-  /// 起播时现读的条目编号变了（重新刮削过），之前的判断不算数，不原样播，通知详情页按新数据重新判断（见 `prepare`）。
-  case seriesFile(serverName: String, file: ServerMediaItem, tmdbID: Int)
+  /// 详情页（TMDB 来源）的「继续播放」判断按服务器上的这份播（没有反证）。`judgement` 是判断时读到的这份和当成哪一集：
+  /// 起播时现读的条目过不了和按集起播同一处复核（`ServerEpisodeIndex.admit`：编号、季号集号、路径变了，或播出日期
+  /// 和那一集对不上），之前的判断不算数，不原样播，通知详情页按新数据重新判断（见 `prepare`）。
+  case seriesFile(serverName: String, judgement: EpisodeFileJudgement, tmdbID: Int)
   /// 详情页集列表里的一集，带着它所在那一季的集列表：在各台可播放的服务器上找这一集的文件，见 `EpisodeMatching.swift`。
   /// `accepting`：用户在单集面板看过的说明允许试哪些文件，见 `EpisodeMatchAcceptance`。
   case episode(QueuedEpisode, accepting: EpisodeMatchAcceptance)
@@ -54,7 +55,7 @@ enum PlaybackTarget: Equatable {
   var itemID: String? {
     switch self {
     case .libraryItem(let id, _, _), .serverItem(_, let id): id
-    case .seriesFile(_, let file, _): file.id
+    case .seriesFile(_, let judgement, _): judgement.file?.id
     case .episode: nil
     }
   }
@@ -658,7 +659,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     case .serverItem(let serverName, let id):
       (itemID, expected, owner) = (id, nil, nil)
       candidates = servers.filter { $0.name == serverName && $0.supportsInAppPlayback }
-    case .seriesFile(let serverName, let file, _):
+    case .seriesFile(let serverName, let judgement, _):
+      guard let file = judgement.file else { return nil }
       (itemID, expected, owner) = (file.id, nil, nil)
       candidates = servers.filter { $0.name == serverName && $0.supportsInAppPlayback }
     case .episode:
@@ -1049,7 +1051,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     throw PlaybackError.episodeUnavailable(Self.evidenceUnsettledMessage(server: connection.serverName))
   }
 
-  static let seriesFileChangedMessage = "媒体服务器上这份文件的季号、集号或单集编号刚变过，已重新核对接着看哪一集，请再按一次播放"
+  static let seriesFileChangedMessage = "媒体服务器上这份文件的信息刚变过（编号、季号集号或播出日期），已重新核对接着看哪一集，请再按一次播放"
 
   /// 读集索引时最多跟几次补查版本的变化。
   static let evidenceFollowLimit = 3
@@ -1701,18 +1703,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       let result = try await recovering { () -> EpisodeCandidate in
         guard let fresh = try await connection.item(id: candidate.id, timeout: nil), fresh.kind == .episode
         else { return .stale }
-        switch ServerEpisodeIndex.recheck(
-          fresh, recorded: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID,
-          basis: confirmedBy[candidate.id])
-        {
-        case .same:
-          if let reference = rechecksAirDate[candidate.id], fresh.tmdbEpisodeID != tmdbEpisodeID,
-            fresh.premiereDate != candidate.premiereDate,
-            case .differs = AirDateCheck.compare(server: fresh.premiereDate, moviePilot: reference)
-          {
-            return .airDateDiffers
-          }
-          return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
+        let judgement = EpisodeFileJudgement(
+          file: fromIndex ? candidate : nil, tmdbEpisodeID: tmdbEpisodeID, basis: confirmedBy[candidate.id],
+          airDateReference: rechecksAirDate[candidate.id])
+        switch ServerEpisodeIndex.admit(fresh, as: judgement) {
+        case .same: return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
+        case .airDateDiffers: return .airDateDiffers
         case .changed: return .stale
         case .lostEpisodeID: return .missingEpisodeID
         case .needsIndex: return .needsIndex
@@ -1994,7 +1990,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     var owner: String?
     let candidates: [MediaServerConf]
     /// 「继续播放」判断时读到的这份（见 `PlaybackTarget.seriesFile`）和那部剧的 TMDB 编号。
-    var judged: (file: ServerMediaItem, tmdbID: Int)?
+    var judged: (judgement: EpisodeFileJudgement, tmdbID: Int)?
     switch target {
     case .libraryItem(let id, let expectation, let libraryOwner):
       itemID = id
@@ -2004,9 +2000,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       guard !candidates.isEmpty else { throw PlaybackError.noPlayableServer }
     case .serverItem, .seriesFile:
       let serverName: String
-      if case .seriesFile(let name, let file, let tmdbID) = target {
+      if case .seriesFile(let name, let judgement, let tmdbID) = target, let file = judgement.file {
         (serverName, itemID) = (name, file.id)
-        judged = (file, tmdbID)
+        judged = (judgement, tmdbID)
       } else if case .serverItem(let name, let id) = target {
         (serverName, itemID) = (name, id)
       } else {
@@ -2045,9 +2041,10 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             found = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout)
           }
           guard let item = found else { return nil }
-          // 「继续播放」判断之后这份文件的编号变了（重新刮削过）：之前的判断不算数，不原样播，请详情页按新数据重新判断。
-          if let judged, EpisodeFileNumbering(item) != EpisodeFileNumbering(judged.file) {
-            Logger.info("[Playback] “\(connection.serverName)”上接着看的那份文件编号变了，不按之前的判断起播，重新判断")
+          // 「继续播放」判断之后这份文件过不了起播复核（和按集起播同一处）：之前的判断不算数，不原样播，
+          // 请详情页按新数据重新判断。
+          if let judged, ServerEpisodeIndex.admit(item, as: judged.judgement) != .same {
+            Logger.info("[Playback] “\(connection.serverName)”上接着看的那份文件起播前复核不过，不按之前的判断起播，重新判断")
             self.episodeIndexRefreshes.send(judged.tmdbID)
             throw PlaybackError.episodeUnavailable(Self.seriesFileChangedMessage)
           }
@@ -2822,7 +2819,7 @@ enum BackgroundExecution {
 /// 一次播放判断（详情页「继续播放」的一次读取、集列表行的一次重试）里读 MoviePilot 的结果：每个查询只读一次，成功、
 /// 空列表、出错都留到这一次结束，详情页和各台集索引都从这里取，看到的必定是同一份（不会一处读到失败、另一处稍后读到
 /// 恢复后的列表）。`forced`（按「播放」重试）时第一次读跳过会话缓存。下一次判断用新的一份，重新读。
-/// 集列表按剧集组和季号区分，季列表按剧集组区分。
+/// 集列表按剧集组和季号区分，季列表按剧集组区分。调用方取消后不再发起新的读取；已发出的照常读完（会话缓存里共享）。
 @MainActor
 final class MoviePilotReads {
   private let apiService: APIService
@@ -2843,6 +2840,8 @@ final class MoviePilotReads {
     if let existing = lists[key] {
       read = existing
     } else {
+      // 调用方已取消（离开了页面）：不再发起新的读取。
+      try Task.checkCancellation()
       let apiService = apiService, tmdbID = context.tmdbID, forced = forced
       read = Task {
         do {
@@ -2855,7 +2854,9 @@ final class MoviePilotReads {
       }
       lists[key] = read
     }
-    return try await read.value.get()
+    let result = await read.value
+    try Task.checkCancellation()
+    return try result.get()
   }
 
   /// 一套编号有哪几季：`episodeGroup` 为 nil 是 MoviePilot 给的全部季（默认顺序，含特别篇第 0 季）。
@@ -2865,6 +2866,7 @@ final class MoviePilotReads {
     if let existing = catalogs[key] {
       read = existing
     } else {
+      try Task.checkCancellation()
       let apiService = apiService, context = context, forced = forced
       read = Task {
         do {
@@ -2876,7 +2878,9 @@ final class MoviePilotReads {
       }
       catalogs[key] = read
     }
-    return try await read.value.get()
+    let result = await read.value
+    try Task.checkCancellation()
+    return try result.get()
   }
 
   /// 按 TMDB 身份读季列表（MoviePilot 直接给 TMDB 的季列表，不按剧名识别）；`episodeGroup` 不为 nil 时读剧集组的季。

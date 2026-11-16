@@ -709,13 +709,15 @@ class MediaDetailViewModel: ObservableObject {
       EpisodeRowHint(season: episode.seasonNumber, tmdbEpisodeID: episode.tmdbEpisodeID, episodeNumber: episode.episodeNumber)
     }
     /// 播服务器上的这份。`season`/`episode` 是按钮上写的季号集号（缺一个就不写集号），`hint` 是集列表停的位置。
-    /// TMDB 来源的剧带着判断时读到的这份：起播时编号变了就不原样播（见 `PlaybackTarget.seriesFile`）。
+    /// TMDB 来源的剧带着判断的依据（`judgement`）：起播时复核不过就不原样播（见 `PlaybackTarget.seriesFile`）。
     func playServerFile(
-      _ file: ServerMediaItem, resumes: Bool, season: Int? = nil, episode: Int? = nil, hint: EpisodeRowHint? = nil
+      _ file: ServerMediaItem, resumes: Bool, season: Int? = nil, episode: Int? = nil, hint: EpisodeRowHint? = nil,
+      judgement: EpisodeFileJudgement? = nil
     ) {
       let target: PlaybackTarget =
-        tmdbContext.map { .seriesFile(serverName: progress.serverName, file: file, tmdbID: $0.tmdbID) }
-        ?? .serverItem(serverName: progress.serverName, itemID: file.id)
+        judgement.flatMap { judgement in
+          tmdbContext.map { .seriesFile(serverName: progress.serverName, judgement: judgement, tmdbID: $0.tmdbID) }
+        } ?? .serverItem(serverName: progress.serverName, itemID: file.id)
       publish(
         SeriesPlayAction.labeled(.play(target), resumeFile: resumes ? file : nil, season: season, episode: episode),
         hint ?? latestSeason)
@@ -780,6 +782,15 @@ class MediaDetailViewModel: ObservableObject {
     func explain(_ message: String) {
       publish(SeriesPlayAction(title: "播放", accessibilityLabel: "播放", action: .explain(message)), latestSeason)
     }
+    // 按服务器上的这份播时，起播前复核要的依据，从观看记录那台的集索引取（它怎么确认的、核对日期用哪天）。
+    let ownIndex = loaded.lazy.compactMap { lookup -> ServerEpisodeIndex? in
+      if case .loaded(let index) = lookup, index.serverName == progress.serverName { return index }
+      return nil
+    }.first
+    func judgement(_ file: ServerMediaItem, as episode: MoviePilotEpisode?) -> EpisodeFileJudgement {
+      ownIndex?.judgement(of: file, as: episode?.tmdbEpisodeID)
+        ?? EpisodeFileJudgement(file: file, tmdbEpisodeID: episode?.tmdbEpisodeID)
+    }
     // 播放器里接着播下一集的季顺序用同一份季目录（集列表行显示的季）。
     let queueContext =
       lists.catalog.flatMap {
@@ -808,10 +819,11 @@ class MediaDetailViewModel: ObservableObject {
     case .playServerFile(let file, let resumes, let episode?):
       // 对上了集列表里的这一集，但起播不会试这份（那一集另有确定的文件）：照常播这份，按钮写那一集的集号。
       playServerFile(
-        file, resumes: resumes, season: episode.seasonNumber, episode: episode.episodeNumber, hint: hint(episode))
+        file, resumes: resumes, season: episode.seasonNumber, episode: episode.episodeNumber, hint: hint(episode),
+        judgement: judgement(file, as: episode))
     case .playServerFile(let file, let resumes, nil):
       // 对不到集列表（认不出、集列表还没有、读不到），没有反证：照常播，按钮不写集号，不以集列表里某一集的名义播。
-      playServerFile(file, resumes: resumes)
+      playServerFile(file, resumes: resumes, judgement: judgement(file, as: nil))
     case .explain(.fileContradicted(let file)):
       let name = SeriesPlayAction.episodeText(season: file.seasonNumber, episode: file.episodeNumber).map { "「\($0)」" } ?? ""
       explain("媒体服务器上\(name)和集列表对不上（播出日期、单集编号或外部编号），没法确定是哪一集，请在集列表里选择要播的集")

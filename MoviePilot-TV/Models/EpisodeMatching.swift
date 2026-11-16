@@ -326,6 +326,18 @@ nonisolated struct UncertainEpisodeMatch: Equatable, Sendable {
 // MARK: - 一台服务器上的对应表
 
 /// 一台服务器上这部剧的文件和 TMDB 单集的对应。
+/// 起播前复核一份文件要的依据（见 `ServerEpisodeIndex.admit`）。
+nonisolated struct EpisodeFileJudgement: Equatable, Sendable {
+  /// 判断时这份文件的样子；只知道条目 ID（播放中换集）时为 nil。
+  let file: ServerMediaItem?
+  /// 当成哪一集播；对不到集列表、照常播这份时为 nil。
+  let tmdbEpisodeID: Int?
+  /// 对应表按外部编号反查或按标题核实它时的依据（见 `ServerEpisodeIndex.confirmedBy`）。
+  var basis: EpisodeConfirmationBasis? = nil
+  /// 按季号集号对上、起播前要再核对播出日期时，那一集在 MoviePilot 里的日期（可能没有）；不核对日期时为 nil。
+  var airDateReference: String?? = nil
+}
+
 nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 按季号集号对上的一个文件。
   struct UncertainFile: Equatable, Sendable {
@@ -795,12 +807,67 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
         return .changed
       }
     }
-    // 仍然没有编号，季号集号和文件路径都没变。
-    guard fresh.tmdbEpisodeID == nil, fresh.seasonNumber == recorded.seasonNumber,
-      fresh.episodeNumber == recorded.episodeNumber, fresh.episodeNumberEnd == recorded.episodeNumberEnd,
-      fresh.path == nil || recorded.path == nil || fresh.path == recorded.path
-    else { return .changed }
-    return .same
+    return unnumberedFileUnchanged(fresh, recorded) ? .same : .changed
+  }
+
+  /// 没有 TMDB 单集编号的文件：仍然没有编号，季号集号和文件路径都没变。
+  private static func unnumberedFileUnchanged(_ fresh: ServerMediaItem, _ recorded: ServerMediaItem) -> Bool {
+    fresh.tmdbEpisodeID == nil && fresh.seasonNumber == recorded.seasonNumber
+      && fresh.episodeNumber == recorded.episodeNumber && fresh.episodeNumberEnd == recorded.episodeNumberEnd
+      && (fresh.path == nil || recorded.path == nil || fresh.path == recorded.path)
+  }
+
+  /// 起播前现读的条目还能不能按之前的判断播。按集起播（`PlaybackCoordinator.prepareFirstPlayable`）和详情页
+  /// 「继续播放」按服务器上这份续播（`PlaybackTarget.seriesFile`）都按这一处：
+  /// - 当成某一集播的（`judgement.tmdbEpisodeID`）：条目还是对应表里记的那一集（`recheck`）；按季号集号对上、
+  ///   要核对日期的（`airDateReference`），重新读到的播出日期也不能和那一集对不上（日期可能刚补上或改了）。
+  /// - 对不到集列表、照常播的：判断它时用到的编号信息都没变（有编号的编号和季号集号不变，没编号的同 `recheck`）。
+  static func admit(_ fresh: ServerMediaItem, as judgement: EpisodeFileJudgement) -> Admission {
+    guard let tmdbEpisodeID = judgement.tmdbEpisodeID else {
+      guard let recorded = judgement.file else { return .changed }
+      if let recordedID = recorded.tmdbEpisodeID {
+        guard let freshID = fresh.tmdbEpisodeID else { return .lostEpisodeID }
+        guard freshID == recordedID, fresh.seasonNumber == recorded.seasonNumber,
+          fresh.episodeNumber == recorded.episodeNumber, fresh.episodeNumberEnd == recorded.episodeNumberEnd
+        else { return .changed }
+        return .same
+      }
+      guard ExternalEvidenceRequest.lookupIDs(of: fresh) == ExternalEvidenceRequest.lookupIDs(of: recorded),
+        unnumberedFileUnchanged(fresh, recorded)
+      else { return .changed }
+      return .same
+    }
+    switch recheck(fresh, recorded: judgement.file, tmdbEpisodeID: tmdbEpisodeID, basis: judgement.basis) {
+    case .same:
+      if let reference = judgement.airDateReference, let recorded = judgement.file,
+        fresh.tmdbEpisodeID != tmdbEpisodeID, fresh.premiereDate != recorded.premiereDate,
+        case .differs = AirDateCheck.compare(server: fresh.premiereDate, moviePilot: reference)
+      {
+        return .airDateDiffers
+      }
+      return .same
+    case .changed: return .changed
+    case .lostEpisodeID: return .lostEpisodeID
+    case .needsIndex: return .needsIndex
+    }
+  }
+
+  /// `admit` 的结果。
+  enum Admission: Equatable, Sendable {
+    case same
+    /// 条目变了，对应表要重读（或判断要重做）
+    case changed
+    case lostEpisodeID
+    case needsIndex
+    /// 按季号集号对上的文件，重新读到的播出日期和这一集对不上
+    case airDateDiffers
+  }
+
+  /// 判断「这份文件按哪一集播」时，起播前复核要用的依据（见 `admit`）。`tmdbEpisodeID` 为 nil：对不到集列表。
+  func judgement(of file: ServerMediaItem, as tmdbEpisodeID: Int?) -> EpisodeFileJudgement {
+    EpisodeFileJudgement(
+      file: file, tmdbEpisodeID: tmdbEpisodeID, basis: confirmedBy[file.id],
+      airDateReference: tmdbEpisodeID.flatMap { numberMatches[file.id]?[$0] }.map { .some($0.referenceAirDate) } ?? nil)
   }
 
   // MARK: 查询
@@ -976,6 +1043,7 @@ enum EpisodeMatchLoader {
   static let concurrentListReads = 4
 
   /// 读这些集列表，最多同时读 `concurrentListReads` 份。读失败的记下错误（取消照常抛出），不影响别的。
+  /// 被取消时不再派发还没开始的。
   private static func readLists(
     _ keys: [EpisodeListKey], using seasonList: @escaping @MainActor (EpisodeListKey) async throws -> [TmdbEpisode]
   ) async throws -> [EpisodeListKey: Result<[TmdbEpisode], any Error>] {
@@ -996,6 +1064,8 @@ enum EpisodeMatchLoader {
       var reads: [EpisodeListKey: Result<[TmdbEpisode], any Error>] = [:]
       while let finished = try await group.next() {
         reads[finished.key] = finished.result
+        // 被取消（离开了页面）：不再派发下一份，已发出的照常收尾。
+        try Task.checkCancellation()
         if let key = waiting.popFirst() { group.addTask { try await read(key) } }
       }
       return reads

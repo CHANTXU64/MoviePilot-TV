@@ -234,22 +234,6 @@ nonisolated enum ExternalMediaID {
 // MARK: - 服务器条目与片源
 
 /// 媒体服务器上的一个条目。各类服务器的接口数据都转换成它，协调器和播放界面只认这个类型。
-/// 一份剧集文件在服务器上标的编号：季号、集号（多集文件的最后一集）和 TMDB 单集编号。判断它是哪一集用的就是这些；
-/// 它们变了（重新刮削过），之前的判断就不算数。观看状态、路径、简介等不算在内。
-nonisolated struct EpisodeFileNumbering: Equatable, Sendable {
-  let seasonNumber: Int?
-  let episodeNumber: Int?
-  let episodeNumberEnd: Int?
-  let tmdbEpisodeID: Int?
-
-  init(_ item: ServerMediaItem) {
-    seasonNumber = item.seasonNumber
-    episodeNumber = item.episodeNumber
-    episodeNumberEnd = item.episodeNumberEnd
-    tmdbEpisodeID = item.tmdbEpisodeID
-  }
-}
-
 nonisolated struct ServerMediaItem: Equatable, Sendable {
   enum Kind: Equatable, Sendable {
     case movie, series, episode, other

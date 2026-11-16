@@ -5287,6 +5287,65 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testServerFileWhoseAirDateTurnsContradictoryIsNotResumedAsIs() async throws {
+    // 第 2 集另有编号确定的副本（e2b），按钮按续播点在 e2a（只按季号集号对上，日期相符）定下。之后 e2a 的播出日期被改成
+    // 和这一集明显对不上，季号集号、编号都没变：起播前和按集起播同一处复核，日期对不上就不原样播；详情页重新判断，
+    // 改成按集播第 2 集（从编号确定的那份）。
+    let file = #"{"Id":"e2a","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":2,"PremiereDate":"2025-09-01T00:00:00Z","RunTimeTicks":72000000000,"UserData":{"PlaybackPositionTicks":18000000000}}"#
+    let first = Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true)
+    let confirmed = Self.watchedEpisode("e2b", episode: 2, tmdb: 12)
+    let (viewModel, service) = try makeContinueWatchingDetailViewModel(first, file, confirmed) {
+      $0.items["\(Self.lan)|e2a"] = file
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] =
+        #"[{"id":11,"season_number":1,"episode_number":1},{"id":12,"season_number":1,"episode_number":2,"air_date":"2025-09-01"}]"#
+      $0.playbackInfo = Self.playbackInfo()
+      $0.transferHistory = "[]"
+    }
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    XCTAssertEqual(Self.judgedServerFileID(viewModel), "e2a")
+    let redated = file.replacingOccurrences(of: "2025-09-01", with: "2025-01-01")
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e2a"] = redated
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes([first, redated, confirmed].joined(separator: ","))
+    }
+    let coordinator = service.sessionScope.playbackCoordinator
+    viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
+    try await waitUntil { coordinator.session != nil || coordinator.failure != nil }
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, PlaybackCoordinator.seriesFileChangedMessage)
+    try await waitUntil {
+      if case .play(.episode)? = viewModel.seriesPlayAction?.action { return true }
+      return false
+    }
+    guard case .play(.episode(let queued, _))? = viewModel.seriesPlayAction?.action else { return }
+    XCTAssertEqual(queued.episode.tmdbEpisodeID, 12)
+  }
+
+  func testLeavingTheDetailPageStopsDispatchingSeasonListReads() async throws {
+    // 10 季、每季都有没编号的文件（集索引要读 10 份集列表，同时读 4 份）：读到第一批时离开详情页，放行这一批后
+    // 不再发出后面的季。
+    let show = Self.manySeasons(10)
+    let files = (1...10).map { number in
+      #"{"Id":"e\#(number)","Type":"Episode","SeriesId":"s1","ParentIndexNumber":\#(number),"IndexNumber":1}"#
+    }
+    let gate = DispatchSemaphore(value: 0)
+    defer { for _ in 0..<8 { gate.signal() } }
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(files[0], seasonInfo: show.seasonInfo) {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(files.joined(separator: ","))
+      $0.tmdbEpisodes = show.lists
+      $0.transferHistory = "[]"
+      $0.tmdbEpisodesGates = Dictionary(uniqueKeysWithValues: (1...4).map { ("/api/v1/tmdb/100/\($0)", gate) })
+    }
+    try await waitUntil { Set(Self.seasonListRequests()).count >= 4 }
+    XCTAssertEqual(Set(Self.seasonListRequests()).count, 4)
+    viewModel.cancelForPop()
+    for _ in 0..<4 { gate.signal() }
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertEqual(Set(Self.seasonListRequests()).count, 4, "\(Self.seasonListRequests())")
+    XCTAssertNil(viewModel.seriesPlayAction)
+  }
+
   func testServerFileRenumberedAfterTheDecisionIsNotPlayedAsIs() async throws {
     // 按钮定下要续播那份对不到集列表的文件之后，它被重新刮削成第 1 季第 2 集、编号 999（和集列表的第 2 集对不上）：
     // 起播时现读到编号变了，不原样播；详情页按新数据重新判断，认出对不上，改成打开第 2 集的面板。
@@ -5672,10 +5731,10 @@ extension PlaybackCoordinatorTests {
   /// 「继续播放」按服务器上的哪一份播（带着判断时读到的这份，起播时核对编号，见 `PlaybackTarget.seriesFile`）；
   /// 不是按服务器上的一份播时为 nil。
   private static func judgedServerFileID(_ viewModel: MediaDetailViewModel) -> String? {
-    guard case .play(.seriesFile(let server, let file, let tmdbID))? = viewModel.seriesPlayAction?.action,
+    guard case .play(.seriesFile(let server, let judgement, let tmdbID))? = viewModel.seriesPlayAction?.action,
       server == "emby", tmdbID == 100
     else { return nil }
-    return file.id
+    return judgement.file?.id
   }
 
   /// 一部 `count` 季的剧：每季两集，第 n 季第 k 集是 TMDB n*100+k。
