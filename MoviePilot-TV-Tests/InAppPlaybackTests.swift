@@ -2626,7 +2626,7 @@ extension PlaybackCoordinatorTests {
     let fields = URLComponents(url: episodesRequest.url, resolvingAgainstBaseURL: false)?.queryItems?
       .first { $0.name == "Fields" }?.value
     XCTAssertEqual(
-      fields, "ProviderIds,Path,PremiereDate,Overview", "集列表要带外部编号、文件路径、首播日期，和集列表缺简介时用的简介")
+      fields, "ProviderIds,Path,PremiereDate,Overview,UserDataLastPlayedDate", "集列表要带外部编号、文件路径、首播日期、集列表缺简介时用的简介，和最后播放时间")
     coordinator.endCurrentSession()
   }
 
@@ -5417,6 +5417,22 @@ extension PlaybackCoordinatorTests {
     try await Task.sleep(for: .milliseconds(800))
     XCTAssertEqual(Set(secondaryListRequests()), initial, "\(secondaryListRequests())")
     XCTAssertNil(viewModel.seriesPlayAction)
+  }
+
+  func testEpisodeListRequestAsksEmbyForTheLastPlayedDate() async throws {
+    // 同一集重新在看的判断要用最后播放时间：Emby 剧集列表默认不给，读观看记录的那次请求要点名要它，不逐集另发请求。
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true))
+    defer { viewModel.cancelForPop() }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    let reads = PlaybackURLProtocol.stub.requests().filter { $0.url.path.hasSuffix("/Episodes") }
+    XCTAssertFalse(reads.isEmpty)
+    for read in reads {
+      let fields = URLComponents(url: read.url, resolvingAgainstBaseURL: false)?.queryItems?
+        .first { $0.name == "Fields" }?.value?.split(separator: ",").map(String.init) ?? []
+      XCTAssertTrue(fields.contains("UserDataLastPlayedDate"), "\(read.url)")
+    }
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().filter { $0.url.path.contains("/Items/e1") }.isEmpty, "不逐集另读")
   }
 
   func testServerFileMovedToAnotherSeriesIsNotResumedAsIs() async throws {

@@ -175,11 +175,16 @@ struct EmbyClient {
 
   /// 剧集的全部集（按 Emby 顺序，带用户观看数据、外部编号、文件路径和首播日期），不含缺失的集。
   /// 单集对应（见 `EpisodeMatching.swift`）先看 `ProviderIds.Tmdb`（TMDB 单集 ID），没有时拿路径对整理记录、按季号集号和首播日期对。
+  /// 列表里的用户数据默认没有最后播放时间，要在 `Fields` 里点名 `UserDataLastPlayedDate` 才给：同一集一份看完、
+  /// 一份看到一半时靠它分辨是不是重新在看（见 `PlaybackEpisodeProgress`），不为此逐集另发请求。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds,Path,PremiereDate,Overview"]))
+        query: [
+          "UserId": userID, "IsMissing": "false",
+          "Fields": "ProviderIds,Path,PremiereDate,Overview,UserDataLastPlayedDate",
+        ]))
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
