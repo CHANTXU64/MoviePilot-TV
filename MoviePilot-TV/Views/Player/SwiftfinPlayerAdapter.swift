@@ -190,7 +190,7 @@ final class MediaSession {
 
   /// 就绪、可跳转、缓冲与时长，值变化时才更新。
   private(set) var playbackState = PlaybackState()
-  /// 播放器读到的当前条目内嵌章节；还没读完文件时为 nil。
+  /// 播放器读到的当前条目内嵌章节，随播放器更新；播放器还不知道时为 nil。
   private var embeddedChapters: [ServerChapter]?
   /// 播放器报告的播放位置，变化满 `positionPublishStep` 才更新（见 `publishPosition`）。只有进度条和时间读它。
   private var observedPosition: Duration = .zero
@@ -270,13 +270,6 @@ final class MediaSession {
     case .chapters(let chapters):
       return .chapters(
         ChapterInfo.fullInfo(chapters, placeholderSymbol: playbackItem.chapterPlaceholderSymbol))
-    }
-  }
-
-  /// 播放器读完文件后交来文件里内嵌的章节（测试也直接调用它模拟播放器）。
-  func embeddedChaptersDidLoad(_ chapters: [ServerChapter]) {
-    if embeddedChapters != chapters {
-      embeddedChapters = chapters
     }
   }
 
@@ -661,9 +654,10 @@ final class MediaSession {
     if playbackState != next {
       playbackState = next
     }
-    // 就绪时播放器已读完文件信息（轨道和章节一起读出）。
-    if next.isReady, embeddedChapters == nil {
-      embeddedChaptersDidLoad(enginePlayer.chapters)
+    // 播放器知道章节时每次都跟上（之后还可能换算到新的时间轴，见 `AetherPlayer.chapters`）；
+    // 还不知道时（载入、换音轨或回前台重建中）保留上次的，不闪成按片长分段。换条目时由 `prepareItem` 清空。
+    if let chapters = enginePlayer.chapters, embeddedChapters != chapters {
+      embeddedChapters = chapters
     }
   }
 

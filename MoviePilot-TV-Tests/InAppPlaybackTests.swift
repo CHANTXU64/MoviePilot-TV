@@ -6795,22 +6795,110 @@ extension PlaybackCoordinatorTests {
     }
   }
 
-  /// 按播放界面的入口起播，读出播放器读完文件前、后（交来 `embedded`）的章节。
-  /// 测试里播放器打不开测试地址、读不到文件，由测试交来它读到的内嵌章节；片长按片源或条目的。
+  /// 按播放界面的入口起播，读出播放器读完文件前、后的章节。
+  /// 测试里真实引擎读不到文件，由引擎替身按起播顺序发布文件里的章节（`embedded`）并就绪，
+  /// 经播放器的订阅和事件交给播放界面；片长按片源或条目的。
   private func playerChapters(
     _ coordinator: PlaybackCoordinator, _ session: PlaybackSession, embedded: [ServerChapter] = []
   ) async throws -> (beforeRead: ShownChapters, afterRead: ShownChapters) {
-    session.onFailure = { _ in }
     let reporter = coordinator.reporterForTesting
-    let screen = MediaSession(session: session, onExit: { _ in }, onSwitchItem: { _, _, _, _, completion in completion(.discarded) })
-    screen.start()
+    let (screen, engine) = startScreenWithEngineStandIn(session)
     let before = try ShownChapters(screen)
-    screen.embeddedChaptersDidLoad(embedded)
+    engine.finishReading(chapters: embedded)
+    try await waitUntil { screen.state == .playback }
     let after = try ShownChapters(screen)
     screen.stop()
     coordinator.endCurrentSession()
     await reporter.waitForQueued()
     return (before, after)
+  }
+
+  /// 按播放界面的入口起播，播放器的状态、就绪和章节由返回的引擎替身发出。
+  private func startScreenWithEngineStandIn(_ session: PlaybackSession) -> (MediaSession, EngineSignalsStandIn) {
+    // 真实引擎打不开测试地址会报失败，与章节无关，接住免得结束会话。
+    session.onFailure = { _ in }
+    let engine = EngineSignalsStandIn()
+    session.usePlayerForTesting(AetherPlayer(signalsForTesting: engine.signals))
+    let screen = MediaSession(session: session, onExit: { _ in }, onSwitchItem: { _, _, _, _, completion in completion(.discarded) })
+    screen.start()
+    return (screen, engine)
+  }
+
+  /// 读完文件后引擎把章节换算到新的时间轴再发一次（软件解码的时钟按第一帧定下零点、播放中换了解码方式），
+  /// 或就绪时还没有章节、之后才发：「章节」面板、进度条刻度和面板里各章节的跳转目标都跟着换。
+  /// 引擎重建期间（换音轨不清章节；暂停时回前台会清空章节、先就绪再定下解码方式）显示上次的章节，
+  /// 不闪成按片长分段；定下解码方式后跟上新的时间轴。
+  func testEmbeddedChaptersRepublishedAfterReadyReachThePanelAndJumpTargets() async throws {
+    configureMovie(
+      playbackInfo:
+        #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","ItemId":"m1","Container":"mkv","Protocol":"File","MediaStreams":[],"Chapters":[]}]}"#
+    )
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    let reporter = coordinator.reporterForTesting
+    let (screen, engine) = startScreenWithEngineStandIn(session)
+
+    // 就绪时文件里的章节还没发（为空）：按 2 小时片长每 10 分钟分段。
+    engine.finishReading(chapters: [])
+    try await waitUntil { screen.state == .playback }
+    XCTAssertEqual(try XCTUnwrap(ShownChapters(screen).panel).chapters.count, 12, "就绪时没有章节，先按片长分段")
+
+    // 之后发来文件里的章节：替换分段。
+    engine.publishChapters([
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 600),
+      ServerChapter(name: "终章", startSeconds: 5400),
+    ])
+    try await waitUntil { (try? ShownChapters(screen).panel?.chapters.count) == 3 }
+    let fromFile = try ShownChapters(screen)
+    XCTAssertEqual(try XCTUnwrap(fromFile.panel).chapters.map(\.displayTitle), ["序幕", "正片", "终章"])
+
+    // 软件解码的时钟定下零点，章节整体前移 2.5 秒：面板、刻度和跳转目标都换成新的起点。
+    engine.publishChapters([
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 597.5),
+      ServerChapter(name: "终章", startSeconds: 5397.5),
+    ])
+    let rebasedStarts: [Duration] = [.zero, .milliseconds(597_500), .milliseconds(5_397_500)]
+    try await waitUntil { (try? ShownChapters(screen).panel?.chapters.map(\.startSeconds)) == rebasedStarts }
+    let rebased = try ShownChapters(screen)
+    let panel = try XCTUnwrap(rebased.panel)
+    XCTAssertEqual(panel.chapters.map(\.chapterInfo.startSeconds), rebasedStarts.map(Optional.some), "选中章节时按这个起点跳转")
+    XCTAssertEqual(rebased.slider.map(\.startSeconds), rebasedStarts.map(Optional.some), "进度条刻度和面板同一份")
+    XCTAssertEqual(panel.nextChapterStart(after: .seconds(10)), .milliseconds(597_500), "跳到下一章的目标")
+    XCTAssertEqual(panel.previousChapterStart(before: .seconds(5399)), .milliseconds(597_500), "跳到上一章的目标")
+
+    // 换音轨：重建期间显示上次的章节；重建完成后换了解码方式，章节换算回 600、5400 秒。
+    let unshifted = [
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 600),
+      ServerChapter(name: "终章", startSeconds: 5400),
+    ]
+    let unshiftedStarts: [Duration] = [.zero, .seconds(600), .seconds(5400)]
+    engine.beginReopenKeepingChapters()
+    try await waitUntil { screen.state == .preparing }
+    XCTAssertEqual(try XCTUnwrap(ShownChapters(screen).panel).chapters.map(\.startSeconds), rebasedStarts, "换音轨期间保留上次的章节")
+    engine.finishReopen(chapters: unshifted)
+    try await waitUntil { (try? ShownChapters(screen).panel?.chapters.map(\.startSeconds)) == unshiftedStarts }
+
+    // 暂停时回前台：引擎清空章节重新载入，先就绪（暂停），之后才定下解码方式、重新发布章节。
+    engine.beginReloadAfterBackgroundTeardown()
+    try await waitUntil { screen.state == .preparing }
+    XCTAssertEqual(
+      try XCTUnwrap(ShownChapters(screen).panel).chapters.map(\.startSeconds), unshiftedStarts, "重新载入时清空的章节不显示")
+    engine.becomeReadyPaused()
+    try await waitUntil { screen.state == .playback }
+    XCTAssertEqual(
+      try XCTUnwrap(ShownChapters(screen).panel).chapters.map(\.startSeconds), unshiftedStarts,
+      "已就绪但还没定下解码方式：仍是上次的章节，不闪成按片长分段")
+    engine.settleRoute(
+      chapters: [
+        ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 597.5),
+        ServerChapter(name: "终章", startSeconds: 5397.5),
+      ], route: .software)
+    try await waitUntil { (try? ShownChapters(screen).panel?.chapters.map(\.startSeconds)) == rebasedStarts }
+
+    screen.stop()
+    coordinator.endCurrentSession()
+    await reporter.waitForQueued()
   }
 
   private func configureMovie(playbackInfo: String) {

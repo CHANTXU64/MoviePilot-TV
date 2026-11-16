@@ -2422,6 +2422,12 @@ final class PlaybackSession: Identifiable {
     return player
   }
 
+  /// 测试用：在播放界面建立前换成由测试替身驱动的播放器（见 `AetherPlayer.init(signalsForTesting:)`）。
+  func usePlayerForTesting(_ player: AetherPlayer) {
+    precondition(self.player == nil, "播放器已经建立")
+    self.player = player
+  }
+
   /// FFmpeg 的警告和错误写进日志：播放失败时看得出卡在哪一步，比如读不到数据、解不了码。
   /// 解码出错时可能每帧都报，每个条目只记前 `engineLogLimit` 条。流地址和密钥照常隐去。测试也直接调用它模拟引擎。
   func recordEngineLog(_ line: String) {

@@ -144,7 +144,7 @@ final class AetherPlayer {
 
   enum Event: Equatable {
     case statusChanged(Status)
-    /// 就绪、可跳转、缓冲、时长、首帧或显示模式切换有变化（合并到下一轮主线程再发，那时引擎的值都已更新）。
+    /// 就绪、可跳转、缓冲、时长、首帧、显示模式切换或章节有变化（合并到下一轮主线程再发，那时引擎的值都已更新）。
     case updated
     /// 播放失败。载入期间的失败在载入返回时报，之后的失败在状态变成出错时报，每次载入只报一次。
     case failed(PlaybackFailure)
@@ -152,6 +152,41 @@ final class AetherPlayer {
     case seekStarted
     /// 已出画面且未处于跳转中的位置。同步交给进度上报，退出时可以读到最后一次采样。
     case positionConfirmed(Double, isPlaying: Bool)
+  }
+
+  /// 播放器跟随的四个引擎发布值：状态、会话就绪、解码方式和文件里的章节。平时取自引擎；
+  /// 测试换成自己的 `@Published` 替身（同样在赋值前发出新值），经同一套订阅进入播放器。
+  struct EngineSignals {
+    var state: AnyPublisher<PlaybackState, Never>
+    var isSessionReady: AnyPublisher<Bool, Never>
+    var videoRoute: AnyPublisher<VideoRoute, Never>
+    /// 引擎的 `mediaChapters`，逐条经 `AetherPlayer.fileChapter` 换好。
+    var mediaChapters: AnyPublisher<[ServerChapter], Never>
+
+    init(
+      state: AnyPublisher<PlaybackState, Never>, isSessionReady: AnyPublisher<Bool, Never>,
+      videoRoute: AnyPublisher<VideoRoute, Never>, mediaChapters: AnyPublisher<[ServerChapter], Never>
+    ) {
+      self.state = state
+      self.isSessionReady = isSessionReady
+      self.videoRoute = videoRoute
+      self.mediaChapters = mediaChapters
+    }
+
+    init(_ engine: AetherEngine) {
+      // 引擎的章节类型与 Swiftfin 的 `ChapterInfo` 同名，引擎模块又与引擎类同名，写不出它的类型，就地换掉。
+      self.init(
+        state: engine.$state.eraseToAnyPublisher(), isSessionReady: engine.$isSessionReady.eraseToAnyPublisher(),
+        videoRoute: engine.$videoRoute.eraseToAnyPublisher(),
+        mediaChapters: engine.$mediaChapters
+          .map { $0.map { AetherPlayer.fileChapter(name: $0.name, startSeconds: $0.startSeconds) } }
+          .eraseToAnyPublisher())
+    }
+  }
+
+  /// 引擎给的一条文件章节。没写名字的章节引擎给空字符串，`ServerChapter` 把它当作没有名字（界面按位置命名）。
+  nonisolated static func fileChapter(name: String, startSeconds: Double) -> ServerChapter {
+    ServerChapter(name: name, startSeconds: startSeconds)
   }
 
   /// 字幕偏移能调到的最大幅度（秒），与播放界面的调节范围一致。
@@ -174,8 +209,16 @@ final class AetherPlayer {
   private(set) var videoSize: CGSize = .zero
 
   @ObservationIgnored private(set) var status: Status = .idle
-  /// 文件里内嵌的章节（Matroska、MP4）；没有或还没读到时为空。
-  @ObservationIgnored private(set) var chapters: [ServerChapter] = []
+  /// 文件里内嵌的章节（Matroska、MP4），与进度条同一时间轴；空表示文件里没有章节。
+  /// nil 表示还不知道：引擎还没定下解码方式（载入、重建中）。引擎定下解码方式时才把章节换算到那条时间轴上发出，
+  /// 在那之前给的空列表不代表没有章节，就绪也不代表已经定下（暂停方式重建时先就绪）。
+  /// 定下后引擎还可能换算后再发一次（软件解码的时钟按第一帧定下零点、播放中换了解码方式）。这两样变了都发 `.updated`。
+  var chapters: [ServerChapter]? { hasVideoRoute ? fileChapters : nil }
+  @ObservationIgnored private var fileChapters: [ServerChapter] = []
+  /// 引擎已定下解码方式（`videoRoute` 不是 `.none`）。
+  @ObservationIgnored private var hasVideoRoute = false
+  /// 引擎的会话已就绪（`AetherEngine.isSessionReady`）。
+  @ObservationIgnored private var isSessionReady = false
   /// 每次载入或停止加一，事件带上它。
   @ObservationIgnored private(set) var generation: UInt64 = 0
   /// 最近一次交给引擎的地址，可能含密钥，不得写入日志。
@@ -200,7 +243,16 @@ final class AetherPlayer {
   @ObservationIgnored private var seekWaiter: SeekWaiter?
   @ObservationIgnored private var seekWaiterID: UInt64 = 0
 
-  init() {
+  convenience init() {
+    self.init(signals: nil)
+  }
+
+  /// 测试用：状态、会话就绪和章节改由 `signals` 发出，引擎的这三个值不再跟随；其余照常读引擎。
+  convenience init(signalsForTesting signals: EngineSignals) {
+    self.init(signals: signals)
+  }
+
+  private init(signals: EngineSignals?) {
     do {
       engine = try AetherEngine()
     } catch {
@@ -214,13 +266,13 @@ final class AetherPlayer {
     // PGS 等图片轨仍会在起播和跳转落点补读，远端可能为此额外传输一个 32 MiB 的 Range。
     engine.maximumSubtitleDelaySeconds = Self.subtitleOffsetLimit
     engine.maximumSubtitleAdvanceSeconds = 0
-    subscribe(to: engine)
+    subscribe(to: engine, signals: signals ?? EngineSignals(engine))
   }
 
   // MARK: 读数
 
   var isPlaybackReady: Bool {
-    guard let engine, engine.isSessionReady else { return false }
+    guard engine != nil, isSessionReady else { return false }
     switch status {
     case .playing, .paused, .seeking, .ended: return true
     case .idle, .loading, .failed: return false
@@ -412,11 +464,18 @@ final class AetherPlayer {
 
   // MARK: 引擎回调
 
-  private func subscribe(to engine: AetherEngine) {
+  private func subscribe(to engine: AetherEngine, signals: EngineSignals) {
     // `@Published` 在赋值前发出新值：这里只用传进来的值，或合并到下一轮主线程再读引擎。
-    engine.$state.sink { [weak self] in self?.engineStateWillChange(to: $0) }.store(in: &subscriptions)
+    signals.state.sink { [weak self] in self?.engineStateWillChange(to: $0) }.store(in: &subscriptions)
+    signals.isSessionReady.sink { [weak self] ready in
+      guard let self else { return }
+      self.isSessionReady = ready
+      self.scheduleUpdate()
+    }
+    .store(in: &subscriptions)
+    signals.videoRoute.sink { [weak self] in self?.videoRouteDidChange($0) }.store(in: &subscriptions)
+    signals.mediaChapters.sink { [weak self] in self?.mediaChaptersDidChange($0) }.store(in: &subscriptions)
     for publisher in [
-      engine.$isSessionReady.map { _ in () }.eraseToAnyPublisher(),
       engine.$isBuffering.map { _ in () }.eraseToAnyPublisher(),
       engine.$isSeeking.map { _ in () }.eraseToAnyPublisher(),
       engine.$isSourceSeekable.map { _ in () }.eraseToAnyPublisher(),
@@ -448,10 +507,6 @@ final class AetherPlayer {
     engine.$activeAudioTrackIndex.sink { [weak self] in self?.selectedAudioTrackID = $0 }.store(in: &subscriptions)
     engine.$activeSubtitleTrackIndex.sink { [weak self] in self?.selectedSubtitleTrackID = $0 }
       .store(in: &subscriptions)
-    engine.$mediaChapters.sink { [weak self] chapters in
-      self?.chapters = chapters.map { ServerChapter(name: $0.name.isEmpty ? nil : $0.name, startSeconds: $0.startSeconds) }
-    }
-    .store(in: &subscriptions)
     NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -459,6 +514,20 @@ final class AetherPlayer {
         self.restoreVideo(playing: false)
       }
       .store(in: &subscriptions)
+  }
+
+  /// 引擎在同一次赋值里先改解码方式、再发换算好的章节；合并到下一轮主线程再发事件，界面读到的是两样都更新后的值。
+  private func videoRouteDidChange(_ route: VideoRoute) {
+    let next = route != .none
+    guard next != hasVideoRoute else { return }
+    hasVideoRoute = next
+    scheduleUpdate()
+  }
+
+  private func mediaChaptersDidChange(_ next: [ServerChapter]) {
+    guard next != fileChapters else { return }
+    fileChapters = next
+    scheduleUpdate()
   }
 
   func audioDeliveryDidChange(_ delivery: AudioDelivery) {
