@@ -894,7 +894,7 @@ enum EpisodeMatchLoader {
   /// 集列表读不到时那一季的文件无法对应，记为没读全。集列表是空的有两种可能：MoviePilot 读 TMDB 失败（过一会儿可能就好），
   /// 或那套编号里根本没有这一季（比如 TMDB 没有第 0 季而服务器上有特别篇，或服务器按 TVDB 分季）。这时再读那套编号的季列表：
   /// 季列表里确实没有这一季，这一季的文件按集列表里没有那一集处理，不影响别的集；季列表里有这一季或也读不到，才算没读全。
-  /// `describe` 把错误转成给用户看的说明。
+  /// 集列表最多同时读 `concurrentListReads` 份。`describe` 把错误转成给用户看的说明。
   static func index(
     serverName: String, hasSeries: Bool, episodes: [ServerMediaItem], incompleteReason: String?,
     sources: EpisodeMatchingSources, describe: (Error) -> String
@@ -913,13 +913,18 @@ enum EpisodeMatchLoader {
     var absentSeasons: [EpisodeListKey] = []
     /// 每套编号的季列表只读一次（键是剧集组，默认顺序为空串）；读不到记为空集合。
     var seasonCatalogs: [String: Set<Int>] = [:]
-    let required = await requiredLists(episodes: episodes, records: records)
-    for key in required.sorted() {
+    let required = await requiredLists(episodes: episodes, records: records).sorted()
+    let reads = try await readLists(required, using: sources.seasonList)
+    // 按季的顺序处理读到的结果：没读全的说明取最前面那一季的，空列表时每套编号的季列表只读一次。
+    for key in required {
       let list: [TmdbEpisode]
-      do {
-        list = try await sources.seasonList(key)
-      } catch let error where !(error is CancellationError) {
+      switch reads[key] {
+      case .success(let read)?:
+        list = read
+      case .failure(let error)?:
         listFailure = listFailure ?? "没能从 MoviePilot 读取\(key.title)的集列表，无法对应这一季的文件：\(describe(error))"
+        continue
+      case nil:
         continue
       }
       guard list.isEmpty else {
@@ -966,6 +971,36 @@ enum EpisodeMatchLoader {
       Logger.info("[Playback] “\(serverName)”上这部剧（整理记录 \(records.count) 条）：\(summary)")
     }
     return index
+  }
+
+  /// 同时读几份集列表。服务器上季很多时不一份读完再读下一份（几十次往返排队），也不一下子全部发出去。
+  static let concurrentListReads = 4
+
+  /// 读这些集列表，最多同时读 `concurrentListReads` 份。读失败的记下错误（取消照常抛出），不影响别的。
+  private static func readLists(
+    _ keys: [EpisodeListKey], using seasonList: @escaping @MainActor (EpisodeListKey) async throws -> [TmdbEpisode]
+  ) async throws -> [EpisodeListKey: Result<[TmdbEpisode], any Error>] {
+    typealias Read = (key: EpisodeListKey, result: Result<[TmdbEpisode], any Error>)
+    let read: @Sendable @MainActor (EpisodeListKey) async throws -> Read = { key in
+      do {
+        return (key, .success(try await seasonList(key)))
+      } catch let error where !(error is CancellationError) {
+        return (key, .failure(error))
+      }
+    }
+    return try await withThrowingTaskGroup(of: Read.self) { group in
+      var waiting = keys[...]
+      for _ in 0..<concurrentListReads {
+        guard let key = waiting.popFirst() else { break }
+        group.addTask { try await read(key) }
+      }
+      var reads: [EpisodeListKey: Result<[TmdbEpisode], any Error>] = [:]
+      while let finished = try await group.next() {
+        reads[finished.key] = finished.result
+        if let key = waiting.popFirst() { group.addTask { try await read(key) } }
+      }
+      return reads
+    }
   }
 
   @concurrent

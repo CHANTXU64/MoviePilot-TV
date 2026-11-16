@@ -402,7 +402,8 @@ final class EpisodeMatchingTests: XCTestCase {
       sources: sources, describe: { _ in "超时" })
     XCTAssertEqual(recordReads, 1)
     XCTAssertEqual(
-      listReads, [EpisodeListKey(episodeGroup: nil, season: 1), EpisodeListKey(episodeGroup: nil, season: 2)])
+      Set(listReads), [EpisodeListKey(episodeGroup: nil, season: 1), EpisodeListKey(episodeGroup: nil, season: 2)])
+    XCTAssertEqual(listReads.count, 2)
     guard case .uncertain = unidentified.availability(of: 101) else {
       return XCTFail("整理记录读不到也照常按季号集号对应")
     }
@@ -410,6 +411,33 @@ final class EpisodeMatchingTests: XCTestCase {
       unidentified.availability(of: 102), .failed("MoviePilot 返回的第 2 季集列表是空的，无法对应这一季的文件"),
       "第 2 季的列表是空的、季列表里却有第 2 季：多半是没读到，那一季的文件无法对应，不能说没有")
     XCTAssertEqual(seasonReads, [nil], "遇到空集列表才读默认顺序的季列表")
+  }
+
+  @MainActor
+  func testLoaderReadsListsConcurrentlyWithALimitAndReportsTheEarliestFailure() async throws {
+    // 服务器上 10 季、都没有单集编号：集列表同时读，最多 `concurrentListReads` 份。第 1、2 季读失败，第 1 季最后才失败：
+    // 说明仍写排在最前的第 1 季，不按哪个先失败。
+    var running = 0
+    var peak = 0
+    let files = (1...10).map { file("e\($0)", season: $0, episode: 1) }
+    let index = try await EpisodeMatchLoader.index(
+      serverName: "emby", hasSeries: true, episodes: files, incompleteReason: nil,
+      sources: EpisodeMatchingSources(
+        seasonList: { key in
+          running += 1
+          peak = max(peak, running)
+          defer { running -= 1 }
+          try await Task.sleep(for: .milliseconds(key.season == 1 ? 150 : 10))
+          if key.season <= 2 { throw URLError(.timedOut) }
+          return [TmdbEpisode(id: key.season * 100 + 1, episodeNumber: 1, seasonNumber: key.season, airDate: nil)]
+        },
+        seasons: { _ in Array(1...10) }, transferRecords: { _ in [] }),
+      describe: { _ in "超时" })
+    XCTAssertEqual(peak, EpisodeMatchLoader.concurrentListReads)
+    XCTAssertEqual(index.incompleteReason, "没能从 MoviePilot 读取第 1 季的集列表，无法对应这一季的文件：超时")
+    guard case .uncertain = index.availability(of: 1001) else {
+      return XCTFail("别的季照常按季号集号对应：\(index.availability(of: 1001))")
+    }
   }
 
   // MARK: 集列表是空的
