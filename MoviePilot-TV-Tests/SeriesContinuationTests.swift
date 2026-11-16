@@ -72,6 +72,44 @@ final class SeriesContinuationTests: XCTestCase {
       independentFiles: Set(ids), lookups: Dictionary(uniqueKeysWithValues: ids.map { ($0, .conflicting) }))
   }
 
+  /// 全部季读完时的结论；同时核对按需读（`SeriesContinuation.decide`）：先只读其中任意几季，按它说的补读（一次补完或
+  /// 一季一季补），定下的结论都和全部读完的一样，且每次要求补读的都是还没读的季。
+  private func checkedChoose(
+    upNext: PlaybackEpisodeProgress.UpNext?, lastWatched: ServerMediaItem?, serverName: String,
+    lookups: [ServerEpisodeLookup], seasons: [SeriesContinuation.Season], knownSeasons: [Int], catalogComplete: Bool,
+    file: StaticString = #filePath, line: UInt = #line
+  ) -> SeriesContinuation.Choice? {
+    let full = SeriesContinuation.choose(
+      upNext: upNext, lastWatched: lastWatched, serverName: serverName, lookups: lookups, seasons: seasons,
+      knownSeasons: knownSeasons, catalogComplete: catalogComplete)
+    let numbers = seasons.map(\.number)
+    for oneAtATime in [false, true] {
+      for mask in 0..<(1 << numbers.count) {
+        let first = Set(numbers.indices.filter { mask & (1 << $0) != 0 }.map { numbers[$0] })
+        var loaded = first
+        for _ in 0...numbers.count {
+          let outcome = SeriesContinuation.decide(
+            upNext: upNext, lastWatched: lastWatched, serverName: serverName, lookups: lookups,
+            seasons: seasons.filter { loaded.contains($0.number) }, unread: Set(numbers).subtracting(loaded),
+            knownSeasons: knownSeasons, catalogComplete: catalogComplete)
+          guard case .needs(let wanted) = outcome else {
+            XCTAssertEqual(
+              outcome, .decided(full), "先读第 \(first.sorted()) 季、补读到第 \(loaded.sorted()) 季时定下的结论和全部读完的不一样",
+              file: file, line: line)
+            break
+          }
+          let fresh = wanted.subtracting(loaded)
+          guard !fresh.isEmpty, fresh == wanted else {
+            XCTFail("要求补读的 \(wanted.sorted()) 不全是还没读的季（已读 \(loaded.sorted())）", file: file, line: line)
+            break
+          }
+          if oneAtATime, let next = fresh.min() { loaded.insert(next) } else { loaded.formUnion(fresh) }
+        }
+      }
+    }
+    return full
+  }
+
   /// `unread` 是应有、但这次没读到的季（季 3 不在替身里，用来表示「后面还有一季没读到」）；
   /// `catalogComplete` 为 false 时 MoviePilot 的季列表本身没读到。
   private func choose(
@@ -83,7 +121,7 @@ final class SeriesContinuationTests: XCTestCase {
       resuming.map { PlaybackEpisodeProgress.UpNext(episode: $0, resumes: true) }
       ?? next.map { PlaybackEpisodeProgress.UpNext(episode: $0, resumes: false) }
     let loaded = seasons.filter { !unread.contains($0.number) }
-    return SeriesContinuation.choose(
+    return checkedChoose(
       upNext: upNext, lastWatched: watched, serverName: "emby", lookups: lookups ?? [index(files, records: records)],
       seasons: loaded, knownSeasons: Array(Set(seasons.map(\.number) + unread)).sorted(),
       catalogComplete: catalogComplete)
@@ -206,6 +244,14 @@ final class SeriesContinuationTests: XCTestCase {
     XCTAssertEqual(choose([watched, later], next: later, watched: watched), .openPanel(episode(1, 3)))
   }
 
+  func testServerFileStartingASeasonDoesNotSkipTheMissingEndOfThePreviousSeason() {
+    // 没有看完的记录，服务器上接着看的那份是第 2 季第 1 集，第 1 季最后一集确定不在服务器上：打开第 1 季第 6 集的面板，
+    // 不跳过去（前一集在前一季，按需读时第 1 季没读也得先读）。
+    let next = file("n", season: 2, episode: 1, tmdb: 201)
+    let earlier = (1...5).map { file("e\($0)", episode: $0, tmdb: 100 + $0) }
+    XCTAssertEqual(choose(earlier + [next], next: next), .openPanel(episode(1, 6)))
+  }
+
   func testNextEpisodeCrossesIntoTheNextRegularSeasonButNotIntoSpecials() {
     let watched = file("w", episode: 6, tmdb: 106)
     XCTAssertEqual(choose([watched], watched: watched), .openPanel(episode(2, 1)))
@@ -312,7 +358,7 @@ final class SeriesContinuationTests: XCTestCase {
         lists: [
           EpisodeListKey(episodeGroup: nil, season: 1): season1, EpisodeListKey(episodeGroup: nil, season: 3): season3,
         ]))
-    let choice = SeriesContinuation.choose(
+    let choice = checkedChoose(
       upNext: .init(episode: next, resumes: false), lastWatched: watched, serverName: "emby", lookups: [lookup],
       seasons: [
         .init(number: 1, episodes: MoviePilotEpisode.list(season1, season: 1)),
@@ -326,7 +372,7 @@ final class SeriesContinuationTests: XCTestCase {
     // MoviePilot 的集列表一集都没读到（比如读 TMDB 失败）：没有反证就按服务器上接着看的那份播，按钮不写集号。
     func choose(_ files: [ServerMediaItem], upNext: PlaybackEpisodeProgress.UpNext?, watched: ServerMediaItem?,
       evidence: EpisodeEvidence = EpisodeEvidence()) -> SeriesContinuation.Choice? {
-      SeriesContinuation.choose(
+      checkedChoose(
         upNext: upNext, lastWatched: watched, serverName: "emby", lookups: [index(files, evidence: evidence)],
         seasons: [], knownSeasons: [1, 2], catalogComplete: false)
     }
@@ -552,9 +598,36 @@ final class SeriesContinuationTests: XCTestCase {
     }
   }
 
+  func testSeasonsReadFirstAreTheOnesTheDecisionUsuallyNeeds() {
+    let known = Array(0...30)
+    let half = file("h", season: 12, episode: 3)
+    // 接着看到一半：只读它那一季。
+    XCTAssertEqual(
+      SeriesContinuation.seasonsToReadFirst(upNext: .init(episode: half, resumes: true), lastWatched: nil, known: known),
+      [12])
+    // 接着看下一份：它那一季、前面一季、看完的那一季和下一季、第一季正片。
+    let next = file("n", season: 13, episode: 1)
+    let watched = file("w", season: 12, episode: 10)
+    XCTAssertEqual(
+      SeriesContinuation.seasonsToReadFirst(upNext: .init(episode: next, resumes: false), lastWatched: watched, known: known),
+      [13, 12, 1])
+    // 没有观看记录：第一季正片。
+    XCTAssertEqual(SeriesContinuation.seasonsToReadFirst(upNext: nil, lastWatched: nil, known: known), [1])
+    // 不在季目录里的季号不读。
+    XCTAssertEqual(
+      SeriesContinuation.seasonsToReadFirst(
+        upNext: .init(episode: file("x", season: 99, episode: 1), resumes: true), lastWatched: nil, known: known),
+      [])
+  }
+
+  func testMoreSeasonsAreReadNearestFirstWithSpecialsLast() {
+    XCTAssertEqual(SeriesContinuation.readingOrder([0, 1, 5, 7, 9, 20], near: 8), [7, 9, 5, 1, 20, 0])
+    XCTAssertEqual(SeriesContinuation.readingOrder([0, 3, 1, 2], near: nil), [1, 2, 3, 0])
+  }
+
   func testNoEpisodeListMeansNoDecision() {
     XCTAssertNil(
-      SeriesContinuation.choose(
+      checkedChoose(
         upNext: nil, lastWatched: nil, serverName: "emby", lookups: [], seasons: [], knownSeasons: [1],
         catalogComplete: false))
   }

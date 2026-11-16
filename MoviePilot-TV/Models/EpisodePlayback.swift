@@ -707,260 +707,348 @@ nonisolated enum SeriesContinuation {
     case episodesUnreadable
   }
 
-  /// `lookups` 是各台服务器的集索引，`serverName` 是读到观看记录的那台。`seasons` 是读到的集列表；
-  /// `knownSeasons` 是应有的、有集的季号（MoviePilot 给的季列表并上详情里的），没读到的季不在 `seasons` 里；
-  /// `catalogComplete` 为 false 时 MoviePilot 的季列表没读到，最后一个已知季后面可能还有季。
-  /// 集列表一集都没有、服务器上也没有接着看的那份时为 nil。
+  /// 按需读集列表时一次判断的结果：定下了，或还要先读这几季（都在 `unread` 里）。
+  enum Outcome: Equatable, Sendable {
+    case decided(Choice?)
+    case needs(Set<Int>)
+  }
+
+  /// 所有季都读过（读到或读失败）时的结论，见 `decide`。
   static func choose(
     upNext: PlaybackEpisodeProgress.UpNext?, lastWatched: ServerMediaItem?, serverName: String,
     lookups: [ServerEpisodeLookup], seasons: [Season], knownSeasons: [Int], catalogComplete: Bool
   ) -> Choice? {
-    // 正片季按季号排，特别篇放最后；接着看的下一集只在正片季之间、或特别篇里面往后走。
-    let ordered = seasons.filter { $0.number > 0 }.sorted { $0.number < $1.number } + seasons.filter { $0.number == 0 }
-    let entries = ordered.flatMap { season in season.episodes.map { (episode: $0, season: season.episodes) } }
-    // 集列表一集都没读到：服务器上有接着看的那份时照常按它走（没有反证就继续播，有反证的说明原因），否则没法决定。
-    guard !entries.isEmpty || upNext != nil else { return nil }
-    let loadedSeasons = Set(seasons.map(\.number))
-    let missingRegular = Set(knownSeasons.filter { $0 > 0 && !loadedSeasons.contains($0) })
-    let listsComplete = catalogComplete && knownSeasons.allSatisfy(loadedSeasons.contains)
-    var positions: [Int: Int] = [:]
-    for (position, entry) in entries.enumerated() {
-      if let id = entry.episode.tmdbEpisodeID, positions[id] == nil { positions[id] = position }
-    }
-    let index = lookups.lazy.compactMap { lookup -> ServerEpisodeIndex? in
-      if case .loaded(let index) = lookup, index.serverName == serverName { return index }
+    let outcome = decide(
+      upNext: upNext, lastWatched: lastWatched, serverName: serverName, lookups: lookups, seasons: seasons,
+      unread: [], knownSeasons: knownSeasons, catalogComplete: catalogComplete)
+    guard case .decided(let choice) = outcome else {
+      assertionFailure("没有还没读的季时不会要求再读")
       return nil
-    }.first
+    }
+    return choice
+  }
 
-    func availability(_ position: Int) -> EpisodeAvailability {
-      EpisodeAvailability.resolve(entries[position].episode, lookups: lookups)
+  /// 按需读集列表时先读的几季（`known` 里的）：接着看的那份那一季（不是接着看到一半的，还有它前面一季，看是不是跳过了
+  /// 前一集）；看完的那一集那一季和下一季；没看到一半时还有第一季正片（从头播）。判断还要别的季时再按 `decide` 补读。
+  static func seasonsToReadFirst(upNext: PlaybackEpisodeProgress.UpNext?, lastWatched: ServerMediaItem?, known: [Int])
+    -> [Int]
+  {
+    let regular = known.filter { $0 > 0 }.sorted()
+    var first: [Int] = []
+    func add(_ number: Int?) {
+      if let number, known.contains(number), !first.contains(number) { first.append(number) }
     }
-    /// 集卡片会说能播：有确定的文件，或只按季号集号对上、没有反证。
-    func plays(_ position: Int) -> Bool {
-      switch availability(position) {
-      case .playable: true
-      case .uncertain(_, let match): match.hasNoContraryEvidence
-      default: false
-      }
+    add(upNext?.episode.seasonNumber)
+    guard upNext?.resumes != true else { return first }
+    if let season = upNext?.episode.seasonNumber { add(regular.last { $0 < season }) }
+    if let season = lastWatched?.seasonNumber {
+      add(season)
+      add(regular.first { $0 > season })
     }
-    func playOrPanel(_ position: Int, resumeFile: ServerMediaItem? = nil) -> Choice {
-      let entry = entries[position]
-      return plays(position) ? .play(entry.episode, season: entry.season, resumeFile: resumeFile) : .openPanel(entry.episode)
-    }
-    /// 正片季 `from` 之后、`to` 之前（`from` 为 nil 表示从头，`to` 为 nil 表示到最后）有没有没读到的季。
-    func skipsUnreadSeason(after from: Int?, before to: Int?) -> Bool {
-      // 季列表没读到：最后一个已知季后面可能还有季。
-      if to == nil, !catalogComplete { return true }
-      return missingRegular.contains { season in (from.map { season > $0 } ?? true) && (to.map { season < $0 } ?? true) }
-    }
+    add(regular.first)
+    return first
+  }
 
-    /// 一份文件在集索引里对到集列表的哪一集。
-    enum Placement {
-      /// 对上了这些集（确定的，或按季号集号对上、没有反证的；多集文件几集），`candidate`：起播会试这份。
-      case placed([Int], candidate: Bool)
-      /// 有反证；`position` 是按季号集号或同号对到的那一集（能从别的文件播就播它），对不到时为 nil。
-      case contradicted(Int?)
-      /// 对不到集列表，也没有反证（认不出、集列表还没有那一集或没读到、集索引读不到）。
-      case unplaced
-    }
-    func place(_ file: ServerMediaItem) -> Placement {
-      guard let index else { return .unplaced }
-      /// 它标着的那一集，按集索引认定的那套编号找（和起播、集卡片一样）：按剧集组整理的用组内编号对到的那一集，
-      /// 否则在默认顺序的集列表里按季号集号找。
-      func sameNumber(_ file: ServerMediaItem) -> Int? {
-        if index.numberingGroup != nil { return index.numberedEpisodeIDs[file.id].flatMap { positions[$0] } }
-        guard let season = file.seasonNumber, let number = file.episodeNumber else { return nil }
-        return entries.firstIndex { $0.episode.seasonNumber == season && $0.episode.episodeNumber == number }
+  /// 补读时离哪一季近的先读：接着看的那份、看完的那一集的季，都没有时第一季正片。
+  static func anchorSeason(upNext: PlaybackEpisodeProgress.UpNext?, lastWatched: ServerMediaItem?, known: [Int]) -> Int? {
+    upNext?.episode.seasonNumber ?? lastWatched?.seasonNumber ?? known.filter { $0 > 0 }.min()
+  }
+
+  /// 补读的顺序：离 `anchor` 近的正片季先读，特别篇最后。
+  static func readingOrder(_ numbers: Set<Int>, near anchor: Int?) -> [Int] {
+    func key(_ number: Int) -> (Int, Int, Int) { (number == 0 ? 1 : 0, anchor.map { abs(number - $0) } ?? number, number) }
+    return numbers.sorted { key($0) < key($1) }
+  }
+
+  /// `lookups` 是各台服务器的集索引，`serverName` 是读到观看记录的那台。`seasons` 是读到的集列表；
+  /// `knownSeasons` 是应有的、有集的季号（MoviePilot 给的季列表并上详情里的），没读到的季不在 `seasons` 里；
+  /// `catalogComplete` 为 false 时 MoviePilot 的季列表没读到，最后一个已知季后面可能还有季。
+  /// 集列表一集都没有、服务器上也没有接着看的那份时结论为 nil。
+  ///
+  /// `unread` 是还没去读的季（不在 `seasons` 里，和读失败的季分开）：判断照常把它们当没读到，但凡结论可能因为它们读到
+  /// 而不同（要在里面找一集、要知道集列表读全没有、要跨过它们），就返回 `.needs`，读完再判断一次。所以返回 `.decided`
+  /// 时，结论和这些季读到还是读失败都无关，和全部读完再判断的一样。
+  static func decide(
+    upNext: PlaybackEpisodeProgress.UpNext?, lastWatched: ServerMediaItem?, serverName: String,
+    lookups: [ServerEpisodeLookup], seasons: [Season], unread: Set<Int>, knownSeasons: [Int], catalogComplete: Bool
+  ) -> Outcome {
+    var needed: Set<Int> = []
+    /// 结论要看这几季：还没读的记下来。
+    func need<S: Sequence<Int>>(_ numbers: S) { needed.formUnion(numbers.filter(unread.contains)) }
+    /// 要找的东西可能在任何一季（单集编号、剧集组编号对到的集）。
+    func needAny() { needed.formUnion(unread) }
+
+    func evaluate() -> Choice? {
+      // 正片季按季号排，特别篇放最后；接着看的下一集只在正片季之间、或特别篇里面往后走。
+      let ordered = seasons.filter { $0.number > 0 }.sorted { $0.number < $1.number } + seasons.filter { $0.number == 0 }
+      let entries = ordered.flatMap { season in season.episodes.map { (episode: $0, season: season.episodes) } }
+      // 集列表一集都没读到：服务器上有接着看的那份时照常按它走（没有反证就继续播，有反证的说明原因），否则没法决定。
+      guard !entries.isEmpty || upNext != nil else {
+        needAny()
+        return nil
       }
-      let confirmedIDs = index.confirmed.compactMap { id, files in files.contains { $0.id == file.id } ? id : nil }
-      let confirmed = confirmedIDs.compactMap { positions[$0] }
-      if !confirmed.isEmpty { return .placed(confirmed.sorted(), candidate: true) }
-      if index.conflictingFileIDs.contains(file.id) { return .contradicted(sameNumber(file)) }
-      if !confirmedIDs.isEmpty {
-        // 单集编号指向集列表里没有的集。集列表读全了、又有同号的集：编号和那一集的对不上，是反证（播同号那一集，见用户决定
-        // 「直接就播 B 上那份第 2 集」）。没有同号的集、或集列表没读全（编号可能在没读到的那一季）：没有反证。
-        if listsComplete, let same = sameNumber(file) { return .contradicted(same) }
-        return .unplaced
+      let loadedSeasons = Set(seasons.map(\.number))
+      let missingRegular = Set(knownSeasons.filter { $0 > 0 && !loadedSeasons.contains($0) })
+      let listsComplete = catalogComplete && knownSeasons.allSatisfy(loadedSeasons.contains)
+      var positions: [Int: Int] = [:]
+      for (position, entry) in entries.enumerated() {
+        if let id = entry.episode.tmdbEpisodeID, positions[id] == nil { positions[id] = position }
       }
-      let matches = index.numberMatches[file.id] ?? [:]
-      if matches.values.contains(where: { !$0.hasNoContraryEvidence }) {
-        return .contradicted(matches.keys.compactMap { positions[$0] }.min())
+      let index = lookups.lazy.compactMap { lookup -> ServerEpisodeIndex? in
+        if case .loaded(let index) = lookup, index.serverName == serverName { return index }
+        return nil
+      }.first
+
+      func availability(_ position: Int) -> EpisodeAvailability {
+        EpisodeAvailability.resolve(entries[position].episode, lookups: lookups)
       }
-      let matched = matches.keys.compactMap { positions[$0] }.sorted()
-      guard let first = matched.first, let id = entries[first].episode.tmdbEpisodeID else { return .unplaced }
-      return .placed(matched, candidate: index.uncertain[id]?.contains { $0.item.id == file.id } == true)
-    }
-    /// 有反证的文件：对到的那一集能从别的文件播就播它，否则打开面板；对不到集列表时说明原因。
-    func contradicted(_ file: ServerMediaItem, _ position: Int?) -> Choice {
-      position.map { playOrPanel($0) } ?? .explain(.fileContradicted(file))
-    }
-    /// 接着看服务器上对到集列表第 `position` 集的那份：确定前一集不在服务器上时停在那一集，不跳过去。
-    func follow(_ position: Int) -> Choice {
-      let current = entries[position].episode.seasonNumber
-      if position > 0, (entries[position - 1].episode.seasonNumber > 0) == (current > 0),
-        availability(position - 1) == .notOnServer
-      {
-        return .openPanel(entries[position - 1].episode)
+      /// 集卡片会说能播：有确定的文件，或只按季号集号对上、没有反证。
+      func plays(_ position: Int) -> Bool {
+        switch availability(position) {
+        case .playable: true
+        case .uncertain(_, let match): match.hasNoContraryEvidence
+        default: false
+        }
       }
-      return playOrPanel(position)
-    }
-    /// 没看过或全看完：从最早能播的一集开始。只略过确定不在服务器上的集，其他还不能播的停在那一集；不跨过没读到的季。
-    func start() -> Choice {
-      let regular = entries.indices.filter { entries[$0].episode.seasonNumber > 0 }
-      // 正片季一季都没读到（只读到特别篇）：不当成只有特别篇的剧。
-      if regular.isEmpty, !missingRegular.isEmpty || !catalogComplete { return .explain(.seasonListUnreadable) }
-      let pool = regular.isEmpty ? Array(entries.indices) : regular
-      var previousSeason: Int?
-      for position in pool {
-        let season = entries[position].episode.seasonNumber
-        if season > 0, season != previousSeason, skipsUnreadSeason(after: previousSeason, before: season) {
+      func playOrPanel(_ position: Int, resumeFile: ServerMediaItem? = nil) -> Choice {
+        let entry = entries[position]
+        return plays(position) ? .play(entry.episode, season: entry.season, resumeFile: resumeFile) : .openPanel(entry.episode)
+      }
+      /// 正片季 `from` 之后、`to` 之前（`from` 为 nil 表示从头，`to` 为 nil 表示到最后）有没有没读到的季。
+      func skipsUnreadSeason(after from: Int?, before to: Int?) -> Bool {
+        // 季列表没读到：最后一个已知季后面可能还有季。
+        if to == nil, !catalogComplete { return true }
+        let skipped = missingRegular.filter { season in (from.map { season > $0 } ?? true) && (to.map { season < $0 } ?? true) }
+        need(skipped)
+        return !skipped.isEmpty
+      }
+
+      /// 一份文件在集索引里对到集列表的哪一集。
+      enum Placement {
+        /// 对上了这些集（确定的，或按季号集号对上、没有反证的；多集文件几集），`candidate`：起播会试这份。
+        case placed([Int], candidate: Bool)
+        /// 有反证；`position` 是按季号集号或同号对到的那一集（能从别的文件播就播它），对不到时为 nil。
+        case contradicted(Int?)
+        /// 对不到集列表，也没有反证（认不出、集列表还没有那一集或没读到、集索引读不到）。
+        case unplaced
+      }
+      func place(_ file: ServerMediaItem) -> Placement {
+        guard let index else { return .unplaced }
+        /// 它标着的那一集，按集索引认定的那套编号找（和起播、集卡片一样）：按剧集组整理的用组内编号对到的那一集，
+        /// 否则在默认顺序的集列表里按季号集号找。
+        func sameNumber(_ file: ServerMediaItem) -> Int? {
+          if index.numberingGroup != nil {
+            guard let id = index.numberedEpisodeIDs[file.id] else { return nil }
+            if positions[id] == nil { needAny() }
+            return positions[id]
+          }
+          guard let season = file.seasonNumber, let number = file.episodeNumber else { return nil }
+          need([season])
+          return entries.firstIndex { $0.episode.seasonNumber == season && $0.episode.episodeNumber == number }
+        }
+        let confirmedIDs = index.confirmed.compactMap { id, files in files.contains { $0.id == file.id } ? id : nil }
+        let confirmed = confirmedIDs.compactMap { positions[$0] }
+        // 编号对到的集可能在还没读的季里（服务器按别的顺序分季）；集列表读全没有也要读完才知道。
+        if confirmed.count < confirmedIDs.count { needAny() }
+        if !confirmed.isEmpty { return .placed(confirmed.sorted(), candidate: true) }
+        if index.conflictingFileIDs.contains(file.id) { return .contradicted(sameNumber(file)) }
+        if !confirmedIDs.isEmpty {
+          // 单集编号指向集列表里没有的集。集列表读全了、又有同号的集：编号和那一集的对不上，是反证（播同号那一集，见用户决定
+          // 「直接就播 B 上那份第 2 集」）。没有同号的集、或集列表没读全（编号可能在没读到的那一季）：没有反证。
+          if listsComplete, let same = sameNumber(file) { return .contradicted(same) }
+          return .unplaced
+        }
+        let matches = index.numberMatches[file.id] ?? [:]
+        if matches.keys.contains(where: { positions[$0] == nil }) { needAny() }
+        if matches.values.contains(where: { !$0.hasNoContraryEvidence }) {
+          return .contradicted(matches.keys.compactMap { positions[$0] }.min())
+        }
+        let matched = matches.keys.compactMap { positions[$0] }.sorted()
+        guard let first = matched.first, let id = entries[first].episode.tmdbEpisodeID else { return .unplaced }
+        return .placed(matched, candidate: index.uncertain[id]?.contains { $0.item.id == file.id } == true)
+      }
+      /// 有反证的文件：对到的那一集能从别的文件播就播它，否则打开面板；对不到集列表时说明原因。
+      func contradicted(_ file: ServerMediaItem, _ position: Int?) -> Choice {
+        position.map { playOrPanel($0) } ?? .explain(.fileContradicted(file))
+      }
+      /// 接着看服务器上对到集列表第 `position` 集的那份：确定前一集不在服务器上时停在那一集，不跳过去。
+      func follow(_ position: Int) -> Choice {
+        let current = entries[position].episode.seasonNumber
+        // 前一集在前面那一季：中间还没读的季读完才知道前一集是哪一集。
+        if current > 0 {
+          let previous = position > 0 ? max(entries[position - 1].episode.seasonNumber, 0) : 0
+          need(unread.filter { $0 > previous && $0 < current })
+        }
+        if position > 0, (entries[position - 1].episode.seasonNumber > 0) == (current > 0),
+          availability(position - 1) == .notOnServer
+        {
+          return .openPanel(entries[position - 1].episode)
+        }
+        return playOrPanel(position)
+      }
+      /// 没看过或全看完：从最早能播的一集开始。只略过确定不在服务器上的集，其他还不能播的停在那一集；不跨过没读到的季。
+      func start() -> Choice {
+        let regular = entries.indices.filter { entries[$0].episode.seasonNumber > 0 }
+        // 正片季一季都没读到（只读到特别篇）：不当成只有特别篇的剧。
+        if regular.isEmpty, !missingRegular.isEmpty || !catalogComplete {
+          need(missingRegular)
           return .explain(.seasonListUnreadable)
         }
-        previousSeason = season
-        if plays(position) { return .start(entries[position].episode, season: entries[position].season) }
-        if availability(position) != .notOnServer { return .openPanel(entries[position].episode) }
-      }
-      if !regular.isEmpty, skipsUnreadSeason(after: previousSeason, before: nil) { return .explain(.seasonListUnreadable) }
-      return .openPanel(entries[pool[0]].episode)
-    }
-
-    /// 接着看到一半的那份。
-    if let upNext, upNext.resumes {
-      let file = upNext.episode
-      switch place(file) {
-      case .placed(let covered, let candidate):
-        let entry = entries[covered[0]]
-        // 那一集另有确定的文件时起播不会试这份；这份没有反证，照常接着播它。
-        return candidate
-          ? .play(entry.episode, season: entry.season, resumeFile: file)
-          : .playServerFile(file, resumes: true, episode: entry.episode)
-      case .contradicted(let position): return contradicted(file, position)
-      case .unplaced: return .playServerFile(file, resumes: true, episode: nil)
-      }
-    }
-
-    // 接下来播什么由两件独立的事决定，先各自算出来，再按决策表（下面的 switch，每一格都写明）合起来：
-    // 集列表说下一集是哪一集（`ListNext`），服务器上接着看的那份对到集列表的哪一集（`ServerNext`）。
-    enum ListNext {
-      /// 看完的那一集（正片）对上了，集列表里的下一集是这个位置。
-      case episode(Int)
-      /// 看完的是特别篇（不是最后一集），集列表里的下一集特别篇是这个位置。
-      case special(Int)
-      /// 看完了集列表里正片的最后一集，后面没有没读到的季。
-      case finished
-      /// 看完了特别篇的最后一集。
-      case finishedSpecials
-      /// 看完的那一集是第 `season` 季的，接下来那一季的集列表没读到。
-      case blockedByUnreadSeason(after: Int)
-      /// 看完的那一集对不上集列表（`reason` 是没有接着看的那份时的说明）。
-      case unknown(Reason)
-      /// 没有看完的记录。
-      case notWatched
-    }
-    enum ServerNext {
-      case none
-      /// 对上了集列表的这个位置（多集文件取第一集）。
-      case placed(Int)
-      /// 对不到集列表，也没有反证。
-      case unplaced(ServerMediaItem)
-      /// 有反证；`position` 是按季号集号或同号对到的那一集。
-      case contradicted(ServerMediaItem, Int?)
-    }
-
-    let listNext: ListNext
-    if let watched = lastWatched {
-      switch place(watched) {
-      case .placed(let covered, _):
-        // 看完的那份最后包含到集列表的哪一集，下一集按集列表走。
-        let last = covered[covered.count - 1]
-        let current = entries[last].episode.seasonNumber
-        let following = last + 1
-        if entries.indices.contains(following), (current > 0) == (entries[following].episode.seasonNumber > 0) {
-          let season = entries[following].episode.seasonNumber
-          if current == 0 {
-            listNext = .special(following)
-          } else {
-            listNext =
-              season == current || !skipsUnreadSeason(after: current, before: season)
-              ? .episode(following) : .blockedByUnreadSeason(after: current)
+        let pool = regular.isEmpty ? Array(entries.indices) : regular
+        var previousSeason: Int?
+        for position in pool {
+          let season = entries[position].episode.seasonNumber
+          if season > 0, season != previousSeason, skipsUnreadSeason(after: previousSeason, before: season) {
+            return .explain(.seasonListUnreadable)
           }
-        } else if current == 0 {
-          listNext = .finishedSpecials
-        } else {
-          listNext = skipsUnreadSeason(after: current, before: nil) ? .blockedByUnreadSeason(after: current) : .finished
+          previousSeason = season
+          if plays(position) { return .start(entries[position].episode, season: entries[position].season) }
+          if availability(position) != .notOnServer { return .openPanel(entries[position].episode) }
         }
-      case .contradicted: listNext = .unknown(.fileContradicted(watched))
-      case .unplaced: listNext = .unknown(index == nil ? .episodesUnreadable : .nextUnknown)
+        if !regular.isEmpty, skipsUnreadSeason(after: previousSeason, before: nil) { return .explain(.seasonListUnreadable) }
+        return .openPanel(entries[pool[0]].episode)
       }
-    } else {
-      listNext = .notWatched
-    }
 
-    let serverNext: ServerNext
-    if let next = upNext?.episode {
-      switch place(next) {
-      case .placed(let covered, _): serverNext = .placed(covered[0])
-      case .contradicted(let position): serverNext = .contradicted(next, position)
-      case .unplaced: serverNext = .unplaced(next)
+      /// 接着看到一半的那份。
+      if let upNext, upNext.resumes {
+        let file = upNext.episode
+        switch place(file) {
+        case .placed(let covered, let candidate):
+          let entry = entries[covered[0]]
+          // 那一集另有确定的文件时起播不会试这份；这份没有反证，照常接着播它。
+          return candidate
+            ? .play(entry.episode, season: entry.season, resumeFile: file)
+            : .playServerFile(file, resumes: true, episode: entry.episode)
+        case .contradicted(let position): return contradicted(file, position)
+        case .unplaced: return .playServerFile(file, resumes: true, episode: nil)
+        }
       }
-    } else {
-      serverNext = .none
-    }
 
-    /// 服务器上接着看的那份对到的是正片。
-    func isRegular(_ position: Int) -> Bool { entries[position].episode.seasonNumber > 0 }
-    /// 下一季没读到时，第 `season` 季在没读到的那一季后面（跨过了它）。
-    func crossesUnreadSeason(after current: Int, toSeason season: Int?) -> Bool {
-      guard let season else { return false }
-      return season > 0 && season != current && skipsUnreadSeason(after: current, before: season)
-    }
-    func crossesUnreadSeason(after current: Int, to position: Int?) -> Bool {
-      crossesUnreadSeason(after: current, toSeason: position.map { entries[$0].episode.seasonNumber })
-    }
+      // 接下来播什么由两件独立的事决定，先各自算出来，再按决策表（下面的 switch，每一格都写明）合起来：
+      // 集列表说下一集是哪一集（`ListNext`），服务器上接着看的那份对到集列表的哪一集（`ServerNext`）。
+      enum ListNext {
+        /// 看完的那一集（正片）对上了，集列表里的下一集是这个位置。
+        case episode(Int)
+        /// 看完的是特别篇（不是最后一集），集列表里的下一集特别篇是这个位置。
+        case special(Int)
+        /// 看完了集列表里正片的最后一集，后面没有没读到的季。
+        case finished
+        /// 看完了特别篇的最后一集。
+        case finishedSpecials
+        /// 看完的那一集是第 `season` 季的，接下来那一季的集列表没读到。
+        case blockedByUnreadSeason(after: Int)
+        /// 看完的那一集对不上集列表（`reason` 是没有接着看的那份时的说明）。
+        case unknown(Reason)
+        /// 没有看完的记录。
+        case notWatched
+      }
+      enum ServerNext {
+        case none
+        /// 对上了集列表的这个位置（多集文件取第一集）。
+        case placed(Int)
+        /// 对不到集列表，也没有反证。
+        case unplaced(ServerMediaItem)
+        /// 有反证；`position` 是按季号集号或同号对到的那一集。
+        case contradicted(ServerMediaItem, Int?)
+      }
 
-    // 决策表：每一格单独写，不用通配，加了情况编译器会要求补上。
-    switch (listNext, serverNext) {
-    // 集列表说了下一集：以集列表为准。
-    case (.episode(let position), .none): return playOrPanel(position)
-    case (.episode(let position), .placed): return playOrPanel(position)
-    case (.episode(let position), .unplaced): return playOrPanel(position)
-    case (.episode(let position), .contradicted): return playOrPanel(position)
-    // 正片看完：服务器上已有集列表还没更新到的下一集（对不到、没有反证）就播它；否则从头。
-    case (.finished, .none): return start()
-    case (.finished, .placed): return start()
-    case (.finished, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-    case (.finished, .contradicted): return start()
-    // 看完特别篇：服务器上接着看的那份对上了正片就按它走（按 TVDB 编号的动漫，正片里的一集可能对到特别篇）；
-    // 否则按集列表播下一集特别篇，最后一集特别篇看完从头。
-    case (.special(let position), .none): return playOrPanel(position)
-    case (.special(let position), .placed(let next)): return isRegular(next) ? follow(next) : playOrPanel(position)
-    case (.special(let position), .unplaced): return playOrPanel(position)
-    case (.special(let position), .contradicted): return playOrPanel(position)
-    case (.finishedSpecials, .none): return start()
-    case (.finishedSpecials, .placed(let next)): return isRegular(next) ? follow(next) : start()
-    case (.finishedSpecials, .unplaced): return start()
-    case (.finishedSpecials, .contradicted): return start()
-    // 下一季没读到：服务器上的那份对不到集列表（可能就在没读到的那一季）就播它；对到的集跨过了没读到的季就说明原因。
-    case (.blockedByUnreadSeason, .none): return .explain(.seasonListUnreadable)
-    case (.blockedByUnreadSeason(let current), .placed(let position)):
-      return crossesUnreadSeason(after: current, to: position) ? .explain(.seasonListUnreadable) : follow(position)
-    case (.blockedByUnreadSeason(let current), .unplaced(let file)):
-      // 对不到集列表时按服务器上的季号看：标着更后面的季就是跨过了没读到的那一季。
-      return crossesUnreadSeason(after: current, toSeason: file.seasonNumber)
-        ? .explain(.seasonListUnreadable) : .playServerFile(file, resumes: false, episode: nil)
-    case (.blockedByUnreadSeason(let current), .contradicted(let file, let position)):
-      return crossesUnreadSeason(after: current, to: position)
-        ? .explain(.seasonListUnreadable) : contradicted(file, position)
-    // 看完的那一集对不上：没有反证就按服务器上接着看的那份走。
-    case (.unknown(let reason), .none): return .explain(reason)
-    case (.unknown, .placed(let position)): return follow(position)
-    case (.unknown, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-    case (.unknown, .contradicted(let file, let position)): return contradicted(file, position)
-    // 没有看完的记录：服务器上有接着看的那份就按它走，否则从头。
-    case (.notWatched, .none): return start()
-    case (.notWatched, .placed(let position)): return follow(position)
-    case (.notWatched, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
-    case (.notWatched, .contradicted(let file, let position)): return contradicted(file, position)
+      let listNext: ListNext
+      if let watched = lastWatched {
+        switch place(watched) {
+        case .placed(let covered, _):
+          // 看完的那份最后包含到集列表的哪一集，下一集按集列表走。
+          let last = covered[covered.count - 1]
+          let current = entries[last].episode.seasonNumber
+          let following = last + 1
+          if entries.indices.contains(following), (current > 0) == (entries[following].episode.seasonNumber > 0) {
+            let season = entries[following].episode.seasonNumber
+            if current == 0 {
+              listNext = .special(following)
+            } else {
+              listNext =
+                season == current || !skipsUnreadSeason(after: current, before: season)
+                ? .episode(following) : .blockedByUnreadSeason(after: current)
+            }
+          } else if current == 0 {
+            listNext = .finishedSpecials
+          } else {
+            listNext = skipsUnreadSeason(after: current, before: nil) ? .blockedByUnreadSeason(after: current) : .finished
+          }
+        case .contradicted: listNext = .unknown(.fileContradicted(watched))
+        case .unplaced: listNext = .unknown(index == nil ? .episodesUnreadable : .nextUnknown)
+        }
+      } else {
+        listNext = .notWatched
+      }
+
+      let serverNext: ServerNext
+      if let next = upNext?.episode {
+        switch place(next) {
+        case .placed(let covered, _): serverNext = .placed(covered[0])
+        case .contradicted(let position): serverNext = .contradicted(next, position)
+        case .unplaced: serverNext = .unplaced(next)
+        }
+      } else {
+        serverNext = .none
+      }
+
+      /// 服务器上接着看的那份对到的是正片。
+      func isRegular(_ position: Int) -> Bool { entries[position].episode.seasonNumber > 0 }
+      /// 下一季没读到时，第 `season` 季在没读到的那一季后面（跨过了它）。
+      func crossesUnreadSeason(after current: Int, toSeason season: Int?) -> Bool {
+        guard let season else { return false }
+        return season > 0 && season != current && skipsUnreadSeason(after: current, before: season)
+      }
+      func crossesUnreadSeason(after current: Int, to position: Int?) -> Bool {
+        crossesUnreadSeason(after: current, toSeason: position.map { entries[$0].episode.seasonNumber })
+      }
+
+      // 决策表：每一格单独写，不用通配，加了情况编译器会要求补上。
+      switch (listNext, serverNext) {
+      // 集列表说了下一集：以集列表为准。
+      case (.episode(let position), .none): return playOrPanel(position)
+      case (.episode(let position), .placed): return playOrPanel(position)
+      case (.episode(let position), .unplaced): return playOrPanel(position)
+      case (.episode(let position), .contradicted): return playOrPanel(position)
+      // 正片看完：服务器上已有集列表还没更新到的下一集（对不到、没有反证）就播它；否则从头。
+      case (.finished, .none): return start()
+      case (.finished, .placed): return start()
+      case (.finished, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
+      case (.finished, .contradicted): return start()
+      // 看完特别篇：服务器上接着看的那份对上了正片就按它走（按 TVDB 编号的动漫，正片里的一集可能对到特别篇）；
+      // 否则按集列表播下一集特别篇，最后一集特别篇看完从头。
+      case (.special(let position), .none): return playOrPanel(position)
+      case (.special(let position), .placed(let next)): return isRegular(next) ? follow(next) : playOrPanel(position)
+      case (.special(let position), .unplaced): return playOrPanel(position)
+      case (.special(let position), .contradicted): return playOrPanel(position)
+      case (.finishedSpecials, .none): return start()
+      case (.finishedSpecials, .placed(let next)): return isRegular(next) ? follow(next) : start()
+      case (.finishedSpecials, .unplaced): return start()
+      case (.finishedSpecials, .contradicted): return start()
+      // 下一季没读到：服务器上的那份对不到集列表（可能就在没读到的那一季）就播它；对到的集跨过了没读到的季就说明原因。
+      case (.blockedByUnreadSeason, .none): return .explain(.seasonListUnreadable)
+      case (.blockedByUnreadSeason(let current), .placed(let position)):
+        return crossesUnreadSeason(after: current, to: position) ? .explain(.seasonListUnreadable) : follow(position)
+      case (.blockedByUnreadSeason(let current), .unplaced(let file)):
+        // 对不到集列表时按服务器上的季号看：标着更后面的季就是跨过了没读到的那一季。
+        return crossesUnreadSeason(after: current, toSeason: file.seasonNumber)
+          ? .explain(.seasonListUnreadable) : .playServerFile(file, resumes: false, episode: nil)
+      case (.blockedByUnreadSeason(let current), .contradicted(let file, let position)):
+        return crossesUnreadSeason(after: current, to: position)
+          ? .explain(.seasonListUnreadable) : contradicted(file, position)
+      // 看完的那一集对不上：没有反证就按服务器上接着看的那份走。
+      case (.unknown(let reason), .none): return .explain(reason)
+      case (.unknown, .placed(let position)): return follow(position)
+      case (.unknown, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
+      case (.unknown, .contradicted(let file, let position)): return contradicted(file, position)
+      // 没有看完的记录：服务器上有接着看的那份就按它走，否则从头。
+      case (.notWatched, .none): return start()
+      case (.notWatched, .placed(let position)): return follow(position)
+      case (.notWatched, .unplaced(let file)): return .playServerFile(file, resumes: false, episode: nil)
+      case (.notWatched, .contradicted(let file, let position)): return contradicted(file, position)
+      }
     }
+    let choice = evaluate()
+    return needed.isEmpty ? .decided(choice) : .needs(needed)
   }
 }

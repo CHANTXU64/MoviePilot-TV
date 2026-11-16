@@ -5101,11 +5101,11 @@ extension PlaybackCoordinatorTests {
     #"[{"id":21,"season_number":2,"episode_number":1},{"id":22,"season_number":2,"episode_number":2}]"#
 
   /// Emby 上第 1 季的一集（每集 2 小时），`position` 是续播点（秒）。
-  private static func watchedEpisode(_ id: String, episode: Int, tmdb: Int, played: Bool = false, position: Int = 0)
-    -> String
-  {
+  private static func watchedEpisode(
+    _ id: String, season: Int = 1, episode: Int, tmdb: Int, played: Bool = false, position: Int = 0
+  ) -> String {
     let ticks = Int64(position) * 10_000_000
-    return #"{"Id":"\#(id)","Type":"Episode","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":\#(episode),"RunTimeTicks":\#(twoHours),"ProviderIds":{"Tmdb":"\#(tmdb)"},"UserData":{"Played":\#(played),"PlaybackPositionTicks":\#(ticks)}}"#
+    return #"{"Id":"\#(id)","Type":"Episode","SeriesId":"s1","ParentIndexNumber":\#(season),"IndexNumber":\#(episode),"RunTimeTicks":\#(twoHours),"ProviderIds":{"Tmdb":"\#(tmdb)"},"UserData":{"Played":\#(played),"PlaybackPositionTicks":\#(ticks)}}"#
   }
 
   func testContinueDoesNotResumeAServerFileCarryingAnotherTMDBEpisodeID() async throws {
@@ -5347,6 +5347,57 @@ extension PlaybackCoordinatorTests {
     XCTAssertNil(coordinator.notice, "不重复上次的说明")
     XCTAssertEqual(coordinator.session?.item.id, "e1")
     coordinator.endCurrentSession()
+    viewModel.cancelForPop()
+  }
+
+  /// 一部 `count` 季的剧：每季两集，第 n 季第 k 集是 TMDB n*100+k。
+  private static func manySeasons(_ count: Int) -> (seasonInfo: String, lists: [String: String]) {
+    let info = (1...count).map { #"{"season_number":\#($0),"episode_count":2}"# }.joined(separator: ",")
+    var lists: [String: String] = [:]
+    for season in 1...count {
+      lists["/api/v1/tmdb/100/\(season)"] =
+        "[" + (1...2).map { #"{"id":\#(season * 100 + $0),"season_number":\#(season),"episode_number":\#($0)}"# }
+        .joined(separator: ",") + "]"
+    }
+    return ("[\(info)]", lists)
+  }
+
+  private static func seasonListRequests() -> [String] {
+    PlaybackURLProtocol.stub.requests().map(\.url.path).filter { $0.hasPrefix("/api/v1/tmdb/100/") }
+  }
+
+  func testContinueReadsOnlyTheSeasonsItNeeds() async throws {
+    // 30 季的剧，接着看第 12 季第 1 集到一半：只读第 12 季的集列表，不等其他 29 季。
+    let show = Self.manySeasons(30)
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e", season: 12, episode: 1, tmdb: 1201, position: 1800), seasonInfo: show.seasonInfo
+    ) { $0.tmdbEpisodes = show.lists }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    guard case .play(.episode(let queued, _))? = viewModel.seriesPlayAction?.action else {
+      return XCTFail("接着看第 12 季第 1 集：\(String(describing: viewModel.seriesPlayAction?.action))")
+    }
+    XCTAssertEqual(queued.episode.tmdbEpisodeID, 1201)
+    XCTAssertEqual(Set(Self.seasonListRequests()), ["/api/v1/tmdb/100/12"])
+    viewModel.cancelForPop()
+  }
+
+  func testContinueStopsReadingSeasonListsAtTheLimit() async throws {
+    // 100 季的剧，接着看到一半的那份带的单集编号哪一季都没有（要找遍所有季才知道）：最多读上限那么多季，
+    // 剩下的当成没读到，照常续播这份（没有反证），不一下子读 100 季。
+    let show = Self.manySeasons(100)
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e", season: 50, episode: 1, tmdb: 999_999, position: 1800), seasonInfo: show.seasonInfo
+    ) { $0.tmdbEpisodes = show.lists }
+    try await waitUntil { viewModel.seriesPlayAction != nil }
+    guard case .play(.serverItem(_, let itemID))? = viewModel.seriesPlayAction?.action else {
+      return XCTFail("照常续播这份：\(String(describing: viewModel.seriesPlayAction?.action))")
+    }
+    XCTAssertEqual(itemID, "e")
+    let reads = Self.seasonListRequests()
+    XCTAssertEqual(reads.count, MediaDetailViewModel.continuationSeasonReadLimit, "\(reads)")
+    // 离第 50 季近的先读。
+    XCTAssertTrue(reads.contains("/api/v1/tmdb/100/50") && reads.contains("/api/v1/tmdb/100/45"), "\(reads)")
+    XCTAssertFalse(reads.contains("/api/v1/tmdb/100/1"), "\(reads)")
     viewModel.cancelForPop()
   }
 
