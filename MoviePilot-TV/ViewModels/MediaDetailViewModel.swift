@@ -686,13 +686,12 @@ class MediaDetailViewModel: ObservableObject {
     }
     let selectable = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
     let context = episodePlayback?.context(media: detail, episodeGroup: nil, seasons: selectable)
-    // TMDB 来源的剧：观看记录和集索引一起读，观看记录那台的集索引按同一次读到的集建（见 `seriesContinuation`）。
+    // TMDB 来源的剧：一次判断用一次服务器读取，观看记录和那台的集索引出自同一批集；MoviePilot 的集列表、季列表
+    // 这次判断里每个只读一次，和集索引共用（见 `seriesContinuation`）。
     let tmdbContext = MediaDetailEpisodeSeasons.tmdbID(for: detail) != nil ? context : nil
-    // 一轮重读从这一刻算起：MoviePilot 的集列表、季列表，详情页和集索引各处都只用这以后开始的读取，同一季只读一次。
-    let round = forceRefresh ? Date() : nil
     var continuation: PlaybackCoordinator.SeriesContinuationRead?
     if let tmdbContext {
-      continuation = await coordinator.seriesContinuation(tmdbContext, forceRefresh: forceRefresh, freshSince: round)
+      continuation = await coordinator.seriesContinuation(tmdbContext, forceRefresh: forceRefresh)
     }
     let lookupsTask = continuation?.lookups
     defer { lookupsTask?.cancel() }
@@ -710,18 +709,20 @@ class MediaDetailViewModel: ObservableObject {
       EpisodeRowHint(season: episode.seasonNumber, tmdbEpisodeID: episode.tmdbEpisodeID, episodeNumber: episode.episodeNumber)
     }
     /// 播服务器上的这份。`season`/`episode` 是按钮上写的季号集号（缺一个就不写集号），`hint` 是集列表停的位置。
+    /// TMDB 来源的剧带着判断时读到的这份：起播时编号变了就不原样播（见 `PlaybackTarget.seriesFile`）。
     func playServerFile(
       _ file: ServerMediaItem, resumes: Bool, season: Int? = nil, episode: Int? = nil, hint: EpisodeRowHint? = nil
     ) {
+      let target: PlaybackTarget =
+        tmdbContext.map { .seriesFile(serverName: progress.serverName, file: file, tmdbID: $0.tmdbID) }
+        ?? .serverItem(serverName: progress.serverName, itemID: file.id)
       publish(
-        SeriesPlayAction.labeled(
-          .play(.serverItem(serverName: progress.serverName, itemID: file.id)), resumeFile: resumes ? file : nil,
-          season: season, episode: episode),
+        SeriesPlayAction.labeled(.play(target), resumeFile: resumes ? file : nil, season: season, episode: episode),
         hint ?? latestSeason)
     }
 
     // 详情页不是 TMDB 来源（豆瓣、Bangumi）：没有集列表可对（集列表行也不显示），按服务器的观看记录播，写服务器上的集号。
-    guard let context, MediaDetailEpisodeSeasons.tmdbID(for: detail) != nil else {
+    guard let context = tmdbContext, let moviePilot = continuation?.reads else {
       if let upNext = progress.upNext {
         let file = upNext.episode
         playServerFile(
@@ -732,15 +733,13 @@ class MediaDetailViewModel: ObservableObject {
       }
       return
     }
-    let lists = await moviePilotSeasonCatalog(tmdbID: context.tmdbID, freshSince: round)
+    let lists = await moviePilotSeasonCatalog(tmdbID: context.tmdbID, reads: moviePilot)
     guard isCurrent() else { return }
     if let catalog = lists.catalog, episodeSeasons != catalog { episodeSeasons = catalog }
     // 集列表按需读：先读眼下用得到的几季（和集索引同时读），每读到一季就判断一次，判断说还要别的季再补读
     // （见 `SeriesContinuation.decide`），不等不相关的季。一次最多读 `continuationSeasonReadLimit` 季，超过的当成没读到。
-    let reads = SeasonListReads(budget: Self.continuationSeasonReadLimit) { [apiService] number in
-      let list =
-        (try? await apiService.fetchTmdbEpisodes(
-          tmdbID: context.tmdbID, season: number, episodeGroup: nil, freshSince: round)) ?? []
+    let reads = SeasonListReads(budget: Self.continuationSeasonReadLimit) { number in
+      let list = (try? await moviePilot.seasonList(EpisodeListKey(episodeGroup: nil, season: number))) ?? []
       return list.isEmpty ? nil : SeriesContinuation.Season(number: number, episodes: MoviePilotEpisode.list(list, season: number))
     }
     defer { reads.finish() }
@@ -834,13 +833,13 @@ class MediaDetailViewModel: ObservableObject {
 
   /// MoviePilot 集列表（默认顺序）应有的季：季号取 MoviePilot 给的全部季（含新出的季和特别篇，和集索引用的一样），
   /// 并上详情里的季（`known`，不含一集都还没有的季）；季列表本身没读到时 `catalogComplete` 为 false。
-  private func moviePilotSeasonCatalog(tmdbID: Int, freshSince: Date?) async
+  private func moviePilotSeasonCatalog(tmdbID: Int, reads: MoviePilotReads) async
     -> (known: [Int], catalogComplete: Bool, catalog: [TmdbSeason]?)
   {
     let media = MediaInfo(
       tmdb_id: tmdbID, source: "themoviedb", media_id: String(tmdbID), title: detail.title, type: "电视剧",
       season_info: detail.season_info)
-    let all = try? await apiService.getMediaSeasons(media: media, allSeasons: true, freshSince: freshSince)
+    let all = try? await reads.seasons(episodeGroup: nil)
     let merged = MediaDetailEpisodeSeasons.catalog(all ?? [], media: media)
     // 和集列表行同一套完整性判断：没读到，或比详情说的季数少（MoviePilot 只给了一部分），都不算完整，
     // 最后一个已知季后面可能还有季；这时不交给集列表行，它自己补读、显示重试。

@@ -393,41 +393,6 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
   /// 或按外部编号查找、按 ID 补查、读 MoviePilot 集列表有一步失败。读到的照常用，找不到某一集时不能说这台上没有。
   let incompleteReason: String?
   let summary: Summary
-  /// 建这份索引时服务器上每份文件的编号信息（服务器条目 ID → 季号集号、外部编号、路径等，不含观看状态）。
-  private let fileIdentities: [String: FileIdentity]
-
-  /// 判断一份文件是哪一集时用到的服务器信息。观看状态（看完没有、续播点）不算在内：它变了，对应结果不变。
-  private struct FileIdentity: Equatable, Sendable {
-    let name: String?
-    let seasonNumber: Int?
-    let episodeNumber: Int?
-    let episodeNumberEnd: Int?
-    let externalIDs: [String: String]
-    let path: String?
-    let premiereDate: String?
-    let seriesID: String?
-    let hasFile: Bool
-
-    init(_ item: ServerMediaItem) {
-      name = item.name
-      seasonNumber = item.seasonNumber
-      episodeNumber = item.episodeNumber
-      episodeNumberEnd = item.episodeNumberEnd
-      externalIDs = item.externalIDs
-      path = item.path
-      premiereDate = item.premiereDate
-      seriesID = item.seriesID
-      hasFile = item.hasFile
-    }
-  }
-
-  /// 这份索引是按服务器上这批集现在的样子建的：文件一份不多一份不少，编号信息也都没变（观看状态不算）。
-  /// 缓存里的索引可能是旧数据（新入库、重新刮削过），和刚读到的集对不上时要按刚读到的重建。
-  func reflects(_ episodes: [ServerMediaItem]) -> Bool {
-    let current = Dictionary(episodes.map { ($0.id, FileIdentity($0)) }, uniquingKeysWith: { first, _ in first })
-    return current == fileIdentities
-  }
-
   /// `lists` 是按 `requiredLists(for:records:)` 读到的 MoviePilot 集列表（读不到的不放），
   /// `records` 是这部剧成功的整理记录（已按 TMDB 编号筛过），`evidence` 是文件以外的依据。
   init(
@@ -438,7 +403,6 @@ nonisolated struct ServerEpisodeIndex: Equatable, Sendable {
     self.serverName = serverName
     self.hasSeries = hasSeries
     self.incompleteReason = incompleteReason
-    fileIdentities = Dictionary(episodes.map { ($0.id, FileIdentity($0)) }, uniquingKeysWith: { first, _ in first })
     let plan = Plan(episodes: episodes, records: records)
     var confirmed: [Int: [ServerMediaItem]] = [:]
     var uncertain: [Int: [UncertainFile]] = [:]

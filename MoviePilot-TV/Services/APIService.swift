@@ -434,7 +434,6 @@ class APIService: ObservableObject {
     _ cache: CoalescingCache<String, Value>,
     key: String,
     forceRefresh: Bool = false,
-    freshSince: Date? = nil,
     acceptsCachedValue: (Value) -> Bool = { _ in true },
     load: @escaping @MainActor () async throws -> Value
   ) async throws -> Value {
@@ -442,7 +441,6 @@ class APIService: ObservableObject {
     return try await cache.value(
       for: key,
       forceRefresh: forceRefresh,
-      freshSince: freshSince,
       acceptsCachedValue: acceptsCachedValue,
       validate: { try validateSessionSnapshot(snapshot) }
     ) { [weak self] in
@@ -3276,9 +3274,8 @@ class APIService: ObservableObject {
   /// 获取标准电视剧的各季基础信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getMediaSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户**未**选择任何特殊的“剧集组”时，调用此 API 获取并展示该剧集在 TMDB 上定义的标准分季信息（S01, S02 等）。
-  /// `freshSince`：只用这一刻及以后开始的读取（一轮重试里几处都要新数据时共用一次读取，见 `CoalescingCache`）。
   func getMediaSeasons(
-    media: MediaInfo, allSeasons: Bool = false, forceRefresh: Bool = false, freshSince: Date? = nil
+    media: MediaInfo, allSeasons: Bool = false, forceRefresh: Bool = false
   ) async throws -> [TmdbSeason] {
     guard let identity = media.identity else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
@@ -3294,7 +3291,7 @@ class APIService: ObservableObject {
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
     // 后端查询失败时也会回空列表。空结果不跨页面复用，下次进入按 Web 一样重新读取。
     return try await sessionCachedValue(
-      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh, freshSince: freshSince,
+      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
       acceptsCachedValue: { !$0.isEmpty }
     ) { [weak self] in
       guard let self else { throw CancellationError() }
@@ -3324,14 +3321,13 @@ class APIService: ObservableObject {
   /// - 应用场景: 详情页集列表；按集播放的上一集、下一集
   /// - 备注: 选了剧集组时 `season` 是组内季号，返回的 `episode_number` 是组内序号，`season_number` 仍是 TMDB 原季号；
   ///   v3.2.6 起每集带 TMDB 单集 ID（`id`），不随剧集组变化。
-  /// `freshSince`：只用这一刻及以后开始的读取（一轮重试里详情页和集索引共用一次读取，见 `CoalescingCache`）。
   func fetchTmdbEpisodes(
-    tmdbID: Int, season: Int, episodeGroup: String?, forceRefresh: Bool = false, freshSince: Date? = nil
+    tmdbID: Int, season: Int, episodeGroup: String?, forceRefresh: Bool = false
   ) async throws -> [TmdbEpisode] {
     let endpoint = try buildEndpoint(
       path: "/tmdb/\(tmdbID)/\(season)", params: ["episode_group": trimmedNonEmpty([episodeGroup])])
     return try await sessionCachedValue(
-      sessionScope.tmdbEpisodesCache, key: endpoint, forceRefresh: forceRefresh, freshSince: freshSince
+      sessionScope.tmdbEpisodesCache, key: endpoint, forceRefresh: forceRefresh
     ) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)

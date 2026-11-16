@@ -4,8 +4,6 @@ import Foundation
 /// 调用方只提供 key、加载闭包和自身的校验（会话快照、任务取消）。
 ///
 /// - 普通读取：命中未过期缓存直接返回；否则加入同 key 仍在运行的加载，没有才发起新加载。
-/// - 从某一刻起算新（`freshSince`）：只用那一刻及以后开始的加载——缓存里是那以后开始的加载写的就直接用，同 key 在途的
-///   加载是那以后开始的就跟上，否则发起新加载。用于一轮重试里几处各自要新数据：同一个 key 只重新加载一次，各处拿到同一份结果。
 /// - 强制刷新：跳过缓存发起新加载。同 key 每次新加载都接在上一个加载之后形成取代链；
 ///   只要该 key 还有调用者在等待，链尾就一直保留，之后的加载都能接上。被取代加载的成功或失败
 ///   既不写缓存，也不返回；它的等待者沿取代链走到链尾，拿到最新加载的成功或失败。
@@ -20,7 +18,6 @@ import Foundation
 final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private final class Flight {
     let generation: UInt64
-    let startedAt: Date
     /// 同 key 在本次之后发起的下一个加载。
     var successor: Flight?
     private(set) var result: Result<Value, Error>?
@@ -31,9 +28,8 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
 
     var isFinished: Bool { result != nil }
 
-    init(generation: UInt64, startedAt: Date) {
+    init(generation: UInt64) {
       self.generation = generation
-      self.startedAt = startedAt
     }
 
     func addWaiter(
@@ -65,8 +61,6 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private struct Entry {
     let value: Value
     var expiresAt: Date
-    /// 写下这个值的那次加载是什么时候开始的。
-    let loadStartedAt: Date
   }
 
   private let ttl: TimeInterval
@@ -99,7 +93,6 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   func value(
     for key: Key,
     forceRefresh: Bool = false,
-    freshSince: Date? = nil,
     acceptsCachedValue: (Value) -> Bool = { _ in true },
     validate: () throws -> Void,
     load: @escaping @MainActor () async throws -> Value
@@ -107,17 +100,14 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     activeCallers[key, default: 0] += 1
     defer { endCall(for: key) }
     var startsNewLoad = forceRefresh
-    func isFresh(_ startedAt: Date) -> Bool { freshSince.map { startedAt >= $0 } ?? true }
     while true {
       try validate()
-      if !startsNewLoad, let cached = cachedEntry(for: key), isFresh(cached.loadStartedAt),
-        acceptsCachedValue(cached.value)
-      {
-        return cached.value
+      if !startsNewLoad, let cached = cachedValue(for: key), acceptsCachedValue(cached) {
+        return cached
       }
 
       var flight: Flight
-      if !startsNewLoad, let running = latestFlights[key], !running.isFinished, isFresh(running.startedAt) {
+      if !startsNewLoad, let running = latestFlights[key], !running.isFinished {
         flight = running
       } else {
         flight = startFlight(for: key, load: load)
@@ -157,7 +147,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     latestFlights.removeAll()
   }
 
-  private func cachedEntry(for key: Key) -> Entry? {
+  private func cachedValue(for key: Key) -> Value? {
     guard var entry = entries[key] else { return nil }
     let currentDate = now()
     guard currentDate <= entry.expiresAt else {
@@ -168,14 +158,14 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       entry.expiresAt = currentDate.addingTimeInterval(ttl)
       entries[key] = entry
     }
-    return entry
+    return entry.value
   }
 
   private func startFlight(
     for key: Key,
     load: @escaping @MainActor () async throws -> Value
   ) -> Flight {
-    let flight = Flight(generation: generation, startedAt: now())
+    let flight = Flight(generation: generation)
     Task { [weak self] in
       let result: Result<Value, Error>
       do {
@@ -216,7 +206,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     guard flight.successor == nil, flight.generation == generation,
       case .success(let value) = result
     else { return }
-    store(value, for: key, loadStartedAt: flight.startedAt)
+    store(value, for: key)
   }
 
   private func endCall(for key: Key) {
@@ -235,12 +225,12 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     latestFlights.removeValue(forKey: key)
   }
 
-  private func store(_ value: Value, for key: Key, loadStartedAt: Date) {
+  private func store(_ value: Value, for key: Key) {
     if entries[key] == nil, entries.count >= capacity,
       let evictedKey = entries.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key
     {
       entries.removeValue(forKey: evictedKey)
     }
-    entries[key] = Entry(value: value, expiresAt: now().addingTimeInterval(ttl), loadStartedAt: loadStartedAt)
+    entries[key] = Entry(value: value, expiresAt: now().addingTimeInterval(ttl))
   }
 }
