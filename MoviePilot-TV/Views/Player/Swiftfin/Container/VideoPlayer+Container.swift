@@ -20,6 +20,7 @@
 // - 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 // - 去掉画面上的压暗层（打开面板时底部的黑色渐变、全屏面板的黑底）：面板和卡片自带玻璃底，压暗会挡住字幕。
 // - 播放/暂停键和触控板中央按系统播放器处理（判断见 VideoPlayer+RemoteCommands.swift）。
+// - 键盘才有的按键原样交给系统，由系统转成遥控器按键再送来（见 `isKeyboardOnlyPress`）。
 // - 大屏上标签区域的高度按标签和面板的实际尺寸算（`PlayerPanelLayout`）：标签和打开后的简介面板底边都落在底部安全区上。
 //   原版收起时固定露出 120（标签离屏幕底只剩约 30），打开时取屏幕高度的三分之一。
 //
@@ -912,6 +913,11 @@ extension VideoPlayer {
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesBegan([press], event: event)
+                    continue
+                }
+
                 switch press.type {
                 case .playPause, .select, .menu:
                     continue
@@ -935,6 +941,11 @@ extension VideoPlayer {
 
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesEnded([press], event: event)
+                    continue
+                }
+
                 switch press.type {
                 case .playPause:
                     handlePlayPauseEnded()
@@ -962,6 +973,11 @@ extension VideoPlayer {
 
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesCancelled([press], event: event)
+                    continue
+                }
+
                 onPressEvent.send(
                     .init(type: press.type, phase: .cancelled) { [weak self] in
                         self?.forwardPressesCancelled([press], event: event)
@@ -1041,6 +1057,23 @@ extension VideoPlayer {
 // MARK: - tvOS PressEvent
 
 extension VideoPlayer.UIContainerViewController {
+
+    /// 只有键盘才有的按键（类型不是遥控器上的任何一个键），原样交给系统，不当成遥控器按键处理。
+    ///
+    /// 模拟器遥控器发的是键盘按键（播放/暂停是空格，方向是键盘方向键）。系统先把原始按键沿响应链送来，
+    /// 没人接才再转成遥控器的播放/暂停、方向键送一次。这里若先接住（比如「按任意键呼出控制条」），系统就不转了：
+    /// 控制条收起时按播放/暂停只会呼出控制条、不暂停，按左右键也不跳。
+    static func isKeyboardOnlyPress(_ type: UIPress.PressType, hasKey: Bool) -> Bool {
+        guard hasKey else { return false }
+
+        switch type {
+        case .upArrow, .downArrow, .leftArrow, .rightArrow, .select, .menu, .playPause,
+             .pageUp, .pageDown, .tvRemoteOneTwoThree, .tvRemoteFourColors:
+            return false
+        @unknown default:
+            return true
+        }
+    }
 
     struct PressEvent {
 

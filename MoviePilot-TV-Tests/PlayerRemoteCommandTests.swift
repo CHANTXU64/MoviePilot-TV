@@ -28,6 +28,18 @@ final class PlayerRemoteCommandTests: XCTestCase {
     )
   }
 
+  // MARK: 键盘按键
+
+  func testKeyboardOnlyKeysAreLeftForTheSystemToMap() {
+    typealias Container = VideoPlayer.UIContainerViewController
+    // 键盘空格：类型是 2000 + HID 键码 44（模拟器遥控器的播放/暂停键实测如此），系统没人接时才转成播放/暂停键。
+    let space = UIPress.PressType(rawValue: 2044)!
+    XCTAssertTrue(Container.isKeyboardOnlyPress(space, hasKey: true), "空格要交给系统转成播放/暂停键，不能被「按任意键呼出控制条」接住")
+    XCTAssertFalse(Container.isKeyboardOnlyPress(.playPause, hasKey: false), "系统转好的播放/暂停键照常处理")
+    XCTAssertFalse(Container.isKeyboardOnlyPress(.leftArrow, hasKey: true), "带键盘信息但类型是遥控器方向键的，照常处理")
+    XCTAssertFalse(Container.isKeyboardOnlyPress(space, hasKey: false), "不是键盘发来的未知按键不归这里管")
+  }
+
   // MARK: 播放/暂停键、触控板中央
 
   func testPlayPauseWhileWatchingPausesAtOnceAndShowsControls() {
