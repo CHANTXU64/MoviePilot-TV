@@ -125,4 +125,22 @@ final class PlayerRemoteCommandTests: XCTestCase {
     XCTAssertEqual(shortEnd, .zero, "比 2 秒还短的片子不往前走")
     XCTAssertTrue(short.hasReachedBound(shortEnd, runtime: .seconds(1)))
   }
+
+  /// 触控板把拖动位置拖进片尾前 2 秒以内，再按住右键：进度条不动，也不跳过去，免得没确认就被当成播完。
+  func testScanFromInsideTheEndMarginNeitherMovesNorSeeks() {
+    let runtime = Duration.seconds(600)
+    let forward = Scan(direction: .forward, level: 2)
+
+    for dragged in [Duration.seconds(600), .milliseconds(599_500)] {
+      let target = forward.position(after: .milliseconds(100), from: dragged, runtime: runtime)
+      XCTAssertEqual(target, dragged, "不往前走，也不拉回片尾前 2 秒")
+      XCTAssertTrue(forward.hasReachedBound(target, runtime: runtime), "到头了，快进停下等确认或取消")
+      XCTAssertFalse(Scan.canSeek(to: target, runtime: runtime), "不跳到片尾 2 秒以内")
+    }
+
+    XCTAssertTrue(Scan.canSeek(to: .seconds(598), runtime: runtime), "快进停下的位置照常跳过去让画面跟上")
+    let backward = Scan(direction: .backward)
+    let back = backward.position(after: .milliseconds(100), from: .seconds(600), runtime: runtime)
+    XCTAssertTrue(Scan.canSeek(to: back, runtime: runtime), "从片尾往回快退，先回到片尾前 2 秒再退，照常跳转")
+  }
 }

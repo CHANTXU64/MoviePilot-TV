@@ -207,6 +207,8 @@ final class MediaSession {
   @ObservationIgnored private let onExit: Exit
   @ObservationIgnored private let onSwitchItem: SwitchItem
   @ObservationIgnored private var pendingPlaybackStatus: PlaybackRequestStatus?
+  /// 暂停时跳转还没落定就要求播放（确认或取消快退快进、选章节）：等跳到最后一个目标再播，见 `performPendingSeeks`。
+  @ObservationIgnored private var playsAfterSeek = false
   @ObservationIgnored private var seekTask: Task<Void, Never>?
   @ObservationIgnored private var eventObservation: AnyCancellable?
   @ObservationIgnored private var positionObservation: AnyCancellable?
@@ -324,6 +326,7 @@ final class MediaSession {
     seekTask = nil
     pendingSeek = nil
     pendingPlaybackStatus = nil
+    playsAfterSeek = false
     playbackRequestStatus = .playing
     guard hasStarted else { return }
     loadCurrentItem()
@@ -482,11 +485,20 @@ final class MediaSession {
 
   // MARK: 播放控制
 
+  /// 暂停中、跳转还没落定时要求播放，先不让播放器播：否则先从跳转前的画面播一会儿再跳，跳转失败就从错的位置接着播。
+  /// 界面先显示为播放，跳到最后一个目标后再播（见 `performPendingSeeks`）；其间暂停就不再播。正在播放时照常边播边跳。
   func setPlaybackRequestStatus(status: PlaybackRequestStatus) {
     guard state != .stopped, state != .error else { return }
+    let waitsForSeek =
+      status == .playing && pendingSeek != nil && (playbackRequestStatus == .paused || playsAfterSeek)
     playbackRequestStatus = status
+    playsAfterSeek = false
     guard hasStarted else { return }
     pendingPlaybackStatus = status
+    if waitsForSeek {
+      playsAfterSeek = true
+      return
+    }
     switch status {
     case .playing: enginePlayer.play()
     case .paused: enginePlayer.pause()
@@ -518,6 +530,7 @@ final class MediaSession {
   }
 
   /// 一次只发一个跳转；进行中又有新目标时，完成后接着跳到最新目标。
+  /// 跳完最后一个目标再处理等着的播放（见 `setPlaybackRequestStatus`）：跳转失败就停在暂停，不从没确认的位置播。
   private func performPendingSeeks() async {
     defer { seekTask = nil }
     while pendingSeek != nil {
@@ -525,7 +538,9 @@ final class MediaSession {
       try? await Task.sleep(for: .milliseconds(80))
       guard !Task.isCancelled, !isStopped, let target = pendingSeek else { return }
       guard canSeek else {
+        // 重新载入、换集等：没跳，播放照原来的要求。
         pendingSeek = nil
+        resumeAfterSeek(landed: true)
         return
       }
       let succeeded = await enginePlayer.seek(to: target.seconds)
@@ -533,7 +548,20 @@ final class MediaSession {
       if pendingSeek == target {
         pendingSeek = nil
         if !succeeded { commandError = L10n.unableToSeek }
+        // 跳转中播放器重新载入（换音轨、回前台）会让这次跳转算作失败。已经知道不能跳转时，与上面没跳一样，照原来的要求播放；
+        // 播放器事件还没到、仍显示可跳转时，按失败处理：停在暂停、提示无法跳转，再按一次播放即可。
+        resumeAfterSeek(landed: succeeded || !canSeek)
       }
+    }
+  }
+
+  private func resumeAfterSeek(landed: Bool) {
+    guard playsAfterSeek else { return }
+    playsAfterSeek = false
+    if landed {
+      enginePlayer.play()
+    } else {
+      setPlaybackRequestStatus(status: .paused)
     }
   }
 

@@ -68,6 +68,12 @@ extension VideoPlayer.ViewState {
         static func upperBound(runtime: Duration) -> Duration {
             max(runtime - endMargin, .zero)
         }
+
+        /// 快退快进中能不能跳到这里让画面跟上：片尾前 `endMargin` 以内不跳，跳过去会被当成播完。
+        /// 触控板能把拖动位置拖进这一段，这时再按住右键，进度条停着不动，也不跳转，等用户确认或取消。
+        static func canSeek(to position: Duration, runtime: Duration) -> Bool {
+            position <= upperBound(runtime: runtime)
+        }
     }
 
     /// 播放/暂停键和触控板中央。

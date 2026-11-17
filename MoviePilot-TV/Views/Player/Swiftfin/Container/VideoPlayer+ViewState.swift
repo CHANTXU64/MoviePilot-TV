@@ -489,6 +489,7 @@ extension VideoPlayer {
 
         /// 每 0.1 秒按倍速移动拖动位置；每隔 `Scan.seekInterval` 跳一次，让暂停的画面跟上。跳转沿用 `MediaSession.seek`
         /// 的合并机制，前一次还没完成时只保留最新目标。到头（片头，或片尾前 `Scan.endMargin`）就停，留在拖动状态等用户确认或取消。
+        /// 拖进片尾前 `Scan.endMargin` 以内再快进，不跳转（见 `Scan.canSeek`）。
         private func startScanTask() {
             scanTask?.cancel()
             scanTask = Task { [weak self] in
@@ -515,7 +516,9 @@ extension VideoPlayer {
                     self.scrubPosition = target
 
                     let reachedBound = scan.hasReachedBound(target, runtime: runtime)
-                    if reachedBound || now - lastSeek >= Scan.seekInterval {
+                    if reachedBound || now - lastSeek >= Scan.seekInterval,
+                       Scan.canSeek(to: target, runtime: runtime)
+                    {
                         if mediaSession.seek(to: target) {
                             self.scanHasSeeked = true
                         }
