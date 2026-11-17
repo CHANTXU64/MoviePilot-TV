@@ -159,16 +159,12 @@ nonisolated enum InAppPlaybackAvailability {
   }
 }
 
-/// 播放相关的本机设置（只影响 TV 端），设置页「播放」和播放界面共用。
+/// 播放相关的本机设置（只影响 TV 端），设置页「播放」读写。
 nonisolated enum PlaybackPreferences {
   static let inAppPlaybackKey = "inAppPlaybackEnabled"
   static let defaultInAppPlaybackEnabled = true
   /// 应用内播放开关变化后发出，已打开的页面据此收起或补回播放入口。
   static let inAppPlaybackDidChangeNotification = Notification.Name("InAppPlaybackPreferenceDidChange")
-  /// 自动播放变化后发出：播放界面工具栏也能改，设置页据此同步。
-  static let autoPlayDidChangeNotification = Notification.Name("AutoPlayNextEpisodePreferenceDidChange")
-  /// 播放界面工具栏的“自动播放”按钮读写同一个键（沿用移植 Swiftfin 时的键名）。
-  static let autoPlayNextEpisodeKey = "swiftfin.enableNextEpisodeAutoPlay"
 
   /// 应用内播放开关，默认开。后端低于 `InAppPlaybackAvailability.minimumBackendVersion` 时不管它是什么都不提供。
   static var isInAppPlaybackEnabled: Bool {
@@ -178,14 +174,6 @@ nonisolated enum PlaybackPreferences {
   static func setInAppPlaybackEnabled(_ enabled: Bool) {
     UserDefaults.standard.set(enabled, forKey: inAppPlaybackKey)
     NotificationCenter.default.post(name: inAppPlaybackDidChangeNotification, object: nil)
-  }
-
-  /// 播完自动播下一集，默认开（与 Jellyfin/Emby 用户默认值相同）。
-  static var autoPlaysNextEpisode: Bool { bool(forKey: autoPlayNextEpisodeKey, default: true) }
-
-  static func setAutoPlaysNextEpisode(_ enabled: Bool) {
-    UserDefaults.standard.set(enabled, forKey: autoPlayNextEpisodeKey)
-    NotificationCenter.default.post(name: autoPlayDidChangeNotification, object: nil)
   }
 
   private static func bool(forKey key: String, default defaultValue: Bool) -> Bool {

@@ -9,7 +9,6 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 取代 Swiftfin 的 `EpisodeMediaPlayerQueue`，所以放在 Swiftfin/ 目录外、改了类型名。
-// 同步 Swiftfin 时不要把上游的 EpisodeMediaPlayerQueue.swift 加回 Swiftfin/，上游改动按需合进本文件。
 // 播放界面仍通过 Swiftfin 的 `MediaPlayerQueue` 协议读同季列表和上一集/下一集。
 //
 // 修改：

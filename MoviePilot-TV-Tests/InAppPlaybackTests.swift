@@ -874,15 +874,14 @@ final class InAppPlaybackModelTests: XCTestCase {
 @MainActor
 final class PlaybackEndActionTests: XCTestCase {
   private func action(
-    switching: Bool = false, seeking: Bool = false, autoPlay: Bool = true, hasNext: Bool = true,
-    canLookUpNext: Bool = false
+    switching: Bool = false, seeking: Bool = false, hasNext: Bool = true, canLookUpNext: Bool = false
   ) -> MediaSession.EndAction {
     MediaSession.endAction(
-      isSwitchingItem: switching, isSeeking: seeking, isLiveStream: false, isAutoPlayEnabled: autoPlay,
+      isSwitchingItem: switching, isSeeking: seeking, isLiveStream: false,
       nextItem: hasNext ? PlaybackIntent(item: BaseItemDto(id: "e2")) : nil, canLookUpNext: canLookUpNext)
   }
 
-  func testAutoPlayContinuesWithNextEpisode() {
+  func testContinuesWithNextEpisode() {
     guard case .playNext(let next) = action() else { return XCTFail("应接着播下一集") }
     XCTAssertEqual(next.item.id, "e2")
   }
@@ -891,9 +890,8 @@ final class PlaybackEndActionTests: XCTestCase {
     guard case .waitForSwitch = action(switching: true) else { return XCTFail("正在换集时不能退出") }
   }
 
-  func testExitsWithoutNextEpisodeOrAutoPlay() {
+  func testExitsWithoutNextEpisodeOrWhileSeeking() {
     guard case .exit = action(hasNext: false) else { return XCTFail("没有下一集应退出") }
-    guard case .exit = action(autoPlay: false) else { return XCTFail("关了自动播放应退出") }
     guard case .exit = action(seeking: true) else { return XCTFail("拖动中播完应退出") }
   }
 
@@ -901,33 +899,15 @@ final class PlaybackEndActionTests: XCTestCase {
     // 按集播放：开播时下一集还没入库（或查询还没回来），播完时重新查一次，不直接退出。
     guard case .lookUpNext = action(hasNext: false, canLookUpNext: true) else { return XCTFail("应重新查下一集") }
     guard case .playNext = action(canLookUpNext: true) else { return XCTFail("已知下一集时直接播") }
-    guard case .exit = action(autoPlay: false, hasNext: false, canLookUpNext: true) else {
-      return XCTFail("关了自动播放不再查")
-    }
+    guard case .exit = action(hasNext: false) else { return XCTFail("没有下一集时退出") }
   }
 
   func testNextFoundBySkippingMissingEpisodesIsRecheckedAtTheEnd() {
     // 开播时第 2 集还没入库，队列记下的是第 3 集；播完时第 2 集可能已经入库，要按顺序先播它。
     let recheck = MediaSession.endAction(
-      isSwitchingItem: false, isSeeking: false, isLiveStream: false, isAutoPlayEnabled: true,
+      isSwitchingItem: false, isSeeking: false, isLiveStream: false,
       nextItem: PlaybackIntent(item: BaseItemDto(id: "e3")), canLookUpNext: true, nextNeedsRecheck: true)
     guard case .lookUpNext = recheck else { return XCTFail("应重新确认下一集，实际 \(recheck)") }
-  }
-
-  func testAutoPlayTurnedOffDuringTheEndLookupExitsNormally() {
-    // 片尾正在重新查下一集时，用户从工具栏关掉了自动播放：查到了也不起播，和平常播完一样退出、不说明原因。
-    let found = MoviePilotEpisodeQueue.NextLookup.play(PlaybackIntent(item: BaseItemDto(id: "e3")))
-    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: false) else {
-      return XCTFail("关了自动播放不能起播")
-    }
-    let missing = MoviePilotEpisodeQueue.NextLookup.unavailable(EpisodeNavigator.nextMissingMessage)
-    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(missing, isAutoPlayEnabled: false) else {
-      return XCTFail("关了自动播放不再说明下一集的情况")
-    }
-    guard case .play(let next) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: true) else {
-      return XCTFail("开着自动播放照常接着播")
-    }
-    XCTAssertEqual(next.item.id, "e3")
   }
 }
 
@@ -6756,42 +6736,36 @@ extension PlaybackCoordinatorTests {
     XCTAssertFalse(session.watchProgress(at: 7000).completed, "按条目的 2 小时算会误判看完（7000/7200）")
     XCTAssertTrue(session.watchProgress(at: 9800).completed, "按 3 小时的 90%")
 
-    // 信息面板和选集里的当前一集读播放界面建条目时的那份，片长在建条目时就按所选片源；
+    // 信息面板读播放界面建条目时的那份，片长在建条目时就按所选片源；
     // 起播后播放器读出的时长经 `runtime` 给出（测试里播放器打不开测试地址，读不到时长，取值顺序见 `PlaybackDuration` 的测试）。
     // 播放器的失败与这里无关，接住免得结束会话。
     session.onFailure = { _ in }
     let reporter = coordinator.reporterForTesting
     screen.start()
     let playing = try XCTUnwrap(screen.playbackItem)
-    XCTAssertEqual(playing.baseItem.runtime, .seconds(10_800), "选集里的当前一集按这份显示")
+    XCTAssertEqual(playing.baseItem.runtime, .seconds(10_800), "播放界面建条目时就按所选片源")
     let info = try XCTUnwrap(
       VideoPlayerSupplementType.info.makeSupplement(for: playing, queue: nil, chapters: screen.chapters)
         as? MediaInfoSupplement)
     XCTAssertEqual(info.item.runtime, .seconds(10_800), "按播放界面建面板的入口建出的信息面板")
     XCTAssertEqual(screen.runtime, .seconds(10_800), "面板的片长、结束时间和跳转上限读这个值")
-    // 选集卡片来自按季取的集列表，条目上记的是 2 小时；正在播的那一集要显示所播文件的 3 小时。
-    let listed = ItemEntry(item: BaseItemDto(item: session.item, metadata: session.item.metadata))
-    XCTAssertEqual(listed.snapshot.runtime, .seconds(7200))
-    XCTAssertEqual(screen.runTimeLabel(for: listed), BaseItemDto.runTimeLabel(seconds: 10_800), "选集里正在播的一集")
-    let other = ItemEntry(item: BaseItemDto(item: ServerMediaItem(id: "m2", kind: .movie, runtimeSeconds: 5400), metadata: PlaybackMetadata()))
-    XCTAssertEqual(screen.runTimeLabel(for: other), BaseItemDto.runTimeLabel(seconds: 5400), "其他集用自己的")
     screen.stop()
     coordinator.endCurrentSession()
     // 起播上报了开始、退出排进了停止和写回：发完再结束，免得请求落到后面的用例里。
     await reporter.waitForQueued()
   }
 
-  /// 播放界面上的章节：「章节」面板（不显示时为 nil）和进度条刻度读的章节。
+  /// 播放界面上的章节：「章节」面板（不显示时为 nil）和播放界面持有的章节列表。
   @MainActor
   private struct ShownChapters {
     let panel: MediaChaptersSupplement?
-    let slider: [ChapterInfo]
+    let loaded: [ChapterInfo]
 
     init(_ screen: MediaSession) throws {
       let playing = try XCTUnwrap(screen.playbackItem)
       panel = VideoPlayerSupplementType.chapters.makeSupplement(for: playing, queue: nil, chapters: screen.chapters)
         as? MediaChaptersSupplement
-      slider = screen.chapters.loaded.map(\.chapterInfo)
+      loaded = screen.chapters.loaded.map(\.chapterInfo)
     }
   }
 
@@ -6863,7 +6837,7 @@ extension PlaybackCoordinatorTests {
     let rebased = try ShownChapters(screen)
     let panel = try XCTUnwrap(rebased.panel)
     XCTAssertEqual(panel.chapters.map(\.chapterInfo.startSeconds), rebasedStarts.map(Optional.some), "选中章节时按这个起点跳转")
-    XCTAssertEqual(rebased.slider.map(\.startSeconds), rebasedStarts.map(Optional.some), "进度条刻度和面板同一份")
+    XCTAssertEqual(rebased.loaded.map(\.startSeconds), rebasedStarts.map(Optional.some), "播放界面和面板同一份章节")
     XCTAssertEqual(panel.nextChapterStart(after: .seconds(10)), .milliseconds(597_500), "跳到下一章的目标")
     XCTAssertEqual(panel.previousChapterStart(before: .seconds(5399)), .milliseconds(597_500), "跳到上一章的目标")
 
@@ -6946,7 +6920,7 @@ extension PlaybackCoordinatorTests {
     XCTAssertNil(image.query?.range(of: "api_key"), "图片地址不带密钥")
     XCTAssertNil(chapters[0].imageSource, "没有截图的章节不带地址，卡片显示占位图标")
     XCTAssertEqual(chapters[0].systemImage, AppSymbol.movie)
-    XCTAssertEqual(shown.beforeRead.slider.map(\.name), ["片头", "正片", "片尾"], "进度条的章节刻度和面板同一份")
+    XCTAssertEqual(shown.beforeRead.loaded.map(\.name), ["片头", "正片", "片尾"], "播放界面和面板同一份章节")
     XCTAssertEqual(
       shown.afterRead.panel?.chapters.map(\.displayTitle), ["片头", "正片", "片尾"],
       "播放器读到的内嵌章节不替换服务器的")
@@ -6978,11 +6952,11 @@ extension PlaybackCoordinatorTests {
     let waiting = try XCTUnwrap(embedded.beforeRead.panel, "播放器读完文件前就显示「章节」，告诉用户会有章节")
     XCTAssertTrue(waiting.isLoading)
     XCTAssertTrue(waiting.chapters.isEmpty, "转圈时还没有章节")
-    XCTAssertTrue(embedded.beforeRead.slider.isEmpty)
+    XCTAssertTrue(embedded.beforeRead.loaded.isEmpty)
     let fromFile = try XCTUnwrap(embedded.afterRead.panel)
     XCTAssertFalse(fromFile.isLoading)
     XCTAssertEqual(fromFile.chapters.map(\.displayTitle), ["序幕", "章节 2", "终章"], "文件里没写名字的按位置命名")
-    XCTAssertEqual(embedded.afterRead.slider.count, 3)
+    XCTAssertEqual(embedded.afterRead.loaded.count, 3)
 
     // 文件里也没有：2 小时按 10 分钟分 12 段，没有截图。
     let none = try await movieChapters()
@@ -7015,7 +6989,7 @@ extension PlaybackCoordinatorTests {
     let short = try await movieChapters(sourceRuntime: #","RunTimeTicks":6500000000"#)
     XCTAssertNotNil(short.beforeRead.panel, "读完前不知道文件里有没有章节")
     XCTAssertNil(short.afterRead.panel, "10 分 50 秒只分得出一段，不显示「章节」")
-    XCTAssertTrue(short.afterRead.slider.isEmpty, "进度条也不画刻度")
+    XCTAssertTrue(short.afterRead.loaded.isEmpty, "没有可跳的章节时章节列表为空")
 
     // 1 万小时：超过 500 段的上限，当作坏片长。
     let broken = try await movieChapters(sourceRuntime: #","RunTimeTicks":360000000000000"#)

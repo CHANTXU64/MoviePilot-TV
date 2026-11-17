@@ -10,7 +10,8 @@
 //
 // 修改：只保留播放器用到的成员。tvOS 上 `presentation` 恒为 `.large`，播放器用到的尺寸都只取决于它，
 // 因此 `AdaptiveLayout` 不再读取 `frameForParentView` 容器尺寸，直接给出平台默认布局。
-// 大屏工具栏按钮直径由 56 改为 66，配合缩小的图标，留白接近系统播放器按钮。
+// 左右边距单独取 81（`horizontalSafeInset`），进度条、标题、按钮、面板标签和卡片行都对齐这条线；上下仍是 60。
+// 工具栏按钮按 HIG 的 tvOS 默认控件尺寸取 66，图标 26。
 //
 
 import SwiftUI
@@ -62,8 +63,17 @@ nonisolated struct ViewLayout: Equatable {
         isLarge ? large : standard
     }
 
+    /// 播放界面左右两边的留白，与 App 里详情页选集行等卡片行相同（HIG 的 tvOS 左右安全区是 80）。
+    /// 进度条、标题、按钮、面板标签和剧照卡都对齐这条线，焦点在它们之间移动时画面不会左右挪。
+    static let horizontalSafeInset: CGFloat = 81
+
+    /// 上下留白（tvOS 安全区）。左右见 `horizontalEdgePadding`。
     var edgePadding: CGFloat {
         value(standard: value(compact: 16, regular: 24), large: 60)
+    }
+
+    var horizontalEdgePadding: CGFloat {
+        value(standard: edgePadding, large: Self.horizontalSafeInset)
     }
 
     var edgeInsets: EdgeInsets {
@@ -74,28 +84,17 @@ nonisolated struct ViewLayout: Equatable {
         value(standard: 10, large: 40)
     }
 
-    var controlHeight: CGFloat {
-        value(standard: 44, large: 75)
-    }
-
-    var selectionBorderWidth: CGFloat {
-        value(standard: 8, large: 12)
-    }
-
-    var indicatorSize: CGFloat {
-        value(standard: 25, large: 45)
-    }
-
-    var supplementLogoHeight: CGFloat {
-        value(standard: 40, large: 80)
-    }
-
-    var supplementRowHeight: CGFloat {
-        value(standard: 50, large: 80)
-    }
-
     var toolbarButtonSize: CGFloat {
         value(standard: 44, large: 66)
+    }
+
+    var toolbarIconSize: CGFloat {
+        value(standard: 18, large: 26)
+    }
+
+    /// HIG 给 tvOS 的最小控件尺寸。
+    var controlMinimumSize: CGFloat {
+        value(standard: 44, large: 56)
     }
 
     var supplementButtonSpacing: CGFloat {
@@ -103,7 +102,7 @@ nonisolated struct ViewLayout: Equatable {
     }
 
     var toolbarButtonSpacing: CGFloat {
-        UIDevice.supportsLiquidGlass ? value(standard: 4, large: 20) : value(standard: 0, large: 16)
+        value(standard: 4, large: 24)
     }
 
     init(
@@ -143,7 +142,9 @@ struct EdgePaddingModifier: ViewModifier {
     let edges: Edge.Set
 
     func body(content: Content) -> some View {
-        content.padding(edges, viewLayout.edgePadding)
+        content
+            .padding(edges.intersection(.horizontal), viewLayout.horizontalEdgePadding)
+            .padding(edges.intersection(.vertical), viewLayout.edgePadding)
     }
 }
 

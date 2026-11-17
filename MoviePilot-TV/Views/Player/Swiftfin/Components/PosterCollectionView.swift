@@ -8,151 +8,79 @@
 // 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Components/PosterCollectionView.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：`CollectionHStack` / `CollectionVGrid` 两个第三方包未引入（添加依赖未获授权），使用 Views/Player/SwiftfinPackageShims.swift 中的同名替身。
+// 修改：只保留 tvOS 的横排。不用 Swiftfin 的 CollectionHStack，直接用 ScrollView + LazyHStack 排 App 自己的剧照卡
+// （`StillCard`），左右留白与播放界面其他控件对齐；剧照左下角的小字和下面的标题由调用方给。
+// 每次打开面板都滚到正在播的那一项，焦点从上面的标签移下来时也落在它上面。
+// 离标签的留白放在滚动区域外面，滚动区域只和卡片一样高（见 body 里的说明）。
 //
 
 import SwiftUI
 
 extension VideoPlayer {
 
-    struct PosterCollectionView<Data: RandomAccessCollection, Content: View>: PresentationView
+    struct PosterCollectionView<Data: RandomAccessCollection>: View
         where Data.Element: Poster, Data.Index == Int
     {
 
-        @Environment(VideoPlayer.ViewState.self)
-        private var viewState
-
-        @AdaptiveLayout
-        private var viewLayout
-
-        @State
-        private var initialElementID: Data.Element.ID?
+        @FocusState
+        private var focusedID: Data.Element.ID?
 
         private let data: Data
         private let currentElementID: Data.Element.ID?
-        private let isCompact: Bool
-        private let displayType: PosterDisplayType
-        private let size: PosterDisplayType.Size
+        private let badge: (Data.Element) -> String?
+        private let title: (Data.Element) -> String
         private let action: (Data.Element) -> Void
-        private let content: (Data.Element) -> Content
 
         init(
             data: Data,
-            currentElementID: Data.Element.ID? = nil,
-            isCompact: Bool,
-            displayType: PosterDisplayType = .landscape,
-            size: PosterDisplayType.Size = .small,
-            action: @escaping (Data.Element) -> Void,
-            @ViewBuilder content: @escaping (Data.Element) -> Content
+            currentElementID: Data.Element.ID?,
+            badge: @escaping (Data.Element) -> String?,
+            title: @escaping (Data.Element) -> String,
+            action: @escaping (Data.Element) -> Void
         ) {
             self.data = data
             self.currentElementID = currentElementID
-            self._initialElementID = State(initialValue: currentElementID)
-            self.isCompact = isCompact
-            self.displayType = displayType
-            self.size = size
+            self.badge = badge
+            self.title = title
             self.action = action
-            self.content = content
         }
 
-        private func isCurrent(_ element: Data.Element) -> Bool {
-            guard let currentElementID else { return false }
-
-            return element.id == currentElementID
-        }
-
-        private func elementRow(_ element: Data.Element) -> some View {
-            ListRow(insets: .init(horizontal: viewLayout.edgePadding)) {
-                PosterImage(item: element, type: displayType, size: size)
-                    .overlay { element.posterOverlay(for: displayType).posterStyle(displayType) }
-                    .subtleShadow()
-                    .hoverEffect(.highlight)
-                    .frame(width: 110)
-                    .padding(.vertical, 8)
-            } content: {
-                content(element)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } action: {
-                action(element)
-            }
-            .environment(\.posterDisplayType, displayType)
-            .isSelected(isCurrent(element))
-            .accessibilityAddTraits(isCurrent(element) ? .isSelected : [])
-        }
-
-        private func elementButton(_ element: Data.Element) -> some View {
-            PosterButton(item: element, displayType: displayType, size: size) { _ in
-                action(element)
-            }
-            .isSelected(isCurrent(element))
-            .accessibilityAddTraits(isCurrent(element) ? .isSelected : [])
-        }
-
-        var standardView: some View {
-            CompactOrRegularView(isCompact: isCompact) {
-                CollectionVGrid(
-                    uniqueElements: data,
-                    id: \.id,
-                    layout: .columns(
-                        1,
-                        insets: viewLayout.edgeInsets,
-                        itemSpacing: viewLayout.itemSpacing,
-                        lineSpacing: viewLayout.itemSpacing
-                    ),
-                    viewProvider: elementRow
-                )
-                .padding(.leading, viewState.supplementInsets.leading)
-                .padding(.trailing, viewState.supplementInsets.trailing)
-            } regularView: {
-                CollectionHStack(
-                    uniqueElements: data,
-                    id: \.id,
-                    layout: .minimumWidth(columnWidth: viewLayout.value(standard: 170, large: 300), rows: 1, columnFraction: 0.5),
-                    content: elementButton
-                )
-                .initialElement(id: initialElementID)
-                .clipsToBounds(false)
-                .insets(EdgeInsets(
-                    top: 0,
-                    leading: max(viewState.supplementInsets.leading, viewLayout.edgePadding),
-                    bottom: 0,
-                    trailing: max(viewState.supplementInsets.trailing, viewLayout.edgePadding)
-                ))
-                .itemSpacing(viewLayout.itemSpacing)
-                .scrollBehavior(.continuousLeadingEdge)
+        var body: some View {
+            ScrollViewReader { reader in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: StillCardLayout.spacing) {
+                        ForEach(data) { element in
+                            StillCard(
+                                item: element,
+                                badge: badge(element),
+                                title: title(element),
+                                isFocused: focusedID == element.id,
+                                action: { action(element) }
+                            )
+                            .focused($focusedID, equals: element.id)
+                        }
+                    }
+                    .padding(.horizontal, StillCardLayout.rowInset)
+                }
+                .scrollIndicators(.hidden)
+                .scrollClipDisabled()
+                // 滚动区域和卡片一样高、上下不留白：SwiftUI 按纵向居中对准卡片时，有时按内容高度算，
+                // 内容里卡片若不居中，整行会被纵向滚上去一截。
+                .fixedSize(horizontal: false, vertical: true)
+                // 与简介面板离标签同样远；剧照聚焦时向上长出约 9pt，仍和标签隔开。
+                .padding(.top, PlayerPanelLayout.tabGap)
                 .focusSection()
-            }
-            .onChange(of: currentElementID) { _, newID in
-                if initialElementID == nil {
-                    initialElementID = newID
+                .defaultFocus($focusedID, currentElementID, priority: .userInitiated)
+                // 面板每次打开，托管它的视图都会重新出现：按此刻在播的位置滚，不沿用上次打开时的。
+                .onAppear {
+                    guard let currentElementID else { return }
+
+                    reader.scrollTo(
+                        currentElementID,
+                        anchor: EpisodeCardLayout.leadingScrollAnchor(cardWidth: StillCardLayout.size.width)
+                    )
                 }
             }
         }
-
-        var largeView: some View {
-            standardView
-        }
-    }
-}
-
-extension VideoPlayer.PosterCollectionView where Content == Data.Element.LabelBody {
-
-    init(
-        data: Data,
-        currentElementID: Data.Element.ID? = nil,
-        isCompact: Bool,
-        displayType: PosterDisplayType = .landscape,
-        size: PosterDisplayType.Size = .small,
-        action: @escaping (Data.Element) -> Void
-    ) {
-        self.init(
-            data: data,
-            currentElementID: currentElementID,
-            isCompact: isCompact,
-            displayType: displayType,
-            size: size,
-            action: action,
-            content: { $0.posterLabel }
-        )
     }
 }

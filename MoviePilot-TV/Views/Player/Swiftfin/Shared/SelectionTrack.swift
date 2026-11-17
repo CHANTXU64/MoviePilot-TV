@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Components/SelectionTrack.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：标签换成播放界面统一的玻璃胶囊按钮（`PlayerGlassCapsuleButtonStyle`）。
 //
 
 import SwiftUI
@@ -52,7 +55,7 @@ struct SelectionTrack<Elements: RandomAccessCollection, ID: Hashable>: View {
                 .isSelected(setID == element[keyPath: id])
             }
         }
-        .buttonStyle(.capsule(isSelectionActive: focus.wrappedValue != nil))
+        .buttonStyle(.playerGlass)
     }
 }
 

@@ -10,6 +10,9 @@
 //
 // 修改：删去 `#if os(iOS)` 分支（iOS 的关闭按钮与手势）。
 // 焦点离开回调写成 `@MainActor` 闭包（Swift 6 并发检查）。
+// 面板标签用播放界面统一的玻璃胶囊按钮，字号同系统按钮（body）。
+// 面板内容固定按深色显示（与播放界面其他各层相同）。
+// 大屏上标签离进度条时间 20（原版 30），见 `PlayerPanelLayout`。
 //
 
 import SwiftUI
@@ -53,6 +56,8 @@ extension VideoPlayer.UIContainerViewController {
             .environment(viewState)
             .environmentObject(viewState.focusCoordinator)
             .environment(mediaSession)
+            // 面板内容由单独的托管控制器显示，不继承外层的深色；玻璃和文字颜色要按深色画。
+            .environment(\.colorScheme, .dark)
         }
 
         private var tabButtons: some View {
@@ -99,9 +104,8 @@ extension VideoPlayer.UIContainerViewController {
                     }
                 }
             .padding(.bottom, viewLayout.isLarge ? 0 : 8)
-            .buttonStyle(.capsule)
-            .controlSize(.large)
-            .foregroundStyle(.white)
+            // 量高度用的隐藏按钮也要同一个样式，标签行才是真实高度。
+            .buttonStyle(.playerGlass)
         }
 
         var body: some View {
@@ -133,7 +137,7 @@ extension VideoPlayer.UIContainerViewController {
                 }
                 .isVisible(viewState.visibleElements.contains(.supplements))
                 .enabled(viewState.visibleElements.contains(.supplements))
-                .padding(.top, viewLayout.edgeInsets.bottom / (viewLayout.isLarge ? 2 : 1))
+                .padding(.top, viewLayout.isLarge ? PlayerPanelLayout.tabTopInset : viewLayout.edgePadding)
                 .animation(.linear(duration: 0.25), value: viewState.presentation)
                 .animation(.linear(duration: 0.1), value: viewState.isScrubbing)
                 .animation(.bouncy(duration: 0.25, extraBounce: 0.1), value: viewState.supplements.map(\.id))

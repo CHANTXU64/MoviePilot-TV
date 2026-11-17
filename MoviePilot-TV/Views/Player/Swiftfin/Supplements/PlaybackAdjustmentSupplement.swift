@@ -10,6 +10,7 @@
 //
 // 修改：Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
 // 偏移的调节范围按播放器能做到的：音频 ±2 秒（AetherEngine 的上限），字幕 ±5 秒（原版都是 ±5 秒）。
+// 滑杆放在玻璃面板里（`PlayerGlassPanel`）：播放界面不再压暗画面。
 //
 
 import SwiftUI
@@ -51,16 +52,20 @@ extension PlaybackAdjustmentSupplement: @MainActor VideoPlayerSupplement {
         let supplement: PlaybackAdjustmentSupplement
 
         private var content: some View {
-            PlaybackAdjustmentSlider(
-                value: supplement.value(mediaSession),
-                title: supplement.displayTitle,
-                range: supplement.range,
-                step: supplement.step,
-                presets: supplement.presets,
-                resetValue: supplement.resetValue,
-                formatValue: supplement.formatValue,
-                focusID: supplement.preferredFocusID
-            )
+            // 画面不压暗：滑杆连同两端的刻度字垫一块和简介面板相同的玻璃。
+            PlayerGlassPanel {
+                PlaybackAdjustmentSlider(
+                    value: supplement.value(mediaSession),
+                    title: supplement.displayTitle,
+                    range: supplement.range,
+                    step: supplement.step,
+                    presets: supplement.presets,
+                    resetValue: supplement.resetValue,
+                    formatValue: supplement.formatValue,
+                    focusID: supplement.preferredFocusID
+                )
+                .padding(.horizontal, 20)
+            }
             .frame(maxWidth: viewLayout.isLarge ? 1200 : 700)
             .frame(maxWidth: .infinity)
             .edgePadding(.horizontal)

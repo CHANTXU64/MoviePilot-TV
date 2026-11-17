@@ -19,10 +19,6 @@ import SwiftUI
 
 extension View {
 
-    var backport: Backport<Self> {
-        Backport(content: self)
-    }
-
     func copy<Value>(modifying keyPath: WritableKeyPath<Self, Value>, with newValue: Value) -> Self {
         var copy = self
         copy[keyPath: keyPath] = newValue
@@ -84,17 +80,6 @@ extension View {
             transform(self, value)
         } else {
             self
-        }
-    }
-
-    // TODO: rename `invertedMask`?
-    func inverseMask(alignment: Alignment = .center, @ViewBuilder _ content: @escaping () -> some View) -> some View {
-        mask(alignment: alignment) {
-            content()
-                .foregroundStyle(.black)
-                .background(.white)
-                .compositingGroup()
-                .luminanceToAlpha()
         }
     }
 

@@ -16,7 +16,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
     case aspectFill
     case audio
     case audioOffset
-    case autoPlay
     case pictureInPicture
     case playbackSpeed
     case playbackSettings
@@ -35,8 +34,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
             L10n.audio
         case .audioOffset:
             L10n.audioOffset
-        case .autoPlay:
-            L10n.autoPlay
         case .pictureInPicture:
             L10n.pictureInPicture
         case .playbackSpeed:
@@ -67,7 +64,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
         case .aspectFill: AppSymbol.aspectFill
         case .audio: AppSymbol.audioTrack
         case .audioOffset: AppSymbol.audioOffset
-        case .autoPlay: AppSymbol.autoPlayOn
         case .pictureInPicture: AppSymbol.pictureInPicture
         case .playbackSpeed: AppSymbol.playbackSpeed
         case .playbackSettings: AppSymbol.playbackSettings
@@ -83,7 +79,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
     var secondarySystemImage: String {
         switch self {
         case .aspectFill: AppSymbol.aspectFit
-        case .autoPlay: AppSymbol.autoPlayOff
         case .pictureInPicture: AppSymbol.exitPictureInPicture
         case .subtitles: AppSymbol.subtitlesOff
         default:
@@ -98,7 +93,6 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
     static let defaultBarActionButtons: [VideoPlayerActionButton] = {
         var buttons: [VideoPlayerActionButton] = [
             .aspectFill,
-            .autoPlay,
             .playPreviousItem,
             .playNextItem,
         ]

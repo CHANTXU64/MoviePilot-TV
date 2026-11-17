@@ -50,25 +50,24 @@ struct InAppPlaybackScreen: View {
   }
 }
 
-/// Swiftfin 播放器设置项的固定取值（均为 Swiftfin 默认值）。
+/// 播放器设置项的固定取值；平台能力的差异在使用处说明。
 enum VideoPlayerDefaults {
-  static let jumpBackwardInterval: Duration = .seconds(15)
-  static let jumpForwardInterval: Duration = .seconds(15)
-  /// 长按右键加速的倍率。
-  static let longPressSpeedMultiplier: Double = 2
+  /// 遥控器左右键点一下跳多远，与系统播放器相同。
+  static let jumpInterval: Duration = .seconds(10)
+  /// 左右键按住多久算长按，开始快退、快进。
+  static let scanHoldDelay: Duration = .milliseconds(500)
+  /// 控制条显示多久后自动收起；只显示进度条（跳转、轻触触控板）时更短。
+  static let controlsAutoHideInterval: TimeInterval = 5
+  static let progressAutoHideInterval: TimeInterval = 2
   static let playbackRates: [Double] = [0.5, 1.0, 1.25, 1.5, 2.0]
   /// 控制条收起后再按 Menu 是否先确认再退出。
   static let confirmClose = false
-  /// 进度条上显示章节刻度。
-  static let chapterSlider = true
   static let appMaximumBitrate: PlaybackBitrate = .auto
-  /// 拖动预览图来源：Swiftfin 默认只用 trickplay、不回退到章节图。
-  static let previewImageScrubbing: PreviewImageScrubbingOption = .trickplay(fallbackToChapters: false)
   static let supplements: [VideoPlayerSupplementType] = VideoPlayerSupplementType.supportedCases
-  /// 工具栏按钮。Swiftfin 默认还有「填充」（`.aspectFill`），这里不放。
-  static let barActionButtons: [VideoPlayerActionButton] = [.autoPlay, .playPreviousItem, .playNextItem]
+  /// 工具栏按钮。Swiftfin 默认还有「填充」（`.aspectFill`），这里不放；字幕选择直接放工具栏，不进「…」菜单。
+  static let barActionButtons: [VideoPlayerActionButton] = [.playPreviousItem, .playNextItem, .subtitles]
   static let menuActionButtons: [VideoPlayerActionButton] = [
-    .audio, .audioOffset, .subtitles, .subtitleOffset, .playbackSpeed, .pictureInPicture, .playbackSettings,
+    .audio, .audioOffset, .subtitleOffset, .playbackSpeed, .pictureInPicture, .playbackSettings,
   ].filter { VideoPlayerActionButton.supportedCases.contains($0) }
 }
 
@@ -246,12 +245,6 @@ final class MediaSession {
     session.playback.durationSeconds(playerSeconds: playbackState.duration?.seconds).map { .seconds($0) }
   }
 
-  /// 选集卡片上的片长：正在播的那一集用 `runtime`（与进度条一致）；其他集用集列表条目的，那些集还没选版本。
-  func runTimeLabel(for entry: ItemEntry) -> String? {
-    guard entry.itemID == session.item.id, let runtime else { return entry.snapshot.runTimeLabel }
-    return BaseItemDto.runTimeLabel(seconds: runtime.seconds)
-  }
-
   /// 当前条目，片长换成 `runtime`。
   var item: BaseItemDto {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
@@ -410,7 +403,6 @@ final class MediaSession {
       baseItem: baseItem,
       source: session.mediaSource,
       player: enginePlayer,
-      connection: session.connection,
       startSeconds: session.startSeconds)
     playbackItem = item
     if let segments = item.segments {
@@ -433,21 +425,21 @@ final class MediaSession {
     /// 正在换集，上一集刚好播完：等切换完成。
     case waitForSwitch
     case playNext(PlaybackIntent)
-    /// 开着自动播放、按集播放，但还不知道下一集，或已知的下一集是跳过还没入库的集找到的：重新查一次再决定。
+    /// 按集播放，但还不知道下一集，或已知的下一集是跳过还没入库的集找到的：重新查一次再决定。
     case lookUpNext
     case exit
   }
 
-  /// 播完后怎么做：开了自动播放且有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
+  /// 播完后怎么做：有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
   /// 按集播放时，还不知道下一集（开播时没找到、或查询还没回来），或已知的下一集跳过了当时还没入库的集，
   /// 先重新查一次：播放期间那几集可能刚入库，应按顺序接上。
   /// 不看“能否控制播放”：播完时播放器可能已经报告不再就绪。
   static func endAction(
-    isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool, isAutoPlayEnabled: Bool,
+    isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool,
     nextItem: PlaybackIntent?, canLookUpNext: Bool = false, nextNeedsRecheck: Bool = false
   ) -> EndAction {
     if isSwitchingItem { return .waitForSwitch }
-    guard !isSeeking, !isLiveStream, isAutoPlayEnabled else { return .exit }
+    guard !isSeeking, !isLiveStream else { return .exit }
     if canLookUpNext, nextItem == nil || nextNeedsRecheck { return .lookUpNext }
     if let nextItem { return .playNext(nextItem) }
     return .exit
@@ -458,7 +450,7 @@ final class MediaSession {
     let episodeQueue = queue as? MoviePilotEpisodeQueue
     switch Self.endAction(
       isSwitchingItem: isSwitchingItem, isSeeking: isSeeking, isLiveStream: item.isLiveStream,
-      isAutoPlayEnabled: userSession.isAutoPlayEnabled, nextItem: queue?.nextItem,
+      nextItem: queue?.nextItem,
       canLookUpNext: episodeQueue?.canLookUpNext == true, nextNeedsRecheck: episodeQueue?.nextNeedsRecheck == true)
     {
     case .waitForSwitch: break
@@ -470,15 +462,8 @@ final class MediaSession {
     }
   }
 
-  /// 片尾重新查下一集的结果怎么用：查询期间从工具栏关掉了自动播放，就和平常播完一样退出，不起播、也不说明原因。
-  static func resultAfterLookUp(
-    _ result: MoviePilotEpisodeQueue.NextLookup, isAutoPlayEnabled: Bool
-  ) -> MoviePilotEpisodeQueue.NextLookup {
-    isAutoPlayEnabled ? result : .unavailable(nil)
-  }
-
   /// 重新查下一集，查询期间显示加载中；查到就接着播，查不到就退出并说明原因（已是最后一集时不说明）。
-  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃；关掉了自动播放见 `resultAfterLookUp`。
+  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃。
   private func lookUpNextAfterEnd(_ episodeQueue: MoviePilotEpisodeQueue) {
     isSwitchingItem = true
     nextLookupTask?.cancel()
@@ -488,7 +473,7 @@ final class MediaSession {
       guard let self, !Task.isCancelled, !self.isStopped, self.session.item.id == endedItemID else { return }
       self.nextLookupTask = nil
       self.isSwitchingItem = false
-      switch Self.resultAfterLookUp(result, isAutoPlayEnabled: self.userSession.isAutoPlayEnabled) {
+      switch result {
       case .play(let intent): self.playNewItem(intent: intent)
       case .unavailable(let reason): self.finish(notice: reason)
       }
@@ -705,7 +690,6 @@ final class MediaPlayerItem {
   /// 万一有也用中性的图片图标，不装成电影。
   let chapterPlaceholderSymbol: String
   let segments: MediaSegmentObserver? = MediaSegmentObserver()
-  @ObservationIgnored let previewImageProvider: PreviewImageProvider?
   var configuration = MediaPlaybackConfiguration()
 
   @ObservationIgnored private let player: AetherPlayer
@@ -724,8 +708,7 @@ final class MediaPlayerItem {
   var secondarySubtitleOffset: Duration = .zero
 
   init(
-    baseItem: BaseItemDto, source: ServerMediaSource, player: AetherPlayer, connection: any MediaServerConnection,
-    startSeconds: Double
+    baseItem: BaseItemDto, source: ServerMediaSource, player: AetherPlayer, startSeconds: Double
   ) {
     self.baseItem = baseItem
     mediaSource = PlaybackMediaSourceInfo(source: source)
@@ -741,16 +724,7 @@ final class MediaPlayerItem {
     var configuration = MediaPlaybackConfiguration()
     configuration.startSeconds = .milliseconds(Int64(startSeconds * 1000))
     configuration.selectMediaSource(id: source.id)
-    let images = PreviewImageCache(session: MediaServerHTTP.sharedSession)
-    previewImageProvider = PreviewImageProvider(
-      option: VideoPlayerDefaults.previewImageScrubbing,
-      item: baseItem,
-      mediaSourceID: source.id,
-      chapters: ChapterInfo.fullInfo(source.chapters, placeholderSymbol: placeholderSymbol),
-      client: JellyfinClient(connection: connection),
-      resolveImage: { await images.image(for: $0) })
     self.configuration = configuration
-    images.provider = previewImageProvider
   }
 
   private var canSelectTracks: Bool { player.isPlaybackReady }
@@ -852,37 +826,6 @@ final class MediaPlayerItem {
     var configuration = configuration
     configuration.startSeconds = seconds
     return PlaybackIntent(item: baseItem, configuration: configuration)
-  }
-}
-
-/// 拖动预览图的下载缓存（对应 Swiftfin 的 `PlaybackTemporaryFiles.image(for:)`，这里只放内存）。
-@MainActor
-final class PreviewImageCache {
-  nonisolated deinit {}
-
-  weak var provider: PreviewImageProvider?
-  private let session: URLSession
-  private var images: [Int: UIImage] = [:]
-  private var tasks: [Int: Task<UIImage?, Never>] = [:]
-
-  init(session: URLSession) {
-    self.session = session
-  }
-
-  func image(for id: Int) async -> UIImage? {
-    if let image = images[id] { return image }
-    if let task = tasks[id] { return await task.value }
-    guard let url = provider?.downloadURL(for: id) else { return nil }
-    let session = session
-    let task = Task<UIImage?, Never> {
-      guard let (data, _) = try? await session.data(from: url) else { return nil }
-      return UIImage(data: data)
-    }
-    tasks[id] = task
-    let image = await task.value
-    tasks[id] = nil
-    images[id] = image
-    return image
   }
 }
 

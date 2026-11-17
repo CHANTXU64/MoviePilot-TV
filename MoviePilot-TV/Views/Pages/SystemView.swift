@@ -977,16 +977,6 @@ struct SystemView: View {
           )
           .font(.body.bold())
           .focused($focusedItem, equals: .homeMediaTapPlaysInApp)
-        case .autoPlayNextEpisode:
-          Toggle(
-            "自动播放下一集",
-            isOn: Binding(
-              get: { viewModel.autoPlayNextEpisode },
-              set: { viewModel.autoPlayNextEpisode = $0 }
-            )
-          )
-          .font(.body.bold())
-          .focused($focusedItem, equals: .autoPlayNextEpisode)
         }
       }
     }
@@ -1313,7 +1303,7 @@ struct SystemView: View {
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .playbackSettings:
-        return "设置应用内播放、首页点击行为和自动播放下一集。（只影响 TV 端）"
+        return "设置应用内播放和首页点击行为。（只影响 TV 端）"
       case .memoryOptimization:
         return memoryOptimizationDescription
       case .preloadTMDBDetails:
@@ -1349,7 +1339,7 @@ struct SystemView: View {
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
-        .homeMediaTapPlaysInApp, .inAppPlayback, .autoPlayNextEpisode, .memoryOptimizationMode,
+        .homeMediaTapPlaysInApp, .inAppPlayback, .memoryOptimizationMode,
         .logTimeFilter:
         break
       }
@@ -1376,8 +1366,6 @@ struct SystemView: View {
       return "开启后，首页“最近添加”中的电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
     case (.memoryOptimization, .memoryOptimizationMode(let mode)):
       return memoryOptimizationModeDescription(for: mode)
-    case (.playback, .autoPlayNextEpisode):
-      return "从详情页按集播放时，播完一集自动接着播下一集；播放期间刚入库的下一集也能接上。播放界面里的“自动播放”按钮是同一个设置。（只影响 TV 端）"
     default:
       break
     }
@@ -1547,7 +1535,6 @@ enum SystemSettingsFocus: Hashable {
   case homeMediaTapPlaysInApp
   case playbackSettings
   case inAppPlayback
-  case autoPlayNextEpisode
   case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter
