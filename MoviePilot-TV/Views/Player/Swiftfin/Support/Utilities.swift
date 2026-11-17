@@ -227,8 +227,6 @@ extension EdgeInsets {
 
 extension Color {
 
-    nonisolated static let jellyfinPurple = Color(red: 172 / 255, green: 92 / 255, blue: 195 / 255, opacity: 1)
-
     var uiColor: UIColor {
         UIColor(self)
     }
@@ -264,21 +262,6 @@ extension UIDevice {
     static func feedback(_ type: UINotificationFeedbackGenerator.FeedbackType) {}
 
     static func impact(_ type: UIImpactFeedbackGenerator.FeedbackStyle) {}
-
-    nonisolated static let supportsLiquidGlass: Bool = {
-        // MoviePilot-TV 部署到 tvOS 18：tvOS 26 之前没有 Liquid Glass。
-        guard #available(tvOS 26.0, *) else { return false }
-
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let model = withUnsafeBytes(of: systemInfo.machine) { buffer in
-            String(decoding: buffer.prefix { $0 != 0 }, as: UTF8.self)
-        }
-        /// Apple TV HD and Apple TV 4K (1st gen) run tvOS 26 without Liquid Glass
-        /// - https://support.apple.com/en-us/106336
-        /// - See tvOS 26, footnote 2
-        return !["AppleTV5,3", "AppleTV6,2"].contains(model)
-    }()
 }
 
 enum UIImpactFeedbackGenerator {

@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Extensions/ProgressViewStyle/CapsuleProgressViewStyle.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：底槽改用播放界面统一的玻璃（`PlayerGlassBackground`）。
 //
 
 import SwiftUI
@@ -50,9 +53,8 @@ struct CapsuleProgressViewStyle: ProgressViewStyle {
     }
 
     func makeBody(configuration: Configuration) -> some View {
-        Capsule()
-            .foregroundStyle(.secondary)
-            .opacity(0.2)
+        // 底槽是和按钮同一种玻璃（见 `PlayerGlassBackground`），已播部分是白色。
+        PlayerGlassBackground(shape: Capsule())
             .overlay(alignment: .leading) {
                 ZStack(alignment: .leading) {
 

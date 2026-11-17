@@ -11,6 +11,7 @@
 // 修改：tvOS 的 `PresentationView` 恒走 `largeView`，这里只保留 `largeView` 作为 `body`，去掉 iOS 用的 `standardView`
 // 及其“剩余/总时长”切换设置项；无障碍文案换成中文（取自 Swiftfin 的简体中文翻译）。
 // 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// 快退、快进时在当前时间旁显示方向和倍速；控制条下面不再压暗画面，时间文字加投影，未聚焦时也保持白色。
 //
 
 import SwiftUI
@@ -65,7 +66,19 @@ extension VideoPlayer.PlaybackControls {
 
         @ViewBuilder
         private var playbackStatusIndicator: some View {
-            if mediaSession.activity == .loading || mediaSession.playbackState.isBuffering {
+            if let scan = viewState.scan {
+                HStack(spacing: 4) {
+                    Image(systemName: scan.direction == .forward ? AppSymbol.fastForward : AppSymbol.rewind)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: statusIndicatorSize, height: statusIndicatorSize)
+                    Text(scan.rate, format: .playbackRate)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    "\(scan.direction == .forward ? "快进" : "快退") \(scan.rate.formatted(.playbackRate))"
+                )
+            } else if mediaSession.activity == .loading || mediaSession.playbackState.isBuffering {
                 ProgressView()
                     .progressViewStyle(.circular)
                     .tint(.primary)
@@ -109,8 +122,9 @@ extension VideoPlayer.PlaybackControls {
             .fontWeight(viewLayout.value(standard: nil, large: .medium))
             .monospacedDigit()
             .trackingSize($contentSize)
-            .foregroundStyle(viewState.isProgressBarFocused ? .primary : .secondary)
-            .opacity(viewState.isProgressBarFocused ? 1 : 0.7)
+            .foregroundStyle(.white)
+            .opacity(viewState.isProgressBarFocused ? 1 : 0.8)
+            .shadow(color: .black.opacity(0.6), radius: 6, y: 1)
         }
     }
 }

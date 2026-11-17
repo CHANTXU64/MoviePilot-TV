@@ -9,7 +9,8 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：`@SharedPoster`（Swiftfin 的共享条目存储）换成普通存储属性；去掉 tvOS 的
-// `focusedValue(\.focusedPoster, AnyPoster(item))`（只供 Swiftfin 首页的背景联动使用，依赖 Jellyfin 条目存储）。
+// `focusedValue(\.focusedPoster, AnyPoster(item))`（只供 Swiftfin 首页的背景联动使用，依赖 Jellyfin 条目存储）；
+// 长按预览的底换成播放界面统一的玻璃底。
 //
 
 import SwiftUI
@@ -50,8 +51,7 @@ struct PosterButton<Item: Poster>: View {
             .posterAccessibility(for: item)
             .frame(width: width)
             .padding(20)
-            .backport
-            .glassEffect(in: .rect(cornerRadius: 10))
+            .background { PlayerGlassBackground(shape: RoundedRectangle(cornerRadius: 10)) }
     }
 
     private func posterImage(overlay: some View) -> some View {

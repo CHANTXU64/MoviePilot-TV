@@ -10,8 +10,10 @@
 //
 // 修改：去掉 `import JellyfinAPI` 与 Router（关闭按钮只调 `mediaSession.stop()`，由外部退出闭包关闭界面；
 // tvOS 大屏布局本来就不显示关闭按钮）；`@SharedBaseItem` 换成普通存储属性，条目为 MoviePilot-TV 的同名 Emby 适配类型；
-// 删去 `#if os(iOS)` 分支；按钮组去掉左右内边距，右边与进度条右端对齐；图标名改从 `AppSymbol` 取
+// 删去 `#if os(iOS)` 分支；图标名改从 `AppSymbol` 取
 // （收起面板用 `chevron.compact.down`，`chevron.down` 已是降序排序）。
+// 按钮组不加左右内边距，最右的按钮与进度条右端对齐；控制条下面不压暗画面，标题加投影。
+// 剧集标题上面一行写「第几季第几集 · 集名」（同 Apple TV App）。
 //
 
 import SwiftUI
@@ -86,7 +88,9 @@ extension VideoPlayer.PlaybackControls.Toolbar {
 
         private var _titleSubtitle: (title: String, subtitle: String?) {
             if item.type == .episode, let parentTitle = item.parentTitle {
-                return (title: parentTitle, subtitle: item.seasonEpisodeLabel)
+                // 同 Apple TV App：上面一行「第几季第几集 · 集名」，下面是剧名。
+                let episode = [item.seasonEpisodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
+                return (title: parentTitle, subtitle: episode.isEmpty ? nil : episode)
             }
 
             return (title: item.displayTitle, subtitle: nil)
@@ -118,8 +122,8 @@ extension VideoPlayer.PlaybackControls.Toolbar {
             VStack(alignment: .leading) {
                 if let subtitle = _titleSubtitle.subtitle {
                     Text(subtitle)
-                        .font(.callout)
-                        .fontWeight(.medium)
+                        .font(.body)
+                        .fontWeight(.semibold)
                 }
 
                 Text(_titleSubtitle.title)
@@ -127,6 +131,8 @@ extension VideoPlayer.PlaybackControls.Toolbar {
                     .fontWeight(.semibold)
             }
             .lineLimit(1)
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.6), radius: 8, y: 2)
         }
     }
 }

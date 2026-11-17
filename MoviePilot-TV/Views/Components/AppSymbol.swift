@@ -1,8 +1,7 @@
 /// 整个 App 使用的 SF Symbols 图标，全部从这里取。
 ///
-/// 规则：同一个意思在所有地方（卡片、菜单、详情页、Sheet、状态页）只用一个图标；不同常量不写同一个图标名，
-/// 也不写系统里互为别名的两个名字（如 `doc.on.doc` 与 `document.on.document`）。
-/// 确实是同一个意思、只是出现在不同位置时，写成指向另一个常量的别名并注明理由（如 `season = tv`）。
+/// 规则：同一个意思在所有地方（卡片、菜单、详情页、Sheet、状态页）只用一个图标；同一个意思出现在不同位置时，
+/// 写成指向另一个常量的别名并注明理由（如 `season = tv`）。不同意思可以共用一个图标（如 `language` 与 `subtitleOffset`）。
 /// 卡片上看到的图标，点开的 Sheet 里也是同一个。新增图标先在这里加一项，不要在视图里直接写图标名。
 nonisolated enum AppSymbol {
   // MARK: 底部标签页
@@ -120,20 +119,17 @@ nonisolated enum AppSymbol {
   // MARK: 播放器（沿用 Swiftfin 播放界面的图标）
 
   static let playbackError = "exclamationmark.triangle"
+  /// 进度条时间旁的暂停标记，同 Apple TV App（圆圈里两道竖线），与「暂停」同一个图标。
   static let playbackPaused = pause
-  /// 自动播放开、关：工具栏按钮和切换后的提示条用同一组。
-  static let autoPlayOn = "play.circle.fill"
-  static let autoPlayOff = "stop.circle"
   /// 跳过片头、片尾等片段；上一集、下一集用 `previousItem` / `nextItem`。
   static let skipSegment = "forward.end.alt.fill"
   static let nextItem = "forward.end.fill"
   static let previousItem = "backward.end.fill"
   static let nextChapter = "forward.frame.fill"
   static let previousChapter = "backward.frame.fill"
-  /// 长按加速的倍率提示。
-  static let speedBoost = "forward.fill"
-  static let jumpForward = "goforward"
-  static let jumpBackward = "gobackward"
+  /// 按住左右键快进、快退时，进度条时间旁的方向提示。
+  static let fastForward = "forward.fill"
+  static let rewind = "backward.fill"
   /// 音频、字幕偏移的增减。
   static let decrease = "minus"
   static let increase = "plus"
@@ -146,7 +142,8 @@ nonisolated enum AppSymbol {
   static let subtitlesOn = "captions.bubble.fill"
   /// 没选字幕：和「搜索字幕」同一个图标，都表示字幕。
   static let subtitlesOff = searchSubtitles
-  static let subtitleOffset = "textformat.abc"
+  /// 字幕时间偏移：带字母的气泡，和字幕轨的 `captions.bubble` 区分开；与字幕语言 `language` 同一个图标。
+  static let subtitleOffset = "character.bubble"
   static let pictureInPicture = "pip.enter"
   static let exitPictureInPicture = "pip.exit"
   static let playbackSpeed = "speedometer"

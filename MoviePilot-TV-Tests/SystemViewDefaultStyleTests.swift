@@ -504,17 +504,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertGreaterThan(checked, 50)
   }
 
-  /// AppSymbol 里每个图标名只出现一次，并且在当前系统能取到图标。
-  /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
-  func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
+  /// AppSymbol 里每个图标名在当前系统都能取到图标。不同意思可以共用一个图标，这里不检查重复。
+  func testAppSymbolNamesAreResolvableInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
     let names = source.matches(of: #/static let (\w+) = "([^"]+)"/#)
       .map { (constant: String($0.1), symbol: String($0.2)) }
     XCTAssertGreaterThan(names.count, 50)
-
-    let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
-      .mapValues { $0.map(\.constant) }
-    XCTAssertEqual(duplicates, [:], "同一个图标名写了多次，同义请写成别名，不同意思请换图标。")
 
     for name in names {
       XCTAssertNotNil(UIImage(systemName: name.symbol), "AppSymbol.\(name.constant)（\(name.symbol)）取不到图标。")

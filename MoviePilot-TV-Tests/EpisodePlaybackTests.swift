@@ -283,7 +283,7 @@ final class EpisodePlaybackModelTests: XCTestCase {
       SystemViewModel.playbackSettingRows(backendVersion: nil, inAppPlaybackEnabled: true), [.versionRequirement])
     XCTAssertEqual(
       SystemViewModel.playbackSettingRows(backendVersion: "v3.2.6", inAppPlaybackEnabled: true),
-      [.inAppPlayback, .homeMediaTap, .autoPlayNextEpisode])
+      [.inAppPlayback, .homeMediaTap])
     XCTAssertEqual(
       SystemViewModel.playbackSettingRows(backendVersion: "v3.2.6", inAppPlaybackEnabled: false), [.inAppPlayback],
       "关掉后只在应用内播放才有意义的两项不显示")

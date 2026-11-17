@@ -8,89 +8,25 @@
 // 本文件改自 Swiftfin：Swiftfin tvOS/Views/VideoPlayer/PlaybackControls/Components/PlaybackControls+Scrubbing.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：长按加速倍率由 Swiftfin 设置项换成常量（保持 Swiftfin 默认 2 倍）；快进快退间隔是 `Duration` 常量，去掉 `.rawValue`。
-// 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// 修改：去掉长按右键的 2 倍速；左右键点一下前后跳 `VideoPlayerDefaults.jumpInterval`（10 秒，与系统播放器相同），
+// 拖动中只挪拖动位置。跳转只显示进度条，不再在画面顶部弹提示。
 //
 
-import Foundation
 import SwiftUI
 
 extension VideoPlayer.PlaybackControls {
 
-    func startSpeedBoost() {
-        guard mediaSession.canControlPlayback, !isSpeedBoosting, speedBoostTimer == nil else { return }
+    func jump(_ direction: ViewState.Scan.Direction) {
+        let interval = VideoPlayerDefaults.jumpInterval
+        let offset = direction == .forward ? interval : .zero - interval
 
-        viewState.setInteraction(.speedBoost, active: true)
-
-        speedBoostTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [self] _ in
-            // This timer is scheduled on the main actor's run loop.
-            MainActor.assumeIsolated {
-                isSpeedBoosting = true
-                viewState.originalPlaybackRate = mediaSession.rate
-
-                let multiplier = VideoPlayerDefaults.longPressSpeedMultiplier
-                mediaSession.rate = multiplier
-
-                toaster.present(
-                    Text(multiplier, format: .playbackRate),
-                    systemName: AppSymbol.speedBoost
-                )
-            }
-        }
-    }
-
-    func stopSpeedBoost(performJump: Bool = false) {
-        speedBoostTimer?.invalidate()
-        speedBoostTimer = nil
-        viewState.setInteraction(.speedBoost, active: false)
-
-        if isSpeedBoosting {
-            if let originalRate = viewState.originalPlaybackRate {
-                mediaSession.rate = originalRate
-
-                toaster.present(
-                    Text(originalRate, format: .playbackRate),
-                    systemName: AppSymbol.speedBoost
-                )
-            }
-
-            viewState.originalPlaybackRate = nil
-            isSpeedBoosting = false
+        if viewState.isScrubbing {
+            viewState.moveScrub(by: offset)
             return
         }
 
-        if performJump {
-            jumpForward()
-        }
-    }
-
-    func jumpForward() {
-        guard mediaSession.seek(by: jumpForwardInterval) else { return }
+        guard mediaSession.seek(by: offset) else { return }
 
         viewState.showProgress()
-        viewState.jumpProgressObserver.jumpForward()
-
-        toaster.present(
-            Text(
-                jumpForwardInterval * viewState.jumpProgressObserver.jumps,
-                format: .minuteSecondsAbbreviated
-            ),
-            systemName: AppSymbol.jumpForward
-        )
-    }
-
-    func jumpBackward() {
-        guard mediaSession.seek(by: .zero - jumpBackwardInterval) else { return }
-
-        viewState.showProgress()
-        viewState.jumpProgressObserver.jumpBackward()
-
-        toaster.present(
-            Text(
-                jumpBackwardInterval * viewState.jumpProgressObserver.jumps,
-                format: .minuteSecondsAbbreviated
-            ),
-            systemName: AppSymbol.jumpBackward
-        )
     }
 }

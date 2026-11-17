@@ -27,7 +27,10 @@ extension VideoPlayer.PlaybackControls.Toolbar.ActionButtons {
                 viewState.presentGuestSupplement(PlaybackAdjustmentSupplement.subtitleOffset)
             } label: {
                 if isInMenu {
-                    Text(L10n.subtitleOffset)
+                    Label(
+                        L10n.subtitleOffset,
+                        systemImage: VideoPlayerActionButton.subtitleOffset.systemImage
+                    )
 
                     Text(mediaSession.playbackItem?.subtitleOffset ?? .zero, format: .playbackOffset)
                 } else {

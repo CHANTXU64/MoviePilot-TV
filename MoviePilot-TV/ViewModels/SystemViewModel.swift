@@ -94,11 +94,6 @@ class SystemViewModel: ObservableObject {
     didSet { PlaybackPreferences.setInAppPlaybackEnabled(inAppPlaybackEnabled) }
   }
 
-  /// 播完自动播下一集，和播放界面工具栏的“自动播放”是同一个设置。
-  @Published var autoPlayNextEpisode: Bool = true {
-    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(autoPlayNextEpisode) }
-  }
-
   /// 后端版本是否支持应用内播放。
   var backendSupportsInAppPlayback: Bool {
     InAppPlaybackAvailability.supports(backendVersion: apiService.settings?.BACKEND_VERSION)
@@ -110,7 +105,6 @@ class SystemViewModel: ObservableObject {
     case versionRequirement
     case inAppPlayback
     case homeMediaTap
-    case autoPlayNextEpisode
   }
 
   var playbackSettingRows: [PlaybackSettingRow] {
@@ -118,10 +112,10 @@ class SystemViewModel: ObservableObject {
       backendVersion: apiService.settings?.BACKEND_VERSION, inAppPlaybackEnabled: inAppPlaybackEnabled)
   }
 
-  /// 后端低于 v3.2.6 时只有版本说明，开关打不开；开关关着时，只在应用内播放才有意义的两项不显示。
+  /// 后端低于 v3.2.6 时只有版本说明，开关打不开；开关关着时，「首页点击行为」不显示（只在应用内播放才有意义）。
   static func playbackSettingRows(backendVersion: String?, inAppPlaybackEnabled: Bool) -> [PlaybackSettingRow] {
     guard InAppPlaybackAvailability.supports(backendVersion: backendVersion) else { return [.versionRequirement] }
-    return inAppPlaybackEnabled ? [.inAppPlayback, .homeMediaTap, .autoPlayNextEpisode] : [.inAppPlayback]
+    return inAppPlaybackEnabled ? [.inAppPlayback, .homeMediaTap] : [.inAppPlayback]
   }
 
   @Published private(set) var isCheckingBackendVersion = false
@@ -146,12 +140,10 @@ class SystemViewModel: ObservableObject {
     }
   }
 
-  /// 进入「播放」设置页、或播放界面改了自动播放时重读。
+  /// 进入「播放」设置页时重读。
   func reloadPlaybackSettings() {
     let enabled = PlaybackPreferences.isInAppPlaybackEnabled
     if inAppPlaybackEnabled != enabled { inAppPlaybackEnabled = enabled }
-    let autoPlay = PlaybackPreferences.autoPlaysNextEpisode
-    if autoPlayNextEpisode != autoPlay { autoPlayNextEpisode = autoPlay }
     let homeTap = Self.shouldPlayHomeMediaInApp
     if homeMediaTapPlaysInApp != homeTap { homeMediaTapPlaysInApp = homeTap }
   }
@@ -286,17 +278,11 @@ class SystemViewModel: ObservableObject {
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     homeMediaTapPlaysInApp = Self.shouldPlayHomeMediaInApp
     inAppPlaybackEnabled = PlaybackPreferences.isInAppPlaybackEnabled
-    autoPlayNextEpisode = PlaybackPreferences.autoPlaysNextEpisode
     checkKeychainStatus()
     apiService.$session
       .sink { [weak self] session in
         self?.updateStorageStatus(for: session)
       }
-      .store(in: &cancellables)
-    // 播放界面工具栏也能改自动播放；设置页留在「播放」子页时切回来要显示新值。
-    NotificationCenter.default.publisher(for: PlaybackPreferences.autoPlayDidChangeNotification)
-      .receive(on: DispatchQueue.main)
-      .sink { [weak self] _ in self?.reloadPlaybackSettings() }
       .store(in: &cancellables)
   }
 

@@ -1,11 +1,10 @@
 import SwiftUI
 import UIKit
 
-// 移植自 Swiftfin 的播放器代码用到几个 MoviePilot-TV 没有引入的第三方包。
-// 这里按移植代码实际调用到的接口提供最小替身，接口名与原包一致，移植文件无需改动：
-// - `HostingController`：nathantannar4/Engine 的托管控制器（这里是 `UIHostingController` 子类）。
-// - `CollectionHStack` / `CollectionVGrid`：LePips/CollectionHStack、LePips/CollectionVGrid（这里用 SwiftUI 懒加载栈实现）。
-// 若日后引入原包，删除对应替身即可。
+// 移植自 Swiftfin 的播放器代码用到几个 MoviePilot-TV 没有引入的第三方包，这里只按实际用到的接口提供最小实现：
+// - `HostingController`：对应 nathantannar4/Engine 的托管控制器（这里是 `UIHostingController` 子类）。
+// - `CollectionHStack` / `CollectionVGrid`：对应 LePips/CollectionHStack、LePips/CollectionVGrid（这里用 SwiftUI 懒加载栈实现）。
+// 不打算引入这些原包；用不到的成员可以直接删。
 
 // MARK: - HostingController
 

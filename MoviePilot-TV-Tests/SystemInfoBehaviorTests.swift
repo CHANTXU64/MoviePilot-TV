@@ -136,24 +136,6 @@ extension SystemSessionBehaviorTests {
     XCTAssertEqual(service.settings?.BACKEND_VERSION, "v9.9.9")
   }
 
-  func testPlaybackSettingsFollowAutoPlayChangedInThePlayer() async throws {
-    // 设置页停在「播放」子页，用户在播放界面工具栏改了自动播放，切回来要显示新值。
-    let key = PlaybackPreferences.autoPlayNextEpisodeKey
-    let saved = UserDefaults.standard.object(forKey: key) as? Bool
-    defer {
-      if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
-    }
-    PlaybackPreferences.setAutoPlaysNextEpisode(true)
-    let viewModel = SystemViewModel(apiService: APIService.isolatedTestingInstance())
-    XCTAssertTrue(viewModel.autoPlayNextEpisode)
-
-    PlaybackPreferences.setAutoPlaysNextEpisode(false)
-    for _ in 0..<200 where viewModel.autoPlayNextEpisode {
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertFalse(viewModel.autoPlayNextEpisode)
-  }
-
   func testAutomaticMemoryOptimizationFollowsPlaybackAvailableToCurrentSession() {
     let defaults = UserDefaults.standard
     let modeKey = MemoryOptimizationSettings.modeKey

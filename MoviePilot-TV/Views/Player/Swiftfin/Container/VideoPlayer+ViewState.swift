@@ -15,6 +15,9 @@
 // - Swiftfin 的 `isolated deinit` 改为 `nonisolated deinit`：tvOS 18 上隔离析构的回部署会崩溃（工程约定）。
 // - 章节不在条目上，取 `MediaSession.chapters` 传给面板；章节有无变化时与换条目一样检查选中的面板还在不在
 //   （检查抽成 `supplementsDidChange`）。
+// - 遥控器行为按系统播放器：去掉长按右键的 2 倍速，改为按住左右键快退、快进（`Scan`，见 VideoPlayer+RemoteCommands.swift）；
+//   拖动分「确认」「取消（回到原处）」「丢弃（换集、退出时直接清掉）」三种结束方式。
+// - 控制条不再压黑色渐变，只有打开面板时才压暗画面；控制条 5 秒、只显示进度条时 2 秒后自动收起。
 //
 
 import Combine
@@ -51,7 +54,6 @@ extension VideoPlayer {
             case toolbar
             case playbackButtons
             case supplements
-            case dimming
         }
 
         enum AspectFillBehavior {
@@ -64,7 +66,6 @@ extension VideoPlayer {
 
             case pan
             case pinch
-            case speedBoost
             case button(UUID)
             case menu(UUID)
         }
@@ -177,7 +178,7 @@ extension VideoPlayer {
         var isGestureLocked: Bool = false {
             didSet {
                 if isGestureLocked {
-                    cancelScrub()
+                    discardScrub()
                     zoom.endInteraction()
                     setInteraction(.pan, active: false)
                     setInteraction(.pinch, active: false)
@@ -189,9 +190,8 @@ extension VideoPlayer {
         var isBeingDismissed = false
         var isCompact: Bool = false
 
-        var isScrubbing: Bool {
-            scrubPosition != nil
-        }
+        /// 单独存一份，只在开始、结束拖动时变：拖动和快退快进中位置每秒变好几次，只读这个的视图不必跟着重算。
+        private(set) var isScrubbing = false
 
         var selectedSupplementID: String? {
             get {
@@ -307,7 +307,8 @@ extension VideoPlayer {
                 return overlayActions.isEmpty ? [.progress] : [.progress, .overlayActions]
 
             case .controls:
-                var elements: Set<Element> = [.progress, .toolbar, .playbackButtons, .dimming]
+                // 控制条不压暗画面：和系统播放器一样只有几个玻璃控件，下面的字幕不被挡住。
+                var elements: Set<Element> = [.progress, .toolbar, .playbackButtons]
 
 
                 if supplements.isNotEmpty {
@@ -317,30 +318,29 @@ extension VideoPlayer {
                 return elements
 
             case let .supplement(_, showsPlaybackButtons):
+                // 打开面板也不压暗画面：面板、卡片自己带玻璃底，文字不靠黑色渐变衬。
                 if ViewLayout.platformDefault.isLarge {
-                    return [.supplements, .dimming]
+                    return [.supplements]
                 }
 
                 if isCompact {
                     return showsPlaybackButtons
-                        ? [.toolbar, .playbackButtons, .supplements, .dimming]
+                        ? [.toolbar, .playbackButtons, .supplements]
                         : [.toolbar, .supplements]
                 }
 
                 return isPresentingFullScreenSupplement
-                    ? [.supplements, .dimming]
-                    : [.toolbar, .supplements, .dimming]
+                    ? [.supplements]
+                    : [.toolbar, .supplements]
             }
         }
 
-        var originalPlaybackRate: Double?
-
         let focusCoordinator: FocusCoordinator = .init()
-        let jumpProgressObserver: JumpProgressObserver = .init()
 
         private var scrubPosition: Duration? {
             didSet {
                 if (oldValue == nil) != (scrubPosition == nil) {
+                    isScrubbing = scrubPosition != nil
                     freezePlaybackTimeIfHidden()
                     refreshAutoDismiss()
                 }
@@ -389,6 +389,17 @@ extension VideoPlayer {
 
         private(set) var scrubOriginSeconds: Duration?
 
+        /// 正在快退、快进（按住左右键开始）；拖动中但没有自动移动时为 nil。
+        private(set) var scan: Scan?
+        @ObservationIgnored
+        private var scanTask: Task<Void, Never>?
+        /// 快退快进期间为了让画面跟上跳转过：取消时要跳回原处。
+        @ObservationIgnored
+        private var scanHasSeeked = false
+        /// 快退快进开始时正在播放：取消后接着播。
+        @ObservationIgnored
+        private var scanResumesPlayback = false
+
         func beginScrub() {
             guard !isScrubbing, !isGestureLocked, mediaSession?.canSeek == true else { return }
 
@@ -396,28 +407,135 @@ extension VideoPlayer {
             scrubPosition = scrubOriginSeconds
         }
 
+        /// 从拖动（或快退快进）停下的位置播放。
         func commitScrub(resumePlayback: Bool = false) {
             guard isScrubbing else { return }
 
-            mediaSession?.seek(to: scrubbedSeconds)
+            let target = scrubbedSeconds
+            discardScrub()
+            mediaSession?.seek(to: target)
 
             if resumePlayback {
                 mediaSession?.setPlaybackRequestStatus(status: .playing)
             }
-
-            scrubPosition = nil
-            scrubOriginSeconds = nil
         }
 
+        /// 用户放弃这次拖动（返回键、焦点离开进度条）：回到原处；快退快进前在播放的，接着播。
         func cancelScrub() {
             guard isScrubbing else { return }
 
+            let origin = scrubOriginSeconds
+            let seeksBack = scanHasSeeked
+            let resumesPlayback = scanResumesPlayback
+            discardScrub()
+
+            if seeksBack, let origin {
+                mediaSession?.seek(to: origin)
+            }
+            if resumesPlayback {
+                mediaSession?.setPlaybackRequestStatus(status: .playing)
+            }
+        }
+
+        /// 直接清掉拖动状态，不跳转也不改播放状态：换集、退出、不能再跳转时用，免得把旧位置跳到新条目上。
+        func discardScrub() {
+            stopScan()
+            scanHasSeeked = false
+            scanResumesPlayback = false
             scrubPosition = nil
             scrubOriginSeconds = nil
         }
 
+        /// 拖动中点一下左右键：拖动位置前后挪一格，不跳转。和快进一样停在片尾前 `Scan.endMargin`，确认后不会被当成播完。
+        func moveScrub(by offset: Duration) {
+            guard isScrubbing else { return }
+
+            let upper = Scan.upperBound(runtime: mediaSession?.runtime ?? .zero)
+            scrubPosition = min(max(scrubbedSeconds + offset, .zero), upper)
+        }
+
+        /// 按住左右键：开始快退、快进。画面暂停，进度条按倍速移动（见 `Scan`）。
+        func beginScan(_ direction: Scan.Direction) {
+            guard let mediaSession, mediaSession.canSeek, mediaSession.runtime != nil else { return }
+
+            if !isScrubbing {
+                let wasPlaying = mediaSession.playbackRequestStatus == .playing
+                beginScrub()
+                guard isScrubbing else { return }
+
+                scanResumesPlayback = wasPlaying
+            }
+
+            if mediaSession.playbackRequestStatus == .playing {
+                mediaSession.setPlaybackRequestStatus(status: .paused)
+            }
+
+            scan = Scan(direction: direction)
+            startScanTask()
+        }
+
+        /// 快退快进中再点一下左右键：换档或掉头（见 `Scan.next`）。
+        func stepScan(_ direction: Scan.Direction) {
+            guard isScrubbing, scan != nil else { return }
+
+            scan = Scan.next(after: scan, pressing: direction)
+        }
+
+        private func stopScan() {
+            scanTask?.cancel()
+            scanTask = nil
+            scan = nil
+        }
+
+        /// 每 0.1 秒按倍速移动拖动位置；每隔 `Scan.seekInterval` 跳一次，让暂停的画面跟上。跳转沿用 `MediaSession.seek`
+        /// 的合并机制，前一次还没完成时只保留最新目标。到头（片头，或片尾前 `Scan.endMargin`）就停，留在拖动状态等用户确认或取消。
+        /// 拖进片尾前 `Scan.endMargin` 以内再快进，不跳转（见 `Scan.canSeek`）。
+        private func startScanTask() {
+            scanTask?.cancel()
+            scanTask = Task { [weak self] in
+                let clock = ContinuousClock()
+                var lastTick = clock.now
+                var lastSeek = lastTick
+
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(100))
+
+                    guard !Task.isCancelled,
+                          let self,
+                          let scan = self.scan,
+                          let position = self.scrubPosition,
+                          let mediaSession = self.mediaSession,
+                          let runtime = mediaSession.runtime
+                    else { return }
+
+                    let now = clock.now
+                    // 挂起（回到主屏幕、屏保）后回来，不把整段离开的时间一次补上。
+                    let elapsed = min(now - lastTick, Scan.maximumTickInterval)
+                    let target = scan.position(after: elapsed, from: position, runtime: runtime)
+                    lastTick = now
+                    self.scrubPosition = target
+
+                    let reachedBound = scan.hasReachedBound(target, runtime: runtime)
+                    if reachedBound || now - lastSeek >= Scan.seekInterval,
+                       Scan.canSeek(to: target, runtime: runtime)
+                    {
+                        if mediaSession.seek(to: target) {
+                            self.scanHasSeeked = true
+                        }
+                        lastSeek = now
+                    }
+
+                    if reachedBound {
+                        self.scan = nil
+                        self.scanTask = nil
+                        return
+                    }
+                }
+            }
+        }
+
         init(timer: PokeIntervalTimer? = nil) {
-            self.timer = timer ?? .init(defaultInterval: ViewLayout.platformDefault.isLarge ? 10 : 5)
+            self.timer = timer ?? .init(defaultInterval: VideoPlayerDefaults.controlsAutoHideInterval)
 
             self.timer
                 .sink { [weak self] in
@@ -486,16 +604,8 @@ extension VideoPlayer {
 
                     supplementsDidChange()
 
-                    cancelScrub()
+                    discardScrub()
                     freezePlaybackTimeIfHidden()
-
-                    if let rate = originalPlaybackRate {
-                        self.mediaSession?.rate = rate
-                        originalPlaybackRate = nil
-                    }
-
-                    setInteraction(.speedBoost, active: false)
-
 
                     fitVideo()
                 },
@@ -528,7 +638,12 @@ extension VideoPlayer {
                     previousActivity = activity
 
                     if !activity.1 {
-                        cancelScrub()
+                        // 不能再跳转了（重新载入、换集）：只清状态。快退快进时暂停是这里加的，恢复播放。
+                        let resumesPlayback = scanResumesPlayback
+                        discardScrub()
+                        if resumesPlayback {
+                            self.mediaSession?.setPlaybackRequestStatus(status: .playing)
+                        }
                     }
 
                     refreshAutoDismiss()
@@ -540,7 +655,7 @@ extension VideoPlayer {
 
         func disconnect() {
             sessionObservations.removeAll()
-            cancelScrub()
+            discardScrub()
             timer.stop()
 
 
@@ -638,8 +753,9 @@ extension VideoPlayer {
         }
 
         private var autoDismissInterval: TimeInterval {
-            // Short interval for progress only
-            presentation == .progress ? 2 : 10
+            presentation == .progress
+                ? VideoPlayerDefaults.progressAutoHideInterval
+                : VideoPlayerDefaults.controlsAutoHideInterval
         }
 
         func refreshAutoDismiss() {

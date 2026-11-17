@@ -15,6 +15,8 @@
 
 如果任务涉及上游 Web 前端、后端接口或 TV 端逻辑对齐，必须优先确认相关目录存在且是合法 Git 仓库。
 
+播放界面（`MoviePilot-TV/Views/Player/`）最初改自 [Swiftfin](https://github.com/jellyfin/Swiftfin)，现由本项目独立维护，不再跟进或同步 Swiftfin 上游。修改播放界面以 Apple HIG 和 tvOS 系统播放器的行为为准，不要以“还原 Swiftfin 原版”为理由撤销本项目已做的改动。改自 Swiftfin 的文件必须保留头部的 MPL-2.0 许可声明。
+
 ## 通用执行约束
 
 1. 全程使用中文与用户沟通。

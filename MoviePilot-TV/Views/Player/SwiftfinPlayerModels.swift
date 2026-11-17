@@ -184,10 +184,6 @@ nonisolated struct BaseItemDto: Identifiable {
     }
   }
 
-  var runTimeLabel: String? {
-    runTimeTicks.flatMap { Self.runTimeLabel(seconds: Double($0 / 10_000_000)) }
-  }
-
   /// 片长文字（如「2小时 5分钟」）。
   static func runTimeLabel(seconds: Double) -> String? {
     let formatter = DateComponentsFormatter()
@@ -266,10 +262,6 @@ extension BaseItemDto: Poster {
 
   var posterLabel: some View {
     BaseItemDtoPosterLabel(item: self)
-  }
-
-  func posterOverlay(for displayType: PosterDisplayType) -> some View {
-    PosterSelectionOverlay()
   }
 
   func imageSources(for displayType: PosterDisplayType, environment: Empty) -> [ImageSource] {
@@ -526,10 +518,6 @@ extension ItemEntry: Poster {
   }
 
   var posterLabel: some View { snapshot.posterLabel }
-
-  func posterOverlay(for displayType: PosterDisplayType) -> some View {
-    snapshot.posterOverlay(for: displayType)
-  }
 }
 
 /// 与 Swiftfin `MediaPlaybackConfiguration` 同名的播放配置（只含界面用到的字段）。
@@ -594,14 +582,9 @@ final class UserSession {
 
   /// 播放界面持有会话，这里不延长它的生命周期。
   @ObservationIgnored private weak var session: PlaybackSession?
-  /// 播完自动播下一集。Swiftfin 读写服务器上的用户配置；这里存在本机，与设置页「播放」的开关是同一个。
-  var isAutoPlayEnabled: Bool {
-    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(isAutoPlayEnabled) }
-  }
 
   init(session: PlaybackSession) {
     self.session = session
-    isAutoPlayEnabled = PlaybackPreferences.autoPlaysNextEpisode
   }
 
   /// 接入点：片头/片尾片段。

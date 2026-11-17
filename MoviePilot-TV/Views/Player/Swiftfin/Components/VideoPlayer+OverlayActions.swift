@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Components/VideoPlayer+OverlayActions.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：按钮用播放界面统一的玻璃胶囊按钮（`PlayerGlassCapsuleButtonStyle`），未聚焦时不再常亮白底。
 //
 
 import SwiftUI
@@ -73,41 +76,10 @@ extension VideoPlayer {
                             Text(action.button.title)
                         }
                     }
-                    .buttonStyle(OverlayActionButtonStyle())
+                    .buttonStyle(.playerGlass)
                     .coordinatedFocus(action.id.focusID, selection: $focusedAction)
                 }
             }
-        }
-    }
-
-    private struct OverlayActionButtonStyle: ButtonStyle {
-
-        @AdaptiveLayout
-        private var viewLayout
-
-        @Environment(\.isFocused)
-        private var isFocused
-        @Environment(\.isEnabled)
-        private var isEnabled
-        @Environment(\.accessibilityReduceMotion)
-        private var reduceMotion
-
-        func makeBody(configuration: Configuration) -> some View {
-            configuration.label
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.black)
-                .symbolRenderingMode(.monochrome)
-                .padding(.horizontal, viewLayout.isLarge ? 28 : 20)
-                .padding(.vertical, viewLayout.isLarge ? 16 : 10)
-                .frame(minHeight: 44)
-                .background(.white, in: Capsule())
-                .contentShape(Capsule())
-                .scaleEffect(isFocused && !reduceMotion ? 1.08 : 1)
-                .shadow(color: .black.opacity(isFocused ? 0.5 : 0.2), radius: isFocused ? 12 : 4)
-                .opacity(isEnabled ? (configuration.isPressed ? 0.65 : 1) : 0.5)
-                .animation(.easeOut(duration: 0.15), value: isFocused)
-                .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
         }
     }
 }
