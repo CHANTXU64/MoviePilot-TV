@@ -2472,7 +2472,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(session.item.id, "e2")
     XCTAssertEqual(screen.item.id, "e2", "界面的条目跟着换了")
     XCTAssertNotEqual(screen.state, .loadingItem, "新条目已起播，不再停在加载中")
-    XCTAssertEqual(player.generation, firstGeneration + 2, "旧条目停止一次、新条目载入一次，没有重复载入")
+    XCTAssertEqual(player.generation, firstGeneration + 1, "新条目只载入一次，旧条目不再额外停止")
     XCTAssertEqual(player.loadedURL, session.streamURL, "交给播放器的是新条目的地址")
     let started = PlaybackURLProtocol.stub.requests().dropFirst(before)
       .filter { "\($0.method) \($0.url.path)" == "POST /Sessions/Playing" }
@@ -2492,6 +2492,46 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(failures.count, failuresBefore + 1)
     screen.handlePlayerEvent(.statusChanged(.ended), generation: player.generation)
     XCTAssertTrue([.stopped, .loadingItem].contains(screen.state), "当前条目播完后退出或接下一集")
+
+    screen.stop()
+    coordinator.endCurrentSession()
+    await reporter.waitForQueued()
+  }
+
+  /// 换集时上一集的内嵌章节不能带进新条目：旧条目读出章节后换到没有章节的新条目，
+  /// 新条目载入期间「章节」不能还显示旧条目那几段（服务器没给章节、依赖文件内嵌时最容易触发）。
+  func testSwitchItemDropsPreviousEmbeddedChaptersDuringLoad() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSession(coordinator)
+    session.onFailure = { _ in }
+    let engine = EngineSignalsStandIn()
+    session.usePlayerForTesting(AetherPlayer(signalsForTesting: engine.signals))
+    let screen = MediaSession(
+      session: session,
+      onExit: { _ in coordinator.endSession(session) },
+      onSwitchItem: { itemID, sourceID, position, episode, completion in
+        coordinator.switchItem(
+          to: itemID, mediaSourceID: sourceID, startPosition: position, episode: episode, in: session,
+          completion: completion)
+      })
+
+    screen.start()
+    engine.finishReading(chapters: [
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 600),
+    ])
+    try await waitUntil { screen.state == .playback }
+    let chaptersBefore: [ChapterInfo.FullInfo] = screen.chapters.loaded
+    XCTAssertTrue(chaptersBefore.contains { $0.chapterInfo.name == "序幕" }, "旧条目读出内嵌章节")
+
+    screen.playNewItem(intent: PlaybackIntent(item: BaseItemDto(id: "e2")))
+    await coordinator.switchTaskForTesting?.value
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(session.item.id, "e2")
+    let chaptersAfter: [ChapterInfo.FullInfo] = screen.chapters.loaded
+    let leaked = chaptersAfter.filter { $0.chapterInfo.name == "序幕" || $0.chapterInfo.name == "正片" }
+    XCTAssertTrue(leaked.isEmpty, "换集载入期间不应显示上一集的内嵌章节")
 
     screen.stop()
     coordinator.endCurrentSession()
@@ -6924,6 +6964,20 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(
       shown.afterRead.panel?.chapters.map(\.displayTitle), ["片头", "正片", "片尾"],
       "播放器读到的内嵌章节不替换服务器的")
+  }
+
+  /// 服务器给的默认英文章节名（Emby/Jellyfin/Plex 的 "Chapter 01"）按现有英文转中文规则本地化，真实章节名保真。
+  func testDefaultEnglishServerChapterNamesAreLocalized() async throws {
+    let shown = try await movieChapters(
+      chapters: #"""
+        [
+          {"StartPositionTicks":0,"Name":"Chapter 01","MarkerType":"Chapter","ChapterIndex":0},
+          {"StartPositionTicks":6000000000,"Name":"Chapter 02","MarkerType":"Chapter","ChapterIndex":1},
+          {"StartPositionTicks":12000000000,"Name":"片尾","MarkerType":"Chapter","ChapterIndex":2}]
+        """#)
+    let chapters = try XCTUnwrap(shown.beforeRead.panel).chapters
+    XCTAssertEqual(chapters.map(\.displayTitle), ["章节 1", "章节 2", "片尾"], "默认英文名本地化，真实章节名保真")
+    XCTAssertEqual(shown.beforeRead.loaded.map(\.name), ["章节 1", "章节 2", "片尾"], "播放界面和面板同一份章节")
   }
 
   /// 老版本 Emby 不给 `ChapterIndex`、片源也不给 `ItemId`：截图序号按章节在服务器列表里的位置（读不出的条目也占位），

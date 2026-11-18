@@ -339,6 +339,10 @@ final class AetherPlayer {
     audioDelay = 0
     hasDroppedAudio = false
     resolveSeekWaiter(false)
+    // 解码方式与内嵌章节同步清掉：换集原位交接保留的是旧画面，不是旧条目的数据。
+    // 引擎异步载入完成前 chapters 仍返回旧值，不在这里清就会被 refreshPlaybackState 写回界面缓存，带进新条目。
+    hasVideoRoute = false
+    fileChapters = []
     guard let engine else {
       reportFailure(
         PlaybackFailure(kind: PlaybackFailureMessage.initializationKind, message: "AetherEngine init failed"),
@@ -361,7 +365,7 @@ final class AetherPlayer {
     }
   }
 
-  /// 停止当前条目。`keepsDisplayMode` 为真时电视保持当前显示模式（换集时用），否则还原并交还音频会话。
+  /// 停止当前条目。`keepsDisplayMode` 为真时电视保持当前显示模式，留给下一次载入；否则还原并交还音频会话。
   func stop(keepsDisplayMode: Bool = false) {
     // 还没开始执行的载入不再开始：停止之后再起播就没人管了。
     loadTask?.cancel()
@@ -372,6 +376,16 @@ final class AetherPlayer {
     resolveSeekWaiter(false)
     subtitles.reset()
     engine?.stop(resetDisplayCriteria: !keepsDisplayMode, finalTeardown: !keepsDisplayMode)
+  }
+
+  /// 换条目：停住当前画面，交给下一次载入原位替换。原生解码（`VideoRoute.loopback`/`.remoteBypass`）旧画面保留到新条目就绪、不出黑帧；
+  /// 软件解码（`.software`）不支持原位交接，仍会露黑帧（见 `MediaSession.coverUntilStartupSettles` 的边界说明）。
+  /// 引擎的原位交接不暂停播放，旧条目会一直播到新条目替换，这里先停住。
+  func handOverForItemReplacement() {
+    // 与 stop 一致：还在途的旧载入不再返回发布，避免它抢在新条目载入前写回旧状态。
+    loadTask?.cancel()
+    engine?.pause()
+    engine?.prepareForItemReplacement()
   }
 
   func play() {

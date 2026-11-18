@@ -194,6 +194,12 @@ struct MediaDetailView: View {
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
+  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
+  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
+  /// 正在等待焦点写回「播放」。播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
+  @State private var pendingButtonRestore = false
+  /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
+  @State private var restoreGeneration = 0
 
   /// 音乐走独立订阅链，TV 不提供入口：既不能当电影直接订阅，也不能进分季流程（否则是死按钮）。
   private var canSubscribeMedia: Bool {
@@ -755,6 +761,24 @@ struct MediaDetailView: View {
       if let newValue = newValue {
         lastFocusedButton = newValue
       }
+      // 焦点真的落回「播放」了，通知呈现层可以盖播放器。
+      if newValue == .play, playbackFocusHandoff.target == .detailHeader(routeID: routeID) {
+        playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
+      }
+    }
+    // 盖播放器之前把焦点交回起播控件：模态关闭时系统还原的是盖上去那一刻的焦点项，
+    // 那一刻焦点在黑屏锚点上，锚点退出时已经撤掉，系统就只能退回 Tab 栏。
+    .onChange(of: playbackFocusHandoff.request) { _, _ in
+      guard playbackFocusHandoff.target == .detailHeader(routeID: routeID) else { return }
+      focusedButton = .play
+    }
+    // 播放结束：盖上过播放器时由系统还原，播放器没出来就结束（准备期取消）时没有可还原的对象，
+    // 这里主动写回。两者都等模态和转场结束后再写。
+    .onChange(of: playbackEndedGeneration) { _, _ in
+      guard playbackFocusHandoff.target == .detailHeader(routeID: routeID) else { return }
+      playbackFocusHandoff.target = nil
+      guard navigationCoordinator.topEntryID == routeID else { return }
+      beginButtonRestore()
     }
     // 设置为晚到（例如启动后才拿到 BACKEND_VERSION）或详情后到时补发首屏请求；
     // 请求成功后 `loadDoubanDiscussionIfNeeded` 自己不会再重发。
@@ -771,6 +795,33 @@ struct MediaDetailView: View {
       onContentFocus: { hasAppeared = true },
       action: { focusedButton = preferredHeaderFocus }
     ))
+    // 焦点没被系统还原回来时（播放器没盖上过就结束）补写一次：等模态和转场彻底结束再写，写回前每帧重试。
+    .background(PresentationReadyAction(
+      isEnabled: pendingButtonRestore && allowsRequests,
+      requiresNavigationTop: true,
+      contentFocusMatches: pendingButtonRestore && focusedButton == .play,
+      onContentFocus: {
+        pendingButtonRestore = false
+        restoreGeneration += 1
+      },
+      action: {
+        // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
+        focusedButton = focusedButton == .play ? nil : .play
+      }
+    ))
+  }
+
+  /// 把焦点补写回头部「播放」。真正的写回由 `PresentationReadyAction` 轮询完成：
+  /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回按钮就放弃。
+  private func beginButtonRestore() {
+    restoreGeneration += 1
+    let generation = restoreGeneration
+    pendingButtonRestore = true
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(3))
+      guard restoreGeneration == generation else { return }
+      pendingButtonRestore = false
+    }
   }
 
   private func navigateFromSecondPage(to destination: Person) {
@@ -1061,7 +1112,17 @@ struct MediaDetailView: View {
               let seriesAction = viewModel.seriesPlayAction
               let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
               let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
-              Button(action: { viewModel.playFromHeader(playbackTarget) }) {
+              Button(action: {
+                let coordinator = apiService.sessionScope.playbackCoordinator
+                // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这个头部按钮。
+                guard !coordinator.isBusy else { return }
+                playbackFocusHandoff.target = .detailHeader(routeID: routeID)
+                viewModel.playFromHeader(playbackTarget)
+                // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
+                if !coordinator.isBusy {
+                  playbackFocusHandoff.target = nil
+                }
+              }) {
                 HStack(spacing: 14) {
                   Image(systemName: AppSymbol.play)
                   if let progress {

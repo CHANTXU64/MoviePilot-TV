@@ -150,6 +150,8 @@ private enum EpisodeBrowserLayout {
 private struct EpisodeBrowser: View {
   @ObservedObject private var apiService = APIService.shared
   @EnvironmentObject private var notificationManager: NotificationManager
+  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
+  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
   let media: MediaInfo
   let tmdbID: Int
   let groupID: String?
@@ -181,6 +183,12 @@ private struct EpisodeBrowser: View {
   @State private var appliedHint: EpisodeRowHint?
   @FocusState private var focus: EpisodeRowFocus?
   @FocusState private var focusedSeason: Int?
+  /// 这一行的实例身份。同一部剧的货架行和展开的剧集页是两个实例，焦点只能交回起播的那一个。
+  @State private var focusOwnerID = UUID()
+  /// 正在等待焦点写回的那一集。播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
+  @State private var pendingFocusRestore: MoviePilotEpisode.ID?
+  /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
+  @State private var focusRestoreGeneration = 0
   /// 打开着单集面板的那一集。面板由本行弹出，内容随本行的播放状态和试看进度实时变化。
   @State private var panelEpisode: MoviePilotEpisode?
   /// 面板关掉后要做的事：全屏播放器不能叠在面板上起播，先关面板再播。
@@ -498,6 +506,56 @@ private struct EpisodeBrowser: View {
     .onChange(of: rowHint, initial: true) { _, hint in
       guard hint != appliedHint, focus == nil, focusedSeason == nil, group.selectedSeason == nil else { return }
       appliedHint = hint
+    }
+    // 盖播放器之前把焦点交回这一集：模态关闭时系统还原的是盖上去那一刻的焦点项。
+    .onChange(of: playbackFocusHandoff.request) { _, _ in
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID
+      else { return }
+      focus = .episode(id)
+    }
+    // 焦点真的落回这一集了，通知呈现层可以盖播放器。
+    .onChange(of: focus) { _, newValue in
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID, newValue == .episode(id)
+      else { return }
+      playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
+    }
+    // 播放结束：盖上过播放器时由系统还原，播放器没出来就结束（准备期取消）时没有可还原的对象，
+    // 这里主动写回。两者都等模态和转场结束后再写。
+    .onChange(of: playbackEndedGeneration) { _, _ in
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID
+      else { return }
+      playbackFocusHandoff.target = nil
+      beginFocusRestore(id)
+    }
+    .background(PresentationReadyAction(
+      isEnabled: pendingFocusRestore != nil && allowsRequests,
+      requiresNavigationTop: true,
+      contentFocusMatches: pendingFocusRestore.map { focus == .episode($0) } ?? false,
+      onContentFocus: {
+        pendingFocusRestore = nil
+        focusRestoreGeneration += 1
+      },
+      action: {
+        // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
+        guard let id = pendingFocusRestore else { return }
+        focus = focus == .episode(id) ? nil : .episode(id)
+      }
+    ))
+  }
+
+  /// 焦点没被系统还原回来时把焦点补写回这一集。真正的写回由 `PresentationReadyAction` 轮询完成：
+  /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回这一集就放弃。
+  private func beginFocusRestore(_ id: MoviePilotEpisode.ID) {
+    focusRestoreGeneration += 1
+    let generation = focusRestoreGeneration
+    pendingFocusRestore = id
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(3))
+      guard focusRestoreGeneration == generation else { return }
+      pendingFocusRestore = nil
     }
   }
 
@@ -866,8 +924,15 @@ private struct EpisodeBrowser: View {
     guard let playback, let context = playbackContext(playback),
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }
-    apiService.sessionScope.playbackCoordinator.play(
+    // 播放器盖上之后退出时，焦点要回到这一集。
+    let coordinator = apiService.sessionScope.playbackCoordinator
+    // 已有别的播放在准备或播放：这次会被协调器拒绝，先别登记目标，免得把焦点目标错改成这一集。
+    guard !coordinator.isBusy else { return }
+    playbackFocusHandoff.target = .episode(ownerID: focusOwnerID, seriesID: tmdbID, id: episode.id)
+    coordinator.play(
       .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), accepting: acceptance))
+    // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
+    if !coordinator.isBusy { playbackFocusHandoff.target = nil }
   }
 
   /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）

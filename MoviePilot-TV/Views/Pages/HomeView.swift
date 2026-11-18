@@ -177,6 +177,8 @@ private struct MediaSectionView: View {
   @ObservedObject var viewModel: HomeViewModel
 
   @Environment(\.openURL) private var openURL
+  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
+  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
@@ -186,6 +188,12 @@ private struct MediaSectionView: View {
   @State private var imageAnchorId: String?
   @State private var posterWarmDelayTask: Task<Void, Never>?
   @State private var posterWarmDownloadTask: DownloadTask?
+  /// 这一行的实例身份，焦点只交回起播的那一个。
+  @State private var focusOwnerID = UUID()
+  /// 正在等待焦点写回的媒体卡；播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
+  @State private var pendingFocusRestore: String?
+  /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
+  @State private var focusRestoreGeneration = 0
 
   private var canSearchResources: Bool {
     APIService.shared.canAccess(.search)
@@ -378,6 +386,62 @@ private struct MediaSectionView: View {
       }
     }
     .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
+    // 盖播放器之前把焦点交回起播的媒体卡：模态关闭时系统还原的是盖上去那一刻的焦点项。
+    .onChange(of: playbackFocusHandoff.request) { _, _ in
+      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
+        owner == focusOwnerID
+      else { return }
+      focusedItemId = itemID
+    }
+    // 焦点真的落回这张卡了，通知呈现层可以盖播放器。
+    .onChange(of: focusedItemId) { _, newValue in
+      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, newValue == itemID
+      else { return }
+      playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
+    }
+    // 播放结束：盖上过播放器时由系统还原，准备期取消没出来时主动写回。两者都等转场结束后再写。
+    .onChange(of: playbackEndedGeneration) { _, _ in
+      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
+        owner == focusOwnerID
+      else { return }
+      playbackFocusHandoff.target = nil
+      beginFocusRestore(itemID)
+    }
+    .background(PresentationReadyAction(
+      isEnabled: pendingFocusRestore != nil,
+      requiresNavigationTop: true,
+      contentFocusMatches: pendingFocusRestore.map { focusedItemId == $0 } ?? false,
+      onContentFocus: {
+        pendingFocusRestore = nil
+        focusRestoreGeneration += 1
+      },
+      action: {
+        // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
+        guard let id = pendingFocusRestore else { return }
+        // 轮询期间卡被刷掉：立刻放弃，焦点交给系统默认，不再空转。
+        guard items.contains(where: { $0.id == id }) else {
+          pendingFocusRestore = nil
+          return
+        }
+        focusedItemId = focusedItemId == id ? nil : id
+      }
+    ))
+  }
+
+  /// 焦点没被系统还原回来时把焦点补写回这张卡。真正的写回由 `PresentationReadyAction` 轮询完成：
+  /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回就放弃。
+  private func beginFocusRestore(_ id: String) {
+    // 卡已经被刷掉就别等了，焦点交给系统默认。
+    guard items.contains(where: { $0.id == id }) else { return }
+    focusRestoreGeneration += 1
+    let generation = focusRestoreGeneration
+    pendingFocusRestore = id
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(3))
+      guard focusRestoreGeneration == generation else { return }
+      pendingFocusRestore = nil
+    }
   }
 
   private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
@@ -395,7 +459,14 @@ private struct MediaSectionView: View {
         navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
       case .play(let target):
         guard navigationCoordinator.isCurrent(navigationSource) else { return }
-        APIService.shared.sessionScope.playbackCoordinator.play(target)
+        let coordinator = APIService.shared.sessionScope.playbackCoordinator
+        // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这张卡。
+        guard !coordinator.isBusy else { return }
+        // 播放器盖上之后退出时，焦点要回到这张卡。
+        playbackFocusHandoff.target = .homeMedia(ownerID: focusOwnerID, itemID: item.id)
+        coordinator.play(target)
+        // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
+        if !coordinator.isBusy { playbackFocusHandoff.target = nil }
       case nil:
         break
       }

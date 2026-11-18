@@ -10,7 +10,8 @@ enum AppLanguage: String {
 struct TranslationHelper {
   /// 全局当前语言设置，默认为简体中文。
   /// 之后可以根据系统设置或用户偏好进行修改。
-  static var currentLanguage: AppLanguage = .zhHans
+  /// 起播后不再改写的全局配置，允许 nonisolated 的章节命名（`PlaybackChapters`）读取。
+  nonisolated(unsafe) static var currentLanguage: AppLanguage = .zhHans
 
   // MARK: - 语言翻译
 
@@ -564,5 +565,32 @@ struct TranslationHelper {
     let trimmed = genreName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return "" }
     return genreTranslations[trimmed]?[currentLanguage] ?? trimmed
+  }
+
+  // MARK: - 章节名翻译
+
+  /// Emby/Jellyfin/Plex 与 mkvmerge 等给无标题章节的默认英文名是「Chapter N」（N 可能补零，如「Chapter 01」）。
+  nonisolated private static let defaultChapterNameRegex = try? NSRegularExpression(
+    pattern: "^Chapter\\s+0*(\\d+)$", options: [.caseInsensitive])
+
+  /**
+   把媒体服务器或文件自带的默认英文章节名（"Chapter 01" 等）本地化；真实章节名保真。
+   - Returns: 按 `currentLanguage` 本地化的「章节 N」（简体）/「章節 N」（繁体）/「Chapter N」（英文）；
+     非默认名只做 trim 原样返回；全为空白时返回空串。
+   */
+  nonisolated static func translateChapter(for name: String) -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    let range = NSRange(trimmed.startIndex..., in: trimmed)
+    guard let regex = defaultChapterNameRegex,
+          let match = regex.firstMatch(in: trimmed, range: range),
+          let numberRange = Range(match.range(at: 1), in: trimmed),
+          let number = Int(trimmed[numberRange])
+    else { return trimmed }
+    switch currentLanguage {
+    case .zhHans: return "章节 \(number)"
+    case .zhHant: return "章節 \(number)"
+    case .en: return "Chapter \(number)"
+    }
   }
 }

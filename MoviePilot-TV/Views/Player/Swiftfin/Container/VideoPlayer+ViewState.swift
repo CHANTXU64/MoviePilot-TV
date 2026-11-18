@@ -133,7 +133,17 @@ extension VideoPlayer {
         }
 
         private func focusPlaybackControls() {
-            focusCoordinator.focus(mediaSession?.item.isLiveStream == true ? Focus.controls : Focus.progress)
+            let id = mediaSession?.item.isLiveStream == true ? Focus.controls : Focus.progress
+
+            // 进播放器时播放器还没就绪，进度条的滑块是 disabled 的，写焦点扑空（焦点会被工具栏的默认焦点接走）。
+            // 记下来，等能跳转了（canSeek 为真）再补这一次。
+            guard id != Focus.progress || mediaSession?.canSeek == true else {
+                isAwaitingPlaybackFocus = true
+                return
+            }
+
+            isAwaitingPlaybackFocus = false
+            focusCoordinator.focus(id)
         }
 
         func updateOverlayActionFocus(previousIDs: [OverlayAction.ID] = []) {
@@ -243,6 +253,9 @@ extension VideoPlayer {
         }
 
         private var pendingSupplementFocusID: String?
+
+        /// 起播时进度条还不可聚焦，初始焦点请求被记下，等 `canSeek` 为真再补发。
+        private var isAwaitingPlaybackFocus = false
 
         var isSupplementFocusPending: Bool {
             pendingSupplementFocusID != nil
@@ -637,6 +650,10 @@ extension VideoPlayer {
 
                     previousActivity = activity
 
+                    if activity.1, isAwaitingPlaybackFocus, isPresentingProgress {
+                        focusPlaybackControls()
+                    }
+
                     if !activity.1 {
                         // 不能再跳转了（重新载入、换集）：只清状态。快退快进时暂停是这里加的，恢复播放。
                         let resumesPlayback = scanResumesPlayback
@@ -647,6 +664,15 @@ extension VideoPlayer {
                     }
 
                     refreshAutoDismiss()
+                },
+                // 自动接下一集时控制条可能已自动隐藏：换集加载期间主动露出进度条，让加载转圈可见。
+                // 加载期间 activity 非 nil，canAutoDismiss 为假不会提前收；加载结束后由现有自动收起逻辑收掉。
+                ObservationToken { [weak mediaSession] in
+                    mediaSession?.state == .loadingItem
+                } onChange: { [weak self] isLoadingItem in
+                    guard let self, isLoadingItem, presentation == .hidden else { return }
+
+                    showProgress()
                 },
             ]
 
@@ -793,6 +819,10 @@ extension VideoPlayer {
 
             if isPresentingProgress, !wasPresentingProgress {
                 focusPlaybackControls()
+            }
+
+            if !isPresentingProgress {
+                isAwaitingPlaybackFocus = false
             }
 
             refreshAutoDismiss()

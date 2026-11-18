@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 /// 挂在主界面上的播放呈现：起播前的黑屏、全屏播放器和失败提示。有续播点时直接接着播，不询问。
@@ -16,6 +17,16 @@ struct PlaybackPresentationModifier: ViewModifier {
   @FocusState private var isLoadingScreenFocused: Bool
   /// 全屏播放器正在显示的会话，播放界面出现时记下。
   @State private var presented = PresentedSession()
+  /// 播放结束的次数。盖过播放器时由系统还原盖上那一刻的焦点项；准备期取消时没有可还原的对象，
+  /// 页面据此把焦点交回起播的那个控件。
+  @State private var playbackEndedGeneration = 0
+  /// 盖播放器之前的焦点交接：请页面把焦点放回起播控件，页面回执后再盖（见 `requestFocusHandoff`）。
+  @State private var focusHandoff = PlaybackFocusHandoff()
+  /// 已经排上呈现、还没盖上的会话。
+  @State private var pendingPresentation: PlaybackSession?
+  /// 页面是否已经解除禁用。准备阶段（黑屏淡入、解析中）页面保持禁用；到真要交回焦点那一刻才解除，
+  /// 之后播放期间和退出时也保持解除，系统关闭模态才能把焦点还原到页面控件。
+  @State private var isHandingOffFocus = false
 
   private final class PresentedSession {
     // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -26,8 +37,12 @@ struct PlaybackPresentationModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .disabled(coordinator.isBusy)
-      .accessibilityHidden(coordinator.isBusy)
+      .environment(\.playbackEndedGeneration, playbackEndedGeneration)
+      .environment(\.playbackFocusHandoff, focusHandoff)
+      // 准备阶段禁用整页：那时焦点要落在黑屏上接返回键，页面不能先被遥控器操作。
+      // 到交回焦点那一刻才解除，之后播放期间保持解除，模态关闭时系统才能把记下的页面控件还原回来。
+      .disabled(coordinator.isBusy && !isHandingOffFocus)
+      .accessibilityHidden(coordinator.isBusy && !isHandingOffFocus)
       .overlay {
         // 按下播放先从页面淡入黑屏，正中转圈、不带文字（Apple TV App 的做法，HIG「Playing video › Loading content」
         // 的黑底居中转圈）。黑屏盖满后播放器接上，播放器里同样的黑屏一直盖到出画面。返回键取消。
@@ -38,8 +53,13 @@ struct PlaybackPresentationModifier: ViewModifier {
           }
         }
       }
-      .onChange(of: coordinator.isBusy, initial: true) { _, isBusy in
+      .onChange(of: coordinator.isBusy, initial: true) { wasBusy, isBusy in
         updateLoadingScreen(isBusy: isBusy)
+        // 每次起播都从锁住页面开始，等交回焦点那一刻再解除。
+        if isBusy { isHandingOffFocus = false }
+        // 播放结束（含准备期取消）：播放器盖上之前焦点交回了页面，正常情况下系统会自己还原；
+        // 没盖上播放器就结束时没有可还原的对象，由起播的那个控件自己写回。
+        if !isBusy, wasBusy { playbackEndedGeneration += 1 }
       }
       .task(id: showsLoadingScreen) {
         guard showsLoadingScreen else { return }
@@ -49,6 +69,11 @@ struct PlaybackPresentationModifier: ViewModifier {
       }
       .onChange(of: coordinator.session?.id) {
         presentPlayerIfReady()
+      }
+      .onChange(of: focusHandoff.acknowledged) { _, acknowledged in
+        // 页面已经把焦点写回起播控件，这时才盖播放器，让系统记下的是那个控件。
+        guard acknowledged == focusHandoff.request, let session = pendingPresentation else { return }
+        presentCover(session)
       }
       .fullScreenCover(
         item: Binding(
@@ -97,6 +122,8 @@ struct PlaybackPresentationModifier: ViewModifier {
       withAnimation(PlaybackLoadingScreen.fadeIn) { showsLoadingScreen = true }
       return
     }
+    // 还没盖上播放器就结束了（准备期取消）：撤销排队中的呈现。
+    pendingPresentation = nil
     isLoadingScreenOpaque = false
     if hasShownPlayer {
       // 退出播放：没什么要加载了，播放器收起时露出的直接是页面，不再露出黑屏和转圈。
@@ -114,10 +141,38 @@ struct PlaybackPresentationModifier: ViewModifier {
   /// 会话结束时收起播放器。
   private func presentPlayerIfReady() {
     guard let session = coordinator.session else {
+      pendingPresentation = nil
       playerSession = nil
       return
     }
-    guard isLoadingScreenOpaque, playerSession !== session else { return }
+    guard isLoadingScreenOpaque, playerSession !== session, pendingPresentation == nil else { return }
+    pendingPresentation = session
+    // 有要交回的起播控件时先等页面把焦点写回去；没有就直接盖，和原来一样不耽误起播。
+    guard focusHandoff.target != nil else {
+      presentCover(session)
+      return
+    }
+    requestFocusHandoff(for: session)
+  }
+
+  /// 盖播放器之前先让页面把焦点放回起播控件。模态关闭时系统还原它"盖上去那一刻"的焦点项：
+  /// 那一刻焦点在黑屏锚点上，锚点退出时已经撤掉，只能退回 Tab 栏。
+  private func requestFocusHandoff(for session: PlaybackSession) {
+    // 解除页面禁用和发出请求放在同一帧，页面可操作到播放器盖上之间只剩交接本身的几帧。
+    isHandingOffFocus = true
+    focusHandoff.request += 1
+    let request = focusHandoff.request
+    Task { @MainActor in
+      // 页面没能写回（要交回的控件已经不在页面上）时别把播放器一直卡在黑屏里。
+      try? await Task.sleep(for: .milliseconds(150))
+      guard focusHandoff.request == request, pendingPresentation === session else { return }
+      presentCover(session)
+    }
+  }
+
+  private func presentCover(_ session: PlaybackSession) {
+    guard pendingPresentation === session, playerSession !== session else { return }
+    pendingPresentation = nil
     var transaction = Transaction()
     transaction.disablesAnimations = true
     withTransaction(transaction) {
@@ -176,5 +231,58 @@ struct PlaybackLoadingScreen: View {
 extension View {
   func playbackPresentation(_ coordinator: PlaybackCoordinator) -> some View {
     modifier(PlaybackPresentationModifier(coordinator: coordinator))
+  }
+}
+
+private struct PlaybackFocusHandoffKey: EnvironmentKey {
+  static let defaultValue = PlaybackFocusHandoff()
+}
+
+extension EnvironmentValues {
+  /// 盖播放器之前的焦点交接（见 `PlaybackFocusHandoff`）。
+  var playbackFocusHandoff: PlaybackFocusHandoff {
+    get { self[PlaybackFocusHandoffKey.self] }
+    set { self[PlaybackFocusHandoffKey.self] = newValue }
+  }
+}
+
+/// 起播的控件：播放器盖上之后，退出播放时焦点要回到它。带上起播方身份，栈里还有别的详情页、
+/// 或者货架行和展开的剧集页同时活着时，只有起播的那一个实例写焦点、回执、清目标。
+enum PlaybackFocusTarget: Hashable {
+  /// 详情页头部的「播放」。
+  case detailHeader(routeID: UUID)
+  /// 详情页的某一集。集 ID 只是本季列表里的位置，别的剧、同一部剧的另一行都会重复，所以带上行实例和剧。
+  case episode(ownerID: UUID, seriesID: Int, id: MoviePilotEpisode.ID)
+  /// 首页「最近添加」里直接起播的媒体卡（没有 TMDB 编号、不经过详情页）。带上行实例身份，焦点只交回起播的那一个。
+  case homeMedia(ownerID: UUID, itemID: String)
+}
+
+/// 盖播放器之前的焦点交接：呈现层请页面把焦点放回起播控件，页面写回后回执，呈现层再盖上播放器。
+/// 模态关闭时系统还原的是"盖上去那一刻"的焦点项，所以那一刻焦点必须在页面控件上；留在准备阶段的
+/// 黑屏锚点上不行——锚点退出时已经撤掉，系统只能退回 Tab 栏。
+@MainActor
+@Observable
+final class PlaybackFocusHandoff {
+  // 与播放会话一起释放时，避开 tvOS 18 的隔离析构回部署问题。
+  nonisolated deinit {}
+
+  /// 起播控件在按下播放时登记的目标；`nil` 表示这次起播没有要交回的焦点。
+  var target: PlaybackFocusTarget?
+  /// 呈现层自增：请求页面把焦点放回 `target`。
+  var request = 0
+  /// 页面确认焦点已写回（回填对应的 `request`）。
+  var acknowledged = 0
+}
+
+private struct PlaybackEndedGenerationKey: EnvironmentKey {
+  static let defaultValue = 0
+}
+
+extension EnvironmentValues {
+  /// 播放结束（含准备期取消）时自增。盖过播放器时系统会还原盖上那一刻的焦点项（见 `PlaybackFocusHandoff`），
+  /// 页面收到这个信号后等焦点落定，没还原回来就补写一遍。
+  var playbackEndedGeneration: Int {
+    get { self[PlaybackEndedGenerationKey.self] }
+    set { self[PlaybackEndedGenerationKey.self] = newValue }
   }
 }
