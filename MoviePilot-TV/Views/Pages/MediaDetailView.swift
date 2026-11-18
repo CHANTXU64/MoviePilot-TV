@@ -586,37 +586,42 @@ struct MediaDetailView: View {
                   .transition(.opacity)
               }
 
-              Group {
-                seasonSubscriptionSection
-                  .focused($focusedContentRow, equals: "season")
-                if let episodeTMDBID {
-                  MediaDetailEpisodesView(
-                    media: viewModel.detail,
-                    tmdbID: episodeTMDBID,
-                    subscriptionSeasons: shouldShowSeasonSubscriptionSection
-                      ? preloadTask.seasonViewModel : nil,
-                    playback: viewModel.episodePlayback,
-                    rowHint: viewModel.episodeRowHint,
-                    panelRequest: viewModel.episodePanelRequest,
-                    defaultSeasons: viewModel.episodeSeasons,
-                    allowsRequests: allowsRequests,
-                    isContentVisible: showContentPage,
-                    showsHeader: showContentPage || firstVisibleRow != "episodes",
-                    onExpand: { navigationCoordinator.push($0) }
-                  )
-                  .id(episodeTMDBID)
-                  .focused($focusedContentRow, equals: "episodes")
+              // 第二页等完整详情应用后再挂载：避免剧集行用卡片数据提前查询，
+              // 同时仍早于入口就绪，保留与首行准备并行的窗口。
+              if viewModel.hasAppliedFullDetail {
+                Group {
+                  seasonSubscriptionSection
+                    .focused($focusedContentRow, equals: "season")
+                  if let episodeTMDBID {
+                    MediaDetailEpisodesView(
+                      media: viewModel.detail,
+                      tmdbID: episodeTMDBID,
+                      subscriptionSeasons: shouldShowSeasonSubscriptionSection
+                        ? preloadTask.seasonViewModel : nil,
+                      playback: viewModel.episodePlayback,
+                      rowHint: viewModel.episodeRowHint,
+                      panelRequest: viewModel.episodePanelRequest,
+                      defaultSeasons: viewModel.episodeSeasons,
+                      allowsRequests: allowsRequests,
+                      isContentVisible: showContentPage,
+                      showsHeader: showContentPage || firstVisibleRow != "episodes",
+                      onExpand: { navigationCoordinator.push($0) }
+                    )
+                    .id(episodeTMDBID)
+                    .focused($focusedContentRow, equals: "episodes")
+                  }
+                  creditsSection
+                    .focused($focusedContentRow, equals: "credits")
+                  doubanDiscussionSection
+                    .focused($focusedContentRow, equals: "doubanDiscussion")
+                  recommendationsSection
+                    .focused($focusedContentRow, equals: "recommendations")
+                  similarSection
+                    .focused($focusedContentRow, equals: "similar")
                 }
-                creditsSection
-                  .focused($focusedContentRow, equals: "credits")
-                doubanDiscussionSection
-                  .focused($focusedContentRow, equals: "doubanDiscussion")
-                recommendationsSection
-                  .focused($focusedContentRow, equals: "recommendations")
-                similarSection
-                  .focused($focusedContentRow, equals: "similar")
+                .disabled(isEntryLoading)
+                .accessibilityHidden(isEntryLoading)
               }
-              .allowsHitTesting(!isEntryLoading)
             }
             .id("contentTop")
             // tvOS 会把聚焦控件保持在离滚动区顶部约 180pt 以外。60pt 时首行可聚焦标题（胶囊、

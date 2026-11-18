@@ -408,10 +408,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("if let playbackTarget = viewModel.inAppPlaybackTarget"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
-    // 渐进渲染：加载期按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
-    // 但 action 门禁忽略按下；不再用 disabled 把焦点挡在页外。
+    // 渐进渲染：加载期头部按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
+    // 但 action 门禁忽略按下；只有第二页内容用 disabled 挡焦点。
     XCTAssertTrue(source.contains("guard !isEntryLoading else { return }"))
-    XCTAssertFalse(source.contains(".disabled(isEntryLoading)"))
+    XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading)").count - 1, 1)
     XCTAssertTrue(containerSource.contains("isEntryLoading: !isReady"))
     XCTAssertFalse(containerSource.contains(".allowsHitTesting(!isReady)"))
     XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
@@ -906,8 +906,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
     XCTAssertTrue(view.contains("guard !isEntryLoading else { return }"))
     XCTAssertTrue(view.contains(".transition(.opacity)"))
-    XCTAssertTrue(view.contains("Group {\n                seasonSubscriptionSection"))
-    XCTAssertTrue(view.contains(".allowsHitTesting(!isEntryLoading)"))
+    XCTAssertTrue(view.contains("if viewModel.hasAppliedFullDetail {"))
+    XCTAssertTrue(view.contains(".disabled(isEntryLoading)"))
+    XCTAssertTrue(view.contains(".accessibilityHidden(isEntryLoading)"))
     XCTAssertTrue(view.contains("guard allowsRequests, presentationStyle == .direct, let detail else { return }"))
     XCTAssertTrue(view.contains("viewModel.applyFullDetail(detail)"))
     // 可变槽位就地占位，行高对齐真实 caption；加载感用占位上的斜向高光扫过，不用加载图标。
