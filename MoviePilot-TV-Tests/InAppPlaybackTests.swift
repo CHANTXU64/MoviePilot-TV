@@ -2498,6 +2498,46 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await reporter.waitForQueued()
   }
 
+  /// 换集时上一集的内嵌章节不能带进新条目：旧条目读出章节后换到没有章节的新条目，
+  /// 新条目载入期间「章节」不能还显示旧条目那几段（服务器没给章节、依赖文件内嵌时最容易触发）。
+  func testSwitchItemDropsPreviousEmbeddedChaptersDuringLoad() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSession(coordinator)
+    session.onFailure = { _ in }
+    let engine = EngineSignalsStandIn()
+    session.usePlayerForTesting(AetherPlayer(signalsForTesting: engine.signals))
+    let screen = MediaSession(
+      session: session,
+      onExit: { _ in coordinator.endSession(session) },
+      onSwitchItem: { itemID, sourceID, position, episode, completion in
+        coordinator.switchItem(
+          to: itemID, mediaSourceID: sourceID, startPosition: position, episode: episode, in: session,
+          completion: completion)
+      })
+
+    screen.start()
+    engine.finishReading(chapters: [
+      ServerChapter(name: "序幕", startSeconds: 0), ServerChapter(name: "正片", startSeconds: 600),
+    ])
+    try await waitUntil { screen.state == .playback }
+    let chaptersBefore: [ChapterInfo.FullInfo] = screen.chapters.loaded
+    XCTAssertTrue(chaptersBefore.contains { $0.chapterInfo.name == "序幕" }, "旧条目读出内嵌章节")
+
+    screen.playNewItem(intent: PlaybackIntent(item: BaseItemDto(id: "e2")))
+    await coordinator.switchTaskForTesting?.value
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(session.item.id, "e2")
+    let chaptersAfter: [ChapterInfo.FullInfo] = screen.chapters.loaded
+    let leaked = chaptersAfter.filter { $0.chapterInfo.name == "序幕" || $0.chapterInfo.name == "正片" }
+    XCTAssertTrue(leaked.isEmpty, "换集载入期间不应显示上一集的内嵌章节")
+
+    screen.stop()
+    coordinator.endCurrentSession()
+    await reporter.waitForQueued()
+  }
+
   private func requestPaths(after count: Int) -> [String] {
     PlaybackURLProtocol.stub.requests().dropFirst(count).map { "\($0.method) \($0.url.path)" }
   }

@@ -665,6 +665,15 @@ extension VideoPlayer {
 
                     refreshAutoDismiss()
                 },
+                // 自动接下一集时控制条可能已自动隐藏：换集加载期间主动露出进度条，让加载转圈可见。
+                // 加载期间 activity 非 nil，canAutoDismiss 为假不会提前收；加载结束后由现有自动收起逻辑收掉。
+                ObservationToken { [weak mediaSession] in
+                    mediaSession?.state == .loadingItem
+                } onChange: { [weak self] isLoadingItem in
+                    guard let self, isLoadingItem, presentation == .hidden else { return }
+
+                    showProgress()
+                },
             ]
 
             observations.forEach { $0.store(in: &sessionObservations) }
