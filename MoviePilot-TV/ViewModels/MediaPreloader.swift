@@ -171,27 +171,6 @@ struct MediaDetailHeroDownsamplingProcessor: ImageProcessor {
   }
 }
 
-enum MediaDetailLoadingPoster {
-  nonisolated static let size = CGSize(width: 460, height: 690)
-
-  nonisolated static var processor: DownsamplingImageProcessor {
-    DownsamplingImageProcessor(size: size)
-  }
-
-  nonisolated static func removeFromMemory(
-    for url: URL,
-    cacheKey: String? = nil,
-    cache: ImageCache = .default
-  ) {
-    cache.removeImage(
-      forKey: cacheKey ?? url.cacheKey,
-      processorIdentifier: processor.identifier,
-      fromMemory: true,
-      fromDisk: false
-    )
-  }
-}
-
 // MARK: - 单个媒体的预加载任务
 
 /// 管理单个媒体项的所有预加载数据。
@@ -834,7 +813,6 @@ class MediaPreloader: ObservableObject {
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
-  private var loadingPosterWarmDownloadTask: DownloadTask?
   // 服务拥有预载缓存；缓存及其子任务只在执行操作期间保留服务。
   private weak var apiService: APIService?
 
@@ -901,27 +879,6 @@ class MediaPreloader: ObservableObject {
     guard media.shouldPreloadDetail else { return nil }
     replaceCandidate(with: media.id, stackID: stackID)
     return preload(for: media)
-  }
-
-  /// 预热详情页加载遮罩海报：与转场海报使用相同缓存 key（URL + 460x690 processor），
-  /// 提前经 Kingfisher 下载并写入磁盘缓存（解码图不占内存缓存）。
-  /// 详情页 PageManagedImage 加载时磁盘同步命中，跳转动画期间即可显示，
-  /// 避免“先空白再出现”；缓存已命中时无任何网络开销。
-  @discardableResult
-  func warmLoadingPoster(_ url: URL?) -> DownloadTask? {
-    loadingPosterWarmDownloadTask?.cancel()
-    loadingPosterWarmDownloadTask = nil
-    guard let url, let apiService else { return nil }
-    var options = apiService.imageOptions(for: url)
-    options.append(.processor(MediaDetailLoadingPoster.processor))
-    options.append(TransientDecodedImage.skipMemoryCache)
-    let downloadTask = KingfisherManager.shared.retrieveImage(
-      with: apiService.imageSource(for: url),
-      options: options,
-      completionHandler: { _ in }
-    )
-    loadingPosterWarmDownloadTask = downloadTask
-    return downloadTask
   }
 
   /// 给当前详情页附带预载，不抢走推荐页焦点候选。
@@ -1105,8 +1062,6 @@ class MediaPreloader: ObservableObject {
   func clearAll() {
     subscriptionRefreshTask?.cancel()
     subscriptionRefreshTask = nil
-    loadingPosterWarmDownloadTask?.cancel()
-    loadingPosterWarmDownloadTask = nil
     for task in cache.values {
       task.cancel()
     }
@@ -1202,18 +1157,6 @@ class MediaPreloader: ObservableObject {
       size: size,
       screenScale: screenScale,
       imageCache: imageCache
-    )
-  }
-
-  func removeLoadingPosterFromMemory(
-    url: URL?,
-    imageCache: ImageCache = .default
-  ) {
-    guard let url, let apiService else { return }
-    MediaDetailLoadingPoster.removeFromMemory(
-      for: url,
-      cacheKey: apiService.imageSource(for: url).cacheKey,
-      cache: imageCache
     )
   }
 

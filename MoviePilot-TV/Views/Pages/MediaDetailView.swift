@@ -189,6 +189,17 @@ struct MediaDetailView: View {
   private var cachedContent: TopShelfCachedContent? {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
   }
+  /// 冷加载阶段背景兜底：完整详情未到时优先用入口携带的海报（远程或本地均可），
+  /// 详情返回后切换为 ViewModel 解析出的背景图。
+  private var coldLoadBackground: (url: URL?, usingPosterAsBackdrop: Bool) {
+    if let backgroundUrl = viewModel.backgroundUrl {
+      return (backgroundUrl, viewModel.isUsingPosterAsBackdrop)
+    }
+    if let loadingPosterURL {
+      return (loadingPosterURL, true)
+    }
+    return (nil, viewModel.isUsingPosterAsBackdrop)
+  }
   let allowsRequests: Bool
   /// 入口渐进渲染：true 时标题已 move-in、按钮胶囊在但文案透明且不可按、可变槽位就地占位；
   /// 就绪后仅文案/可变内容淡入，标题与按钮形状位置不变。
@@ -483,8 +494,8 @@ struct MediaDetailView: View {
         presentationStyle == .standard || (allowsRequests && preloadTask.fullDetail != nil)
       {
         MediaDetailBackgroundLayer(
-          url: viewModel.backgroundUrl,
-          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          url: coldLoadBackground.url,
+          usingPosterAsBackdrop: coldLoadBackground.usingPosterAsBackdrop,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
           providesBlurredContentPage: !memoryOptimization.isEnabled,
@@ -575,7 +586,7 @@ struct MediaDetailView: View {
                   .transition(.opacity)
               }
 
-              if !isEntryLoading {
+              Group {
                 seasonSubscriptionSection
                   .focused($focusedContentRow, equals: "season")
                 if let episodeTMDBID {
@@ -605,6 +616,7 @@ struct MediaDetailView: View {
                 similarSection
                   .focused($focusedContentRow, equals: "similar")
               }
+              .allowsHitTesting(!isEntryLoading)
             }
             .id("contentTop")
             // tvOS 会把聚焦控件保持在离滚动区顶部约 180pt 以外。60pt 时首行可聚焦标题（胶囊、

@@ -146,7 +146,7 @@ struct HomeView: View {
 
   private func navigateToDetail(for subscribe: Subscribe) {
     // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
-    // 必须显式携带订阅海报，否则详情页加载遮罩的海报区域会显示空白。
+    // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
     navigationCoordinator.push(
       subscribe.navigationMediaInfo(),
       loadingPosterURL: subscribe.imageURLs.poster
@@ -186,8 +186,6 @@ private struct MediaSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
-  @State private var posterWarmDelayTask: Task<Void, Never>?
-  @State private var posterWarmDownloadTask: DownloadTask?
   /// 这一行的实例身份，焦点只交回起播的那一个。
   @State private var focusOwnerID = UUID()
   /// 正在等待焦点写回的媒体卡；播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
@@ -362,23 +360,9 @@ private struct MediaSectionView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedItemId) { _, newId in
-            // Push 或上下文菜单可能暂时清空焦点；保留已经开始的下载，
-            // 让详情加载遮罩继续等待同一个 Kingfisher 缓存请求。
+            // Push 或上下文菜单可能暂时清空焦点；保留当前图片窗口锚点。
             guard let newId else { return }
             imageAnchorId = newId
-            // 聚焦停留后预热详情加载遮罩海报：媒体服务器图经后端代理转发较慢，
-            // push 时才开始下载会赶不上转场，聚焦时提前下载磁盘即可命中。
-            posterWarmDelayTask?.cancel()
-            posterWarmDownloadTask?.cancel()
-            posterWarmDownloadTask = nil
-            guard let item = items.first(where: { $0.id == newId }) else { return }
-            posterWarmDelayTask = Task { @MainActor in
-              try? await Task.sleep(for: .milliseconds(300))
-              guard !Task.isCancelled else { return }
-              posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
-                item.imageURLs.image
-              )
-            }
           }
         }
         .scrollClipDisabled()
@@ -494,8 +478,6 @@ private struct SubscribeSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
-  @State private var posterWarmDelayTask: Task<Void, Never>?
-  @State private var posterWarmDownloadTask: DownloadTask?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -549,27 +531,9 @@ private struct SubscribeSectionView: View {
         .padding(.top, 25)
         .padding(.bottom, 30)
         .onChange(of: focusedItemId) { _, newId in
-          // Push 或上下文菜单可能暂时清空焦点；保留已经开始的下载，
-          // 让详情加载遮罩继续等待同一个 Kingfisher 缓存请求。
+          // Push 或上下文菜单可能暂时清空焦点；保留当前图片窗口锚点。
           guard let newId else { return }
           imageAnchorId = newId
-          // 聚焦停留后预热详情加载遮罩海报（与“最近添加”一致），
-          // 订阅卡片从菜单进详情时转场海报磁盘已命中。
-          posterWarmDelayTask?.cancel()
-          posterWarmDownloadTask?.cancel()
-          posterWarmDownloadTask = nil
-          guard
-            let item = items.first(where: {
-              HomeSubscribeFocusID.value(for: $0.id) == newId
-            })
-          else { return }
-          posterWarmDelayTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
-              item.imageURLs.poster
-            )
-          }
         }
       }
       .scrollClipDisabled()

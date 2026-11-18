@@ -906,7 +906,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
     XCTAssertTrue(view.contains("guard !isEntryLoading else { return }"))
     XCTAssertTrue(view.contains(".transition(.opacity)"))
-    XCTAssertTrue(view.contains("if !isEntryLoading {\n                seasonSubscriptionSection"))
+    XCTAssertTrue(view.contains("Group {\n                seasonSubscriptionSection"))
+    XCTAssertTrue(view.contains(".allowsHitTesting(!isEntryLoading)"))
     XCTAssertTrue(view.contains("guard allowsRequests, presentationStyle == .direct, let detail else { return }"))
     XCTAssertTrue(view.contains("viewModel.applyFullDetail(detail)"))
     // 可变槽位就地占位，行高对齐真实 caption；加载感用占位上的斜向高光扫过，不用加载图标。
