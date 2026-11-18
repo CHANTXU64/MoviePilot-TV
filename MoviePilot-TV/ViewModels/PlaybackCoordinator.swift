@@ -2477,11 +2477,11 @@ final class PlaybackSession: Identifiable {
   func itemDidLoadForTesting() { itemDidLoad() }
 
   /// 换成另一集或另一个版本：当前条目照常上报停止并保存进度，新条目等播放界面调用 `start()` 后起播。
-  /// 电视保持当前显示模式，下一集格式相同时不再切换。
+  /// 电视保持当前显示模式；播放器交给下一次载入原位替换，旧画面保留到新条目就绪，不出现黑帧。
   func replaceItem(with next: PreparedPlayback, startPosition: Double) {
     guard !isStopped else { return }
     endCurrentItem()
-    player?.stop(keepsDisplayMode: true)
+    player?.handOverForItemReplacement()
     loggedEngineMessages = 0
     sawUnsupportedTrackEncoding = false
     prepared = next

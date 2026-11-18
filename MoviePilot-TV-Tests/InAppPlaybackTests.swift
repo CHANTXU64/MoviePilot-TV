@@ -2472,7 +2472,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(session.item.id, "e2")
     XCTAssertEqual(screen.item.id, "e2", "界面的条目跟着换了")
     XCTAssertNotEqual(screen.state, .loadingItem, "新条目已起播，不再停在加载中")
-    XCTAssertEqual(player.generation, firstGeneration + 2, "旧条目停止一次、新条目载入一次，没有重复载入")
+    XCTAssertEqual(player.generation, firstGeneration + 1, "新条目只载入一次，旧条目不再额外停止")
     XCTAssertEqual(player.loadedURL, session.streamURL, "交给播放器的是新条目的地址")
     let started = PlaybackURLProtocol.stub.requests().dropFirst(before)
       .filter { "\($0.method) \($0.url.path)" == "POST /Sessions/Playing" }
