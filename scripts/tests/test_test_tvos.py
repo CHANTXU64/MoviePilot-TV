@@ -268,7 +268,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 (self.root / "calls.jsonl").unlink(missing_ok=True)
                 (self.root / "devices.json").unlink(missing_ok=True)
-                result = self.run_script(mode, matrix=True)
+                result = self.run_script(mode, "--parallel", matrix=True)
                 self.assertEqual(result.returncode, 65, result.stderr)
                 # Only the two running versions create simulators; the queued one never starts.
                 self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 2)
@@ -279,7 +279,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_FAIL_BUILD_RUNTIME"] = "18.5"
         self.environment["TVOS_RUNNER_TEST_SLOW_BUILD"] = "1"
         self.environment["TVOS_RUNNER_TEST_BUILD_BARRIER"] = "1"
-        result = self.run_script("success", matrix=True)
+        result = self.run_script("success", "--parallel", matrix=True)
         self.assertEqual(result.returncode, 65, result.stderr)
         self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 2)
         self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
@@ -291,7 +291,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_BUILD_BARRIER"] = "1"
         self.environment["TVOS_RUNNER_TEST_GAP_ON"] = "build-for-testing"
         self.environment["TVOS_RUNNER_TEST_GAP_FILE"] = str(self.root / "gap")
-        result = self.run_script("success", matrix=True)
+        result = self.run_script("success", "--parallel", matrix=True)
         self.assertEqual(result.returncode, 65, result.stderr)
         self.assertTrue((self.root / "gap").exists())
         self.assertFalse(any("build-for-testing" in call["args"] for call in self.calls()))
@@ -307,7 +307,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_COUNT"] = "1"
         self.environment["TVOS_RUNNER_TEST_CANCEL_EMPTY"] = str(self.root / "cancel-empty")
         self.environment["TVOS_RUNNER_TEST_SLOW_TEST_BUILD"] = "1"
-        result = self.run_script("success", matrix=True)
+        result = self.run_script("success", "--parallel", matrix=True)
         self.assertEqual(result.returncode, 65, result.stderr)
         self.assertEqual((self.root / "spawned").read_text().splitlines(), ["spawned"])
         self.assertTrue((self.root / "cancel-empty").exists())
@@ -320,7 +320,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
     def test_parallel_delete_failure_lets_other_versions_finish(self):
         self.environment["TVOS_RUNNER_TEST_DELETE_FAILURE"] = "1"
         self.environment["TVOS_RUNNER_TEST_HOLD_TESTS"] = "1"
-        result = self.run_script("success", "--skip-build", matrix=True)
+        result = self.run_script("success", "--parallel", "--skip-build", matrix=True)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(len(list(self.root.glob("test-done-*"))), 3)
         self.assertEqual(sum("test-without-building" in call["args"] for call in self.calls()), 3)
@@ -379,9 +379,9 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual(len([arg for arg in test if arg.startswith("-skip-testing:")]), 3)
         self.assert_owned_cleanup()
 
-    def test_default_matrix_builds_and_tests_each_runtime_with_separate_results(self):
+    def test_parallel_matrix_builds_and_tests_each_runtime_with_separate_results(self):
         self.environment["TVOS_RUNNER_EXPECT_CONCURRENT"] = "2"
-        result = self.run_script("success", "--result-bundle-path", str(self.root / "results.xcresult"), matrix=True)
+        result = self.run_script("success", "--parallel", "--result-bundle-path", str(self.root / "results.xcresult"), matrix=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         creates = [call["args"] for call in calls if call["args"][:2] == ["simctl", "create"]]
@@ -430,6 +430,16 @@ class TestTVOSRunnerTests(unittest.TestCase):
                     for index in range(len(lifecycle))]
         self.assertEqual(max(existing), 2, f"two versions run together, never three: {lifecycle}")
         self.assertEqual(self.sentinel.read_text(), "saved session and password")
+
+    def test_default_matrix_runs_one_version_at_a_time(self):
+        result = self.run_script("success", "--skip-build", matrix=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lifecycle = [call["args"][1] for call in self.calls() if call["args"][:2] in (
+            ["simctl", "create"], ["simctl", "delete"])]
+        self.assertEqual(lifecycle, ["create", "delete"] * 3, "默认逐个版本运行，消除并行资源争用")
+        existing = [lifecycle[:index + 1].count("create") - lifecycle[:index + 1].count("delete")
+                    for index in range(len(lifecycle))]
+        self.assertEqual(max(existing), 1, "任何时刻只有一个版本的模拟器存在")
 
     def test_explicit_runtime_runs_only_exact_version_and_keeps_result_path(self):
         self.environment["TVOS_RUNNER_TEST_VERSIONS"] = json.dumps(["27.0", "27.10", "28.0"])
@@ -496,7 +506,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def assert_matrix_cancellation(self, signum):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
-        process = subprocess.Popen([sys.executable, str(self.script), "--full", "--skip-build"],
+        process = subprocess.Popen([sys.executable, str(self.script), "--full", "--parallel", "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 10

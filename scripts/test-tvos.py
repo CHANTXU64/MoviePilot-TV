@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Build on disposable tvOS simulators; run targeted tests or the full matrix.
 
-The offline matrix runs tvOS 18.5, 26.5, and the latest 27.x, at most two of them at the same time.
+The offline matrix runs tvOS 18.5, 26.5, and the latest 27.x one version at a time by default.
+Two versions building and testing at once starve the CPU/GPU: offscreen subtitle rendering
+(ImageRenderer) draws blank or drifts, yield-based scheduling tests race, and a simulator can
+fail to launch. Serial keeps the matrix reproducible; pass --parallel to trade that for speed.
 Each version keeps its own DerivedData so the builds do not share build.db.
 XCTest inside one version stays serial. Real-backend runs stay one version at a time.
 """
@@ -30,8 +33,8 @@ BACKEND_SUITES = (
 )
 
 
-# Limits load on the Mac: each version builds and tests on its own simulator. The third version starts when
-# one of the first two has finished and removed its simulator.
+# Only used with --parallel. Limits load on the Mac: each version builds and tests on its own
+# simulator. The third version starts when one of the first two has finished and removed its simulator.
 MAX_PARALLEL_VERSIONS = 2
 
 
@@ -325,15 +328,17 @@ def main(argv=None):
     parser.add_argument("--runtime", help="指定一个 tvOS 版本；日常默认使用最新可用版本")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true",
-                      help="提交验收：完整构建与全套测试；三个 tvOS 版本，最多两个同时运行")
+                      help="提交验收：完整构建与全套测试；三个 tvOS 版本，默认逐个运行")
     mode.add_argument("--only-testing", action="append", default=[], metavar="TEST_ID",
                       help="只构建测试宿主并运行指定用例，默认单版本")
     parser.add_argument("--include-backend-tests", action="store_true",
-                        help="包含真实后端套件；矩阵改为逐版本运行")
+                        help="包含真实后端套件；矩阵始终逐版本运行")
     parser.add_argument("--skip-build", action="store_true",
                         help="仅用于 --full：跳过依赖解析与 Debug 构建；测试宿主仍会构建")
+    parser.add_argument("--parallel", action="store_true",
+                        help="离线三版本矩阵改为最多两个同时运行（更快，但渲染/调度类用例可能因资源争用抖动）")
     parser.add_argument("--serial", action="store_true",
-                        help="离线三版本矩阵改为逐个运行；真实后端矩阵始终逐个运行")
+                        help="离线三版本矩阵逐个运行（已是默认，保留以兼容旧命令）；真实后端矩阵始终逐个运行")
     parser.add_argument("--derived-data-path", help="专用构建缓存目录，默认与日常 Xcode 隔离")
     parser.add_argument("--result-bundle-path", help="测试结果包路径；只构建时不产生结果包")
     args = parser.parse_args(argv)
@@ -362,8 +367,11 @@ def run_selected(args):
         selections = [select_runtime(runtimes["runtimes"])]
     versions = [runtime["version"] for runtime, _ in selections]
     emit("tvOS 测试版本：" + "、".join(versions))
-    parallel = len(selections) > 1 and not args.serial and not args.include_backend_tests
+    # 默认逐个运行：并行会让两套编译＋两个模拟器争用 CPU/GPU，渲染与调度类用例随之抖动。
+    # --parallel 显式提速；真实后端矩阵始终逐个。--serial 已是默认，保留兼容。
+    parallel = args.parallel and len(selections) > 1 and not args.serial and not args.include_backend_tests
     if parallel:
+        emit("并行运行（最多同时 " + str(MAX_PARALLEL_VERSIONS) + " 个）：" + "、".join(versions))
         code = run_parallel(args, selections)
     else:
         code = run_serial(args, selections)
@@ -381,12 +389,18 @@ def result_path_for(args, runtime, count):
 
 
 def run_serial(args, selections):
+    # 多版本矩阵与并行一致：依赖解析放在建任何模拟器之前，解析失败就不浪费设备；各版本共用同一份源码包。
+    # 单版本仍按原样在该版本目录里解析，保持各阶段共用一个 derivedDataPath。
+    packages_dir = None
+    if args.full and not args.skip_build and len(selections) > 1:
+        packages_dir = Path(args.derived_data_path) / "SourcePackages"
+        resolve_packages(packages_dir)
     failures = []
     for runtime, device in selections:
         result_path = result_path_for(args, runtime, len(selections))
         try:
             derived = Path(args.derived_data_path) / f"tvos-{runtime['version']}"
-            run_on_simulator(args, runtime, device, result_path, derived)
+            run_on_simulator(args, runtime, device, result_path, derived, packages_dir=packages_dir)
         except subprocess.CalledProcessError as error:
             # A compile/resolve/setup failure blocks validation on every runtime.
             if args.include_backend_tests or error.cmd[:2] != ["xcodebuild", "test-without-building"]:
@@ -407,8 +421,6 @@ def run_parallel(args, selections):
     gate = Gate()
     failures = []
     failure_lock = threading.Lock()
-    emit("并行运行（最多同时 " + str(MAX_PARALLEL_VERSIONS) + " 个）："
-         + "、".join(runtime["version"] for runtime, _ in selections))
 
     def worker(runtime, device):
         # A queued version that starts after a sibling failed or the run was cancelled does nothing.
