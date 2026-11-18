@@ -714,6 +714,12 @@ final class DownloadTaskViewModelTests: XCTestCase {
         #"{"hash":"h2","season_episode":"S02E05-E07","media":{"season":"S02","episode":"E05-E07"}}"#,
         "2季 5-7集"
       ),
+      // 订阅补齐缺失集：后端 format_ranges 的顿号并列多区间，media 与 season_episode 两条入口都要中文化。
+      (
+        #"{"hash":"h9","season_episode":"S01E01","media":{"season":"S01","episode":"E01-E03、E05"}}"#,
+        "1季 1-3、5集"
+      ),
+      (#"{"hash":"h10","season_episode":"S01 E01、E03","media":{"title":"某剧"}}"#, "1季 1、3集"),
       // media 没有季集时退回 season_episode。
       (#"{"hash":"h3","season_episode":"S03E04","media":{"title":"某剧"}}"#, "3季 4集"),
       (#"{"hash":"h4","season_episode":"S03E04"}"#, "3季 4集"),

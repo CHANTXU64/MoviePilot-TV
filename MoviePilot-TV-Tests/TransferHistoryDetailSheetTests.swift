@@ -29,6 +29,8 @@ final class TransferHistoryDetailSheetTests: XCTestCase {
       (#"{"id":1,"type":"电视剧","seasons":"S01","episodes":"E02","status":true}"#, "1季 2集"),
       // 一个文件多集：后端给的是集号区间。
       (#"{"id":2,"type":"电视剧","seasons":"S01","episodes":"E02-E05","status":true}"#, "1季 2-5集"),
+      // 不连续多集：顿号并列多区间同样中文化。
+      (#"{"id":10,"type":"电视剧","seasons":"S01","episodes":"E01-E03、E05","status":true}"#, "1季 1-3、5集"),
       // 跨季合集。
       (#"{"id":3,"type":"电视剧","seasons":"S01-S02","episodes":"E03-04","status":true}"#, "1-2季 3-4集"),
       // 只有季、只有集，以及季集都是空白。

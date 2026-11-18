@@ -20,63 +20,67 @@ extension Int64 {
 }
 
 extension String {
-  private static let seasonEpisodeRegex = try? NSRegularExpression(
-    pattern: #"^(?:S(\d+)(?:-S?(\d+))?\s*)?(?:E(\d+)(?:-E?(\d+))?)?$"#,
+  private static let seasonPrefixRegex = try? NSRegularExpression(
+    pattern: #"^S(\d+)(?:-S?(\d+))?\s*"#,
+    options: .caseInsensitive)
+  private static let episodeRangeRegex = try? NSRegularExpression(
+    pattern: #"^E?(\d+)(?:-E?(\d+))?$"#,
     options: .caseInsensitive)
 
-  /// 将季集字符串 (如 "S01", "S01E01", "S01 E28-E32", "E01-E05") 格式化为中文 (如 "1季", "1季 1集", "1季 28-32集", "1-5集")
+  /// 将季集字符串 (如 "S01", "S01E01", "S01 E28-E32", "E01-E05", "S01 E01-E03、E05")
+  /// 格式化为中文 (如 "1季", "1季 1集", "1季 28-32集", "1-5集", "1季 1-3、5集")。
+  /// 集号支持后端并列多区间（顿号或逗号分隔，见 MoviePilot `episode.format_ranges`）；
+  /// 任一段认不出时整串原样返回，不改写后端原文。
   func formattedSeasonEpisode() -> String {
-    guard let regex = String.seasonEpisodeRegex else {
+    guard let seasonRegex = String.seasonPrefixRegex,
+      let episodeRegex = String.episodeRangeRegex
+    else {
       return self
     }
 
     let nsString = self as NSString
-    let results = regex.matches(
+    var seasonPart: String?
+    var episodeText = self
+    if let match = seasonRegex.firstMatch(
       in: self, options: [], range: NSRange(location: 0, length: nsString.length))
-
-    guard let match = results.first else {
-      return self
-    }
-
-    var result = ""
-
-    // 提取季
-    let s1Range = match.range(at: 1)
-    if s1Range.location != NSNotFound {
-      let s1 = nsString.substring(with: s1Range)
-      if let s1Num = Int(s1) {
-        result += "\(s1Num)"
-
-        let s2Range = match.range(at: 2)
-        if s2Range.location != NSNotFound {
-          let s2 = nsString.substring(with: s2Range)
-          if let s2Num = Int(s2) {
-            result += "-\(s2Num)"
-          }
-        }
-        result += "季"
+    {
+      guard let start = Int(nsString.substring(with: match.range(at: 1))) else { return self }
+      var text = "\(start)"
+      let endRange = match.range(at: 2)
+      if endRange.location != NSNotFound {
+        guard let end = Int(nsString.substring(with: endRange)) else { return self }
+        text += "-\(end)"
       }
+      seasonPart = text + "季"
+      episodeText = nsString.substring(from: match.range.length)
     }
 
-    // 提取集
-    let e1Range = match.range(at: 3)
-    if e1Range.location != NSNotFound {
-      let e1 = nsString.substring(with: e1Range)
-      if let e1Num = Int(e1) {
-        if !result.isEmpty { result += " " }
-        result += "\(e1Num)"
+    guard !episodeText.isEmpty else { return seasonPart ?? self }
 
-        let e2Range = match.range(at: 4)
-        if e2Range.location != NSNotFound {
-          let e2 = nsString.substring(with: e2Range)
-          if let e2Num = Int(e2) {
-            result += "-\(e2Num)"
-          }
-        }
-        result += "集"
+    var segments: [String] = []
+    for part in episodeText.split(
+      omittingEmptySubsequences: false, whereSeparator: { $0 == "," || $0 == "、" })
+    {
+      let token = String(part).trimmingCharacters(in: .whitespaces)
+      let nsToken = token as NSString
+      guard let match = episodeRegex.firstMatch(
+        in: token, options: [], range: NSRange(location: 0, length: nsToken.length)),
+        let start = Int(nsToken.substring(with: match.range(at: 1)))
+      else {
+        return self
       }
+      var text = "\(start)"
+      let endRange = match.range(at: 2)
+      if endRange.location != NSNotFound {
+        guard let end = Int(nsToken.substring(with: endRange)) else { return self }
+        text += "-\(end)"
+      }
+      segments.append(text)
     }
-    return result.isEmpty ? self : result
+
+    let episodePart = segments.joined(separator: "、") + "集"
+    guard let seasonPart else { return episodePart }
+    return seasonPart + " " + episodePart
   }
 
   private static let relativeDateFormatter: RelativeDateTimeFormatter = {
