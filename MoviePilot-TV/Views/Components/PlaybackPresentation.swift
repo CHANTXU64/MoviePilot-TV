@@ -253,6 +253,8 @@ enum PlaybackFocusTarget: Hashable {
   case detailHeader(routeID: UUID)
   /// 详情页的某一集。集 ID 只是本季列表里的位置，别的剧、同一部剧的另一行都会重复，所以带上行实例和剧。
   case episode(ownerID: UUID, seriesID: Int, id: MoviePilotEpisode.ID)
+  /// 首页「最近添加」里直接起播的媒体卡（没有 TMDB 编号、不经过详情页）。带上行实例身份，焦点只交回起播的那一个。
+  case homeMedia(ownerID: UUID, itemID: String)
 }
 
 /// 盖播放器之前的焦点交接：呈现层请页面把焦点放回起播控件，页面写回后回执，呈现层再盖上播放器。
