@@ -1113,10 +1113,13 @@ struct MediaDetailView: View {
               let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
               let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
               Button(action: {
+                let coordinator = apiService.sessionScope.playbackCoordinator
+                // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这个头部按钮。
+                guard !coordinator.isBusy else { return }
                 playbackFocusHandoff.target = .detailHeader(routeID: routeID)
                 viewModel.playFromHeader(playbackTarget)
                 // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
-                if !apiService.sessionScope.playbackCoordinator.isBusy {
+                if !coordinator.isBusy {
                   playbackFocusHandoff.target = nil
                 }
               }) {

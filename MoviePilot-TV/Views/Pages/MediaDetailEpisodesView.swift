@@ -926,6 +926,8 @@ private struct EpisodeBrowser: View {
     else { return }
     // 播放器盖上之后退出时，焦点要回到这一集。
     let coordinator = apiService.sessionScope.playbackCoordinator
+    // 已有别的播放在准备或播放：这次会被协调器拒绝，先别登记目标，免得把焦点目标错改成这一集。
+    guard !coordinator.isBusy else { return }
     playbackFocusHandoff.target = .episode(ownerID: focusOwnerID, seriesID: tmdbID, id: episode.id)
     coordinator.play(
       .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), accepting: acceptance))
