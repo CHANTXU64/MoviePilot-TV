@@ -343,14 +343,12 @@ final class MediaSession {
 
   /// 从起播到首帧备好整屏盖住（Apple TV App 的做法）：准备期间黑底转圈；开了「匹配内容」时电视切换显示模式期间纯黑
   /// （HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下），切好直接揭开。只是遮挡，播放照常进行。
-  /// 播放中换集、换版本时从正在显示的画面淡入。
+  /// 播放中换集、换版本不盖：保留当前画面和控制条，加载状态由控制条上的转圈表示。
   private func coverUntilStartupSettles() {
     displayTask?.cancel()
-    if startupCover == nil {
-      withAnimation(PlaybackLoadingScreen.fadeIn) { startupCover = .loading }
-    } else {
-      startupCover = .loading
-    }
+    // 遮挡揭开后换集：不再整屏盖住，否则控制条和进度条会一起被盖没。
+    guard startupCover != nil else { return }
+    startupCover = .loading
     let display = DisplayModeGate.currentDisplay
     displayTask = Task { [weak self] in
       await DisplayModeGate.wait(

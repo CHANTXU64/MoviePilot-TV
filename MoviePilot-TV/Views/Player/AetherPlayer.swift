@@ -361,7 +361,7 @@ final class AetherPlayer {
     }
   }
 
-  /// 停止当前条目。`keepsDisplayMode` 为真时电视保持当前显示模式（换集时用），否则还原并交还音频会话。
+  /// 停止当前条目。`keepsDisplayMode` 为真时电视保持当前显示模式，留给下一次载入；否则还原并交还音频会话。
   func stop(keepsDisplayMode: Bool = false) {
     // 还没开始执行的载入不再开始：停止之后再起播就没人管了。
     loadTask?.cancel()
@@ -372,6 +372,13 @@ final class AetherPlayer {
     resolveSeekWaiter(false)
     subtitles.reset()
     engine?.stop(resetDisplayCriteria: !keepsDisplayMode, finalTeardown: !keepsDisplayMode)
+  }
+
+  /// 换条目：停住当前画面，交给下一次载入原位替换。旧画面保留到新条目就绪，不出现拆掉播放器 item 的黑帧。
+  /// 引擎的原位交接不暂停播放，旧条目会一直播到新条目替换，这里先停住。
+  func handOverForItemReplacement() {
+    engine?.pause()
+    engine?.prepareForItemReplacement()
   }
 
   func play() {
