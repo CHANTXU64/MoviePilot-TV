@@ -183,6 +183,8 @@ private struct EpisodeBrowser: View {
   @State private var appliedHint: EpisodeRowHint?
   @FocusState private var focus: EpisodeRowFocus?
   @FocusState private var focusedSeason: Int?
+  /// 这一行的实例身份。同一部剧的货架行和展开的剧集页是两个实例，焦点只能交回起播的那一个。
+  @State private var focusOwnerID = UUID()
   /// 正在等待焦点写回的那一集。播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
   @State private var pendingFocusRestore: MoviePilotEpisode.ID?
   /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
@@ -507,20 +509,24 @@ private struct EpisodeBrowser: View {
     }
     // 盖播放器之前把焦点交回这一集：模态关闭时系统还原的是盖上去那一刻的焦点项。
     .onChange(of: playbackFocusHandoff.request) { _, _ in
-      guard case .episode(let series, let id)? = playbackFocusHandoff.target, series == tmdbID else { return }
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID
+      else { return }
       focus = .episode(id)
     }
     // 焦点真的落回这一集了，通知呈现层可以盖播放器。
     .onChange(of: focus) { _, newValue in
-      guard case .episode(let series, let id)? = playbackFocusHandoff.target, series == tmdbID,
-        newValue == .episode(id)
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID, newValue == .episode(id)
       else { return }
       playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
     }
     // 播放结束：盖上过播放器时由系统还原，播放器没出来就结束（准备期取消）时没有可还原的对象，
     // 这里主动写回。两者都等模态和转场结束后再写。
     .onChange(of: playbackEndedGeneration) { _, _ in
-      guard case .episode(let series, let id)? = playbackFocusHandoff.target, series == tmdbID else { return }
+      guard case .episode(let owner, let series, let id)? = playbackFocusHandoff.target,
+        owner == focusOwnerID, series == tmdbID
+      else { return }
       playbackFocusHandoff.target = nil
       beginFocusRestore(id)
     }
@@ -919,9 +925,12 @@ private struct EpisodeBrowser: View {
       case .loaded(let list) = group.episodeStates[episode.seasonNumber]
     else { return }
     // 播放器盖上之后退出时，焦点要回到这一集。
-    playbackFocusHandoff.target = .episode(seriesID: tmdbID, id: episode.id)
-    apiService.sessionScope.playbackCoordinator.play(
+    let coordinator = apiService.sessionScope.playbackCoordinator
+    playbackFocusHandoff.target = .episode(ownerID: focusOwnerID, seriesID: tmdbID, id: episode.id)
+    coordinator.play(
       .episode(QueuedEpisode(context: context, episode: episode, seasonEpisodes: list), accepting: acceptance))
+    // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
+    if !coordinator.isBusy { playbackFocusHandoff.target = nil }
   }
 
   /// 发起试看（面板和长按菜单都从这里发起，面板已经关了）。结果显示在卡片上；卡片上看不出结果时（比如这一季已有订阅）

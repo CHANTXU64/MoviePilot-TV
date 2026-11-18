@@ -1115,6 +1115,10 @@ struct MediaDetailView: View {
               Button(action: {
                 playbackFocusHandoff.target = .detailHeader(routeID: routeID)
                 viewModel.playFromHeader(playbackTarget)
+                // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
+                if !apiService.sessionScope.playbackCoordinator.isBusy {
+                  playbackFocusHandoff.target = nil
+                }
               }) {
                 HStack(spacing: 14) {
                   Image(systemName: AppSymbol.play)

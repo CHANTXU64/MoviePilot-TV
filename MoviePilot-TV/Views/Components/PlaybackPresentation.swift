@@ -24,6 +24,9 @@ struct PlaybackPresentationModifier: ViewModifier {
   @State private var focusHandoff = PlaybackFocusHandoff()
   /// 已经排上呈现、还没盖上的会话。
   @State private var pendingPresentation: PlaybackSession?
+  /// 页面是否已经解除禁用。准备阶段（黑屏淡入、解析中）页面保持禁用；到真要交回焦点那一刻才解除，
+  /// 之后播放期间和退出时也保持解除，系统关闭模态才能把焦点还原到页面控件。
+  @State private var isHandingOffFocus = false
 
   private final class PresentedSession {
     // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -36,10 +39,10 @@ struct PlaybackPresentationModifier: ViewModifier {
     content
       .environment(\.playbackEndedGeneration, playbackEndedGeneration)
       .environment(\.playbackFocusHandoff, focusHandoff)
-      // 只在准备阶段禁用整页：那时焦点要落在黑屏上接返回键，页面不能参与。
-      // 播放器出现后页面必须留在焦点树里，模态关闭时系统才能把它记下的页面控件还原回来。
-      .disabled(coordinator.resolvingTask != nil)
-      .accessibilityHidden(coordinator.resolvingTask != nil)
+      // 准备阶段禁用整页：那时焦点要落在黑屏上接返回键，页面不能先被遥控器操作。
+      // 到交回焦点那一刻才解除，之后播放期间保持解除，模态关闭时系统才能把记下的页面控件还原回来。
+      .disabled(coordinator.isBusy && !isHandingOffFocus)
+      .accessibilityHidden(coordinator.isBusy && !isHandingOffFocus)
       .overlay {
         // 按下播放先从页面淡入黑屏，正中转圈、不带文字（Apple TV App 的做法，HIG「Playing video › Loading content」
         // 的黑底居中转圈）。黑屏盖满后播放器接上，播放器里同样的黑屏一直盖到出画面。返回键取消。
@@ -52,6 +55,8 @@ struct PlaybackPresentationModifier: ViewModifier {
       }
       .onChange(of: coordinator.isBusy, initial: true) { wasBusy, isBusy in
         updateLoadingScreen(isBusy: isBusy)
+        // 每次起播都从锁住页面开始，等交回焦点那一刻再解除。
+        if isBusy { isHandingOffFocus = false }
         // 播放结束（含准备期取消）：播放器盖上之前焦点交回了页面，正常情况下系统会自己还原；
         // 没盖上播放器就结束时没有可还原的对象，由起播的那个控件自己写回。
         if !isBusy, wasBusy { playbackEndedGeneration += 1 }
@@ -153,6 +158,8 @@ struct PlaybackPresentationModifier: ViewModifier {
   /// 盖播放器之前先让页面把焦点放回起播控件。模态关闭时系统还原它"盖上去那一刻"的焦点项：
   /// 那一刻焦点在黑屏锚点上，锚点退出时已经撤掉，只能退回 Tab 栏。
   private func requestFocusHandoff(for session: PlaybackSession) {
+    // 解除页面禁用和发出请求放在同一帧，页面可操作到播放器盖上之间只剩交接本身的几帧。
+    isHandingOffFocus = true
     focusHandoff.request += 1
     let request = focusHandoff.request
     Task { @MainActor in
@@ -244,8 +251,8 @@ extension EnvironmentValues {
 enum PlaybackFocusTarget: Hashable {
   /// 详情页头部的「播放」。
   case detailHeader(routeID: UUID)
-  /// 详情页的某一集。集 ID 只是本季列表里的位置，同一位置在别的剧里也有，所以带上剧。
-  case episode(seriesID: Int, id: MoviePilotEpisode.ID)
+  /// 详情页的某一集。集 ID 只是本季列表里的位置，别的剧、同一部剧的另一行都会重复，所以带上行实例和剧。
+  case episode(ownerID: UUID, seriesID: Int, id: MoviePilotEpisode.ID)
 }
 
 /// 盖播放器之前的焦点交接：呈现层请页面把焦点放回起播控件，页面写回后回执，呈现层再盖上播放器。
