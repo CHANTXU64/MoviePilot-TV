@@ -1115,6 +1115,16 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     if upspeed != other.upspeed { upspeed = other.upspeed }
     if left_time != other.left_time { left_time = other.left_time }
   }
+
+  /// 卡片上的季集显示，如「1季 2集」。取值顺序与 Web 一致：先用 media 的季、集，
+  /// 两项都缺时退回 season_episode；电影或读不出季集时为 nil，调用方据此整段不显示。
+  var seasonEpisodeDisplay: String? {
+    let fromMedia = [media?.season, media?.episode]
+      .compactMap { MediaIdentifier.normalizedString($0) }
+      .joined(separator: " ")
+    let raw = MediaIdentifier.normalizedString(fromMedia.isEmpty ? season_episode : fromMedia)
+    return raw?.formattedSeasonEpisode()
+  }
 }
 
 /// 种子/资源搜索结果详情
@@ -2562,6 +2572,16 @@ extension TransferHistory {
       && src_fileitem == other.src_fileitem
       && dest_fileitem == other.dest_fileitem
       && date == other.date
+  }
+
+  /// 列表卡片、详情标题与重新整理面板共用的季集显示，如「1季 2集」「1季 2-5集」。
+  /// 非电视剧、或季集都读不出时为 nil，调用方据此整段不显示。
+  var seasonEpisodeDisplay: String? {
+    guard type == "电视剧" else { return nil }
+    let text = [seasons, episodes]
+      .compactMap { MediaIdentifier.normalizedString($0) }
+      .joined(separator: " ")
+    return text.isEmpty ? nil : text.formattedSeasonEpisode()
   }
 
   /// 失败记录的后端失败原因：仅失败记录且 trim 后非空白才返回；成功记录与空白原因一律返回 nil。

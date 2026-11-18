@@ -700,6 +700,43 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(refreshedRow.progress, 80)
   }
 
+  /// 下载卡片的季集一律中文：优先 media 的季、集，两项都缺时退回 season_episode；
+  /// 电影或读不出季集时整段不显示。
+  func testDownloadCardSeasonEpisodeIsChinese() throws {
+    let cases: [(json: String, expected: String?)] = [
+      // media 的季集优先于 season_episode。
+      (
+        #"{"hash":"h1","season_episode":"S09E09","media":{"season":"S01","episode":"E02"}}"#,
+        "1季 2集"
+      ),
+      // 一个文件多集。
+      (
+        #"{"hash":"h2","season_episode":"S02E05-E07","media":{"season":"S02","episode":"E05-E07"}}"#,
+        "2季 5-7集"
+      ),
+      // 订阅补齐缺失集：后端 format_ranges 的顿号并列多区间，media 与 season_episode 两条入口都要中文化。
+      (
+        #"{"hash":"h9","season_episode":"S01E01","media":{"season":"S01","episode":"E01-E03、E05"}}"#,
+        "1季 1-3、5集"
+      ),
+      (#"{"hash":"h10","season_episode":"S01 E01、E03","media":{"title":"某剧"}}"#, "1季 1、3集"),
+      // media 没有季集时退回 season_episode。
+      (#"{"hash":"h3","season_episode":"S03E04","media":{"title":"某剧"}}"#, "3季 4集"),
+      (#"{"hash":"h4","season_episode":"S03E04"}"#, "3季 4集"),
+      // 只有季。
+      (#"{"hash":"h5","media":{"season":"S01","episode":""}}"#, "1季"),
+      // 电影：季集都是空串，不能显示成空白或英文。
+      (#"{"hash":"h6","season_episode":"","media":{"season":"","episode":""}}"#, nil),
+      (#"{"hash":"h7","season_episode":"  ","media":{"season":" ","episode":" "}}"#, nil),
+      (#"{"hash":"h8"}"#, nil),
+    ]
+
+    for (json, expected) in cases {
+      let row = try XCTUnwrap(decodeDownloads("[\(json)]").first, json)
+      XCTAssertEqual(row.seasonEpisodeDisplay, expected, json)
+    }
+  }
+
   func testOldRowsCannotSendActionsAfterDownloaderSelectionChanges() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
