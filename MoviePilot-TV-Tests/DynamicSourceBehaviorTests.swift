@@ -132,7 +132,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(retentionSource.contains("static let duration = Duration.seconds(1)"))
     XCTAssertTrue(
       detailSource.contains(
-        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+        "isEntryLoading: !isReady"
       )
     )
   }
