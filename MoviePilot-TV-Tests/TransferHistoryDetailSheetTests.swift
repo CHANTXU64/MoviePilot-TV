@@ -13,14 +13,45 @@ final class TransferHistoryDetailSheetTests: XCTestCase {
     blocks.map { String($0.text.characters) }
   }
 
-  /// 电视剧标题附季集；电影或季集为空时只显示片名。
+  /// 电视剧标题附中文季集；电影或季集为空时只显示片名。
   func testTitleAppendsSeasonEpisodeForTV() throws {
     let tv = try history(#"{"id":1,"title":"某剧","type":"电视剧","seasons":"S01","episodes":"E02","status":true}"#)
-    XCTAssertEqual(TransferHistoryDetailSheet.title(for: tv), "某剧 S01 E02")
+    XCTAssertEqual(TransferHistoryDetailSheet.title(for: tv), "某剧 1季 2集")
     let tvWithoutEpisode = try history(#"{"id":2,"title":"某剧","type":"电视剧","seasons":" ","status":true}"#)
     XCTAssertEqual(TransferHistoryDetailSheet.title(for: tvWithoutEpisode), "某剧")
     let movie = try history(#"{"id":3,"title":"某片","type":"电影","seasons":"S01","status":true}"#)
     XCTAssertEqual(TransferHistoryDetailSheet.title(for: movie), "某片")
+  }
+
+  /// 列表卡片、详情标题和重新整理面板读同一个季集显示：一律中文，空白段丢弃，读不出时整段不显示。
+  func testSeasonEpisodeDisplayIsChineseAndSharedByCards() throws {
+    let cases: [(json: String, expected: String?)] = [
+      (#"{"id":1,"type":"电视剧","seasons":"S01","episodes":"E02","status":true}"#, "1季 2集"),
+      // 一个文件多集：后端给的是集号区间。
+      (#"{"id":2,"type":"电视剧","seasons":"S01","episodes":"E02-E05","status":true}"#, "1季 2-5集"),
+      // 跨季合集。
+      (#"{"id":3,"type":"电视剧","seasons":"S01-S02","episodes":"E03-04","status":true}"#, "1-2季 3-4集"),
+      // 只有季、只有集，以及季集都是空白。
+      (#"{"id":4,"type":"电视剧","seasons":"S02","status":true}"#, "2季"),
+      (#"{"id":5,"type":"电视剧","seasons":" ","episodes":"E07","status":true}"#, "7集"),
+      (#"{"id":6,"type":"电视剧","seasons":" ","episodes":"  ","status":true}"#, nil),
+      (#"{"id":7,"type":"电视剧","status":true}"#, nil),
+      // 电影即使带着季集也不显示。
+      (#"{"id":8,"type":"电影","seasons":"S01","episodes":"E02","status":true}"#, nil),
+      // 认不出的原文不改写。
+      (#"{"id":9,"type":"电视剧","seasons":"Season 1","status":true}"#, "Season 1"),
+    ]
+
+    for (json, expected) in cases {
+      let item = try history(json)
+      XCTAssertEqual(item.seasonEpisodeDisplay, expected, json)
+      let name = item.title ?? "详情"
+      XCTAssertEqual(
+        TransferHistoryDetailSheet.title(for: item),
+        expected.map { "\(name) \($0)" } ?? name,
+        json
+      )
+    }
   }
 
   private func fields(_ blocks: [ReadingBlock]) -> [String] {

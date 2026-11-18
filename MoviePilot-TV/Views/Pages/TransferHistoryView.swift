@@ -511,8 +511,8 @@ private struct TransferHistoryRowView: View {
       HStack(spacing: 20) {
         Text(item.title ?? "未知标题")
           .foregroundColor(isFocused ? .primary : .primary.opacity(0.6))
-        if item.type == "电视剧" {
-          Text("\(item.seasons ?? "") \(item.episodes ?? "")")
+        if let seasonEpisode = item.seasonEpisodeDisplay {
+          Text(seasonEpisode)
             .foregroundColor(.secondary)
         }
       }
@@ -608,12 +608,8 @@ struct TransferHistoryDetailSheet: View {
   /// 片名；电视剧在后面附上季集。
   static func title(for item: TransferHistory) -> String {
     let name = item.title ?? "详情"
-    guard item.type == "电视剧" else { return name }
-    let seasonEpisode = [item.seasons, item.episodes]
-      .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
-    return seasonEpisode.isEmpty ? name : "\(name) \(seasonEpisode)"
+    guard let seasonEpisode = item.seasonEpisodeDisplay else { return name }
+    return "\(name) \(seasonEpisode)"
   }
 
   /// 正文：「标签 + 值」两列。源文件、目标文件、失败原因（仅失败记录）一组，

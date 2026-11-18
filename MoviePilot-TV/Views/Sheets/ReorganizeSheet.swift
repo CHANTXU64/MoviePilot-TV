@@ -126,14 +126,10 @@ struct ReorganizeSheet: View {
     let fileName =
       manualTransferPreviewFileName(from: record.src ?? record.src_fileitem?.path)
       ?? MediaIdentifier.normalizedString(record.title) ?? "整理记录"
-    let seasonEpisode = [record.seasons, record.episodes]
-      .compactMap { MediaIdentifier.normalizedString($0) }
-      .joined(separator: " ")
-      .formattedSeasonEpisode()
     let mediaLine = [
       MediaIdentifier.normalizedString(record.title),
       MediaIdentifier.normalizedString(record.type),
-      record.type == "电视剧" && !seasonEpisode.isEmpty ? seasonEpisode : nil,
+      record.seasonEpisodeDisplay,
     ].compactMap { $0 }.joined(separator: " · ")
 
     return VStack(alignment: .leading, spacing: 0) {

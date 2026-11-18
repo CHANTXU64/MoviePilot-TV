@@ -183,14 +183,14 @@ private struct DownloadTaskRow: View {
       VStack(alignment: .leading, spacing: 10) {
         // 标题对齐 Vue: media.title || name
         let title = item.media?.title ?? item.name ?? "未知任务"
-        // 季集对齐 Vue: (media.season media.episode) || season_episode
-        let epInfo = [item.media?.season, item.media?.episode].compactMap { $0 }.joined(separator: " ")
 
         HStack(spacing: 20) {
           Text(title)
             .foregroundColor(isFocused ? .primary : .primary.opacity(0.6))
-          Text("\(epInfo.isEmpty ? (item.season_episode ?? "") : epInfo)")
-            .foregroundColor(.secondary)
+          if let seasonEpisode = item.seasonEpisodeDisplay {
+            Text(seasonEpisode)
+              .foregroundColor(.secondary)
+          }
         }
         .font(.headline)
         .lineLimit(1)
