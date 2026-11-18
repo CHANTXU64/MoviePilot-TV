@@ -6966,6 +6966,20 @@ extension PlaybackCoordinatorTests {
       "播放器读到的内嵌章节不替换服务器的")
   }
 
+  /// 服务器给的默认英文章节名（Emby/Jellyfin/Plex 的 "Chapter 01"）按现有英文转中文规则本地化，真实章节名保真。
+  func testDefaultEnglishServerChapterNamesAreLocalized() async throws {
+    let shown = try await movieChapters(
+      chapters: #"""
+        [
+          {"StartPositionTicks":0,"Name":"Chapter 01","MarkerType":"Chapter","ChapterIndex":0},
+          {"StartPositionTicks":6000000000,"Name":"Chapter 02","MarkerType":"Chapter","ChapterIndex":1},
+          {"StartPositionTicks":12000000000,"Name":"片尾","MarkerType":"Chapter","ChapterIndex":2}]
+        """#)
+    let chapters = try XCTUnwrap(shown.beforeRead.panel).chapters
+    XCTAssertEqual(chapters.map(\.displayTitle), ["章节 1", "章节 2", "片尾"], "默认英文名本地化，真实章节名保真")
+    XCTAssertEqual(shown.beforeRead.loaded.map(\.name), ["章节 1", "章节 2", "片尾"], "播放界面和面板同一份章节")
+  }
+
   /// 老版本 Emby 不给 `ChapterIndex`、片源也不给 `ItemId`：截图序号按章节在服务器列表里的位置（读不出的条目也占位），
   /// 只有一个版本时截图挂在正在播的条目上。
   func testChapterImagesWithoutIndexOrItemIDFallBackToListPositionAndPlayedItem() async throws {
