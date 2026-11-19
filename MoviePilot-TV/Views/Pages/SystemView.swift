@@ -21,6 +21,8 @@ struct SystemView: View {
   @StateObject private var viewModel: SystemViewModel
   @StateObject private var recommendViewModel: RecommendViewModel
   @StateObject private var topShelfExplore: ExploreViewModel
+  @StateObject private var exploreContentSources: ExploreViewModel
+  @StateObject private var exploreDefaultDraft: ExploreViewModel
   @StateObject private var logViewerViewModel: LogViewerViewModel
   @StateObject private var mediaSources = MediaSourceOptionsModel()
   @ObservedObject private var apiService: APIService
@@ -31,6 +33,8 @@ struct SystemView: View {
   @State private var updateNotice: AppChangelogEntry?
   @State private var showLogoutConfirmation = false
   @State private var showsEpisodeTrialRule = false
+  @State private var isOrderingRecommendation = false
+  @State private var isOrderingExploreContent = false
   @State private var route: [SystemSettingsPage] = []
   @State private var displayedRoute: [SystemSettingsPage] = []
   @State private var pageOffsetDepth = 0
@@ -41,7 +45,9 @@ struct SystemView: View {
     self.isSelected = isSelected
     self.apiService = apiService
     memoryOptimization = MemoryOptimizationSettings(apiService: apiService)
-    _topShelfExplore = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false))
+    _topShelfExplore = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false, sourcePolicy: .topShelf))
+    _exploreContentSources = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false, sourcePolicy: .contentSettings))
+    _exploreDefaultDraft = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false, sourcePolicy: .defaultSettings))
     _viewModel = StateObject(wrappedValue: SystemViewModel(apiService: apiService))
     _recommendViewModel = StateObject(wrappedValue: RecommendViewModel(selectShelf: false, apiService: apiService))
     _logViewerViewModel = StateObject(wrappedValue: LogViewerViewModel())
@@ -289,6 +295,14 @@ struct SystemView: View {
                 if canConfigureRecommendations {
                   recommendationPage
                 }
+              case .exploreContent:
+                if canConfigureRecommendations { exploreContentPage }
+              case .exploreDefault:
+                if canConfigureRecommendations { exploreDefaultPage }
+              case .exploreDefaultSources:
+                if canConfigureRecommendations { exploreDefaultSourcesPage }
+              case .exploreDefaultField(let id):
+                if canConfigureRecommendations { exploreDefaultFieldPage(id) }
               case .playback:
                 if canConfigurePlayback {
                   playbackPage
@@ -360,11 +374,34 @@ struct SystemView: View {
       if canConfigureRecommendations {
         section("推荐页") {
           Button {
+            isOrderingRecommendation = false
             push(.recommendation)
           } label: {
-            row("推荐页显示内容", showsDisclosure: true)
+            row("内容与顺序", showsDisclosure: true)
           }
           .focused($focusedItem, equals: .recommendation)
+        }
+
+        section("探索页") {
+          Button {
+            isOrderingExploreContent = false
+            push(.exploreContent)
+          } label: {
+            row("内容与顺序", showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .exploreContent)
+          Button {
+            exploreDefaultDraft.reloadLocalConfig()
+            exploreDefaultDraft.restoreConfiguration(
+              ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration())
+            push(.exploreDefault)
+          } label: {
+            row(
+              "默认配置",
+              value: ExploreViewModel.storedDefaultConfiguration()?.selectedSource.title ?? "TheMovieDb",
+              showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .exploreDefault)
         }
       }
 
@@ -716,115 +753,202 @@ struct SystemView: View {
   }
 
   private var topShelfExplorePage: some View {
-    section(nil) {
-      Button { push(.topShelfExploreSources) } label: {
-        row("数据源", value: topShelfExplore.selectedSource.title, showsDisclosure: true)
-      }
-      .focused($focusedItem, equals: .topShelfExploreSource)
-      ForEach(topShelfExplore.settingsFields) { field in
-        switch field.kind {
-        case .choice, .multiChoice:
-          Button { push(.topShelfExploreField(field.id)) } label: {
-            row(field.title, value: field.summary, showsDisclosure: true)
-          }
-          .focused($focusedItem, equals: .topShelfExploreField(field.id))
-        case .text, .number:
-          TextField(field.title, text: Binding(
-            get: { field.value.wrappedValue.queryString ?? "" },
-            set: { field.value.wrappedValue = $0.isEmpty ? .null
-              : (field.kind == .number ? Int($0).map(JSONValue.int) ?? .string($0) : .string($0)) }))
-            .focused($focusedItem, equals: .topShelfExploreField(field.id))
-        case .toggle:
-          Toggle(field.title, isOn: Binding(
-            get: { field.value.wrappedValue == .bool(true) },
-            set: { field.value.wrappedValue = .bool($0) }))
-            .focused($focusedItem, equals: .topShelfExploreField(field.id))
-        }
-      }
-      Button {
+    ExploreConfigurationEditorPage(
+      viewModel: topShelfExplore,
+      focusedItem: $focusedItem,
+      sourceFocus: .topShelfExploreSource,
+      fieldFocus: { .topShelfExploreField($0) },
+      resetFocus: .topShelfExploreReset,
+      factoryResetFocus: nil,
+      saveFocus: .topShelfExploreSave,
+      pushSources: { push(.topShelfExploreSources) },
+      pushField: { push(.topShelfExploreField($0)) },
+      onResetFilters: {
         topShelfExplore.restoreConfiguration(ExploreConfiguration(source: topShelfExplore.selectedSource))
-      } label: { row("重置筛选") }
-        .focused($focusedItem, equals: .topShelfExploreReset)
-      Button {
+      },
+      onFactoryReset: nil,
+      onSave: {
         topShelfManager.select(TopShelfSelection(exploration: topShelfExplore.configuration))
         pop()
-      } label: { row("保存") }
-        .disabled(topShelfExplore.selectedSource == .subscriptionShare && !canConfigureSubscriptions)
-        .focused($focusedItem, equals: .topShelfExploreSave)
-    }
+      },
+      saveDisabled: topShelfExplore.selectedSource == .subscriptionShare && !canConfigureSubscriptions
+    )
   }
 
   private var topShelfExploreSourcesPage: some View {
-    section(nil) {
-      ForEach(topShelfExplore.availableSources) { source in
-        Button {
-          if topShelfExplore.selectedSource.id != source.id {
-            topShelfExplore.restoreConfiguration(ExploreConfiguration(source: source))
-          }
-          pop()
-        } label: {
-          row(source.title, value: topShelfExplore.selectedSource.id == source.id ? "已选择" : nil)
+    ExploreConfigurationSourceListPage(
+      viewModel: topShelfExplore,
+      focusedItem: $focusedItem,
+      optionFocus: { .topShelfExploreSourceOption($0) },
+      isSourceDisabled: { $0 == .subscriptionShare && !canConfigureSubscriptions },
+      sourceNote: { _ in nil },
+      onSelect: { source in
+        if topShelfExplore.selectedSource.id != source.id {
+          topShelfExplore.restoreConfiguration(ExploreConfiguration(source: source))
         }
-        .disabled(source == .subscriptionShare && !canConfigureSubscriptions)
-        .focused($focusedItem, equals: .topShelfExploreSourceOption(source.id))
+        pop()
       }
-    }
+    )
     .task { await topShelfExplore.refreshSources() }
   }
 
   @ViewBuilder
   private func topShelfExploreFieldPage(_ id: String) -> some View {
     if let field = topShelfExplore.settingsFields.first(where: { $0.id == id }) {
-      section(field.title) {
-        if field.kind == .multiChoice {
-          Button { field.value.wrappedValue = .array([]) } label: {
-            row("全部", value: field.value.wrappedValue.arrayValue?.isEmpty != false ? "已选择" : nil)
-          }
-          .focused($focusedItem, equals: .topShelfExploreOption(.null))
-        } else if !field.options.contains(where: { $0.value == field.value.wrappedValue }) {
-          Button {} label: { row(field.summary, value: "已选择") }
-            .focused($focusedItem, equals: .topShelfExploreOption(field.value.wrappedValue))
+      ExploreConfigurationFieldPage(
+        field: field,
+        focusedItem: $focusedItem,
+        optionFocus: { .topShelfExploreOption($0) },
+        onSingleSelect: { pop() }
+      )
+    }
+  }
+
+  private var exploreDefaultPage: some View {
+    ExploreConfigurationEditorPage(
+      viewModel: exploreDefaultDraft,
+      focusedItem: $focusedItem,
+      sourceFocus: .exploreDefaultSource,
+      fieldFocus: { .exploreDefaultField($0) },
+      resetFocus: .exploreDefaultReset,
+      factoryResetFocus: .exploreDefaultFactoryReset,
+      saveFocus: .exploreDefaultSave,
+      pushSources: { push(.exploreDefaultSources) },
+      pushField: { push(.exploreDefaultField($0)) },
+      onResetFilters: {
+        exploreDefaultDraft.restoreConfiguration(ExploreConfiguration(source: exploreDefaultDraft.selectedSource))
+      },
+      onFactoryReset: {
+        exploreDefaultDraft.restoreConfiguration(ExploreConfiguration())
+      },
+      onSave: {
+        ExploreViewModel.saveDefaultConfiguration(exploreDefaultDraft.configuration)
+        pop()
+      },
+      saveDisabled: exploreDefaultDraft.selectedSource == .subscriptionShare && !canConfigureSubscriptions
+    )
+  }
+
+  private var exploreDefaultSourcesPage: some View {
+    ExploreConfigurationSourceListPage(
+      viewModel: exploreDefaultDraft,
+      focusedItem: $focusedItem,
+      optionFocus: { .exploreDefaultSourceOption($0) },
+      isSourceDisabled: { $0 == .subscriptionShare && !canConfigureSubscriptions },
+      sourceNote: { exploreDefaultDraft.sourceVisibility[$0.id] == false ? "已隐藏" : nil },
+      onSelect: { source in
+        if exploreDefaultDraft.selectedSource.id != source.id {
+          exploreDefaultDraft.restoreConfiguration(ExploreConfiguration(source: source))
         }
-        ForEach(field.options) { option in
-          let selected = field.kind == .multiChoice
-            ? field.value.wrappedValue.arrayValue?.contains(option.value) == true
-            : field.value.wrappedValue == option.value
-          Button {
-            if field.kind == .multiChoice {
-              var values = field.value.wrappedValue.arrayValue ?? []
-              if selected { values.removeAll { $0 == option.value } } else { values.append(option.value) }
-              field.value.wrappedValue = .array(values)
-            } else {
-              field.value.wrappedValue = option.value
-              pop()
-            }
-          } label: { row(option.title, value: selected ? "已选择" : nil) }
-            .focused($focusedItem, equals: .topShelfExploreOption(option.value))
-        }
+        pop()
       }
+    )
+    .task { await exploreDefaultDraft.refreshSources() }
+  }
+
+  @ViewBuilder
+  private func exploreDefaultFieldPage(_ id: String) -> some View {
+    if let field = exploreDefaultDraft.settingsFields.first(where: { $0.id == id }) {
+      ExploreConfigurationFieldPage(
+        field: field,
+        focusedItem: $focusedItem,
+        optionFocus: { .exploreDefaultOption($0) },
+        onSingleSelect: { pop() }
+      )
     }
   }
 
   private var recommendationPage: some View {
     section(nil) {
-      ForEach(recommendViewModel.shelves) { shelf in
-        Toggle(
-          shelf.title,
-          isOn: Binding(
-            get: { recommendViewModel.enableConfig[shelf.id] == true },
-            set: { enabled in
-              var config = recommendViewModel.enableConfig
-              config[shelf.id] = enabled
-              recommendViewModel.saveEnableConfig(config)
-            }
-          )
-        )
-        .font(.body.bold())
-        .focused($focusedItem, equals: .recommendationShelf(shelf.id))
+      Button {
+        isOrderingRecommendation.toggle()
+      } label: {
+        row(isOrderingRecommendation ? "完成" : "调整顺序")
       }
+      .focused($focusedItem, equals: .recommendationOrdering)
+      OrderableContentList(
+        items: recommendViewModel.orderedShelves,
+        title: { $0.title },
+        isEnabled: { shelf in recommendViewModel.enableConfig[shelf.id] == true },
+        isOrdering: isOrderingRecommendation,
+        onToggle: { shelf, enabled in
+          var config = recommendViewModel.enableConfig
+          config[shelf.id] = enabled
+          recommendViewModel.saveEnableConfig(config)
+        },
+        onMove: { shelf, direction in
+          var order = recommendViewModel.orderedShelves.map(\.id)
+          guard let index = order.firstIndex(of: shelf.id) else { return }
+          let target = direction == .up ? index - 1 : index + 1
+          guard target >= 0, target < order.count else { return }
+          order.swapAt(index, target)
+          recommendViewModel.saveShelfOrder(order)
+        },
+        focus: { shelf, role in
+          switch role {
+          case .toggle: return .recommendationShelf(shelf.id)
+          case .moveUp: return .recommendationShelfMove(shelf.id, .up)
+          case .moveDown: return .recommendationShelfMove(shelf.id, .down)
+          }
+        },
+        focusedItem: $focusedItem
+      )
+      Button {
+        recommendViewModel.resetShelfOrder()
+      } label: {
+        row("恢复默认顺序")
+      }
+      .focused($focusedItem, equals: .recommendationResetOrder)
     }
     .task {
       await recommendViewModel.refreshSources(selectShelf: false)
+    }
+  }
+
+  private var exploreContentPage: some View {
+    section(nil) {
+      Button {
+        isOrderingExploreContent.toggle()
+      } label: {
+        row(isOrderingExploreContent ? "完成" : "调整顺序")
+      }
+      .focused($focusedItem, equals: .exploreContentOrdering)
+      OrderableContentList(
+        items: exploreContentSources.availableSources,
+        title: { $0.title },
+        isEnabled: { exploreContentSources.sourceVisibility[$0.id] != false },
+        isOrdering: isOrderingExploreContent,
+        onToggle: { source, enabled in
+          var config = exploreContentSources.sourceVisibility
+          config[source.id] = enabled
+          exploreContentSources.saveSourceVisibility(config)
+        },
+        onMove: { source, direction in
+          var order = exploreContentSources.availableSources.map(\.id)
+          guard let index = order.firstIndex(of: source.id) else { return }
+          let target = direction == .up ? index - 1 : index + 1
+          guard target >= 0, target < order.count else { return }
+          order.swapAt(index, target)
+          exploreContentSources.saveSourceOrder(order)
+        },
+        focus: { source, role in
+          switch role {
+          case .toggle: return .exploreSource(source.id)
+          case .moveUp: return .exploreSourceMove(source.id, .up)
+          case .moveDown: return .exploreSourceMove(source.id, .down)
+          }
+        },
+        focusedItem: $focusedItem
+      )
+      Button {
+        exploreContentSources.resetSourceOrder()
+      } label: {
+        row("恢复默认顺序")
+      }
+      .focused($focusedItem, equals: .exploreContentResetOrder)
+    }
+    .task {
+      await exploreContentSources.refreshSources()
     }
   }
 
@@ -1020,20 +1144,9 @@ struct SystemView: View {
 
   private func section<Content: View>(
     _ title: String?,
-    @ViewBuilder content: () -> Content
+    @ViewBuilder content: @escaping () -> Content
   ) -> some View {
-    VStack(alignment: .leading) {
-      if let title, !title.isEmpty {
-        Text(title)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .padding(.leading, 16)
-      }
-      VStack() {
-        content()
-          .padding(.horizontal, 10)
-      }
-    }
+    SettingsSection(title, content: content)
   }
 
   private func row(
@@ -1042,33 +1155,7 @@ struct SystemView: View {
     showsProgress: Bool = false,
     showsDisclosure: Bool = false
   ) -> some View {
-    HStack {
-      Text(title)
-        .font(.body.bold())
-        .lineLimit(1)
-
-      Spacer()
-
-      HStack(spacing: 8) {
-        if showsProgress {
-          ProgressView()
-        }
-
-        if let value {
-          Text(value)
-            .font(.body.bold())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .multilineTextAlignment(.trailing)
-            .truncationMode(.middle)
-        }
-
-        if showsDisclosure {
-          Image(systemName: AppSymbol.disclosure)
-            .foregroundStyle(.secondary)
-        }
-      }
-    }
+    SettingsRowLabel(title, value: value, showsProgress: showsProgress, showsDisclosure: showsDisclosure)
   }
 
   private func staticRow(_ title: String, _ value: String) -> some View {
@@ -1095,6 +1182,8 @@ struct SystemView: View {
 
   private func pop() {
     guard !route.isEmpty else { return }
+    isOrderingRecommendation = false
+    isOrderingExploreContent = false
 
     navigationRevision += 1
     let revision = navigationRevision
@@ -1122,6 +1211,8 @@ struct SystemView: View {
       case .topShelfExploreField(let id): target = .topShelfExploreField(id)
       case .topShelfExplore: target = .topShelfModeExplore
       case .topShelfRecommendations: target = .topShelfModeRecommendation
+      case .exploreDefaultSources: target = .exploreDefaultSource
+      case .exploreDefaultField(let id): target = .exploreDefaultField(id)
       default: target = nil
       }
       if let target { DispatchQueue.main.async { focusedItem = target } }
@@ -1154,6 +1245,10 @@ struct SystemView: View {
       target = .topShelfRecommendation
     case .recommendation:
       target = .recommendation
+    case .exploreContent:
+      target = .exploreContent
+    case .exploreDefault, .exploreDefaultSources, .exploreDefaultField:
+      target = .exploreDefault
     case .playback:
       target = .playbackSettings
     case .logs:
@@ -1203,7 +1298,17 @@ struct SystemView: View {
         .topShelfExploreOption($0.kind == .multiChoice ? .null : $0.value.wrappedValue)
       } ?? .topShelfExploreSource
     case .recommendation:
-      target = recommendViewModel.shelves.first.map { .recommendationShelf($0.id) } ?? .recommendation
+      target = .recommendationOrdering
+    case .exploreContent:
+      target = .exploreContentOrdering
+    case .exploreDefault:
+      target = .exploreDefaultSource
+    case .exploreDefaultSources:
+      target = .exploreDefaultSourceOption(exploreDefaultDraft.selectedSource.id)
+    case .exploreDefaultField(let id):
+      target = exploreDefaultDraft.settingsFields.first(where: { $0.id == id }).map {
+        .exploreDefaultOption($0.kind == .multiChoice ? .null : $0.value.wrappedValue)
+      } ?? .exploreDefaultSource
     case .playback:
       target = .inAppPlayback
     case .logs:
@@ -1221,7 +1326,8 @@ struct SystemView: View {
       return .softFilterNone
     case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
       .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
-      .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
+      .recommendation, .exploreContent, .exploreDefault, .exploreDefaultSources, .exploreDefaultField,
+      .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
     }
@@ -1233,7 +1339,8 @@ struct SystemView: View {
       return .softFilterRule(ruleId)
     case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
       .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
-      .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
+      .recommendation, .exploreContent, .exploreDefault, .exploreDefaultSources, .exploreDefaultField,
+      .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
     }
@@ -1319,7 +1426,11 @@ struct SystemView: View {
       case .softFilter:
         return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
       case .recommendation:
-        return "设置推荐页面显示的内容。（只影响 TV 端）"
+        return "设置推荐页显示的内容与顺序。（只影响 TV 端）"
+      case .exploreContent:
+        return "设置探索页显示的数据源与顺序。（只影响 TV 端）"
+      case .exploreDefault:
+        return "设置探索页的默认数据源、类型与筛选，保存后下次进入探索页时应用一次。（只影响 TV 端）"
       case .topShelfRecommendation:
         return "选择 Apple TV 主屏幕显示的内容。"
       case .connection:
@@ -1335,7 +1446,11 @@ struct SystemView: View {
       case .allSites, .site, .allSubtitleSites, .subtitleSite, .defaultMediaSource, .mediaSource,
         .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion, .license,
+        .recommendationShelf, .recommendationOrdering, .recommendationResetOrder, .recommendationShelfMove,
+        .exploreContentOrdering, .exploreContentResetOrder, .exploreSource, .exploreSourceMove,
+        .exploreDefaultSource, .exploreDefaultField, .exploreDefaultOption, .exploreDefaultSourceOption,
+        .exploreDefaultSave, .exploreDefaultReset, .exploreDefaultFactoryReset,
+        .topShelfDisabled, .topShelfSource, .changelogVersion, .license,
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
@@ -1398,7 +1513,11 @@ struct SystemView: View {
     case .topShelfExplore, .topShelfExploreSources, .topShelfExploreField:
       return "按这套探索条件更新主屏内容。保存后生效，不影响探索页的筛选。"
     case .recommendation:
-      return "设置推荐页面显示的内容。（只影响 TV 端）"
+      return "设置推荐页显示的内容与顺序。（只影响 TV 端）"
+    case .exploreContent:
+      return "设置探索页显示的数据源与顺序。（只影响 TV 端）"
+    case .exploreDefault, .exploreDefaultSources, .exploreDefaultField:
+      return "保存后作为探索页的默认条件，下次进入探索页时应用一次，不影响当前浏览。（只影响 TV 端）"
     case .playback:
       return "设置应用内播放。（只影响 TV 端）"
     }
@@ -1499,6 +1618,10 @@ enum SystemSettingsPage: Hashable {
   case hardFilter
   case softFilter
   case recommendation
+  case exploreContent
+  case exploreDefault
+  case exploreDefaultSources
+  case exploreDefaultField(String)
   case topShelfSelection
   case topShelfRecommendations
   case topShelfExplore
@@ -1546,6 +1669,22 @@ enum SystemSettingsFocus: Hashable {
   case hardFilterRule(String)
   case softFilterRule(String)
   case recommendation
+  case recommendationOrdering
+  case recommendationResetOrder
+  case recommendationShelfMove(String, ContentMoveDirection)
+  case exploreContent
+  case exploreContentOrdering
+  case exploreContentResetOrder
+  case exploreSource(String)
+  case exploreSourceMove(String, ContentMoveDirection)
+  case exploreDefault
+  case exploreDefaultSource
+  case exploreDefaultField(String)
+  case exploreDefaultOption(JSONValue)
+  case exploreDefaultSourceOption(String)
+  case exploreDefaultSave
+  case exploreDefaultReset
+  case exploreDefaultFactoryReset
   case topShelfRecommendation
   case topShelfDisabled
   case topShelfModeRecommendation

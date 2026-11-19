@@ -164,5 +164,7 @@ nonisolated enum AppSymbol {
   static let unselected = "circle"
   static let disclosure = "chevron.right"
   static let menuDisclosure = "chevron.up.chevron.down"
+  static let moveUp = "chevron.up"
+  static let moveDown = "chevron.down"
   static let arrowRight = "arrow.right"
 }

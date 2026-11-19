@@ -508,6 +508,18 @@ enum ExploreContent {
   case shares(Paginator<SubscribeShare>)
 }
 
+/// 来源可用范围策略，与是否加载媒体结果（loadsResults）无关。
+nonisolated enum ExploreSourcePolicy: Sendable {
+  /// 探索页：权限 + 用户显隐 + 用户排序。
+  case browse
+  /// 设置-内容与顺序：全部来源 + 用户排序（含已隐藏，供标注）。
+  case contentSettings
+  /// 设置-默认配置：权限 + 用户显隐 + 用户排序，保留当前配置的隐藏来源。
+  case defaultSettings
+  /// 主屏配置：全部来源、默认顺序，不应用探索页显隐与排序。
+  case topShelf
+}
+
 // MARK: - ViewModel
 @MainActor
 class ExploreViewModel: ObservableObject {
@@ -516,6 +528,7 @@ class ExploreViewModel: ObservableObject {
 
   @Published var configuration: ExploreConfiguration
   private let loadsResults: Bool
+  private let sourcePolicy: ExploreSourcePolicy
   var selectedSource: DiscoverSource {
     get { configuration.selectedSource }
     set { configuration.selectedSource = newValue }
@@ -525,6 +538,8 @@ class ExploreViewModel: ObservableObject {
     set { configuration.selectedType = newValue }
   }
   @Published private(set) var availableSources: [DiscoverSource] = []
+  @Published private(set) var sourceVisibility: [String: Bool] = [:]
+  @Published private(set) var sourceOrder: [String] = []
 
   // TheMovieDb 筛选参数
   var tmdbSortBy: String {
@@ -655,6 +670,14 @@ class ExploreViewModel: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
   private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
+  private var hasCompletedFirstSourceLoad = false
+  private var hasHandledFirstActivation = false
+  private var resolvingStoredDefault = false
+
+  nonisolated static let visibilityDefaultsKey = "MP_EXPLORE_VISIBILITY"
+  nonisolated static let orderDefaultsKey = "MP_EXPLORE_ORDER"
+  nonisolated static let defaultConfigurationKey = "MP_EXPLORE_DEFAULT"
+  nonisolated static let defaultPendingKey = "MP_EXPLORE_DEFAULT_PENDING"
 
   /// 上次触发 Paginator 重建的 "sourceID\0path" 键，用于在 sink 内代替
   /// removeDuplicates 做去重（元组不满足 Equatable 协议，无法直接入链）。
@@ -663,11 +686,16 @@ class ExploreViewModel: ObservableObject {
   init(
     apiService: APIService = .shared,
     configuration: ExploreConfiguration = ExploreConfiguration(),
-    loadsResults: Bool = true
+    loadsResults: Bool = true,
+    sourcePolicy: ExploreSourcePolicy = .browse,
+    restoredDefault: Bool = false
   ) {
     self.apiService = apiService
     self.configuration = configuration
     self.loadsResults = loadsResults
+    self.sourcePolicy = sourcePolicy
+    self.resolvingStoredDefault = restoredDefault && configuration.selectedSource.descriptor != nil
+    loadLocalConfig()
     pluginFilterControls = PluginFilterControlParser.parse(configuration.selectedSource.descriptor?.filter_ui ?? [])
     applySources()
     guard loadsResults else { return }
@@ -682,6 +710,8 @@ class ExploreViewModel: ObservableObject {
       // 遵循 Equatable 协议（元组不满足），故在 sink 内按上一对键手动去重。
       .map { [unowned self] _ in (sourceID: self.selectedSource.id, path: self.buildApiPath()) }
       .sink { [unowned self] ownerAndPath in
+        // debounce 陈旧触发时来源可能已被用户隐藏，就地重验显隐。
+        guard self.sourceVisibility[self.selectedSource.id] != false else { return }
         let reloadKey = "\(ownerAndPath.sourceID)\u{0}\(ownerAndPath.path)"
         guard self.lastPaginatorReloadKey != reloadKey else { return }
         self.lastPaginatorReloadKey = reloadKey
@@ -1082,6 +1112,15 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 重置筛选器
 
+  /// 用户在选择器手动切换来源：重置为新来源的默认筛选。
+  /// 程序化恢复/解析默认直接写 selectedSource，不走这里，避免重置已恢复的配置。
+  func selectSource(_ source: DiscoverSource) {
+    let previous = selectedSource
+    guard source != previous else { return }
+    selectedSource = source
+    onSourceChanged(from: previous)
+  }
+
   func onSourceChanged(from previousSource: DiscoverSource? = nil) {
     let preservesPluginValues =
       previousSource?.id == selectedSource.id
@@ -1128,6 +1167,89 @@ class ExploreViewModel: ObservableObject {
     applySources()
   }
 
+  // MARK: - 本地显隐/顺序/默认配置
+
+  nonisolated static func storedVisibility(defaults: UserDefaults = .standard) -> [String: Bool] {
+    guard let data = defaults.data(forKey: visibilityDefaultsKey) else { return [:] }
+    return (try? JSONDecoder().decode([String: Bool].self, from: data)) ?? [:]
+  }
+
+  nonisolated static func storedOrder(defaults: UserDefaults = .standard) -> [String] {
+    guard let data = defaults.data(forKey: orderDefaultsKey) else { return [] }
+    return (try? JSONDecoder().decode([String].self, from: data)) ?? []
+  }
+
+  nonisolated static func storedDefaultConfiguration(defaults: UserDefaults = .standard) -> ExploreConfiguration? {
+    guard let data = defaults.data(forKey: defaultConfigurationKey) else { return nil }
+    return try? JSONDecoder().decode(ExploreConfiguration.self, from: data)
+  }
+
+  nonisolated static func saveDefaultConfiguration(
+    _ configuration: ExploreConfiguration, defaults: UserDefaults = .standard
+  ) {
+    guard let data = try? JSONEncoder().encode(configuration) else { return }
+    defaults.set(data, forKey: defaultConfigurationKey)
+    defaults.set(true, forKey: defaultPendingKey)
+  }
+
+  nonisolated static func consumePendingDefault(defaults: UserDefaults = .standard) -> ExploreConfiguration? {
+    guard defaults.bool(forKey: defaultPendingKey),
+      let config = storedDefaultConfiguration(defaults: defaults)
+    else { return nil }
+    defaults.removeObject(forKey: defaultPendingKey)
+    return config
+  }
+
+  /// 探索页 VM：冷启动读取持久化默认。供 StateObject autoclosure 延迟到首次使用才解码。
+  static func makeBrowseViewModel(apiService: APIService = .shared) -> ExploreViewModel {
+    let saved = storedDefaultConfiguration()
+    return ExploreViewModel(
+      apiService: apiService,
+      configuration: saved ?? ExploreConfiguration(),
+      restoredDefault: saved != nil
+    )
+  }
+
+  func saveSourceVisibility(_ config: [String: Bool]) {
+    sourceVisibility = config
+    if let data = try? JSONEncoder().encode(config) {
+      UserDefaults.standard.set(data, forKey: Self.visibilityDefaultsKey)
+    }
+    applySources()
+  }
+
+  func saveSourceOrder(_ reorderedVisible: [String]) {
+    let merged = ContentOrdering.persistOrder(stored: sourceOrder, reorderedVisible: reorderedVisible)
+    sourceOrder = merged
+    if let data = try? JSONEncoder().encode(merged) {
+      UserDefaults.standard.set(data, forKey: Self.orderDefaultsKey)
+    }
+    applySources()
+  }
+
+  func resetSourceOrder() {
+    sourceOrder = []
+    UserDefaults.standard.removeObject(forKey: Self.orderDefaultsKey)
+    applySources()
+  }
+
+  private func loadLocalConfig() {
+    sourceVisibility = Self.storedVisibility()
+    sourceOrder = Self.storedOrder()
+  }
+
+  func reloadLocalConfig() {
+    loadLocalConfig()
+    applySources()
+  }
+
+  /// 保存新默认后，下次进入探索页应用一次；普通 Tab 切换不打断会话内筛选。
+  func consumePendingDefaultIfNeeded() {
+    guard sourcePolicy == .browse, let pending = Self.consumePendingDefault() else { return }
+    resolvingStoredDefault = pending.selectedSource.descriptor != nil
+    restoreConfiguration(pending)
+  }
+
   func setPluginFilter(_ field: String, value: JSONValue) {
     guard let source = selectedSource.descriptor else { return }
     pluginFilterValues = Self.applyingPluginFilter(
@@ -1163,6 +1285,7 @@ class ExploreViewModel: ObservableObject {
   }
 
   func refreshSources() async {
+    loadLocalConfig()
     guard apiService.canAccess(.discovery) else {
       applySources()
       return
@@ -1173,6 +1296,7 @@ class ExploreViewModel: ObservableObject {
         previous: extraSourceSnapshot,
         response: sources
       )
+      hasCompletedFirstSourceLoad = true
     } catch {
       Logger.error("动态发现来源加载失败: \(error)")
       extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
@@ -1181,6 +1305,7 @@ class ExploreViewModel: ObservableObject {
       )
     }
     applySources()
+    hasHandledFirstActivation = true
   }
 
   nonisolated static func updatedExtraSourceSnapshot(
@@ -1197,12 +1322,23 @@ class ExploreViewModel: ObservableObject {
   private func applySources() {
     guard apiService.canAccess(.discovery) else {
       availableSources = []
+      if loadsResults { teardownPaginator() }
       return
     }
     var sources = DiscoverSource.allCases.filter {
       $0 != .subscriptionShare || apiService.canAccess(.subscribe)
     }
     sources.append(contentsOf: extraSourceSnapshot.map(DiscoverSource.custom))
+
+    if sourcePolicy != .topShelf {
+      let byID = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0) })
+      sources = ContentOrdering.orderedVisibleIDs(stored: sourceOrder, current: sources.map(\.id))
+        .compactMap { byID[$0] }
+    }
+    if sourcePolicy == .browse || sourcePolicy == .defaultSettings {
+      sources = sources.filter { sourceVisibility[$0.id] != false }
+    }
+
     if !loadsResults {
       if let latest = sources.first(where: { $0.id == selectedSource.id }) {
         selectedSource = latest
@@ -1216,13 +1352,52 @@ class ExploreViewModel: ObservableObject {
       availableSources = sources
       return
     }
+
     availableSources = sources
+    reconcileBrowseSelection()
+  }
+
+  private func reconcileBrowseSelection() {
     let previousSource = selectedSource
-    if let source = sources.first(where: { $0.id == previousSource.id }) ?? sources.first,
-      source != previousSource
+    if let latest = availableSources.first(where: { $0.id == previousSource.id }) {
+      if latest != previousSource {
+        if resolvingStoredDefault, let descriptor = latest.descriptor {
+          // 持久化默认按稳定 id 解析：用最新描述信息，保留仍适用的保存值。
+          selectedSource = latest
+          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+        } else {
+          selectedSource = latest
+          onSourceChanged(from: previousSource)
+        }
+      }
+    } else if case .custom = previousSource, !hasCompletedFirstSourceLoad,
+      sourceVisibility[previousSource.id] != false
     {
-      selectedSource = source
+      // 首次来源加载完成前保留持久化的插件默认来源，不做回退；已隐藏的除外。
+      availableSources.insert(previousSource, at: 0)
+    } else if let fallback = availableSources.first {
+      selectedSource = fallback
       onSourceChanged(from: previousSource)
+    } else {
+      teardownPaginator()
+      return
     }
+    if hasCompletedFirstSourceLoad {
+      resolvingStoredDefault = false
+    }
+    // 全隐藏后重新启用同一来源时配置未变，去重键不会触发，需要显式重建。
+    // 门禁用本地首次激活标志（离线冷启动也成立）；网络成功只用于插件保留判断。
+    if hasHandledFirstActivation, paginator == nil {
+      setupPaginator(for: buildApiPath())
+      lastPaginatorReloadKey = "\(selectedSource.id)\u{0}\(buildApiPath())"
+    }
+  }
+
+  private func teardownPaginator() {
+    paginator?.cancel()
+    paginatorCancellable?.cancel()
+    paginator = nil
+    lastPaginatorReloadKey = nil
   }
 }

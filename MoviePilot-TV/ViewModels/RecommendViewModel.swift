@@ -51,6 +51,7 @@ class RecommendViewModel: ObservableObject {
   @Published private(set) var paginator: Paginator<MediaInfo>?
   @Published private(set) var shelves: [RecommendShelf] = []
   @Published private(set) var enableConfig: [String: Bool] = [:]
+  @Published private(set) var shelfOrder: [String] = []
 
   private let apiService: APIService
 
@@ -59,6 +60,7 @@ class RecommendViewModel: ObservableObject {
   private var extraSourceSnapshot: [RecommendSourceDescriptor] = []
 
   nonisolated static let localConfigKey = "MP_RECOMMEND"
+  nonisolated static let orderConfigKey = "MP_RECOMMEND_ORDER"
 
   // 所有货架配置
   nonisolated static let allShelves: [RecommendShelf] = [
@@ -93,9 +95,16 @@ class RecommendViewModel: ObservableObject {
       id: "recommend/douban_tv_weekly_global", title: "豆瓣全球口碑周榜", category: .chart),
   ]
 
+  /// 按用户保存顺序排列的全量货架（设置页与推荐页共用）。
+  var orderedShelves: [RecommendShelf] {
+    let byID = Dictionary(uniqueKeysWithValues: shelves.map { ($0.id, $0) })
+    return ContentOrdering.orderedVisibleIDs(stored: shelfOrder, current: shelves.map(\.id))
+      .compactMap { byID[$0] }
+  }
+
   // 根据当前分类过滤的货架列表
   var filteredShelves: [RecommendShelf] {
-    let enabledShelves = Self.enabledShelves(shelves, enableConfig: enableConfig)
+    let enabledShelves = Self.enabledShelves(orderedShelves, enableConfig: enableConfig)
     if selectedCategory == .all {
       return enabledShelves
     }
@@ -140,7 +149,9 @@ class RecommendViewModel: ObservableObject {
       .removeDuplicates()
       .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
       .sink { [weak self] shelf in
-        self?.setupPaginator(for: shelf)
+        // debounce 陈旧触发时货架可能已被隐藏或随分类切换失效，就地重验。
+        guard let self, self.filteredShelves.contains(where: { $0.id == shelf.id }) else { return }
+        self.setupPaginator(for: shelf)
       }
       .store(in: &cancellables)
 
@@ -215,6 +226,24 @@ class RecommendViewModel: ObservableObject {
     }
   }
 
+  func saveShelfOrder(_ reorderedVisible: [String]) {
+    let merged = ContentOrdering.persistOrder(stored: shelfOrder, reorderedVisible: reorderedVisible)
+    shelfOrder = merged
+    if let data = try? JSONEncoder().encode(merged) {
+      UserDefaults.standard.set(data, forKey: Self.orderConfigKey)
+    }
+  }
+
+  func resetShelfOrder() {
+    shelfOrder = []
+    UserDefaults.standard.removeObject(forKey: Self.orderConfigKey)
+  }
+
+  nonisolated static func storedShelfOrder(defaults: UserDefaults = .standard) -> [String] {
+    guard let data = defaults.data(forKey: orderConfigKey) else { return [] }
+    return (try? JSONDecoder().decode([String].self, from: data)) ?? []
+  }
+
   func refreshSources(selectShelf: Bool = true) async {
     loadConfig()
     guard apiService.canAccess(.discovery) else { return }
@@ -270,6 +299,11 @@ class RecommendViewModel: ObservableObject {
     }
     if selectedShelf == nil || !filteredShelves.contains(where: { $0.id == selectedShelf?.id }) {
       selectFirstVisibleShelf()
+    }
+    // 全隐藏后重新启用同一货架时 selectedShelf 经历 X→nil→X，compactMap 丢弃 nil
+    // 后 removeDuplicates 会把第二次 X 去重掉，分页器需要显式重建。
+    if hasHandledFirstActivation, let shelf = selectedShelf, paginator == nil {
+      setupPaginator(for: shelf)
     }
   }
 
@@ -354,5 +388,6 @@ class RecommendViewModel: ObservableObject {
       if config[shelf.id] == nil { config[shelf.id] = true }
     }
     enableConfig = config
+    shelfOrder = Self.storedShelfOrder()
   }
 }
