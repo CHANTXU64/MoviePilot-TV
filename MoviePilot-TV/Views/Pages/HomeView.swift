@@ -297,14 +297,8 @@ private struct MediaSectionView: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { entry in
               let item = entry.element
               if content == .continueWatching {
-                ContinueWatchingItemView(
-                  item: item,
-                  server: selectedServer,
-                  loadsImage: loadsImage(at: entry.offset),
-                  focusOwnerID: focusOwnerID,
-                  viewModel: viewModel
-                )
-                .focused($focusedItemId, equals: item.id)
+                continueWatchingCard(item, at: entry.offset)
+                  .focused($focusedItemId, equals: item.id)
               } else {
                 latestCard(item, at: entry.offset)
                   .focused($focusedItemId, equals: item.id)
@@ -448,6 +442,55 @@ private struct MediaSectionView: View {
     }
   }
 
+  /// 「继续观看」的剧照卡：按下接着看，长按给详情、跳转媒体库和搜索。
+  @ViewBuilder
+  private func continueWatchingCard(_ item: MediaServerPlayItem, at index: Int) -> some View {
+    // 卡片所在的服务器（建卡片时取，不用动作到达时选中的）：条目 ID 只在它自己的服务器上有意义。
+    let server = selectedServer
+    let action = viewModel.continueWatchingAction(for: item, server: server)
+    ContinueWatchingCard(
+      title: item.title,
+      stillURL: item.imageURLs.image,
+      icon: action.badgeIcon,
+      episodeText: ContinueWatchingDisplay.episodeText(type: item.type, subtitle: item.subtitle),
+      progress: ContinueWatchingDisplay.progress(percent: item.percent),
+      loadsImage: loadsImage(at: index),
+      action: {
+        switch action {
+        case .play(let target):
+          play(target, from: item)
+        case .openInServerApp:
+          openMediaItem(item)
+        case .detail:
+          openDetail(item)
+        }
+      }
+    )
+    .accessibilityHint(action.accessibilityHint)
+    .compositingGroup()
+    .contextMenu {
+      // 按下做的那一种不再重复列出。
+      if action != .detail {
+        Button {
+          openDetail(item)
+        } label: {
+          Label("详情", systemImage: AppSymbol.details)
+        }
+      }
+      if case .play = action, canOpenMediaLibrary(item) {
+        Button {
+          openMediaItem(item)
+        } label: {
+          Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
+        }
+      }
+      // 剧集的副标题是季集和集名，不是年份。
+      MediaServerSearchMenuItems(
+        info: ContinueWatchingDisplay.mediaInfo(
+          title: item.title, type: item.type, subtitle: item.subtitle))
+    }
+  }
+
   /// 焦点没被系统还原回来时把焦点补写回这张卡。真正的写回由 `PresentationReadyAction` 轮询完成：
   /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回就放弃。
   private func beginFocusRestore(_ id: String) {
@@ -468,134 +511,45 @@ private struct MediaSectionView: View {
   }
 
   /// 在应用内打开条目（见 `HomeViewModel.cardDestination`）：打开详情页，没有 TMDB 编号的直接播放。
+  /// 「继续观看」只打开详情页——接着播由卡片按下直接做，不经过这里。
   /// 期间页面变了（已经进了别的页）就不再推入、不再起播。
   private func openDetail(_ item: MediaServerPlayItem) {
     let navigationSource = navigationCoordinator.sourceToken()
     let loadingPosterURL = item.imageURLs.image
     Task {
-      switch await viewModel.cardDestination(for: item, server: selectedServer, using: mediaActionHandler) {
+      let destination: HomeViewModel.CardDestination?
+      if content == .continueWatching {
+        destination = await viewModel.continueWatchingDetailTarget(for: item, using: mediaActionHandler)
+          .map { .detail($0) }
+      } else {
+        destination = await viewModel.cardDestination(
+          for: item, server: selectedServer, using: mediaActionHandler)
+      }
+      switch destination {
       case .detail(let target):
         navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
       case .play(let target):
         guard navigationCoordinator.isCurrent(navigationSource) else { return }
-        let coordinator = APIService.shared.sessionScope.playbackCoordinator
-        // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这张卡。
-        guard !coordinator.isBusy else { return }
-        // 播放器盖上之后退出时，焦点要回到这张卡。
-        playbackFocusHandoff.target = .homeMedia(ownerID: focusOwnerID, itemID: item.id)
-        coordinator.play(target)
-        // 这次没被接受（没权限、后端太旧、设置关闭）：别把目标留给下一次播放。
-        if !coordinator.isBusy { playbackFocusHandoff.target = nil }
+        play(target, from: item)
       case nil:
         break
       }
     }
   }
 
+  /// 不经过详情页直接起播：播放器盖上之后退出时，焦点要回到这张卡。
+  private func play(_ target: PlaybackTarget, from item: MediaServerPlayItem) {
+    let coordinator = APIService.shared.sessionScope.playbackCoordinator
+    playbackFocusHandoff.play(
+      returningTo: .homeMedia(ownerID: focusOwnerID, itemID: item.id), on: coordinator
+    ) {
+      coordinator.play(target)
+    }
+  }
+
   private func openMediaItem(_ item: MediaServerPlayItem) {
     viewModel.openMediaItem(item, using: openURL) { message in
       notificationManager.show(message: message, type: .error)
-    }
-  }
-}
-
-/// 「继续观看」的一张卡：按下接着看，长按给详情、跳转媒体库和搜索。
-private struct ContinueWatchingItemView: View {
-  let item: MediaServerPlayItem
-  /// 卡片所在的服务器（建卡片时取，不用动作到达时选中的）：条目 ID 只在它自己的服务器上有意义。
-  let server: String
-  let loadsImage: Bool
-  /// 所在行的实例身份，焦点只交回起播的那一行。
-  let focusOwnerID: UUID
-  @ObservedObject var viewModel: HomeViewModel
-
-  @Environment(\.openURL) private var openURL
-  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
-  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
-  @EnvironmentObject private var notificationManager: NotificationManager
-  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
-
-  private var action: HomeViewModel.ContinueWatchingAction {
-    viewModel.continueWatchingAction(for: item, server: server)
-  }
-
-  /// 识别和搜索用的媒体信息：剧集的副标题是季集和集名，不是年份。
-  private var mediaInfo: MediaInfo {
-    ContinueWatchingDisplay.mediaInfo(title: item.title, type: item.type, subtitle: item.subtitle)
-  }
-
-  private var accessibilityHint: String {
-    switch action {
-    case .play: "接着播放"
-    case .openInServerApp: "在媒体服务器 App 中打开"
-    case .detail: "打开详情"
-    }
-  }
-
-  var body: some View {
-    ContinueWatchingCard(
-      title: item.title,
-      stillURL: item.imageURLs.image,
-      icon: action.badgeIcon,
-      episodeText: ContinueWatchingDisplay.episodeText(type: item.type, subtitle: item.subtitle),
-      progress: ContinueWatchingDisplay.progress(percent: item.percent),
-      loadsImage: loadsImage,
-      action: press
-    )
-    .accessibilityHint(accessibilityHint)
-    .compositingGroup()
-    .contextMenu {
-      // 按下做的那一种不再重复列出。
-      if action != .detail {
-        Button {
-          openDetail()
-        } label: {
-          Label("详情", systemImage: AppSymbol.details)
-        }
-      }
-      if case .play = action, HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type) {
-        Button {
-          openInServerApp()
-        } label: {
-          Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
-        }
-      }
-      MediaServerSearchMenuItems(info: mediaInfo)
-    }
-  }
-
-  private func press() {
-    switch action {
-    case .play(let target):
-      let coordinator = APIService.shared.sessionScope.playbackCoordinator
-      // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这张卡。
-      guard !coordinator.isBusy else { return }
-      // 播放器盖上之后退出时，焦点要回到这张卡。
-      playbackFocusHandoff.target = .homeMedia(ownerID: focusOwnerID, itemID: item.id)
-      coordinator.play(target)
-      // 这次没被接受（例如服务器配置刚被删掉）：别把目标留给下一次播放。
-      if !coordinator.isBusy { playbackFocusHandoff.target = nil }
-    case .openInServerApp:
-      openInServerApp()
-    case .detail:
-      openDetail()
-    }
-  }
-
-  private func openInServerApp() {
-    viewModel.openMediaItem(item, using: openURL) { message in
-      notificationManager.show(message: message, type: .error)
-    }
-  }
-
-  /// 打开 MoviePilot 详情页（没有应用内播放、这台服务器也不支持跳转时）。期间页面变了就不再推入。
-  private func openDetail() {
-    let navigationSource = navigationCoordinator.sourceToken()
-    let loadingPosterURL = item.imageURLs.image
-    Task {
-      guard let target = await viewModel.continueWatchingDetailTarget(for: item, using: mediaActionHandler)
-      else { return }
-      navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
     }
   }
 }

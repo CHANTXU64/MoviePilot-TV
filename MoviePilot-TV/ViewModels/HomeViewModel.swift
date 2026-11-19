@@ -143,8 +143,7 @@ class HomeViewModel: ObservableObject {
   /// （`_get_resume_image`），跟着 10 秒轮询会把这份开销持续压到媒体服务器上；Web 也只在页面激活时读。
   private func loadMediaServerRows(includeContinueWatching: Bool) async {
     guard apiService.canRequestSuperUserEndpoints else {
-      clearLatestMedia()
-      clearContinueWatching()
+      clearMediaServerRows()
       if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
       return
     }
@@ -189,30 +188,14 @@ class HomeViewModel: ObservableObject {
     // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
     if !read.anyCancelled { latestLoadFailed = read.anyFailed }
 
-    // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
-    let enabledServerNames = Set(enabledServers.map(\.name))
-    var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
-    for (serverName, items) in read.byServer {
-      nextByServer[serverName] = items
-    }
-    latestMediaByServer = nextByServer
+    let merged = Self.mergedRow(
+      read, enabledServers: enabledServers, previous: latestMediaByServer,
+      selected: selectedLatestMediaServer)
+    latestMediaByServer = merged.byServer
     loadLibraryLinks(read.byServer, playableServers: playableServers, session: session)
-    let newServerNames = enabledServers.map(\.name)
-    if latestMediaServers != newServerNames {
-      latestMediaServers = newServerNames
-    }
-
-    if latestMediaServers.isEmpty {
-      if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
-      if !latestMedia.isEmpty { latestMedia = [] }
-    } else {
-      if selectedLatestMediaServer.isEmpty
-        || !latestMediaServers.contains(selectedLatestMediaServer)
-      {
-        selectedLatestMediaServer = latestMediaServers[0]
-      }
-      applyLatestMediaSelection()
-    }
+    if latestMediaServers != merged.servers { latestMediaServers = merged.servers }
+    selectedLatestMediaServer = merged.selected
+    applyLatestMediaSelection()
   }
 
   /// 从已启用的媒体服务器加载「继续观看」。快照、失败标记和选择规则与「最近添加」相同，各自独立。
@@ -223,28 +206,28 @@ class HomeViewModel: ObservableObject {
     guard apiService.isSessionUnchanged(from: session) else { return }
     if !read.anyCancelled { continueWatchingLoadFailed = read.anyFailed }
 
-    let enabledServerNames = Set(enabledServers.map(\.name))
-    var nextByServer = continueWatchingByServer.filter { enabledServerNames.contains($0.key) }
-    for (serverName, items) in read.byServer {
-      nextByServer[serverName] = items
-    }
-    continueWatchingByServer = nextByServer
-    let newServerNames = enabledServers.map(\.name)
-    if continueWatchingServers != newServerNames {
-      continueWatchingServers = newServerNames
-    }
+    let merged = Self.mergedRow(
+      read, enabledServers: enabledServers, previous: continueWatchingByServer,
+      selected: selectedContinueWatchingServer)
+    continueWatchingByServer = merged.byServer
+    if continueWatchingServers != merged.servers { continueWatchingServers = merged.servers }
+    selectedContinueWatchingServer = merged.selected
+    applyContinueWatchingSelection()
+  }
 
-    if continueWatchingServers.isEmpty {
-      if selectedContinueWatchingServer != "" { selectedContinueWatchingServer = "" }
-      if !continueWatching.isEmpty { continueWatching = [] }
-    } else {
-      if selectedContinueWatchingServer.isEmpty
-        || !continueWatchingServers.contains(selectedContinueWatchingServer)
-      {
-        selectedContinueWatchingServer = continueWatchingServers[0]
-      }
-      applyContinueWatchingSelection()
+  /// 两行共用的快照与选择规则：这一轮读成功的服务器覆盖旧快照，失败/取消的保留上一轮，停用的随新列表移除；
+  /// 没有可选服务器时选择清空（这一行随之为空），否则保留仍有效的旧选择，无效时选第一个。
+  private static func mergedRow(
+    _ read: ServerItemsRead, enabledServers: [MediaServerConf],
+    previous: [String: [MediaServerPlayItem]], selected: String
+  ) -> (byServer: [String: [MediaServerPlayItem]], servers: [String], selected: String) {
+    let enabledServerNames = Set(enabledServers.map(\.name))
+    var byServer = previous.filter { enabledServerNames.contains($0.key) }
+    for (serverName, items) in read.byServer {
+      byServer[serverName] = items
     }
+    let servers = enabledServers.map(\.name)
+    return (byServer, servers, servers.contains(selected) ? selected : (servers.first ?? ""))
   }
 
   /// 媒体库页两行读的是同一个形状：按服务器并发读同一个列表。
@@ -315,15 +298,13 @@ class HomeViewModel: ObservableObject {
     case cancelled
   }
 
-  private func clearLatestMedia() {
+  /// 读不到媒体服务器配置（没有超管权限）：两行都清空，不算加载失败。
+  private func clearMediaServerRows() {
     latestMediaByServer = [:]
     latestMediaServers = []
     latestLoadFailed = false
     if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
     if !latestMedia.isEmpty { latestMedia = [] }
-  }
-
-  private func clearContinueWatching() {
     continueWatchingByServer = [:]
     continueWatchingServers = []
     continueWatchingLoadFailed = false
@@ -331,15 +312,16 @@ class HomeViewModel: ObservableObject {
     if !continueWatching.isEmpty { continueWatching = [] }
   }
 
+  /// 这一行要显示的条目就是选中服务器的快照；没有选中服务器时这一行为空。
+  private static func selectedItems(
+    _ selected: String, byServer: [String: [MediaServerPlayItem]]
+  ) -> [MediaServerPlayItem] {
+    selected.isEmpty ? [] : (byServer[selected] ?? [])
+  }
+
   private func applyLatestMediaSelection() {
-    guard !selectedLatestMediaServer.isEmpty else {
-      if !self.latestMedia.isEmpty { self.latestMedia = [] }
-      return
-    }
-    let newMedia = latestMediaByServer[selectedLatestMediaServer] ?? []
-    if self.latestMedia != newMedia {
-      self.latestMedia = newMedia
-    }
+    let newMedia = Self.selectedItems(selectedLatestMediaServer, byServer: latestMediaByServer)
+    if latestMedia != newMedia { latestMedia = newMedia }
   }
 
   private func persistSelectedLatestMediaServer() {
@@ -348,14 +330,9 @@ class HomeViewModel: ObservableObject {
   }
 
   private func applyContinueWatchingSelection() {
-    guard !selectedContinueWatchingServer.isEmpty else {
-      if !continueWatching.isEmpty { continueWatching = [] }
-      return
-    }
-    let newItems = continueWatchingByServer[selectedContinueWatchingServer] ?? []
-    if continueWatching != newItems {
-      continueWatching = newItems
-    }
+    let newItems = Self.selectedItems(
+      selectedContinueWatchingServer, byServer: continueWatchingByServer)
+    if continueWatching != newItems { continueWatching = newItems }
   }
 
   private func persistSelectedContinueWatchingServer() {
@@ -612,6 +589,15 @@ class HomeViewModel: ObservableObject {
       case .play: AppSymbol.play
       case .openInServerApp: AppSymbol.openInLibrary
       case .detail: nil
+      }
+    }
+
+    /// 无障碍提示：说出按下会做什么。
+    var accessibilityHint: String {
+      switch self {
+      case .play: "接着播放"
+      case .openInServerApp: "在媒体服务器 App 中打开"
+      case .detail: "打开详情"
       }
     }
   }

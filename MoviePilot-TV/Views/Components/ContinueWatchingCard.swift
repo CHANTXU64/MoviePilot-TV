@@ -2,12 +2,11 @@ import Kingfisher
 import SwiftUI
 
 /// 媒体库页「继续观看」的剧照卡：16:9 剧照，左下角图标、已播放进度条和季集（电影没有季集），
-/// 剧照下面只有一行居中标题，不垫聚焦底板。标题的居中、聚焦加宽和动画与海报卡 `MediaCard` 一致。
+/// 剧照下面只有一行居中标题，不垫聚焦底板。标题的居中、聚焦加宽和下移与海报卡共用 `posterCardTitleLayout`。
 /// 剧照尺寸、间距和聚焦外观与详情页单集卡共用。
 struct ContinueWatchingCard: View {
   static let stillSize = EpisodeCardLayout.stillSize
-  /// 剧照与标题的间距，同 `MediaCard` 的 10pt。间距必须小于「剧照聚焦向下长出的高度 + 5」，
-  /// 否则 `focusedTextOffset` 算成 0，聚焦时标题就不跟着剧照下移了。
+  /// 剧照与标题的间距，同 `MediaCard` 的 10pt；取大了聚焦时标题就不跟着下移，见 `posterCardTitleLayout`。
   static let titleSpacing: CGFloat = 10
 
   let title: String
@@ -48,26 +47,15 @@ struct ContinueWatchingCard: View {
         .compactMap { $0 }.joined(separator: "，"))
   }
 
-  /// 标题居中，聚焦时可用宽度跟剧照一起向左右各多出 `focusedGrowth`；加宽走不回弹的 easeOut，
-  /// 免得单行标题反复截断时来回抖（同 `MediaCard`）。
   private var titleView: some View {
     Text(title)
       .font(.caption)
       .foregroundStyle(isFocused ? .primary : .secondary)
       .lineLimit(1)
       .compositingGroup()
-      .frame(
-        maxWidth: isFocused
-          ? Self.stillSize.width + PosterCardFocus.focusedTextExtraWidth : Self.stillSize.width,
-        alignment: .center)
-      .frame(width: Self.stillSize.width + PosterCardFocus.focusedTextExtraWidth)
-      .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
-      .offset(
-        y: isFocused
-          ? PosterCardFocus.focusedTextOffset(
-            forImageSize: Self.stillSize, stackSpacing: Self.titleSpacing)
-          : 0)
-      .posterCardTitleAnimation(isFocused: isFocused)
+      .posterCardTitleLayout(
+        isFocused: isFocused, width: Self.stillSize.width, imageSize: Self.stillSize,
+        stackSpacing: Self.titleSpacing)
   }
 
   private var still: some View {

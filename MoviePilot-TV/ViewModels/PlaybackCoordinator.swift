@@ -2020,9 +2020,6 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         judged = (judgement, tmdbID)
       } else if case .serverItem(let name, let id) = target {
         (serverName, itemID) = (name, id)
-      } else if case .serverEpisode(let name, let id) = target {
-        // 上面补上下文没成功时才会走到这里，和直接播服务器条目一样。
-        (serverName, itemID) = (name, id)
       } else {
         throw PlaybackError.notFound
       }
@@ -2102,16 +2099,15 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           for: item, media: nil, on: connection, api: apiService),
           let found = await PlaybackMetadataLookup.episodeInSeason(for: item, detail: detail, api: apiService)
         else { return nil }
-        // 跨季的上一集/下一集按这份季目录走；详情没给季目录时至少带上当前季。
-        var seasons = detail.season_info?.compactMap(\.season_number) ?? []
+        // 跨季的上一集/下一集按详情页那份季目录走；详情没给当前季时至少带上它。
+        var seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? [])
+          .compactMap(\.season_number)
         if !seasons.contains(found.season) { seasons.append(found.season) }
         guard let context = EpisodePlaybackContext(
           media: detail, episodeGroup: nil, seasons: seasons,
           libraryItem: MediaServerItemRef(itemID: seriesID, server: serverName))
         else { return nil }
-        let episodes = found.list.enumerated().map {
-          MoviePilotEpisode($0.element, season: found.season, index: $0.offset)
-        }
+        let episodes = MoviePilotEpisode.list(found.list, season: found.season)
         guard let episode = episodes.first(where: { $0.tmdbEpisodeID == found.episode.id }) else { return nil }
         var queued = QueuedEpisode(context: context, episode: episode, seasonEpisodes: episodes)
         // 续播点在这份文件上，先试它：同一集在别的媒体库还有一份时，不为那份从头播。

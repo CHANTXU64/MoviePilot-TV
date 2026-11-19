@@ -161,12 +161,12 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         "@EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator"
       )
     )
-    // 四个异步跳转入口：最近添加打开详情、继续观看打开详情、搜索资源、搜索字幕。
+    // 三个异步跳转入口：打开详情（最近添加与继续观看共用）、搜索资源、搜索字幕。
     XCTAssertEqual(
       homeSource.components(
         separatedBy: "let navigationSource = navigationCoordinator.sourceToken()"
       ).count - 1,
-      4
+      3
     )
     XCTAssertTrue(
       containsTokensInOrder(
@@ -191,10 +191,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         ]
       )
     )
-    // 最近添加打开详情、继续观看打开详情、搜索资源（识别成功与退回标题搜索两条）、搜索字幕。
+    // 打开详情（两行共用）、搜索资源（识别成功与退回标题搜索两条）、搜索字幕。
     XCTAssertEqual(
       homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
-      5
+      4
     )
     XCTAssertFalse(homeSource.contains("onTMDBDetail"))
     XCTAssertFalse(homeSource.contains("onSearchResource"))

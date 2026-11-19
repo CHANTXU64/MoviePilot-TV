@@ -272,6 +272,18 @@ final class PlaybackFocusHandoff {
   var request = 0
   /// 页面确认焦点已写回（回填对应的 `request`）。
   var acknowledged = 0
+
+  /// 起播并登记退出后焦点要交回的控件。已有别的播放在准备或播放时这次会被拒绝，先不登记目标，
+  /// 免得把焦点目标错改成这个控件；起播没被接受（没权限、后端太旧、设置关闭）时清掉目标，
+  /// 不留给下一次播放。
+  func play(
+    returningTo focus: PlaybackFocusTarget, on coordinator: PlaybackCoordinator, start: () -> Void
+  ) {
+    guard !coordinator.isBusy else { return }
+    target = focus
+    start()
+    if !coordinator.isBusy { target = nil }
+  }
 }
 
 private struct PlaybackEndedGenerationKey: EnvironmentKey {

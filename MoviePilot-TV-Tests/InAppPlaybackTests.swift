@@ -1898,6 +1898,43 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.host == "lan.playback-tests.local" })
   }
 
+  /// 起播焦点交接（`PlaybackFocusHandoff.play`）：起播被同步拒绝时不留焦点目标，接受了才留着；
+  /// 已有播放在准备时这次不起播，也不把目标错改成后按的那个控件。
+  func testFocusHandoffRegistersTargetOnlyWhenPlayIsAccepted() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let handoff = PlaybackFocusHandoff()
+    let card = PlaybackFocusTarget.homeMedia(ownerID: UUID(), itemID: "m1")
+    let target = PlaybackTarget.serverItem(serverName: "emby", itemID: "m1")
+
+    // 设置里关了应用内播放：同步拒绝，目标不留给下一次播放。
+    enabledInSettings = false
+    let rejected = makeCoordinator(makeService())
+    handoff.play(returningTo: card, on: rejected) { rejected.play(target) }
+    XCTAssertFalse(rejected.isBusy)
+    XCTAssertNil(handoff.target, "起播没被接受就不该留下焦点目标")
+
+    enabledInSettings = true
+    let coordinator = makeCoordinator(makeService())
+    handoff.play(returningTo: card, on: coordinator) { coordinator.play(target) }
+    XCTAssertTrue(coordinator.isBusy)
+    XCTAssertEqual(handoff.target, card, "起播被接受：退出播放时焦点回到这张卡")
+
+    let otherCard = PlaybackFocusTarget.homeMedia(ownerID: UUID(), itemID: "m2")
+    var startedAgain = false
+    handoff.play(returningTo: otherCard, on: coordinator) { startedAgain = true }
+    XCTAssertFalse(startedAgain, "忙时不该再起播")
+    XCTAssertEqual(handoff.target, card, "忙时不该改焦点目标")
+
+    let task = coordinator.resolveTaskForTesting
+    coordinator.cancelResolving()
+    await task?.value
+  }
+
   func testSessionChangeDuringResolveDropsResult() async throws {
     let gate = DispatchSemaphore(value: 0)
     PlaybackURLProtocol.stub.configure {
@@ -6774,7 +6811,7 @@ extension PlaybackCoordinatorTests {
       ]
       $0.mediaDetails = [
         "/api/v1/media/100":
-          #"{"tmdb_id":100,"source":"themoviedb","type":"电视剧","title":"MP 剧名","poster_path":"/mp-series.jpg"}"#
+          #"{"tmdb_id":100,"source":"themoviedb","type":"电视剧","title":"MP 剧名","poster_path":"/mp-series.jpg","season_info":[{"season_number":2},{"season_number":0},{"season_number":1},{"season_number":1},{"season_number":-1}]}"#
       ]
       $0.tmdbEpisodes = [
         "/api/v1/tmdb/100/1":
@@ -6796,6 +6833,9 @@ extension PlaybackCoordinatorTests {
     let queued = try XCTUnwrap(session.episode, "认出这一集就要带队列上下文，否则选集面板是空的")
     XCTAssertEqual(queued.episode.tmdbEpisodeID, 12)
     XCTAssertEqual(queued.preferredFile, ServerFileRef(server: "emby", itemID: "e1"))
+    XCTAssertEqual(
+      queued.context.seasons, [1, 2, 0],
+      "跨季连播按详情页那份季目录：去重、丢掉非法季号、特别篇排在最后")
     let panel = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
     XCTAssertFalse(panel.isEmpty, "选集面板要有内容")
     coordinator.endCurrentSession()
