@@ -126,6 +126,41 @@ private struct TopShelfPresentationKey: EnvironmentKey {
   static let defaultValue = TopShelfOpeningContext()
 }
 
+/// 订阅编辑、复用订阅这类"关闭即取消用户正在进行工作"的贵弹窗呈现计数。
+/// Top Shelf 交接据此决定不强制关闭、等用户自然关完再跳转，避免打断订阅或 Fork。
+/// 由弹窗自身 onAppear/onDisappear 注册，不依赖窗口扫描，后台未激活时也准确。
+@MainActor
+enum CostlyModalPresentation {
+  private static var count = 0
+  static var isPresenting: Bool { count > 0 }
+  static func begin() { count += 1 }
+  static func end() { count = max(0, count - 1) }
+  /// 仅供测试隔离清理；生产不调用——呈现就绪机制的祖先链看不到子视图呈现的贵弹窗，
+  /// 若据此 reset 会在面板仍开着时误清标记，导致 Top Shelf 提前交接关掉面板。
+  static func reset() { count = 0 }
+}
+
+extension PresentationReadyAction {
+  /// 同步查询当前 key window 是否有模态正在呈现（含关闭转场中）。递归扫描控制器树，
+  /// 嵌套弹窗也能命中。只查 key window，避免把无关窗口的模态算进来误延迟冷启动交接；
+  /// 后台未 key 时的贵弹窗由 CostlyModalPresentation 标记兜底。
+  @MainActor static var isModalPresenting: Bool {
+    for scene in UIApplication.shared.connectedScenes {
+      guard let windowScene = scene as? UIWindowScene else { continue }
+      for window in windowScene.windows where window.isKeyWindow {
+        if hasPresentedModal(window.rootViewController) { return true }
+      }
+    }
+    return false
+  }
+
+  @MainActor private static func hasPresentedModal(_ controller: UIViewController?) -> Bool {
+    guard let controller else { return false }
+    if controller.presentedViewController != nil { return true }
+    return controller.children.contains { hasPresentedModal($0) }
+  }
+}
+
 struct TopShelfOpeningContext {
   var routeID: UUID?
   var blocksInteraction = false

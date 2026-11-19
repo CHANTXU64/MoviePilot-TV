@@ -2,8 +2,10 @@ import SwiftUI
 
 struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
+  @Environment(\.isPresented) private var isPresented
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
+  @State private var costlyRegistered = false
   @State private var isSaveAttemptInFlight = false
   @State private var showingIdentityResetConfirmation = false
 
@@ -77,6 +79,17 @@ struct SubscribeSheet: View {
       }
     }
     .cancelOnExternalNavigation()
+    // 用 isPresented 注册贵弹窗：它反映呈现状态，退后台不变，避免 onDisappear 在后台
+    // 触发 end、前台 onAppear 又被 hasAppeared 挡住不 re-begin 而丢标记。
+    .onChange(of: isPresented, initial: true) { _, presented in
+      if presented, !costlyRegistered {
+        CostlyModalPresentation.begin()
+        costlyRegistered = true
+      } else if !presented, costlyRegistered {
+        CostlyModalPresentation.end()
+        costlyRegistered = false
+      }
+    }
     .onDisappear {
       let wasSaving = viewModel.isSaving
       Task {

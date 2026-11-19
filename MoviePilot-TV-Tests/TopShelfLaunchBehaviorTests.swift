@@ -11,11 +11,13 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
   override func setUp() async throws {
     try await super.setUp()
     persistence = APIServicePersistenceSnapshot.capture()
+    CostlyModalPresentation.reset()
     XCTAssertTrue(APIService.installURLProtocolForTesting(TopShelfLaunchURLProtocol.self))
     TopShelfLaunchURLProtocol.reset()
   }
 
   override func tearDown() async throws {
+    CostlyModalPresentation.reset()
     TopShelfLaunchURLProtocol.reset()
     APIService.removeURLProtocolForTesting(TopShelfLaunchURLProtocol.self)
     if let persistence {
@@ -1027,7 +1029,8 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     model.backendVersionWarning = BackendVersionWarning(backendVersion: nil, registry: BackendCompatibilityTestFixtures.registry())
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertNotNil(host.presentedViewController)
-    XCTAssertTrue(router.handle(try TopShelfDeepLink.url(for: payload(service: service, origin: .explore))))
+    // 走真实深链入口：安全弹窗（版本提示）被取消，但交接须等关闭转场结束，不得提前入栈。
+    model.handleTopShelfURL(try TopShelfDeepLink.url(for: payload(service: service, origin: .explore)), router: router)
     let id = try XCTUnwrap(router.pendingRoute?.id)
     let deadline = ContinuousClock.now.advanced(by: .seconds(3))
     var observedCancellation = false
@@ -1050,6 +1053,90 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertFalse(model.isOpeningTopShelf)
     service.logout()
     XCTAssertNil(model.topShelfRoute)
+  }
+
+  func testCostlyModalIsPreservedAndHandoffWaitsForUserDismiss() async throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    let router = TopShelfNavigationRouter(store: nil)
+    let host = UIHostingController(rootView: ContentView(viewModel: model)
+      .environment(\.scenePhase, .active)
+      .environmentObject(router)
+      .environmentObject(TopShelfManager(apiService: service, store: nil))
+      .environmentObject(NotificationManager()))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      CostlyModalPresentation.reset()
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    // 模拟订阅编辑/Fork 这类贵弹窗正在呈现：真实模态 + 贵弹窗注册。
+    host.present(UIViewController(), animated: false)
+    CostlyModalPresentation.begin()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertNotNil(host.presentedViewController)
+    model.handleTopShelfURL(try TopShelfDeepLink.url(for: payload(service: service)), router: router)
+    let id = try XCTUnwrap(router.pendingRoute?.id)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertNotNil(host.presentedViewController, "贵弹窗不得被深链强制关闭")
+    XCTAssertNotNil(router.pendingRoute, "贵弹窗呈现中交接须延迟")
+    XCTAssertEqual(model.recommendNavigation.path.count, 0, "用户关完前不建详情栈")
+    XCTAssertEqual(model.topShelfRoute?.id, id)
+    // 用户自然关完贵弹窗 → 呈现就绪 → 交接完成。
+    CostlyModalPresentation.end()
+    host.dismiss(animated: false)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    while ContinuousClock.now < deadline {
+      if router.pendingRoute == nil && !model.isOpeningTopShelf { break }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    XCTAssertNil(router.pendingRoute)
+    XCTAssertEqual(model.recommendNavigation.path.count, 1, "用户关完贵弹窗后交接详情")
+    XCTAssertEqual(model.selectedTab, .recommend)
+    XCTAssertFalse(model.isOpeningTopShelf)
+    service.logout()
+    XCTAssertNil(model.topShelfRoute)
+  }
+
+  func testRealSubscribeSheetRegistersAndIsPreservedOnTopShelfEntry() async throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    let router = TopShelfNavigationRouter(store: nil)
+    // 纯宿主隔离验证真实 SubscribeSheet 的自注册与延迟交接。不用 ContentView 宿主：
+    // 其启动任务会抢先呈现版本提示，占用 host 的呈现位导致订阅面板呈现不上（测试假象）。
+    let host = UIHostingController(rootView: Color.clear)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      CostlyModalPresentation.reset()
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    // 呈现真实订阅编辑面板（与详情页同一 SubscribeSheet），验证其自注册贵弹窗标记。
+    let sheet = UIHostingController(rootView: SubscribeSheet(
+      subscribe: Subscribe(id: 9001, name: "订阅保护测试", type: "电影", season: nil, tmdbid: 42),
+      isNewSubscription: true))
+    host.present(sheet, animated: false)
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertTrue(CostlyModalPresentation.isPresenting, "真实订阅面板应注册贵弹窗标记")
+    XCTAssertNotNil(host.presentedViewController)
+    model.handleTopShelfURL(try TopShelfDeepLink.url(for: payload(service: service)), router: router)
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertNotNil(host.presentedViewController, "订阅面板不得被 Top Shelf 强制关闭")
+    XCTAssertNotNil(router.pendingRoute, "订阅面板呈现中交接须延迟")
+    XCTAssertEqual(model.recommendNavigation.path.count, 0)
+    service.logout()
   }
 
   func testForeignOwnerDoesNotCreateAColdPreview() throws {
