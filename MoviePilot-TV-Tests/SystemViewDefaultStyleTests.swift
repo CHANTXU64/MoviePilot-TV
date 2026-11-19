@@ -444,7 +444,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(source.contains("@EnvironmentObject private var notificationManager: NotificationManager"))
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
-    XCTAssertTrue(source.contains("ProgressView()"))
+    XCTAssertTrue(source.contains("LoadingIcon(systemImage: AppSymbol.account, isLoading: true)"))
     XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
     XCTAssertTrue(source.contains("guard !viewModel.isLoading else { return }"))
     XCTAssertFalse(
@@ -781,10 +781,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
 
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 315)"))
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 315)"))
+    XCTAssertTrue(detailSource.contains("RowLoadingTail(height: 315)"))
+    XCTAssertTrue(detailSource.contains("RowLoadingTail(height: 384)"))
+    XCTAssertTrue(searchSource.contains("RowLoadingTail(height: 384)"))
+    XCTAssertTrue(searchSource.contains("RowLoadingTail(height: 315)"))
   }
 
   func testSeasonLoadFailureUsesRetryAndGlobalNotification() throws {

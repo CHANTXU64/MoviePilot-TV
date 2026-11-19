@@ -1601,7 +1601,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         hasSeasonLoadError: false,
         isSeasonLoading: true
       ),
-      "分季信息加载中"
+      "分季信息"
     )
   }
 

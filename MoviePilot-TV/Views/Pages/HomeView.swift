@@ -25,8 +25,7 @@ struct HomeView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 30) {
           if viewModel.isLoading {
-            ProgressView()
-              .frame(maxWidth: .infinity, minHeight: 200)
+            FirstLoadIndicator()
           } else {
             // 部分数据失败：保留旧快照并提示（成功空不算失败）
             if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {

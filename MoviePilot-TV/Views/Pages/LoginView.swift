@@ -42,7 +42,7 @@ struct LoginView: View {
           }) {
             HStack(spacing: 8) {
               if viewModel.isLoading {
-                ProgressView()
+                LoadingIcon(systemImage: AppSymbol.account, isLoading: true)
               }
               Text(viewModel.isLoading ? "登录中" : "登录")
             }

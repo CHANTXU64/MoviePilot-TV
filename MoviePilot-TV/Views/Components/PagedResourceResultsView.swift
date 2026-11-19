@@ -42,7 +42,9 @@ struct PagedResourceResultsView<Header: View>: View {
         Spacer()
         ProgressView(search.progressText)
         if search.isCollecting && search.progress > 0 {
-          ProgressView(value: search.progress, total: 100).frame(width: 360)
+          ProgressView(value: search.progress, total: 100)
+            .progressViewStyle(.linear)
+            .frame(width: 360)
         }
         Text("已保留 \(search.retainedCount) 条 · 本次新增 \(search.newCount) 条")
           .font(.caption).foregroundColor(.secondary)

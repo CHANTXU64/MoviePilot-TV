@@ -326,8 +326,7 @@ struct SubscribeSeasonContentView: View {
   @ViewBuilder
   private var status: some View {
     if viewModel.isLoading {
-      ProgressView("加载中...")
-        .frame(maxWidth: .infinity, minHeight: 200)
+      FirstLoadIndicator()
     } else if viewModel.hasSeasonLoadError {
       VStack(spacing: 16) {
         Image(systemName: AppSymbol.warning)

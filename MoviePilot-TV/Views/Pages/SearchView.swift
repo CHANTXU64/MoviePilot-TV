@@ -182,7 +182,10 @@ struct SearchView: View {
                 if viewModel.searchProgress > 0 {
                   ProgressView(value: viewModel.searchProgress, total: 100)
                     .progressViewStyle(.linear)
-                    .frame(width: 300)
+                    .frame(width: 360)
+                }
+                Button("取消") {
+                  viewModel.cancelResourceSearch()
                 }
               }
             } else {
@@ -479,7 +482,7 @@ private struct ResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(height: 384)
+            RowLoadingTail(height: 384)
           }
         }
         .padding(.top, 25)
@@ -512,15 +515,6 @@ private struct ResultRow: View {
       .focusSection()
     }
     .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
-    }
   }
 }
 
@@ -580,7 +574,7 @@ private struct PersonResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(height: 315)
+            RowLoadingTail(height: 315)
           }
         }
         .padding(.top, 25)
@@ -601,15 +595,6 @@ private struct PersonResultRow: View {
       .focusSection()
     }
     .focusLiftRow(cardImageSize: PersonCard.imageSize)
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
-    }
   }
 }
 

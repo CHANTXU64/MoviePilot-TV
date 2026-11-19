@@ -68,7 +68,7 @@ struct TransferHistoryView: View {
       if !keepsRowsMounted {
         EmptyView()
       } else if viewModel.isFirstLoading {
-        ProgressView().frame(maxWidth: .infinity, alignment: .center).padding()
+        FirstLoadIndicator(minHeight: nil).padding()
       } else if viewModel.items.isEmpty {
         EmptyDataView(title: "没有数据")
       } else {
@@ -148,8 +148,8 @@ struct TransferHistoryView: View {
           VStack(spacing: 20) {
             ProgressView(
               viewModel.isValidatingMutation
-                ? "正在确认整理记录..."
-                : (viewModel.isDeleting ? "正在删除整理记录..." : viewModel.aiRedoProgressText)
+                ? "正在确认整理记录…"
+                : (viewModel.isDeleting ? "正在删除整理记录…" : viewModel.aiRedoProgressText)
             )
           }
           .padding()

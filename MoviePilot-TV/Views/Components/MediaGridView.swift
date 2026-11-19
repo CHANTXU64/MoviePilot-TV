@@ -267,11 +267,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
         header
 
         if isLoading {
-          HStack {
-            Spacer()
-            ProgressView()
-            Spacer()
-          }
+          FirstLoadIndicator(minHeight: nil)
         } else if items.isEmpty {
           HStack {
             Spacer()

@@ -546,7 +546,7 @@ class SearchViewModel: ObservableObject {
         search.start()
         return
       }
-      searchProgressText = "正在搜索..."
+      searchProgressText = "正在搜索…"
       searchProgress = 0.0
       resourceErrorMessage = nil
       // 新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
@@ -819,6 +819,15 @@ class SearchViewModel: ObservableObject {
   func cancelPagedSearch() {
     pagedSearch?.cancel()
     pagedSearch = nil
+    hasSearched = false
+    isLoading = false
+  }
+
+  /// 取消不支持分页的旧版资源搜索（流式）： bump 代际让在途结果不再发布。
+  func cancelResourceSearch() {
+    searchGeneration += 1
+    searchStreamTask?.cancel()
+    searchStreamTask = nil
     hasSearched = false
     isLoading = false
   }

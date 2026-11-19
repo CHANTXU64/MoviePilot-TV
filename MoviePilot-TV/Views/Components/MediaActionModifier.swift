@@ -16,7 +16,7 @@ struct MediaActionModifier: ViewModifier {
           VStack(spacing: 28) {
             ProgressView()
               .scaleEffect(1.5)
-            Text("正在识别媒体信息...")
+            Text("正在识别媒体信息…")
               .font(.headline)
               .foregroundColor(.white)
           }

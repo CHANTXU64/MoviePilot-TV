@@ -91,7 +91,7 @@ class ResourceResultViewModel: ObservableObject {
 
     // 取消可能正在进行的流式搜索
     searchStreamTask?.cancel()
-    searchProgressText = "正在搜索..."
+    searchProgressText = "正在搜索…"
     searchProgress = 0.0
     errorMessage = nil
 

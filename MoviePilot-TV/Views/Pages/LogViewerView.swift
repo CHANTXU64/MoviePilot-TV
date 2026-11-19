@@ -61,8 +61,7 @@ struct LogViewerView: View {
         }
 
         if viewModel.isLoading {
-          ProgressView()
-            .frame(maxWidth: .infinity)
+          FirstLoadIndicator(minHeight: nil)
             .padding(.top, 40)
         } else if viewModel.showsEmptyState {
           Text("没有符合条件的日志")

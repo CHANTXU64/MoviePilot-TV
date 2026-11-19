@@ -1119,7 +1119,8 @@ struct MediaDetailView: View {
       let title = isSubscribed ? "已订阅" : "订阅"
       return isInLibrary ? "\(title)（已入库）" : title
     }
-    if isSeasonLoading { return "分季信息加载中" }
+    // 加载中文案保持「分季信息」不变，由前导图标传达加载，避免按钮先短后长再短地闪。
+    if isSeasonLoading { return "分季信息" }
     if hasSeasonLoadError { return "分季信息加载失败" }
     return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
   }
@@ -1323,11 +1324,7 @@ struct MediaDetailView: View {
                 Label(
                   title: { Text("TMDB") },
                   icon: {
-                    if isButtonLoading {
-                      ProgressView().controlSize(.small)
-                    } else {
-                      Image(systemName: AppSymbol.link)
-                    }
+                    LoadingIcon(systemImage: AppSymbol.link, isLoading: isButtonLoading)
                   }
                 )
                 .foregroundColor(.primary)
@@ -1350,38 +1347,44 @@ struct MediaDetailView: View {
                 }
               }) {
                 if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
-                  HStack(spacing: 8) {
-                    ProgressView()
+                  Label {
                     Text("取消订阅中")
+                  } icon: {
+                    LoadingIcon(systemImage: AppSymbol.subscribed, isLoading: true)
                   }
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
                 } else {
                   let isDirect = detail.canDirectlySubscribe
+                  // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
+                  // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
+                  let seasonWaiting = !isDirect && !preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
                   let label = Self.headerSubscribeButtonTitle(
                     isSubscribed: isSubscribed,
                     detail: detail,
                     isSeasonInformationUnavailable: isSeasonInformationUnavailable,
                     hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: isSeasonLoading,
+                    isSeasonLoading: seasonWaiting,
                     isInLibrary: viewModel.isInLibrary
                   )
                   let icon =
                     isDirect
                     ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
                     : (
-                      isSeasonLoading
-                        ? AppSymbol.loading
-                        : (
-                          hasSeasonLoadError
-                            ? AppSymbol.warning
-                            : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
-                        )
+                      hasSeasonLoadError
+                        ? AppSymbol.warning
+                        : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
                     )
+                  // 文案保持「订阅」「分季信息」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
+                  let showsLoadingIcon = isDirect ? isEntryLoading : seasonWaiting
 
-                  Label(label, systemImage: icon)
-                    .foregroundColor(.primary)
-                    .opacity(isEntryLoading ? 0.35 : 1)
+                  Label {
+                    Text(label)
+                  } icon: {
+                    LoadingIcon(systemImage: icon, isLoading: showsLoadingIcon)
+                  }
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
                 }
               }
               .focused($focusedButton, equals: .subscribe)
@@ -1562,12 +1565,8 @@ struct MediaDetailView: View {
           )
         } else {
           // 分季信息尚在加载中
-          HStack {
-            Spacer()
-            ProgressView()
-              .padding()
-            Spacer()
-          }
+          FirstLoadIndicator(minHeight: nil)
+            .padding()
         }
       }
       .id("seasonSubscriptionSection")
@@ -1694,7 +1693,7 @@ struct MediaDetailView: View {
       }
     }
     if viewModel.actorsPaginator.isLoadingMore {
-      posterCenteredLoadingIndicator(height: 315)
+      RowLoadingTail(height: 315)
     }
   }
 
@@ -1768,10 +1767,15 @@ struct MediaDetailView: View {
             LazyHStack(spacing: 40) {
               if paginator.items.isEmpty {
                 // 加载中 / 失败 / 为空共用同一个状态卡，状态变化时焦点不丢。
-                let status = doubanStatus(for: viewModel.doubanRowState(for: kind))
-                DoubanDiscussionStatusCard(kind: kind, status: status)
+                let status = doubanStatus(kind: kind, state: viewModel.doubanRowState(for: kind))
+                ShelfStatusCard(
+                  status: status,
+                  size: CGSize(
+                    width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight),
+                  emptyIcon: AppSymbol.noComments, failedEmphasis: true, focusStyle: .button
+                )
                   .focused($focusedDiscussionId, equals: Self.doubanStatusFocusID)
-                if status == .failed {
+                if case .failed = status {
                   Button {
                     // 先把焦点交给状态卡：按下后按钮随即消失，焦点不能跟着掉出本区块。
                     focusedDiscussionId = Self.doubanStatusFocusID
@@ -1790,7 +1794,7 @@ struct MediaDetailView: View {
                   .focused($focusedDiscussionId, equals: entry.id)
                 }
                 if paginator.isLoadingMore {
-                  posterCenteredLoadingIndicator(height: DoubanDiscussionCard.cardHeight)
+                  RowLoadingTail(height: DoubanDiscussionCard.cardHeight)
                 } else if paginator.hasError {
                   // 加载更多失败：连续失败到上限后移动焦点不会再请求，这里给一个手动恢复入口。
                   Button {
@@ -1834,12 +1838,12 @@ struct MediaDetailView: View {
   }
 
   private func doubanStatus(
-    for state: DoubanDiscussionRowState
-  ) -> DoubanDiscussionStatusCard.Status {
+    kind: DoubanDiscussionEntry.Kind, state: DoubanDiscussionRowState
+  ) -> ShelfStatusCard.Status {
     switch state {
-    case .failed: return .failed
-    case .empty: return .empty
-    case .idle, .loading, .ready: return .loading
+    case .failed: return .failed(kind.failureText)
+    case .empty: return .empty(kind.emptyText)
+    case .idle, .loading, .ready: return .loading("正在加载\(kind.title)…")
     }
   }
 
@@ -1883,7 +1887,7 @@ struct MediaDetailView: View {
               .mediaContextMenu(item: media)
             }
             if viewModel.recommendPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(height: 384)
+              RowLoadingTail(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1963,7 +1967,7 @@ struct MediaDetailView: View {
               .mediaContextMenu(item: media)
             }
             if viewModel.similarPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(height: 384)
+              RowLoadingTail(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -2000,15 +2004,6 @@ struct MediaDetailView: View {
         .focusSection()
       }
       .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
-    }
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
     }
   }
 }

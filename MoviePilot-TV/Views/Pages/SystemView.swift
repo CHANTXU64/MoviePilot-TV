@@ -451,7 +451,7 @@ struct SystemView: View {
             .focused($focusedItem, equals: .softFilter)
 
             if viewModel.isLoadingRules {
-              row("规则状态", value: "正在加载")
+              row("规则状态", value: "正在加载…")
                 .foregroundStyle(.secondary)
             } else if viewModel.rulesLoadFailed {
               Button {
@@ -869,7 +869,7 @@ struct SystemView: View {
       .focused($focusedItem, equals: allFocus)
 
       if viewModel.isLoadingSites {
-        row("站点状态", value: "正在加载")
+        row("站点状态", value: "正在加载…")
           .foregroundStyle(.secondary)
       } else if let siteLoadError = viewModel.siteLoadError {
         Button {
@@ -1051,7 +1051,7 @@ struct SystemView: View {
 
       HStack(spacing: 8) {
         if showsProgress {
-          ProgressView()
+          LoadingIcon(systemImage: AppSymbol.loading, isLoading: true)
         }
 
         if let value {

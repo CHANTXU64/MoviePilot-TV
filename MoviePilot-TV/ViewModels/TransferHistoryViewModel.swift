@@ -709,7 +709,7 @@ class TransferHistoryViewModel: ObservableObject {
     }
 
     isAiRedoing = true
-    aiRedoProgressText = "正在确认整理记录..."
+    aiRedoProgressText = "正在确认整理记录…"
     let validation = await validateMutationTargets(
       pendingItems,
       sourceSession: sourceSession
@@ -722,7 +722,7 @@ class TransferHistoryViewModel: ObservableObject {
     for id in pendingIds {
       aiRedoingIds.insert(id)
     }
-    aiRedoProgressText = "正在启动 AI 整理..."
+    aiRedoProgressText = "正在启动 AI 整理…"
 
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in

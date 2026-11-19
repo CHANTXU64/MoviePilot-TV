@@ -33,7 +33,7 @@ class SystemViewModel: ObservableObject {
   }
 
   @Published var storageMechanism: StorageMechanism = .none
-  @Published var storageDescription: String = "正在检查..."
+  @Published var storageDescription: String = "正在检查…"
 
   @Published var isRefreshing: Bool = false
   @Published var refreshMessage: String? = nil
