@@ -384,6 +384,45 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.resourceResults.isEmpty)
   }
 
+  /// 流式失败进入非流式 fallback 后取消：fallback 的迟到错误不得写回当前状态。
+  func testCancelDuringFallbackDropsLateFallbackError() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    // eof：流式未收到 done → 抛错进入非流式 fallback。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.eof, forQuery: "fallback-cancel")
+    let fallbackGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(fallbackGate, forPath: "/api/v1/search/title")
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.13.14")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "fallback-cancel"
+    await viewModel.autoSearch()
+
+    try await withTimeout("fallback request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title", query: "fallback-cancel")
+    }
+    XCTAssertTrue(viewModel.isLoading)
+
+    viewModel.cancelResourceSearch()
+    await fallbackGate.open()
+    try await Task.sleep(nanoseconds: 200_000_000)
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSearched)
+    XCTAssertNil(viewModel.resourceErrorMessage)
+    XCTAssertTrue(viewModel.resourceResults.isEmpty)
+  }
+
   @MainActor
   func testResourceSearchForwardsProductionAllActiveSitesFilter() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))

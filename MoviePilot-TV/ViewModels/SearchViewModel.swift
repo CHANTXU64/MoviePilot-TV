@@ -665,6 +665,11 @@ class SearchViewModel: ObservableObject {
             do {
               fallbackResults = try await self.applyCustomFilter(to: fallbackResults)
             } catch let error as CustomFilterService.FilterError {
+              guard canPublishSearchResult(
+                generation: currentSearchGeneration,
+                sessionSnapshot: sessionSnapshot,
+                searchType: currentSearchType)
+              else { return }
               self.resourceErrorMessage = error.localizedDescription
               return
             } catch {
@@ -679,6 +684,11 @@ class SearchViewModel: ObservableObject {
             self.resourceResults = fallbackResults
           } catch {
             Logger.error("Fallback Search error: \(error)")
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
+            else { return }
             self.resourceErrorMessage = error.localizedDescription
           }
           guard canPublishSearchResult(
