@@ -25,26 +25,11 @@ struct ContentView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(white: 0.1).ignoresSafeArea())
-    .disabled(viewModel.isOpeningTopShelf)
-    .accessibilityHidden(viewModel.isOpeningTopShelf)
     .environment(\.topShelfPresentation, TopShelfOpeningContext(
       routeID: viewModel.topShelfRoute?.id,
       blocksInteraction: viewModel.isOpeningTopShelf,
       didPresent: { viewModel.finishTopShelfOpening(id: $0) }
     ))
-    .overlay {
-      if viewModel.isOpeningTopShelf {
-        ZStack {
-          Color(white: 0.1).ignoresSafeArea()
-          VStack(spacing: 32) {
-            ProgressView("正在打开详情…")
-            Button("取消", action: cancelTopShelfOpening)
-          }
-        }
-        .accessibilityIdentifier("top-shelf-opening")
-        .onExitCommand(perform: cancelTopShelfOpening)
-      }
-    }
     .task {
       updateTopShelfPriority()
       topShelfManager.start()
@@ -118,14 +103,6 @@ struct ContentView: View {
       scenePhase != .active || viewModel.isPreparingStartupSession || viewModel.isOpeningTopShelf
         || topShelfNavigationRouter.pendingRoute != nil
     )
-  }
-
-  private func cancelTopShelfOpening() {
-    if let route = topShelfNavigationRouter.pendingRoute {
-      topShelfNavigationRouter.consume(id: route.id)
-    }
-    viewModel.cancelTopShelfOpening()
-    updateTopShelfPriority()
   }
 
   private func reconcileTopShelfRoute() {

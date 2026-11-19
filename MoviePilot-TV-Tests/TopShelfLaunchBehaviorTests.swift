@@ -464,8 +464,13 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
       let eventID = try XCTUnwrap(router.pendingRoute?.id)
       // 深链先到，前台激活稍后发生。
       try await Task.sleep(for: .milliseconds(200))
-      XCTAssertTrue(model.isOpeningTopShelf, "后台收到有效入口即准备遮罩")
+      XCTAssertTrue(model.isOpeningTopShelf, "后台收到有效入口即开始导航交接")
       XCTAssertNotNil(router.pendingRoute, "后台只接收事件，前台再交接导航")
+      func containsOpeningOverlay(in view: UIView) -> Bool {
+        view.accessibilityIdentifier == "top-shelf-opening"
+          || view.subviews.contains(where: containsOpeningOverlay)
+      }
+      XCTAssertFalse(containsOpeningOverlay(in: host.view), "Top Shelf 不应先盖全屏加载页")
       host.rootView = ContentView(viewModel: model)
         .environment(\.scenePhase, .active)
         .environmentObject(notifications)
@@ -485,7 +490,17 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
           ?? controller.children.flatMap { presentationChecks(in: $0) }
       }
       let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+      var focusVisitedTabBarAfterDetailAppeared = false
       while ContinuousClock.now < deadline {
+        if let tabs = tabController(in: host),
+          let selected = tabs.selectedViewController,
+          let navigation = navigationControllers(in: selected).first,
+          navigation.viewControllers.count == 2,
+          let focused = UIFocusSystem(for: window)?.focusedItem as? UIView,
+          focused.isDescendant(of: tabs.tabBar)
+        {
+          focusVisitedTabBarAfterDetailAppeared = true
+        }
         if model.topShelfRoute?.id == eventID, !model.isPreparingStartupSession,
           let selected = tabController(in: host)?.selectedViewController,
           let navigation = navigationControllers(in: selected).first,
@@ -496,7 +511,8 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
         { break }
         try await Task.sleep(for: .milliseconds(25))
       }
-      XCTAssertFalse(model.isOpeningTopShelf, "目标实际呈现后必须解除遮罩")
+      XCTAssertFalse(focusVisitedTabBarAfterDetailAppeared, "详情出现后焦点不得先经过 Tab 栏")
+      XCTAssertFalse(model.isOpeningTopShelf, "目标实际呈现后必须完成导航交接")
       XCTAssertTrue(presentationChecks(in: host).allSatisfy { !$0.isCheckingPresentation },
         "Hero 已取得焦点后不得驻留逐帧重试")
       XCTAssertFalse(model.isPreparingStartupSession)

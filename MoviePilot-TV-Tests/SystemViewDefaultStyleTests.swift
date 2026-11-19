@@ -410,7 +410,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
     // 渐进渲染：加载期头部按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
     // 但 action 门禁忽略按下；只有第二页内容用 disabled 挡焦点。
-    XCTAssertTrue(source.contains("guard !isEntryLoading else { return }"))
+    XCTAssertTrue(source.contains("guard allowsRequests, !isEntryLoading else { return }"))
     XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading)").count - 1, 1)
     XCTAssertTrue(containerSource.contains("isEntryLoading: !isReady"))
     XCTAssertFalse(containerSource.contains(".allowsHitTesting(!isReady)"))
@@ -904,7 +904,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(view.contains("withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }"))
     // 按钮加载期胶囊在、文案透明、action 门禁不可按（但仍可聚焦保返回导航）；就绪后文案淡入。
     XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
-    XCTAssertTrue(view.contains("guard !isEntryLoading else { return }"))
+    XCTAssertTrue(view.contains("guard allowsRequests, !isEntryLoading else { return }"))
     XCTAssertTrue(view.contains(".transition(.opacity)"))
     XCTAssertTrue(view.contains("if viewModel.hasAppliedFullDetail {"))
     XCTAssertTrue(view.contains(".disabled(isEntryLoading)"))

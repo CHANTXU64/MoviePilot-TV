@@ -212,6 +212,7 @@ struct MediaDetailView: View {
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
   @State private var isTMDBJumpInFlight = false
   @State private var hasAppeared = false
+  @State private var hasRequestedDirectHeaderFocus = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var didReleaseAfterPop = false
 
@@ -660,7 +661,7 @@ struct MediaDetailView: View {
         }
       }
     }
-    .disabled(!allowsRequests)
+    .disabled(!allowsRequests && presentationStyle == .standard)
     .environment(\.pageImageLifecycle, imageLifecycle)
     .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
       guard allowsRequests else { return }
@@ -676,6 +677,10 @@ struct MediaDetailView: View {
     }
     .onAppear {
       handleRouteRemovalIfNeeded()
+      if presentationStyle == .direct, !hasRequestedDirectHeaderFocus {
+        hasRequestedDirectHeaderFocus = true
+        focusedButton = preferredHeaderFocus
+      }
     }
     .onChange(of: isEntryLoading) { _, loading in
       guard !loading else { return }
@@ -1247,7 +1252,7 @@ struct MediaDetailView: View {
               let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
               let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
               Button(action: {
-                guard !isEntryLoading else { return }
+                guard allowsRequests, !isEntryLoading else { return }
                 let coordinator = apiService.sessionScope.playbackCoordinator
                 // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这个头部按钮。
                 guard !coordinator.isBusy else { return }
@@ -1284,7 +1289,7 @@ struct MediaDetailView: View {
 
               Button(action: {
                 // 预识别期间沿用原有禁用门禁；其余重复 Select 只在动作入口被忽略。
-                guard !isEntryLoading, !isButtonLoading, !isTMDBJumpInFlight else { return }
+                guard allowsRequests, !isEntryLoading, !isButtonLoading, !isTMDBJumpInFlight else { return }
                 isTMDBJumpInFlight = true
                 let navigationSource = navigationCoordinator.sourceToken()
                 Task {
@@ -1321,7 +1326,7 @@ struct MediaDetailView: View {
             if canSubscribeMedia {
               // Primary subscribe button — 使用预加载的订阅状态
               Button(action: {
-                guard !isEntryLoading else { return }
+                guard allowsRequests, !isEntryLoading else { return }
                 guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
@@ -1374,7 +1379,7 @@ struct MediaDetailView: View {
             if canSearchResources {
               // Search resources icon button
               Button(action: {
-                guard !isEntryLoading else { return }
+                guard allowsRequests, !isEntryLoading else { return }
                 let request = mediaActionHandler.searchResourcesTarget(
                   for: viewModel.detail,
                   sites: viewModel.siteFilter.sitesString(for: .resource)
@@ -1392,7 +1397,7 @@ struct MediaDetailView: View {
 
             if canSearchSubtitles {
               Button(action: {
-                guard !isEntryLoading else { return }
+                guard allowsRequests, !isEntryLoading else { return }
                 guard let request = mediaActionHandler.subtitleSearchRequest(
                   for: viewModel.detail,
                   sites: viewModel.siteFilter.sitesString(for: .subtitle)
@@ -1409,7 +1414,7 @@ struct MediaDetailView: View {
             }
 
             // Site selection button（加载期不渲出可交互筛选菜单）
-            if canSearchResources && shouldShowSiteFilter && !isEntryLoading {
+            if allowsRequests && canSearchResources && shouldShowSiteFilter && !isEntryLoading {
               SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
                 HStack(spacing: 8) {
                   Image(systemName: AppSymbol.site)
@@ -1426,7 +1431,7 @@ struct MediaDetailView: View {
             // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
             if shouldShowOtherInfo {
               Button(action: {
-                guard !isEntryLoading else { return }
+                guard allowsRequests, !isEntryLoading else { return }
                 isContentFocused = true
               }) {
                 Label("其他信息", systemImage: AppSymbol.details)
@@ -1443,7 +1448,7 @@ struct MediaDetailView: View {
           .animation(.snappy, value: shouldShowSiteFilter)
           .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
           .animation(.easeInOut(duration: 0.3), value: preloadTask.fullDetail != nil)
-          .disabled(!allowsRequests)
+          .disabled(!allowsRequests && presentationStyle == .standard)
         }
         .padding(.bottom, 40)
         .frame(maxWidth: UIScreen.main.bounds.width * 0.62, alignment: .leading)
