@@ -678,11 +678,13 @@ struct MediaDetailView: View {
       handleRouteRemovalIfNeeded()
     }
     .task(id: presentationStyle) {
-      guard presentationStyle == .direct else { return }
-      // 栈还没可交互时写 FocusState 会被系统丢掉，并让 ScrollView 为把聚焦项拉进
-      // 可视区滚一次，表现为详情页向下偏移。等栈可交互后再补写，且只写一次。
+      guard presentationStyle == .direct, !hasAppeared else { return }
+      // 栈不可交互时写 FocusState 会被丢弃并触发 ScrollView 滚动，故等可交互后再补写。
+      // hasAppeared 由 PresentationReadyAction 确认焦点落下后置真；返回详情页重跑时不再补写，避免抢走内容区焦点。
       for _ in 0..<10 {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !hasAppeared else { return }
+        // 焦点已落在头部或内容区（含用户主动移动）就停止补写，不抢回 preferredHeaderFocus。
+        if isHeroFocused || isContentFocused { return }
         if navigationCoordinator.isStackInteractive,
           navigationCoordinator.topEntryID == routeID,
           focusedButton == nil,
@@ -696,9 +698,10 @@ struct MediaDetailView: View {
     }
     .onChange(of: isEntryLoading) { _, loading in
       guard !loading else { return }
-      // 揭示后通知 VoiceOver 内容已更新；初始焦点兜底补到首个可用按钮（加载期按钮可聚焦但按下无效）。
+      // 揭示后通知 VoiceOver 内容已更新；standard 模式初始焦点兜底补到首个可用按钮。
+      // direct 模式由上方补写任务交接，这里不写，避免转场状态未知时写入被丢弃或触发滚动。
       UIAccessibility.post(notification: .announcement, argument: "详情已加载")
-      if focusedButton == nil, let target = preferredHeaderFocus {
+      if presentationStyle == .standard, focusedButton == nil, let target = preferredHeaderFocus {
         focusedButton = target
       }
     }
@@ -892,11 +895,11 @@ struct MediaDetailView: View {
       viewModel.loadDoubanDiscussionIfNeeded()
     }
     .background(PresentationReadyAction(
-      isEnabled: presentationStyle == .direct && !hasAppeared && allowsRequests
+      isEnabled: presentationStyle == .direct && !hasAppeared
         && !topShelfPresentation.blocksInteraction && scenePhase == .active
         && navigationCoordinator.isStackInteractive && navigationCoordinator.topEntryID == routeID,
       requiresNavigationTop: true,
-      contentFocusMatches: isHeroFocused && focusedButton == preferredHeaderFocus,
+      contentFocusMatches: isHeroFocused || isContentFocused,
       onContentFocus: { hasAppeared = true },
       action: { focusedButton = preferredHeaderFocus }
     ))
