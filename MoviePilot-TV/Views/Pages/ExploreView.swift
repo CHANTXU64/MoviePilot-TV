@@ -100,9 +100,8 @@ private struct ExploreRootContent: View {
     .onAppear { viewModel.reloadLocalConfig() }
     .task(id: isSelected) {
       guard isSelected else { return }
-      // 先刷新来源再消费默认：用最新快照解析插件默认，避免按旧快照回退。
+      // 刷新来源并由 VM 在成功取得权威来源后消费默认（失败/取消保留 pending）。
       await viewModel.refreshSources()
-      viewModel.consumePendingDefaultIfNeeded()
     }
   }
 

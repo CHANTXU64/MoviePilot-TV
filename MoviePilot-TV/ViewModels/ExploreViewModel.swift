@@ -1293,14 +1293,18 @@ class ExploreViewModel: ObservableObject {
         response: sources
       )
       hasCompletedFirstSourceLoad = true
+      applySources()
+      // 仅在取得权威来源列表后消费默认；失败/取消保留 pending，待下次成功再应用，
+      // 避免按旧快照把新插件当作不存在而回退、丢失本次默认应用机会。
+      consumePendingDefaultIfNeeded()
     } catch {
       Logger.error("动态发现来源加载失败: \(error)")
       extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
         previous: extraSourceSnapshot,
         response: nil
       )
+      applySources()
     }
-    applySources()
     hasHandledFirstActivation = true
   }
 
@@ -1337,9 +1341,18 @@ class ExploreViewModel: ObservableObject {
 
     if !loadsResults {
       if let latest = sources.first(where: { $0.id == selectedSource.id }) {
+        let previousDescriptor = selectedSource.descriptor
         selectedSource = latest
         if let descriptor = latest.descriptor {
-          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          if sourcePolicy == .defaultSettings {
+            // 与浏览页同一合同语义：filter_params 不变保留保存值，变化重置新默认，
+            // 避免编辑页保存废弃字段绕过浏览页修复。Top Shelf 保持原有合并行为。
+            if previousDescriptor?.filter_params != descriptor.filter_params {
+              pluginFilterValues = descriptor.filter_params
+            }
+          } else {
+            pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          }
           pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
         }
       } else {
