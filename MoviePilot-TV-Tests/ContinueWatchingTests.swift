@@ -526,6 +526,23 @@ final class HomeContinueWatchingRowTests: XCTestCase {
     XCTAssertTrue(viewModel.continueWatchingServers.isEmpty)
   }
 
+  /// 在 Web 端停用一台服务器后重新进入媒体库页：两行的可选服务器必须一致。
+  /// 继续观看若读缓存配置就会拿到上一轮的旧列表，而它不跟轮询，不一致会一直留着。
+  func testBothRowsAgreeOnServersAfterConfigChanges() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.loadData()
+    XCTAssertEqual(viewModel.latestMediaServers, ["emby", "jellyfin"])
+    XCTAssertEqual(viewModel.continueWatchingServers, ["emby", "jellyfin"])
+
+    HomeContinueWatchingURLProtocol.stub.setServersBody(
+      HomeContinueWatchingURLProtocol.serversBody(jellyfinEnabled: false))
+    await viewModel.loadData()
+
+    XCTAssertEqual(viewModel.latestMediaServers, ["emby"])
+    XCTAssertEqual(viewModel.continueWatchingServers, ["emby"], "两行必须共用同一次配置读取的结果")
+  }
+
   private static func resumeBody(percent: Int) -> String {
     #"[{"id":"e1","item_id":"e1","title":"某剧","type":"电视剧","subtitle":"S2:5 - 集名","percent":\#(percent),"server_type":"emby"}]"#
   }

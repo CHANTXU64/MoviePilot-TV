@@ -142,7 +142,7 @@ class HomeViewModel: ObservableObject {
     await loadContinueWatching()
   }
 
-  /// 「最近添加」：现拉媒体服务器配置（写回会话缓存，详情页、播放和「继续观看」沿用同一份），
+  /// 「最近添加」：现拉媒体服务器配置（写回会话缓存，详情页和播放沿用同一份），
   /// 再按启用服务器读列表。自己发布快照、失败标记和可选服务器，不等另一行。
   private func loadLatestMedia() async {
     guard apiService.canRequestSuperUserEndpoints else {
@@ -198,8 +198,9 @@ class HomeViewModel: ObservableObject {
       read = try await continueWatchingReads.value(
         for: "continueWatching", forceRefresh: true, validate: { try Task.checkCancellation() }
       ) {
-        // 配置用会话缓存：「最近添加」那一轮已经现拉过（轮询每 10 秒一次），这里不重复强刷。
-        let servers = try await self.apiService.fetchCachedMediaServers()
+        // 配置也现拉：读缓存会拿到上一轮的旧列表，而这一行不跟轮询，两行的可选服务器会一直不一致。
+        // 与「最近添加」并发强刷时，配置缓存的取代链让两边都拿到最新那次的结果，即同一次读取。
+        let servers = try await self.apiService.fetchCachedMediaServers(forceRefresh: true)
         let enabled = servers.filter { $0.enabled?.value ?? false }
         return ContinueWatchingRead(
           enabledServers: enabled, items: await self.readServerItems(enabled, row: .continueWatching))
