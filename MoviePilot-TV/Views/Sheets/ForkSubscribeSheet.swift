@@ -17,7 +17,7 @@ struct ForkSubscribeSheet: View {
   @State private var isForking = false
   @State private var hasTruncatedText = false
   @State private var showsFullText = false
-  @State private var costlyRegistered = false
+  @State private var costlyToken = CostlyModalToken()
   @FocusState private var isConfirmFocused: Bool
 
   var body: some View {
@@ -67,14 +67,12 @@ struct ForkSubscribeSheet: View {
       ReadingSheet(title: share.displayTitle ?? "复用订阅", blocks: Self.fullTextBlocks(for: share))
     }
     .cancelOnExternalNavigation()
-    // 用 isPresented 注册贵弹窗：退后台不变，避免后台/前台切换丢标记。
+    // 用 isPresented 注册贵弹窗令牌：退后台不变；令牌随视图销毁释放，登记自动失效。
     .onChange(of: isPresented, initial: true) { _, presented in
-      if presented, !costlyRegistered {
-        CostlyModalPresentation.begin()
-        costlyRegistered = true
-      } else if !presented, costlyRegistered {
-        CostlyModalPresentation.end()
-        costlyRegistered = false
+      if presented {
+        CostlyModalPresentation.register(costlyToken)
+      } else {
+        CostlyModalPresentation.unregister(costlyToken)
       }
     }
   }
