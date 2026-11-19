@@ -102,9 +102,13 @@ class HomeViewModel: ObservableObject {
 
   private var hasLoaded = false
 
-  /// 初始或刷新加载数据
+  /// 页面每次成为当前 Tab 时调用（见 `HomeView` 的 `.task(id: isSelected)`）：首屏完整加载，
+  /// 之后重新刷一次——「继续观看」不跟轮询，只在页面重新激活和进度写回完成后重读。
   func loadData() async {
-    guard !hasLoaded else { return }
+    guard !hasLoaded else {
+      await refreshData()
+      return
+    }
     hasLoaded = true
 
     // 仅在首次加载（无数据时）显示全屏 Loading
@@ -132,16 +136,26 @@ class HomeViewModel: ObservableObject {
   func refreshData(includeContinueWatching: Bool = true) async {
     // 采用 TaskGroup 并发加载首页的两大板块：媒体服务器两行和我的订阅，提升首屏响应速度
     await withTaskGroup(of: Void.self) { group in
-      group.addTask { await self.loadMediaServerRows(includeContinueWatching: includeContinueWatching) }
+      group.addTask {
+        await self.loadMediaServerRows(includeContinueWatching: includeContinueWatching)
+      }
       group.addTask { await self.refreshSubscriptions(forceRefresh: true) }
     }
   }
 
-  /// 读一次媒体服务器配置，再并发加载「继续观看」和「最近添加」。两行各自发布快照和失败标记，
+  /// 只重读「继续观看」：播放的停止上报和进度写回发完后调用（见 `PlaybackCoordinator.watchStateUpdates`）。
+  /// 不碰「最近添加」和订阅，它们由轮询负责。
+  func refreshContinueWatching() async {
+    await loadMediaServerRows(includeLatest: false, includeContinueWatching: true)
+  }
+
+  /// 读一次媒体服务器配置，再并发加载要刷的那几行。各行自己发布快照和失败标记，
   /// 一行失败或读得慢不挡另一行。
-  /// 「继续观看」只在进页面、重试和播放结束后读：Jellyfin 后端会为每条续播条目向媒体服务器探测一次封面
+  /// 「继续观看」只在页面激活、重试和进度写回完成后读：Jellyfin 后端会为每条续播条目向媒体服务器探测一次封面
   /// （`_get_resume_image`），跟着 10 秒轮询会把这份开销持续压到媒体服务器上；Web 也只在页面激活时读。
-  private func loadMediaServerRows(includeContinueWatching: Bool) async {
+  private func loadMediaServerRows(
+    includeLatest: Bool = true, includeContinueWatching: Bool = true
+  ) async {
     guard apiService.canRequestSuperUserEndpoints else {
       clearMediaServerRows()
       if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
@@ -158,7 +172,7 @@ class HomeViewModel: ObservableObject {
         Logger.debug("加载媒体服务器配置被取消")
       } else {
         Logger.error("加载媒体服务器配置失败: \(error)")
-        latestLoadFailed = true
+        if includeLatest { latestLoadFailed = true }
         if includeContinueWatching { continueWatchingLoadFailed = true }
       }
       return
@@ -170,8 +184,10 @@ class HomeViewModel: ObservableObject {
     // 只保留启用服务器（保持后端返回顺序）
     let enabledServers = servers.filter { $0.enabled?.value ?? false }
     await withTaskGroup(of: Void.self) { group in
-      group.addTask {
-        await self.loadLatestMedia(enabledServers, playableServers: playableServers, session: sessionSnapshot)
+      if includeLatest {
+        group.addTask {
+          await self.loadLatestMedia(enabledServers, playableServers: playableServers, session: sessionSnapshot)
+        }
       }
       if includeContinueWatching {
         group.addTask { await self.loadContinueWatching(enabledServers, session: sessionSnapshot) }
@@ -616,13 +632,30 @@ class HomeViewModel: ObservableObject {
     return Self.supportsMediaLibraryDeepLink(serverType: item.server_type) ? .openInServerApp : .detail
   }
 
-  /// 「继续观看」条目没有应用内播放、这台服务器也不支持跳转时，按标题识别打开详情页。
-  /// 剧集的副标题是季集和集名，不能当年份送去识别（见 `ContinueWatchingDisplay.mediaInfo`）。
-  func continueWatchingDetailTarget(
-    for item: MediaServerPlayItem, using handler: MediaActionHandler
-  ) async -> MediaInfo? {
-    let info = ContinueWatchingDisplay.mediaInfo(
+  /// 「继续观看」条目识别用的媒体信息：优先按服务器上的外部编号认出是哪部片（电影用条目自己的，
+  /// 单集用所属整剧的），读不到再按标题、年份识别——同名不同年的剧不会认错。
+  /// 退回按标题时，剧集的副标题是季集和集名，不能当年份（见 `ContinueWatchingDisplay.mediaInfo`）。
+  func continueWatchingMediaInfo(for item: MediaServerPlayItem, server: String) async -> MediaInfo {
+    let byTitle = ContinueWatchingDisplay.mediaInfo(
       title: item.title, type: item.type, subtitle: item.subtitle)
+    guard let itemID = trimmedNonEmpty([item.item_id?.value]) else { return byTitle }
+    let snapshot = apiService.sessionSnapshot()
+    guard
+      let identified = await apiService.sessionScope.playbackCoordinator.resumeItemIdentity(
+        serverName: server, itemID: itemID),
+      apiService.isSessionUnchanged(from: snapshot)
+    else { return byTitle }
+    return identified
+  }
+
+  /// 「继续观看」条目没有应用内播放、这台服务器也不支持跳转时，打开它的详情页。
+  /// 读服务器身份期间沿用「正在识别」提示，别让按下后静默等着（同 `cardDestination`）。
+  func continueWatchingDetailTarget(
+    for item: MediaServerPlayItem, server: String, using handler: MediaActionHandler
+  ) async -> MediaInfo? {
+    handler.isRecognizingTmdb = true
+    let info = await continueWatchingMediaInfo(for: item, server: server)
+    handler.isRecognizingTmdb = false
     return await handler.getTMDBJumpTarget(for: info)
   }
 

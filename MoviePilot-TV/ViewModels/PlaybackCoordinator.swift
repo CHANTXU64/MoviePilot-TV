@@ -41,8 +41,9 @@ enum PlaybackTarget: Equatable {
   case libraryItem(itemID: String, expected: LibraryItemExpectation, owner: String? = nil)
   /// 已知服务器名称和这台服务器自己的条目 ID，没有身份条件可核对（首页「最近添加」里没有 TMDB 编号、直接播放的条目）。
   case serverItem(serverName: String, itemID: String)
-  /// 媒体服务器上的一个单集（首页「继续观看」）。起播前按它所属的整剧查 MoviePilot，认出这一集就转成
-  /// 带队列上下文的按集播放（选集、上一集/下一集可用）；认不出或超时就退回 `serverItem` 直接播这份文件。
+  /// 媒体服务器上的一个单集（首页「继续观看」）：严格按用户点的这份文件播，续播点就在它上面。起播前按它所属的整剧
+  /// 查 MoviePilot，认出这一集就把队列上下文附加上去（选集、上一集/下一集可用）；认不出或超时就没有上下文，
+  /// 仍然播这份文件。不转成按集播放：那道身份门是给「指定了哪一集、没指定文件」的详情页入口用的。
   case serverEpisode(serverName: String, itemID: String)
   /// 详情页（TMDB 来源）的「继续播放」判断按服务器上的这份播（没有反证）。`judgement` 是判断时读到的这份和当成哪一集：
   /// 起播时现读的条目过不了和按集起播同一处复核（`ServerEpisodeIndex.admit`：编号、季号集号、路径变了，或播出日期
@@ -709,6 +710,39 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       if let link = LibraryItemLink(item: item) { links[item.id] = link }
     }
     return links
+  }
+
+  /// 首页「继续观看」的详情与搜索入口用：按用户点的条目认出是哪部片，给出带 TMDB 编号的媒体信息。
+  /// 电影用条目自己的外部编号；单集用 `SeriesId` 对应整剧的（单集编号不是剧的编号），复用播放界面信息那条链。
+  /// 不要求应用内播放可用——这条路正是应用内播放不可用、服务器又不支持深链时才走的，所以不能用 `libraryItemLinks`。
+  /// 读不到、认不出或超时返回 nil，调用方退回按标题识别。
+  func resumeItemIdentity(serverName: String, itemID: String) async -> MediaInfo? {
+    guard !isTornDown, let apiService,
+      let servers = try? await apiService.fetchCachedMediaServers(),
+      let server = servers.first(where: { $0.name == serverName }), server.supportsInAppPlayback
+    else { return nil }
+    let userName = apiService.currentOrStoredUserName
+    return await PlaybackMetadataLookup.withinTimeout {
+      try? await self.withConnection(to: server, preferredUserName: userName) {
+        connection -> MediaInfo? in
+        guard let item = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout)
+        else { return nil }
+        switch item.kind {
+        case .episode:
+          // 单集自己的编号不是剧的编号，详情页要的是整剧。
+          return await PlaybackMetadataLookup.seriesDetail(
+            for: item, media: nil, on: connection, api: apiService)
+        case .movie, .series:
+          let type = item.kind == .movie ? "电影" : "电视剧"
+          guard
+            let tmdbID = PlaybackMetadataLookup.lookupMedia(externalIDs: item.externalIDs, type: type)?.tmdb_id
+          else { return nil }
+          return MediaInfo(tmdb_id: tmdbID, source: "themoviedb", title: item.name, type: type)
+        case .other:
+          return nil
+        }
+      }
+    }
   }
 
   /// 启用了多台服务器时，不知道属于哪台的条目 ID 可能来自任何一台、还会撞号，按 ID 找到的条目要外部编号对得上才算
@@ -1988,17 +2022,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     _ target: PlaybackTarget, servers: [MediaServerConf], media: MediaInfo?, preferredUserName: String?,
     certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
-    // 「继续观看」的单集：先试着补全剧集上下文。认出来就转成按集播（选集、上一集/下一集可用），
-    // 认不出或超时就退回直接播这份文件，不为补上下文一直耽误起播。
+    // 「继续观看」的单集：用户点的是这台服务器上的这份文件（续播点就在它上面），起播严格按它播，
+    // 不走按集播放的身份门——那道门是给「用户指定了哪一集、没指定文件」的详情页入口用的，
+    // 在这里会让本来能播的文件因为集索引读不到或认不出而报错。补到的剧集上下文只作为附加信息挂上去，
+    // 选集面板和播完自动下一集照常用它；补不到就没有面板，仍然播这份文件。
     var target = target
+    var episodeContext: QueuedEpisode?
+    var seriesDetail: MediaInfo?
     if case .serverEpisode(let serverName, let id) = target {
-      if let queued = await queuedServerEpisode(
+      let resolved = await resolvedServerEpisode(
         serverName: serverName, itemID: id, servers: servers, preferredUserName: preferredUserName)
-      {
-        target = .episode(queued, accepting: .consistentNumberMatches)
-      } else {
-        target = .serverItem(serverName: serverName, itemID: id)
-      }
+      episodeContext = resolved?.queued
+      seriesDetail = resolved?.detail
+      target = .serverItem(serverName: serverName, itemID: id)
     }
     let itemID: String
     let expected: LibraryItemExpectation?
@@ -2063,7 +2099,12 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             self.episodeIndexRefreshes.send(judged.tmdbID)
             throw PlaybackError.episodeUnavailable(Self.seriesFileChangedMessage)
           }
-          return try await self.preparePlayback(item, on: connection, media: media)
+          // 「继续观看」补到的整剧详情直接当已知详情用，直播路径不再重跑一遍识别。
+          var prepared = try await self.preparePlayback(item, on: connection, media: media ?? seriesDetail)
+          if let episodeContext, item.id == episodeContext.preferredFile?.itemID {
+            prepared.episode = episodeContext
+          }
+          return prepared
         }
         if let prepared { return prepared }
       } catch let error where error is CancellationError {
@@ -2080,18 +2121,19 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   private static let serverEpisodeContextTimeout: Duration = .seconds(5)
 
   /// 「继续观看」的单集：按 `SeriesId` 找到服务器上的整剧，再按整剧的外部编号查 MoviePilot 详情和这一季的集列表，
-  /// 认出这一集就建带队列上下文的按集目标（与详情页集列表起播同一条路）。
-  /// 复用播放界面信息那条链（`PlaybackMetadataLookup.seriesDetail` / `episodeInSeason`）。
-  /// 服务器读不到、不是单集、整剧或这一集认不出、超时都返回 nil，调用方退回直接播这份文件。
-  private func queuedServerEpisode(
+  /// 认出这一集就建队列上下文（选集面板、播完自动下一集用），并把整剧详情一起交给调用方当已知详情，
+  /// 直播路径不再重跑一遍识别。复用播放界面信息那条链（`PlaybackMetadataLookup.seriesDetail` / `episodeInSeason`）。
+  /// 这份上下文不决定播哪一份文件：起播严格按用户点的那份播（见 `prepare`）。
+  /// 服务器读不到、不是单集、整剧或这一集认不出、超时都返回 nil，那时没有选集面板，仍然播这份文件。
+  private func resolvedServerEpisode(
     serverName: String, itemID: String, servers: [MediaServerConf], preferredUserName: String?
-  ) async -> QueuedEpisode? {
+  ) async -> (queued: QueuedEpisode, detail: MediaInfo)? {
     guard let server = servers.first(where: { $0.name == serverName }), server.supportsInAppPlayback,
       let apiService
     else { return nil }
     return await PlaybackMetadataLookup.withinTimeout(Self.serverEpisodeContextTimeout) {
       try? await self.withConnection(to: server, preferredUserName: preferredUserName) {
-        connection -> QueuedEpisode? in
+        connection -> (queued: QueuedEpisode, detail: MediaInfo)? in
         guard let item = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout),
           item.kind == .episode, let seriesID = trimmedNonEmpty([item.seriesID])
         else { return nil }
@@ -2110,9 +2152,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
         let episodes = MoviePilotEpisode.list(found.list, season: found.season)
         guard let episode = episodes.first(where: { $0.tmdbEpisodeID == found.episode.id }) else { return nil }
         var queued = QueuedEpisode(context: context, episode: episode, seasonEpisodes: episodes)
-        // 续播点在这份文件上，先试它：同一集在别的媒体库还有一份时，不为那份从头播。
+        // 起播的就是这份文件（续播点在它上面）；调用方按它核对是不是同一条，再挂上下文。
         queued.preferredFile = ServerFileRef(server: serverName, itemID: item.id)
-        return queued
+        return (queued, detail)
       }
     }
   }

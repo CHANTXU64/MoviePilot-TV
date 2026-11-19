@@ -347,6 +347,81 @@ final class HomeContinueWatchingRowTests: XCTestCase {
     await restored.refreshData()
     XCTAssertEqual(restored.continueWatching.map(\.title), ["某片"])
   }
+
+  /// 再次进入媒体库页要重读「继续观看」：在别的设备上看了一集再回来，这一行不能一直是旧的。
+  /// 它不跟轮询，所以页面重新激活是唯一的纠正时机之一。
+  func testReactivatingPageRereadsContinueWatching() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.loadData()
+    XCTAssertEqual(viewModel.continueWatching.map(\.title), ["某剧"])
+    let before = requestCount(path: "/api/v1/mediaserver/playing")
+
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby",
+      #"[{"id":"e2","item_id":"e2","title":"某剧 下一集","type":"电视剧","subtitle":"S2:6 - 集名","percent":10,"server_type":"emby"}]"#)
+    await viewModel.loadData()
+
+    XCTAssertGreaterThan(requestCount(path: "/api/v1/mediaserver/playing"), before, "再次进入页面要重读")
+    XCTAssertEqual(viewModel.continueWatching.map(\.title), ["某剧 下一集"])
+  }
+
+  /// 进度写回完成后的重读只碰「继续观看」和服务器配置，不重读「最近添加」和订阅（它们由轮询负责）。
+  func testWatchStateRefreshOnlyReadsContinueWatching() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshData()
+    let before = HomeContinueWatchingURLProtocol.stub.requestQueries().count
+
+    await viewModel.refreshContinueWatching()
+
+    let added = HomeContinueWatchingURLProtocol.stub.requestQueries().dropFirst(before)
+    XCTAssertFalse(added.isEmpty, "要真的重读一次")
+    XCTAssertTrue(
+      added.allSatisfy {
+        $0.path == "/api/v1/mediaserver/playing" || $0.path == "/api/v1/system/setting/MediaServers"
+      },
+      "多读了别的接口：\(added.map(\.path))")
+  }
+
+  /// 服务器读不到条目身份时退回按标题、年份识别（电影的四位数字副标题仍是年份）。
+  func testDetailIdentityFallsBackToTitleWhenServerUnreadable() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshData()
+    viewModel.selectedContinueWatchingServer = "jellyfin"
+    let item = try XCTUnwrap(viewModel.continueWatching.first)
+
+    // 这台服务器没有配置，读不到条目。
+    let info = await viewModel.continueWatchingMediaInfo(for: item, server: "jellyfin")
+    XCTAssertNil(info.tmdb_id)
+    XCTAssertEqual(info.title, "某片")
+    XCTAssertEqual(info.year, "2024")
+  }
+
+  /// 刷新信号的接线（源码守卫，不代表真机验收）：数据刷新等进度写回完成，焦点恢复仍用播放器刚关那个信号。
+  func testContinueWatchingRefreshWaitsForProgressWriteBack() throws {
+    let source = try Self.homeViewSource()
+    let rowStart = try XCTUnwrap(source.range(of: "private struct MediaSectionView"))
+    let page = String(source[..<rowStart.lowerBound])
+    let row = String(source[rowStart.lowerBound...])
+
+    XCTAssertTrue(page.contains(".task(id: isSelected)"), "页面重新激活时要重跑加载，切走时停掉轮询")
+    XCTAssertTrue(
+      page.contains(".onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates)"),
+      "数据刷新要等停止上报和进度写回发完")
+    XCTAssertTrue(page.contains("await viewModel.refreshContinueWatching()"))
+    XCTAssertFalse(
+      page.contains(".onChange(of: playbackEndedGeneration)"),
+      "播放器刚关时进度还没写回媒体服务器，那时读会拿到旧进度，而这一行不跟轮询")
+    XCTAssertTrue(row.contains(".onChange(of: playbackEndedGeneration)"), "焦点恢复仍用原来的信号")
+  }
+
+  private static func homeViewSource() throws -> String {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    return try String(
+      contentsOf: root.appendingPathComponent("MoviePilot-TV/Views/Pages/HomeView.swift"), encoding: .utf8)
+  }
 }
 
 private enum HomePlayingResult {

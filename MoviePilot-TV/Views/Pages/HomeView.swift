@@ -8,7 +8,6 @@ struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
   @ObservedObject private var apiService = APIService.shared
   @Environment(\.scenePhase) private var scenePhase
-  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
@@ -126,8 +125,10 @@ struct HomeView: View {
           }
         }
       }
-      .task {
-        // 每次页面出现时都会先加载一次（内部有 hasLoaded 控制全屏 Loading）
+      .task(id: isSelected) {
+        // 成为当前 Tab 时加载：首屏完整加载，再次进入重刷一次（「继续观看」不跟轮询，见 `loadData`）。
+        // 切走时任务取消，轮询不再在后台空转。
+        guard isSelected else { return }
         await viewModel.loadData()
 
         // 定期刷新数据（类似 Status 页面的下载器/整理信息）。「继续观看」不跟着轮询：
@@ -138,10 +139,12 @@ struct HomeView: View {
           await viewModel.refreshData(includeContinueWatching: false)
         }
       }
-      // 播放结束（含准备期取消）：续播进度和条目可能变了，这时才重读「继续观看」。
-      .onChange(of: playbackEndedGeneration) { _, _ in
+      // 停止上报和进度写回发完后才重读「继续观看」：播放器刚关时进度还没写回媒体服务器，
+      // 那时读会拿到旧进度，而这一行不跟轮询，旧值会一直留着。焦点恢复仍走 `playbackEndedGeneration`。
+      // 从后台回到前台时协调器也发这个信号（期间可能在媒体服务器自己的 App 里看过）。
+      .onReceive(apiService.sessionScope.playbackCoordinator.watchStateUpdates) { _ in
         guard isSelected else { return }
-        Task { await viewModel.refreshData() }
+        Task { await viewModel.refreshContinueWatching() }
       }
       // 编辑订阅 Sheet
       .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in selectedSubscribe = nil }
@@ -407,7 +410,7 @@ private struct MediaSectionView: View {
       // MoviePilot 没有详情页的，按下直接播放，是播放图标（和单集卡片一样）。其余的按下打开详情页。
       bottomLeftIcon: opensApp ? AppSymbol.openInLibrary : playsDirectly ? AppSymbol.play : nil,
       loadsImage: loadsImage(at: index),
-      action: { opensApp ? openMediaItem(item) : openDetail(item) },
+      action: { opensApp ? openMediaItem(item) : openDetail(item, server: selectedServer) },
       // 媒体服务器上没有封面或读不到时，改用 TMDB 海报。
       onPosterUnavailable: { [selectedServer] in viewModel.loadPosterFallback(for: item, server: selectedServer) }
     )
@@ -419,13 +422,13 @@ private struct MediaSectionView: View {
         // 没有详情页的条目，在应用内打开就是直接播放。
         if viewModel.playsDirectly(item, server: selectedServer) {
           Button {
-            openDetail(item)
+            openDetail(item, server: selectedServer)
           } label: {
             Label("在应用内播放", systemImage: AppSymbol.play)
           }
         } else {
           Button {
-            openDetail(item)
+            openDetail(item, server: selectedServer)
           } label: {
             Label("详情", systemImage: AppSymbol.details)
           }
@@ -462,7 +465,7 @@ private struct MediaSectionView: View {
         case .openInServerApp:
           openMediaItem(item)
         case .detail:
-          openDetail(item)
+          openDetail(item, server: server)
         }
       }
     )
@@ -472,7 +475,7 @@ private struct MediaSectionView: View {
       // 按下做的那一种不再重复列出。
       if action != .detail {
         Button {
-          openDetail(item)
+          openDetail(item, server: server)
         } label: {
           Label("详情", systemImage: AppSymbol.details)
         }
@@ -484,10 +487,11 @@ private struct MediaSectionView: View {
           Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
         }
       }
-      // 剧集的副标题是季集和集名，不是年份。
+      // 剧集的副标题是季集和集名，不是年份；按下时再按服务器上的外部编号认出是哪部片。
       MediaServerSearchMenuItems(
         info: ContinueWatchingDisplay.mediaInfo(
-          title: item.title, type: item.type, subtitle: item.subtitle))
+          title: item.title, type: item.type, subtitle: item.subtitle),
+        resolveIdentity: { await viewModel.continueWatchingMediaInfo(for: item, server: server) })
     }
   }
 
@@ -512,18 +516,18 @@ private struct MediaSectionView: View {
 
   /// 在应用内打开条目（见 `HomeViewModel.cardDestination`）：打开详情页，没有 TMDB 编号的直接播放。
   /// 「继续观看」只打开详情页——接着播由卡片按下直接做，不经过这里。
+  /// `server` 是卡片所在的服务器（建卡片时取）：条目 ID 只在它自己的服务器上有意义。
   /// 期间页面变了（已经进了别的页）就不再推入、不再起播。
-  private func openDetail(_ item: MediaServerPlayItem) {
+  private func openDetail(_ item: MediaServerPlayItem, server: String) {
     let navigationSource = navigationCoordinator.sourceToken()
     let loadingPosterURL = item.imageURLs.image
     Task {
       let destination: HomeViewModel.CardDestination?
       if content == .continueWatching {
-        destination = await viewModel.continueWatchingDetailTarget(for: item, using: mediaActionHandler)
-          .map { .detail($0) }
+        destination = await viewModel.continueWatchingDetailTarget(
+          for: item, server: server, using: mediaActionHandler).map { .detail($0) }
       } else {
-        destination = await viewModel.cardDestination(
-          for: item, server: selectedServer, using: mediaActionHandler)
+        destination = await viewModel.cardDestination(for: item, server: server, using: mediaActionHandler)
       }
       switch destination {
       case .detail(let target):
@@ -560,6 +564,9 @@ private struct MediaSectionView: View {
 private struct MediaServerSearchMenuItems: View {
   /// 识别和搜索用的媒体信息。年份只在确实是年份时给（剧集副标题是季集和集名，不是年份）。
   let info: MediaInfo
+  /// 按下时先按服务器上的外部编号认出是哪部片（「继续观看」用）：同名不同年的剧不会搜错。
+  /// 认不出或期间换了账号就仍用 `info` 按标题识别。「最近添加」不传，维持原样。
+  var resolveIdentity: (@MainActor () async -> MediaInfo?)? = nil
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
@@ -574,6 +581,12 @@ private struct MediaServerSearchMenuItems: View {
         Task {
           guard APIService.shared.canAccess(.search) else { return }
           let sessionSnapshot = APIService.shared.sessionSnapshot()
+          var info = self.info
+          if let resolved = await resolveIdentity?(),
+            APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+          {
+            info = resolved
+          }
           // 识别不出来会退回按标题搜索，动作照样完成，所以这里不弹「未识别到此媒体的TMDB信息」：
           // 否则弹窗与跳转同时发生。
           if let target = await mediaActionHandler.getTMDBJumpTarget(
@@ -601,6 +614,13 @@ private struct MediaServerSearchMenuItems: View {
         Button {
           let navigationSource = navigationCoordinator.sourceToken()
           Task {
+            let sessionSnapshot = APIService.shared.sessionSnapshot()
+            var info = self.info
+            if let resolved = await resolveIdentity?(),
+              APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+            {
+              info = resolved
+            }
             if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(
               for: info, recognizeIfNeeded: true
             ) {
