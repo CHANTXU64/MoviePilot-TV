@@ -8,6 +8,7 @@ struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
   @ObservedObject private var apiService = APIService.shared
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
@@ -29,7 +30,9 @@ struct HomeView: View {
               .frame(maxWidth: .infinity, minHeight: 200)
           } else {
             // 部分数据失败：保留旧快照并提示（成功空不算失败）
-            if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+            if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed
+              || viewModel.subscriptionsLoadFailed
+            {
               HStack {
                 Text("部分数据加载失败，当前显示的是旧数据")
                   .font(.body)
@@ -41,25 +44,41 @@ struct HomeView: View {
               .padding(.horizontal)
             }
 
-            // 第1节：最近添加
-            if !viewModel.latestMediaServers.isEmpty {
+            // 第1节：继续观看。空态时不做首行焦点重定向，交给下面第一个有内容的行。
+            if !viewModel.continueWatchingServers.isEmpty {
               MediaSectionView(
-                title: "最近添加",
-                items: viewModel.latestMedia,
-                servers: viewModel.latestMediaServers,
-                selectedServer: $viewModel.selectedLatestMediaServer,
-                isFirstRow: true,
+                content: .continueWatching,
+                title: "继续观看",
+                items: viewModel.continueWatching,
+                servers: viewModel.continueWatchingServers,
+                selectedServer: $viewModel.selectedContinueWatchingServer,
+                isFirstRow: !viewModel.continueWatching.isEmpty,
                 loadsPageImages: true,
                 viewModel: viewModel
               )
             }
 
-            // 第2节：电影订阅
+            // 第2节：最近添加
+            if !viewModel.latestMediaServers.isEmpty {
+              MediaSectionView(
+                content: .latest,
+                title: "最近添加",
+                items: viewModel.latestMedia,
+                servers: viewModel.latestMediaServers,
+                selectedServer: $viewModel.selectedLatestMediaServer,
+                isFirstRow: viewModel.continueWatchingServers.isEmpty,
+                loadsPageImages: true,
+                viewModel: viewModel
+              )
+            }
+
+            // 第3节：电影订阅
             if !viewModel.movieSubscriptions.isEmpty {
               SubscribeSectionView(
                 title: "电影订阅",
                 items: viewModel.movieSubscriptions,
-                isFirstRow: viewModel.latestMediaServers.isEmpty,
+                isFirstRow: viewModel.continueWatchingServers.isEmpty
+                  && viewModel.latestMediaServers.isEmpty,
                 loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
@@ -67,12 +86,13 @@ struct HomeView: View {
               )
             }
 
-            // 第3节：电视剧订阅
+            // 第4节：电视剧订阅
             if !viewModel.tvSubscriptions.isEmpty {
               SubscribeSectionView(
                 title: "电视剧订阅",
                 items: viewModel.tvSubscriptions,
-                isFirstRow: viewModel.latestMediaServers.isEmpty
+                isFirstRow: viewModel.continueWatchingServers.isEmpty
+                  && viewModel.latestMediaServers.isEmpty
                   && viewModel.movieSubscriptions.isEmpty,
                 loadsPageImages: true,
                 viewModel: viewModel,
@@ -81,10 +101,12 @@ struct HomeView: View {
               )
             }
 
-            if viewModel.latestMediaServers.isEmpty && viewModel.movieSubscriptions.isEmpty
-              && viewModel.tvSubscriptions.isEmpty
+            if viewModel.continueWatchingServers.isEmpty && viewModel.latestMediaServers.isEmpty
+              && viewModel.movieSubscriptions.isEmpty && viewModel.tvSubscriptions.isEmpty
             {
-              if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+              if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed
+                || viewModel.subscriptionsLoadFailed
+              {
                 VStack(spacing: 12) {
                   Text("加载失败，请重试")
                     .font(.headline)
@@ -108,12 +130,18 @@ struct HomeView: View {
         // 每次页面出现时都会先加载一次（内部有 hasLoaded 控制全屏 Loading）
         await viewModel.loadData()
 
-        // 定期刷新数据（类似 Status 页面的下载器/整理信息）
+        // 定期刷新数据（类似 Status 页面的下载器/整理信息）。「继续观看」不跟着轮询：
+        // 后端会为每条续播条目向媒体服务器探测封面，持续轮询会把这份开销压到媒体服务器上。
         while !Task.isCancelled {
           try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
           guard !Task.isCancelled else { break }
-          await viewModel.refreshData()
+          await viewModel.refreshData(includeContinueWatching: false)
         }
+      }
+      // 播放结束（含准备期取消）：续播进度和条目可能变了，这时才重读「继续观看」。
+      .onChange(of: playbackEndedGeneration) { _, _ in
+        guard isSelected else { return }
+        Task { await viewModel.refreshData() }
       }
       // 编辑订阅 Sheet
       .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in selectedSubscribe = nil }
@@ -166,8 +194,19 @@ enum HomeSubscribeFocusID {
 
 // MARK: - 子视图
 
+/// 媒体库页的一行媒体服务器条目。两行共用行头、服务器选择器、图片加载窗口和起播焦点交接，
+/// 只有卡片样子和按下去做什么不同。
 private struct MediaSectionView: View {
+  /// 这一行是「最近添加」还是「继续观看」。
+  enum Content {
+    /// 海报卡；按下打开详情页，或按设置跳到媒体服务器 App。
+    case latest
+    /// 剧照卡（播放图标、进度、季集）；按下接着看。
+    case continueWatching
+  }
+
   private var memoryOptimization = MemoryOptimizationSettings()
+  let content: Content
   let title: String
   let items: [MediaServerPlayItem]
   let servers: [String]
@@ -195,8 +234,16 @@ private struct MediaSectionView: View {
   /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
   @State private var focusRestoreGeneration = 0
 
-  private var canSearchResources: Bool {
-    APIService.shared.canAccess(.search)
+  private var cardImageSize: CGSize {
+    content == .continueWatching ? ContinueWatchingCard.stillSize : MediaCard.defaultPosterSize
+  }
+
+  private var cardKind: ImageLoadWindow.HorizontalCardKind {
+    content == .continueWatching ? .episode : .media
+  }
+
+  private var emptyText: String {
+    content == .continueWatching ? "该服务器暂无继续观看内容" : "该服务器暂无最近内容"
   }
 
   var body: some View {
@@ -239,7 +286,7 @@ private struct MediaSectionView: View {
       }
 
       if items.isEmpty {
-        Text("该服务器暂无最近内容")
+        Text(emptyText)
           .font(.headline)
           .foregroundColor(.secondary)
           .frame(maxWidth: .infinity, minHeight: 120)
@@ -248,114 +295,19 @@ private struct MediaSectionView: View {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
             ForEach(Array(items.enumerated()), id: \.element.id) { entry in
-              let index = entry.offset
               let item = entry.element
-              let opensApp = viewModel.opensMediaServerApp(item)
-              let playsDirectly = !opensApp && viewModel.playsDirectly(item)
-              MediaCard(
-                title: item.title,
-                posterUrl: item.imageURLs.image,
-                posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
-                typeText: item.type,
-                ratingText: nil,
-                bottomLeftText: nil,
-                bottomLeftSecondaryText: nil,
-                source: nil,
-                // 左下角标出按下不是打开详情页的卡片：跳到媒体服务器 App 的是跳转图标；没有 TMDB 编号、
-                // MoviePilot 没有详情页的，按下直接播放，是播放图标（和单集卡片一样）。其余的按下打开详情页。
-                bottomLeftIcon: opensApp ? AppSymbol.openInLibrary : playsDirectly ? AppSymbol.play : nil,
-                loadsImage: loadsPageImages
-                  && ImageLoadWindow.containsHorizontalItem(
-                    at: index,
-                    itemCount: items.count,
-                    anchorIndex: imageAnchorId.flatMap { id in
-                      items.firstIndex(where: { $0.id == id })
-                    },
-                    cardKind: .media,
-                    usesFocusWindow: memoryOptimization.isEnabled
-                  ),
-                action: { opensApp ? openMediaItem(item) : openDetail(item) },
-                // 媒体服务器上没有封面或读不到时，改用 TMDB 海报。
-                onPosterUnavailable: { [selectedServer] in viewModel.loadPosterFallback(for: item, server: selectedServer) }
-              )
-              .accessibilityHint(opensApp ? "在媒体服务器 App 中打开" : playsDirectly ? "播放" : "打开详情")
-              .focused($focusedItemId, equals: item.id)
-              .compositingGroup()
-              .contextMenu {
-                // 按下打开的那一种不再重复列出；有详情页的不在这里直接播放，播放从详情页开始。
-                if opensApp {
-                  // 没有详情页的条目，在应用内打开就是直接播放。
-                  if viewModel.playsDirectly(item) {
-                    Button {
-                      openDetail(item)
-                    } label: {
-                      Label("在应用内播放", systemImage: AppSymbol.play)
-                    }
-                  } else {
-                    Button {
-                      openDetail(item)
-                    } label: {
-                      Label("详情", systemImage: AppSymbol.details)
-                    }
-                  }
-                } else if canOpenMediaLibrary(item) {
-                  Button {
-                    openMediaItem(item)
-                  } label: {
-                    Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
-                  }
-                }
-                if canSearchResources {
-                  Button {
-                    let navigationSource = navigationCoordinator.sourceToken()
-                    Task {
-                      guard APIService.shared.canAccess(.search) else { return }
-                      let sessionSnapshot = APIService.shared.sessionSnapshot()
-                      let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
-                      // 识别不出来会走下面的 else 分支退回按标题搜索，动作照样完成 ——
-                      // 因此不要弹「未识别到此媒体的TMDB信息」，否则弹窗与跳转同时发生（F-122）。
-                      if let target = await mediaActionHandler.getTMDBJumpTarget(
-                        for: info, notifyWhenUnrecognized: false)
-                      {
-                        if let request =
-                          await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
-                            for: target)
-                        {
-                          navigationCoordinator.push(request, ifCurrent: navigationSource)
-                        }
-                      } else {
-                        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
-                          return
-                        }
-                        let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
-                        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
-                          return
-                        }
-                        let request = ResourceSearchRequest(
-                          keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
-                          season: nil, mediaInfo: nil, sites: sites)
-                        navigationCoordinator.push(request, ifCurrent: navigationSource)
-                      }
-                    }
-                  } label: {
-                    Label("搜索资源", systemImage: AppSymbol.search)
-                  }
-                }
-                if canSearchResources, SubtitleSearchRequest.supportsSubtitleSearch(type: item.type) {
-                  Button {
-                    let navigationSource = navigationCoordinator.sourceToken()
-                    Task {
-                      let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
-                      if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(
-                        for: info, recognizeIfNeeded: true
-                      ) {
-                        navigationCoordinator.push(request, ifCurrent: navigationSource)
-                      }
-                    }
-                  } label: {
-                    Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
-                  }
-                }
+              if content == .continueWatching {
+                ContinueWatchingItemView(
+                  item: item,
+                  server: selectedServer,
+                  loadsImage: loadsImage(at: entry.offset),
+                  focusOwnerID: focusOwnerID,
+                  viewModel: viewModel
+                )
+                .focused($focusedItemId, equals: item.id)
+              } else {
+                latestCard(item, at: entry.offset)
+                  .focused($focusedItemId, equals: item.id)
               }
             }
           }
@@ -385,7 +337,7 @@ private struct MediaSectionView: View {
         .focusSection()
       }
     }
-    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
+    .focusLiftRow(cardImageSize: cardImageSize)
     // 盖播放器之前把焦点交回起播的媒体卡：模态关闭时系统还原的是盖上去那一刻的焦点项。
     .onChange(of: playbackFocusHandoff.request) { _, _ in
       guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
@@ -429,6 +381,73 @@ private struct MediaSectionView: View {
     ))
   }
 
+  /// 这一行的图片加载窗口：以当前聚焦的卡为中心。剧照卡较宽，一屏只放 4 张。
+  private func loadsImage(at index: Int) -> Bool {
+    loadsPageImages
+      && ImageLoadWindow.containsHorizontalItem(
+        at: index,
+        itemCount: items.count,
+        anchorIndex: imageAnchorId.flatMap { id in
+          items.firstIndex(where: { $0.id == id })
+        },
+        cardKind: cardKind,
+        usesFocusWindow: memoryOptimization.isEnabled
+      )
+  }
+
+  /// 「最近添加」的海报卡。
+  @ViewBuilder
+  private func latestCard(_ item: MediaServerPlayItem, at index: Int) -> some View {
+    let opensApp = viewModel.opensMediaServerApp(item, server: selectedServer)
+    let playsDirectly = !opensApp && viewModel.playsDirectly(item, server: selectedServer)
+    MediaCard(
+      title: item.title,
+      posterUrl: item.imageURLs.image,
+      posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
+      typeText: item.type,
+      ratingText: nil,
+      bottomLeftText: nil,
+      bottomLeftSecondaryText: nil,
+      source: nil,
+      // 左下角标出按下不是打开详情页的卡片：跳到媒体服务器 App 的是跳转图标；没有 TMDB 编号、
+      // MoviePilot 没有详情页的，按下直接播放，是播放图标（和单集卡片一样）。其余的按下打开详情页。
+      bottomLeftIcon: opensApp ? AppSymbol.openInLibrary : playsDirectly ? AppSymbol.play : nil,
+      loadsImage: loadsImage(at: index),
+      action: { opensApp ? openMediaItem(item) : openDetail(item) },
+      // 媒体服务器上没有封面或读不到时，改用 TMDB 海报。
+      onPosterUnavailable: { [selectedServer] in viewModel.loadPosterFallback(for: item, server: selectedServer) }
+    )
+    .accessibilityHint(opensApp ? "在媒体服务器 App 中打开" : playsDirectly ? "播放" : "打开详情")
+    .compositingGroup()
+    .contextMenu {
+      // 按下打开的那一种不再重复列出；有详情页的不在这里直接播放，播放从详情页开始。
+      if opensApp {
+        // 没有详情页的条目，在应用内打开就是直接播放。
+        if viewModel.playsDirectly(item, server: selectedServer) {
+          Button {
+            openDetail(item)
+          } label: {
+            Label("在应用内播放", systemImage: AppSymbol.play)
+          }
+        } else {
+          Button {
+            openDetail(item)
+          } label: {
+            Label("详情", systemImage: AppSymbol.details)
+          }
+        }
+      } else if canOpenMediaLibrary(item) {
+        Button {
+          openMediaItem(item)
+        } label: {
+          Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
+        }
+      }
+      MediaServerSearchMenuItems(
+        info: MediaInfo(title: item.title, type: item.type, year: item.subtitle))
+    }
+  }
+
   /// 焦点没被系统还原回来时把焦点补写回这张卡。真正的写回由 `PresentationReadyAction` 轮询完成：
   /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回就放弃。
   private func beginFocusRestore(_ id: String) {
@@ -454,7 +473,7 @@ private struct MediaSectionView: View {
     let navigationSource = navigationCoordinator.sourceToken()
     let loadingPosterURL = item.imageURLs.image
     Task {
-      switch await viewModel.cardDestination(for: item, using: mediaActionHandler) {
+      switch await viewModel.cardDestination(for: item, server: selectedServer, using: mediaActionHandler) {
       case .detail(let target):
         navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
       case .play(let target):
@@ -476,6 +495,168 @@ private struct MediaSectionView: View {
   private func openMediaItem(_ item: MediaServerPlayItem) {
     viewModel.openMediaItem(item, using: openURL) { message in
       notificationManager.show(message: message, type: .error)
+    }
+  }
+}
+
+/// 「继续观看」的一张卡：按下接着看，长按给详情、跳转媒体库和搜索。
+private struct ContinueWatchingItemView: View {
+  let item: MediaServerPlayItem
+  /// 卡片所在的服务器（建卡片时取，不用动作到达时选中的）：条目 ID 只在它自己的服务器上有意义。
+  let server: String
+  let loadsImage: Bool
+  /// 所在行的实例身份，焦点只交回起播的那一行。
+  let focusOwnerID: UUID
+  @ObservedObject var viewModel: HomeViewModel
+
+  @Environment(\.openURL) private var openURL
+  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+
+  private var action: HomeViewModel.ContinueWatchingAction {
+    viewModel.continueWatchingAction(for: item, server: server)
+  }
+
+  /// 识别和搜索用的媒体信息：剧集的副标题是季集和集名，不是年份。
+  private var mediaInfo: MediaInfo {
+    ContinueWatchingDisplay.mediaInfo(title: item.title, type: item.type, subtitle: item.subtitle)
+  }
+
+  private var accessibilityHint: String {
+    switch action {
+    case .play: "接着播放"
+    case .openInServerApp: "在媒体服务器 App 中打开"
+    case .detail: "打开详情"
+    }
+  }
+
+  var body: some View {
+    ContinueWatchingCard(
+      title: item.title,
+      stillURL: item.imageURLs.image,
+      icon: action.badgeIcon,
+      episodeText: ContinueWatchingDisplay.episodeText(type: item.type, subtitle: item.subtitle),
+      progress: ContinueWatchingDisplay.progress(percent: item.percent),
+      loadsImage: loadsImage,
+      action: press
+    )
+    .accessibilityHint(accessibilityHint)
+    .compositingGroup()
+    .contextMenu {
+      // 按下做的那一种不再重复列出。
+      if action != .detail {
+        Button {
+          openDetail()
+        } label: {
+          Label("详情", systemImage: AppSymbol.details)
+        }
+      }
+      if case .play = action, HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type) {
+        Button {
+          openInServerApp()
+        } label: {
+          Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
+        }
+      }
+      MediaServerSearchMenuItems(info: mediaInfo)
+    }
+  }
+
+  private func press() {
+    switch action {
+    case .play(let target):
+      let coordinator = APIService.shared.sessionScope.playbackCoordinator
+      // 已有别的播放在准备或播放：这次会被拒绝，先别登记目标，免得焦点目标错改成这张卡。
+      guard !coordinator.isBusy else { return }
+      // 播放器盖上之后退出时，焦点要回到这张卡。
+      playbackFocusHandoff.target = .homeMedia(ownerID: focusOwnerID, itemID: item.id)
+      coordinator.play(target)
+      // 这次没被接受（例如服务器配置刚被删掉）：别把目标留给下一次播放。
+      if !coordinator.isBusy { playbackFocusHandoff.target = nil }
+    case .openInServerApp:
+      openInServerApp()
+    case .detail:
+      openDetail()
+    }
+  }
+
+  private func openInServerApp() {
+    viewModel.openMediaItem(item, using: openURL) { message in
+      notificationManager.show(message: message, type: .error)
+    }
+  }
+
+  /// 打开 MoviePilot 详情页（没有应用内播放、这台服务器也不支持跳转时）。期间页面变了就不再推入。
+  private func openDetail() {
+    let navigationSource = navigationCoordinator.sourceToken()
+    let loadingPosterURL = item.imageURLs.image
+    Task {
+      guard let target = await viewModel.continueWatchingDetailTarget(for: item, using: mediaActionHandler)
+      else { return }
+      navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)
+    }
+  }
+}
+
+/// 媒体服务器条目（「最近添加」「继续观看」）长按菜单里的「搜索资源」「搜索字幕」。
+/// 与 TMDB 媒体卡的菜单不同：这些条目常常没有 TMDB 编号，识别不出时退回按标题搜索，动作照样完成。
+/// 没有搜索权限时两项都不出现；期间页面变了就不再推入。
+private struct MediaServerSearchMenuItems: View {
+  /// 识别和搜索用的媒体信息。年份只在确实是年份时给（剧集副标题是季集和集名，不是年份）。
+  let info: MediaInfo
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+
+  private var canSearchResources: Bool {
+    APIService.shared.canAccess(.search)
+  }
+
+  var body: some View {
+    if canSearchResources {
+      Button {
+        let navigationSource = navigationCoordinator.sourceToken()
+        Task {
+          guard APIService.shared.canAccess(.search) else { return }
+          let sessionSnapshot = APIService.shared.sessionSnapshot()
+          // 识别不出来会退回按标题搜索，动作照样完成，所以这里不弹「未识别到此媒体的TMDB信息」：
+          // 否则弹窗与跳转同时发生。
+          if let target = await mediaActionHandler.getTMDBJumpTarget(
+            for: info, notifyWhenUnrecognized: false)
+          {
+            if let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
+              for: target)
+            {
+              navigationCoordinator.push(request, ifCurrent: navigationSource)
+            }
+          } else {
+            guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+            let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+            guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+            let request = ResourceSearchRequest(
+              keyword: info.title ?? "", type: info.type, area: nil, title: nil, year: nil,
+              season: nil, mediaInfo: nil, sites: sites)
+            navigationCoordinator.push(request, ifCurrent: navigationSource)
+          }
+        }
+      } label: {
+        Label("搜索资源", systemImage: AppSymbol.search)
+      }
+      if SubtitleSearchRequest.supportsSubtitleSearch(type: info.type) {
+        Button {
+          let navigationSource = navigationCoordinator.sourceToken()
+          Task {
+            if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(
+              for: info, recognizeIfNeeded: true
+            ) {
+              navigationCoordinator.push(request, ifCurrent: navigationSource)
+            }
+          }
+        } label: {
+          Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
+        }
+      }
     }
   }
 }

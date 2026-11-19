@@ -573,6 +573,15 @@ enum TVAPIContractCatalog {
         coverage: read
       ),
       TVAPIOperationBuilder.get(
+        "/mediaserver/playing",
+        query: [
+          TVAPIParam.query("server", alwaysSent: true),
+          TVAPIParam.query("count", alwaysSent: true, type: .integer),
+        ],
+        dependedResponse: [TVAPIFields.field("percent", .number)],
+        coverage: read
+      ),
+      TVAPIOperationBuilder.get(
         "/mediaserver/exists",
         query: [
           TVAPIParam.query("media_source"),

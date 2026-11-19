@@ -6757,6 +6757,64 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  /// 「继续观看」的单集：服务器上有这一集和它所属的整剧，MoviePilot 有整剧详情和这一季的集列表。
+  /// `seriesProviderIDs` 给空对象时整剧认不出，用来验证退回直接播。
+  private func configureResumableEpisode(seriesProviderIDs: String = #"{"Tmdb":"100"}"#) {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(Self.lan)|tmdb.100": Self.series()]
+      $0.items = [
+        "\(Self.lan)|e1":
+          #"{"Id":"e1","Type":"Episode","Name":"Emby 集名","SeriesId":"s1","SeriesName":"Emby 剧名","ParentIndexNumber":1,"IndexNumber":2,"PremiereDate":"2024-01-08T00:00:00.0000000Z","ProviderIds":{"Tmdb":"12"}}"#,
+        "\(Self.lan)|s1": #"{"Id":"s1","Type":"Series","Name":"Emby 剧名","ProviderIds":\#(seriesProviderIDs)}"#,
+      ]
+      $0.episodes = [
+        "\(Self.lan)|s1": Self.embyEpisodes(Self.embyEpisode("e1", season: 1, episode: 2, tmdb: 12))
+      ]
+      $0.mediaDetails = [
+        "/api/v1/media/100":
+          #"{"tmdb_id":100,"source":"themoviedb","type":"电视剧","title":"MP 剧名","poster_path":"/mp-series.jpg"}"#
+      ]
+      $0.tmdbEpisodes = [
+        "/api/v1/tmdb/100/1":
+          #"[{"id":11,"episode_number":1,"name":"第一集","air_date":"2024-01-01"},{"id":12,"episode_number":2,"name":"MP 集名","air_date":"2024-01-08"}]"#
+      ]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+  }
+
+  /// 「继续观看」的单集起播前认出这一集：带剧集上下文，选集面板有内容，播的仍是续播点那份文件。
+  func testServerEpisodeResolvesQueueContextAndPlaysTheResumeFile() async throws {
+    configureResumableEpisode()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    let queued = try XCTUnwrap(session.episode, "认出这一集就要带队列上下文，否则选集面板是空的")
+    XCTAssertEqual(queued.episode.tmdbEpisodeID, 12)
+    XCTAssertEqual(queued.preferredFile, ServerFileRef(server: "emby", itemID: "e1"))
+    let panel = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
+    XCTAssertFalse(panel.isEmpty, "选集面板要有内容")
+    coordinator.endCurrentSession()
+  }
+
+  /// 整剧认不出（没有 TMDB 编号）时退回直接播这份文件：仍能播，但没有队列上下文，
+  /// 播放器据此不挂空的选集面板。
+  func testServerEpisodeFallsBackToDirectPlayWhenSeriesUnrecognized() async throws {
+    configureResumableEpisode(seriesProviderIDs: #"{}"#)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    XCTAssertNil(session.episode, "认不出整剧就不带上下文")
+    coordinator.endCurrentSession()
+  }
+
   /// 条目记 2 小时、所选片源 3 小时：播放界面显示的片长、跳转上限读的片长和写回的看完判定都按 3 小时。
   /// 跳转本身要等播放器就绪才发，测试里播放器打不开测试地址，只能断言跳转上限读的那个值（`MediaSession.item.runtime`）。
   func testExtendedCutUsesSourceRuntimeForDisplaySeekAndWriteBack() async throws {

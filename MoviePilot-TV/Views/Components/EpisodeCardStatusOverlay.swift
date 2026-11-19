@@ -21,9 +21,10 @@ struct EpisodeCardStatusOverlay: View {
   var body: some View {
     switch status {
     case .playable:
-      cornerBadge(AppSymbol.play, tint: .white, text: runtimeText, progress: watchProgress)
+      StillCornerBadge(
+        symbol: AppSymbol.play, progress: watchProgress, text: runtimeText, isFocused: isFocused)
     case .attention:
-      cornerBadge(AppSymbol.warning, tint: .yellow)
+      StillCornerBadge(symbol: AppSymbol.warning, tint: .yellow, isFocused: isFocused)
     case .trialInProgress(let indicator):
       ZStack {
         Color.black.opacity(0.55)
@@ -62,31 +63,6 @@ struct EpisodeCardStatusOverlay: View {
   /// 展开页的卡片比剧集行小，圆环跟着缩小。
   private var ringDiameter: CGFloat {
     min(76, stillSize.height * 0.33)
-  }
-
-  /// 左下角的小图标（和可选的短字）直接压在剧照上，不垫底座。
-  private func cornerBadge(_ symbol: String, tint: Color, text: String? = nil, progress: Double? = nil) -> some View {
-    HStack(spacing: 10) {
-      Image(systemName: symbol)
-        .imageScale(.small)
-        .foregroundStyle(tint)
-      if let progress {
-        PlaybackProgressBar(fraction: progress)
-          .foregroundStyle(.white)
-      }
-      if let text {
-        Text(text)
-          .foregroundStyle(.white)
-          .monospacedDigit()
-          .lineLimit(1)
-      }
-    }
-    // 和海报四角徽标同一级（caption2，tvOS 最小字号），比卡片下面的单集标题（caption）小一级。
-    .font(.caption2.bold())
-    // 只改透明度：没聚焦时次一级，聚焦时全亮，跟着卡片的聚焦动画变化。
-    .opacity(isFocused ? 1 : 0.65)
-    .padding(ImageBadgeScrim.inset)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
   }
 }
 

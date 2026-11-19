@@ -1408,6 +1408,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   let use_cookies: FlexibleBool?
   /// 媒体服务器类型
   let server_type: MediaServerType?
+  /// 已播放百分比（0…100），只有「继续观看」接口给；「最近添加」没有这个键。
+  let percent: Double?
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
   @MainActor var imageURLs: ImageURLs {
@@ -1418,7 +1420,7 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
-    case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type
+    case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type, percent
   }
 
   private static func stableID(
@@ -1461,6 +1463,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     link = try container.decodeIfPresent(String.self, forKey: .link)
     use_cookies = try container.decodeIfPresent(FlexibleBool.self, forKey: .use_cookies)
     server_type = try container.decodeIfPresent(MediaServerType.self, forKey: .server_type)
+    // 进度只用来画角标：个别条目给不出数字时这一项不画，不拖垮整批条目。
+    percent = try? container.decodeIfPresent(Double.self, forKey: .percent)
 
     self.id = Self.stableID(
       rawID: raw_id?.value,
@@ -1474,7 +1478,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
   init(
     id: String, title: String, subtitle: String? = nil, type: String? = nil, image: String? = nil,
-    link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil
+    link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil,
+    percent: Double? = nil
   ) {
     self.raw_id = FlexibleString(id)
     self.item_id = nil
@@ -1488,6 +1493,7 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.link = link
     self.use_cookies = use_cookies
     self.server_type = server_type
+    self.percent = percent
   }
 }
 

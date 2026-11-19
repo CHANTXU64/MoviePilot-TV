@@ -67,9 +67,12 @@ enum PlaybackMetadataLookup {
       thumbnailURL: api.getBackdropImageUrl(backdropPath: detail.backdrop_path))
   }
 
-  private static func episodeMetadata(
+  /// 单集所属整剧的 MoviePilot 详情：按 `SeriesId` 取服务器上的整剧条目，再按它的外部编号查详情。
+  /// `media` 是详情页已有的详情，类型对得上就直接用。认不出整剧时 nil。
+  /// 播放界面信息和「继续观看」的队列上下文共用这一跳。
+  static func seriesDetail(
     for item: ServerMediaItem, media: MediaInfo?, on connection: any MediaServerConnection, api: APIService
-  ) async -> PlaybackMetadata? {
+  ) async -> MediaInfo? {
     let series: ServerMediaItem?
     if media?.type == "电视剧" {
       series = nil
@@ -79,15 +82,30 @@ enum PlaybackMetadataLookup {
       else { return nil }
       series = found
     }
-    guard let detail = await detail(of: series, type: "电视剧", known: media, api: api) else { return nil }
-    var metadata = PlaybackMetadata(
-      seriesName: detail.title, posterURL: api.getPosterImageUrl(posterPath: detail.poster_path))
+    return await detail(of: series, type: "电视剧", known: media, api: api)
+  }
+
+  /// 这一集的季号、这一季的 TMDB 集列表（默认顺序），以及这一集对应到列表里的哪一集。
+  /// 身份规则见 `episode(matching:in:)`；季号缺失、列表读不到或对应不上时 nil。
+  static func episodeInSeason(
+    for item: ServerMediaItem, detail: MediaInfo, api: APIService
+  ) async -> (season: Int, list: [TmdbEpisode], episode: TmdbEpisode)? {
     guard let tmdbID = MediaIdentifier.validNumericIdentifier(detail.tmdb_id), let season = item.seasonNumber,
       let list = try? await api.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil),
       let episode = episode(matching: item, in: list)
-    else { return metadata }
-    let still = api.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil)
-    metadata = MoviePilotEpisode(episode, season: season, index: 0)
+    else { return nil }
+    return (season, list, episode)
+  }
+
+  private static func episodeMetadata(
+    for item: ServerMediaItem, media: MediaInfo?, on connection: any MediaServerConnection, api: APIService
+  ) async -> PlaybackMetadata? {
+    guard let detail = await seriesDetail(for: item, media: media, on: connection, api: api) else { return nil }
+    var metadata = PlaybackMetadata(
+      seriesName: detail.title, posterURL: api.getPosterImageUrl(posterPath: detail.poster_path))
+    guard let found = await episodeInSeason(for: item, detail: detail, api: api) else { return metadata }
+    let still = api.getSeasonPosterURL(posterPath: found.episode.stillPath, mediaPosterPath: nil)
+    metadata = MoviePilotEpisode(found.episode, season: found.season, index: 0)
       .playbackMetadata(seriesName: metadata.seriesName, stillURL: still)
       .filling(metadata)
     return metadata

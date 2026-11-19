@@ -1255,8 +1255,8 @@ struct SeriesPlayAction: Equatable {
     return "\(verb) \(text)"
   }
 
-  /// 「第 2 季第 5 集」「特别篇第 1 集」；缺编号时为 nil。
-  static func episodeText(season: Int?, episode: Int?) -> String? {
+  /// 「第 2 季第 5 集」「特别篇第 1 集」；缺编号时为 nil。媒体库页「继续观看」角标共用这一拼法。
+  nonisolated static func episodeText(season: Int?, episode: Int?) -> String? {
     guard let season, let episode else { return nil }
     let seasonText = season == 0 ? "特别篇" : "第 \(season) 季"
     return "\(seasonText)第 \(episode) 集"

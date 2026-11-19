@@ -19,12 +19,26 @@ class HomeViewModel: ObservableObject {
       applyLatestMediaSelection()
     }
   }
+  /// 当前选中服务器的「继续观看」条目（电影或单集，带已播放进度）
+  @Published var continueWatching: [MediaServerPlayItem] = []
+  /// 「继续观看」可选的媒体服务器
+  @Published var continueWatchingServers: [String] = []
+  /// 「继续观看」当前选中的媒体服务器，与「最近添加」各自记住
+  @Published var selectedContinueWatchingServer: String = "" {
+    didSet {
+      guard oldValue != selectedContinueWatchingServer else { return }
+      persistSelectedContinueWatchingServer()
+      applyContinueWatchingSelection()
+    }
+  }
   /// 电影订阅列表
   @Published var movieSubscriptions: [Subscribe] = []
   /// 电视剧订阅列表
   @Published var tvSubscriptions: [Subscribe] = []
   /// 最近播放加载失败标记（成功空视为有效结果；失败保留旧快照并置位）
   @Published var latestLoadFailed = false
+  /// 「继续观看」加载失败标记，与「最近添加」分开：一行失败不影响另一行的提示
+  @Published var continueWatchingLoadFailed = false
   /// 订阅加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
   @Published var subscriptionsLoadFailed = false
   /// 加载状态
@@ -44,7 +58,13 @@ class HomeViewModel: ObservableObject {
   private var latestMediaSelectedServerKey: String? {
     apiService.profileKey.map { "home.latestMedia.selectedServer.v2_\($0)" }
   }
+  private var continueWatchingSelectedServerKey: String? {
+    apiService.profileKey.map { "home.continueWatching.selectedServer.v1_\($0)" }
+  }
+  /// 「继续观看」一行最多读多少条：横排一次只露 4 张，20 条够翻几屏。
+  static let continueWatchingCount = 20
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
+  private var continueWatchingByServer: [String: [MediaServerPlayItem]] = [:]
   private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService? = nil) {
@@ -58,6 +78,9 @@ class HomeViewModel: ObservableObject {
         defaults.removeObject(forKey: "home.latestMedia.selectedServer.v1")
       }
       self.selectedLatestMediaServer = defaults.string(forKey: key) ?? ""
+    }
+    if let key = continueWatchingSelectedServerKey {
+      self.selectedContinueWatchingServer = UserDefaults.standard.string(forKey: key) ?? ""
     }
 
     // 设置里的应用内播放开关变了：重绘卡片的点击方式和长按菜单（是否能在应用内播放每次都现读）。
@@ -85,7 +108,8 @@ class HomeViewModel: ObservableObject {
     hasLoaded = true
 
     // 仅在首次加载（无数据时）显示全屏 Loading
-    let isFirstLoad = latestMedia.isEmpty && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
+    let isFirstLoad = latestMedia.isEmpty && continueWatching.isEmpty
+      && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
     if isFirstLoad {
       isLoading = true
     }
@@ -103,118 +127,208 @@ class HomeViewModel: ObservableObject {
     }
   }
 
-  /// 刷新首页数据
-  func refreshData() async {
-    // 采用 TaskGroup 并发加载首页的两大板块：最近播放和我的订阅，提升首屏响应速度
+  /// 刷新首页数据。`includeContinueWatching` 为 false 时只刷「最近添加」和订阅：
+  /// 「继续观看」不跟着定时轮询（见 `loadMediaServerRows`）。
+  func refreshData(includeContinueWatching: Bool = true) async {
+    // 采用 TaskGroup 并发加载首页的两大板块：媒体服务器两行和我的订阅，提升首屏响应速度
     await withTaskGroup(of: Void.self) { group in
-      group.addTask { await self.loadLatestMedia() }
+      group.addTask { await self.loadMediaServerRows(includeContinueWatching: includeContinueWatching) }
       group.addTask { await self.refreshSubscriptions(forceRefresh: true) }
     }
   }
 
-  /// 从已启用的媒体服务器加载最近媒体
-  private func loadLatestMedia() async {
+  /// 读一次媒体服务器配置，再并发加载「继续观看」和「最近添加」。两行各自发布快照和失败标记，
+  /// 一行失败或读得慢不挡另一行。
+  /// 「继续观看」只在进页面、重试和播放结束后读：Jellyfin 后端会为每条续播条目向媒体服务器探测一次封面
+  /// （`_get_resume_image`），跟着 10 秒轮询会把这份开销持续压到媒体服务器上；Web 也只在页面激活时读。
+  private func loadMediaServerRows(includeContinueWatching: Bool) async {
     guard apiService.canRequestSuperUserEndpoints else {
-      latestMediaByServer = [:]
-      latestMediaServers = []
-      latestLoadFailed = false
+      clearLatestMedia()
+      clearContinueWatching()
       if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
-      if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
-      if !latestMedia.isEmpty { latestMedia = [] }
       return
     }
     let sessionSnapshot = apiService.sessionSnapshot()
-
+    let servers: [MediaServerConf]
     do {
-      // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）；每次现拉并写回会话缓存，详情页和播放沿用同一份
-      let servers = try await apiService.fetchCachedMediaServers(forceRefresh: true)
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-      let playableServers = Set(servers.filter(\.supportsInAppPlayback).map(\.name))
-      if inAppPlayableServers != playableServers { inAppPlayableServers = playableServers }
-
-      // 只保留启用服务器（保持后端返回顺序）
-      let enabledServers = servers.filter { $0.enabled?.value ?? false }
-
-      // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
-      // 只有成功结果（含成功空）才覆盖对应服务器快照；
-      // 失败保留上一轮快照并置失败标记，取消保留快照但不视为失败。
-      let latestByServer = await withTaskGroup(of: (String, ServerLatestOutcome).self) {
-        group in
-        for server in enabledServers {
-          group.addTask {
-            do {
-              let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
-              return (server.name, .success(items))
-            } catch is CancellationError {
-              return (server.name, .cancelled)
-            } catch {
-              Logger.error("加载服务器 \(server.name) 最新媒体失败: \(error)")
-              return (server.name, .failed)
-            }
-          }
-        }
-
-        // 收集各服务器结果，仅保留成功项
-        var byServer: [String: [MediaServerPlayItem]] = [:]
-        var anyFailed = false
-        var anyCancelled = false
-        for await (serverName, outcome) in group {
-          switch outcome {
-          case .success(let items):
-            byServer[serverName] = items
-          case .failed:
-            anyFailed = true
-          case .cancelled:
-            anyCancelled = true
-          }
-        }
-        // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
-        if !anyCancelled {
-          self.latestLoadFailed = anyFailed
-        }
-        return byServer
-      }
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-
-      // 3. 更新筛选器和当前展示列表
-      // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
-      let enabledServerNames = Set(enabledServers.map(\.name))
-      var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
-      for (serverName, items) in latestByServer {
-        nextByServer[serverName] = items
-      }
-      self.latestMediaByServer = nextByServer
-      loadLibraryLinks(latestByServer, playableServers: playableServers, session: sessionSnapshot)
-      let newServerNames = enabledServers.map(\.name)
-      if self.latestMediaServers != newServerNames {
-        self.latestMediaServers = newServerNames
-      }
-
-      if latestMediaServers.isEmpty {
-        if self.selectedLatestMediaServer != "" { self.selectedLatestMediaServer = "" }
-        if !self.latestMedia.isEmpty { self.latestMedia = [] }
-      } else {
-        if selectedLatestMediaServer.isEmpty
-          || !latestMediaServers.contains(selectedLatestMediaServer)
-        {
-          self.selectedLatestMediaServer = latestMediaServers[0]
-        }
-        applyLatestMediaSelection()
-      }
+      // 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）；每次现拉并写回会话缓存，详情页和播放沿用同一份
+      servers = try await apiService.fetchCachedMediaServers(forceRefresh: true)
     } catch {
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       if error is CancellationError {
-        Logger.debug("加载最新媒体被取消")
+        Logger.debug("加载媒体服务器配置被取消")
       } else {
-        Logger.error("加载最新媒体失败: \(error)")
+        Logger.error("加载媒体服务器配置失败: \(error)")
         latestLoadFailed = true
+        if includeContinueWatching { continueWatchingLoadFailed = true }
+      }
+      return
+    }
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    let playableServers = Set(servers.filter(\.supportsInAppPlayback).map(\.name))
+    if inAppPlayableServers != playableServers { inAppPlayableServers = playableServers }
+
+    // 只保留启用服务器（保持后端返回顺序）
+    let enabledServers = servers.filter { $0.enabled?.value ?? false }
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask {
+        await self.loadLatestMedia(enabledServers, playableServers: playableServers, session: sessionSnapshot)
+      }
+      if includeContinueWatching {
+        group.addTask { await self.loadContinueWatching(enabledServers, session: sessionSnapshot) }
       }
     }
   }
 
-  private enum ServerLatestOutcome {
+  /// 从已启用的媒体服务器加载「最近添加」
+  private func loadLatestMedia(
+    _ enabledServers: [MediaServerConf], playableServers: Set<String>, session: APIServiceSessionSnapshot
+  ) async {
+    let read = await readServerItems(enabledServers, row: .latest)
+    guard apiService.isSessionUnchanged(from: session) else { return }
+    // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
+    if !read.anyCancelled { latestLoadFailed = read.anyFailed }
+
+    // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
+    let enabledServerNames = Set(enabledServers.map(\.name))
+    var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
+    for (serverName, items) in read.byServer {
+      nextByServer[serverName] = items
+    }
+    latestMediaByServer = nextByServer
+    loadLibraryLinks(read.byServer, playableServers: playableServers, session: session)
+    let newServerNames = enabledServers.map(\.name)
+    if latestMediaServers != newServerNames {
+      latestMediaServers = newServerNames
+    }
+
+    if latestMediaServers.isEmpty {
+      if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
+      if !latestMedia.isEmpty { latestMedia = [] }
+    } else {
+      if selectedLatestMediaServer.isEmpty
+        || !latestMediaServers.contains(selectedLatestMediaServer)
+      {
+        selectedLatestMediaServer = latestMediaServers[0]
+      }
+      applyLatestMediaSelection()
+    }
+  }
+
+  /// 从已启用的媒体服务器加载「继续观看」。快照、失败标记和选择规则与「最近添加」相同，各自独立。
+  private func loadContinueWatching(
+    _ enabledServers: [MediaServerConf], session: APIServiceSessionSnapshot
+  ) async {
+    let read = await readServerItems(enabledServers, row: .continueWatching)
+    guard apiService.isSessionUnchanged(from: session) else { return }
+    if !read.anyCancelled { continueWatchingLoadFailed = read.anyFailed }
+
+    let enabledServerNames = Set(enabledServers.map(\.name))
+    var nextByServer = continueWatchingByServer.filter { enabledServerNames.contains($0.key) }
+    for (serverName, items) in read.byServer {
+      nextByServer[serverName] = items
+    }
+    continueWatchingByServer = nextByServer
+    let newServerNames = enabledServers.map(\.name)
+    if continueWatchingServers != newServerNames {
+      continueWatchingServers = newServerNames
+    }
+
+    if continueWatchingServers.isEmpty {
+      if selectedContinueWatchingServer != "" { selectedContinueWatchingServer = "" }
+      if !continueWatching.isEmpty { continueWatching = [] }
+    } else {
+      if selectedContinueWatchingServer.isEmpty
+        || !continueWatchingServers.contains(selectedContinueWatchingServer)
+      {
+        selectedContinueWatchingServer = continueWatchingServers[0]
+      }
+      applyContinueWatchingSelection()
+    }
+  }
+
+  /// 媒体库页两行读的是同一个形状：按服务器并发读同一个列表。
+  private enum MediaServerItemRow {
+    case latest
+    case continueWatching
+
+    nonisolated var logName: String {
+      switch self {
+      case .latest: "最新媒体"
+      case .continueWatching: "继续观看"
+      }
+    }
+
+    func read(server: String, api: APIService) async throws -> [MediaServerPlayItem] {
+      switch self {
+      case .latest:
+        return try await api.fetchMediaServerLatest(server: server)
+      case .continueWatching:
+        return try await api.fetchMediaServerPlaying(server: server, count: HomeViewModel.continueWatchingCount)
+      }
+    }
+  }
+
+  private struct ServerItemsRead {
+    var byServer: [String: [MediaServerPlayItem]] = [:]
+    var anyFailed = false
+    var anyCancelled = false
+  }
+
+  /// 并发读各台已启用服务器的同一个列表。只有成功结果（含成功空）进快照；失败和取消分别记账，
+  /// 由调用方决定保留旧快照还是置失败标记。
+  private func readServerItems(_ servers: [MediaServerConf], row: MediaServerItemRow) async -> ServerItemsRead {
+    await withTaskGroup(of: (String, ServerItemOutcome).self) { group in
+      for server in servers {
+        group.addTask {
+          let label = row.logName
+          do {
+            let items = try await row.read(server: server.name, api: self.apiService)
+            return (server.name, .success(items))
+          } catch is CancellationError {
+            return (server.name, .cancelled)
+          } catch {
+            Logger.error("加载服务器 \(server.name) \(label)失败: \(error)")
+            return (server.name, .failed)
+          }
+        }
+      }
+
+      var read = ServerItemsRead()
+      for await (serverName, outcome) in group {
+        switch outcome {
+        case .success(let items):
+          read.byServer[serverName] = items
+        case .failed:
+          read.anyFailed = true
+        case .cancelled:
+          read.anyCancelled = true
+        }
+      }
+      return read
+    }
+  }
+
+  private enum ServerItemOutcome {
     case success([MediaServerPlayItem])
     case failed
     case cancelled
+  }
+
+  private func clearLatestMedia() {
+    latestMediaByServer = [:]
+    latestMediaServers = []
+    latestLoadFailed = false
+    if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
+    if !latestMedia.isEmpty { latestMedia = [] }
+  }
+
+  private func clearContinueWatching() {
+    continueWatchingByServer = [:]
+    continueWatchingServers = []
+    continueWatchingLoadFailed = false
+    if selectedContinueWatchingServer != "" { selectedContinueWatchingServer = "" }
+    if !continueWatching.isEmpty { continueWatching = [] }
   }
 
   private func applyLatestMediaSelection() {
@@ -231,6 +345,22 @@ class HomeViewModel: ObservableObject {
   private func persistSelectedLatestMediaServer() {
     guard let key = latestMediaSelectedServerKey else { return }
     UserDefaults.standard.set(selectedLatestMediaServer, forKey: key)
+  }
+
+  private func applyContinueWatchingSelection() {
+    guard !selectedContinueWatchingServer.isEmpty else {
+      if !continueWatching.isEmpty { continueWatching = [] }
+      return
+    }
+    let newItems = continueWatchingByServer[selectedContinueWatchingServer] ?? []
+    if continueWatching != newItems {
+      continueWatching = newItems
+    }
+  }
+
+  private func persistSelectedContinueWatchingServer() {
+    guard let key = continueWatchingSelectedServerKey else { return }
+    UserDefaults.standard.set(selectedContinueWatchingServer, forKey: key)
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
@@ -363,10 +493,11 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
-  /// 当前服务器“最近添加”里能在应用内播放的条目 ID；不能播放时为 nil。
-  func inAppPlaybackItemID(_ item: MediaServerPlayItem) -> String? {
+  /// 指定服务器上这个条目能在应用内播放时的条目 ID；不能播放时为 nil。
+  /// 服务器由调用方给：媒体库页两行各有自己的选择，条目 ID 只在它自己的服务器上有意义。
+  func inAppPlaybackItemID(_ item: MediaServerPlayItem, server: String) -> String? {
     Self.inAppPlaybackItemID(
-      item, server: selectedLatestMediaServer, playableServers: inAppPlayableServers,
+      item, server: server, playableServers: inAppPlayableServers,
       canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
       backendVersion: apiService.settings?.BACKEND_VERSION)
   }
@@ -390,10 +521,10 @@ class HomeViewModel: ObservableObject {
     canOpenMediaLibrary && !(canPlayInApp && prefersInApp)
   }
 
-  func opensMediaServerApp(_ item: MediaServerPlayItem) -> Bool {
+  func opensMediaServerApp(_ item: MediaServerPlayItem, server: String) -> Bool {
     Self.opensMediaServerApp(
       canOpenMediaLibrary: Self.supportsMediaLibraryDeepLink(serverType: item.server_type),
-      canPlayInApp: inAppPlaybackItemID(item) != nil,
+      canPlayInApp: inAppPlaybackItemID(item, server: server) != nil,
       prefersInApp: SystemViewModel.shouldPlayHomeMediaInApp)
   }
 
@@ -458,13 +589,55 @@ class HomeViewModel: ObservableObject {
   private static func itemKey(server: String, itemID: String) -> String { "\(server)|\(itemID)" }
 
   /// 这张卡对应的条目按下做什么；还没读到或不能在应用内播放时为 nil。
-  func libraryLink(for item: MediaServerPlayItem) -> LibraryItemLink? {
-    inAppPlaybackItemID(item).flatMap { libraryLinks[Self.itemKey(server: selectedLatestMediaServer, itemID: $0)] }
+  func libraryLink(for item: MediaServerPlayItem, server: String) -> LibraryItemLink? {
+    inAppPlaybackItemID(item, server: server).flatMap { libraryLinks[Self.itemKey(server: server, itemID: $0)] }
   }
 
   /// 没跳到媒体服务器 App 时，这张卡按下是不是直接播放：条目没有 TMDB 编号、按标题也识别不出，MoviePilot 没有它的详情页。
-  func playsDirectly(_ item: MediaServerPlayItem) -> Bool {
-    libraryLink(for: item) == .libraryOnly
+  func playsDirectly(_ item: MediaServerPlayItem, server: String) -> Bool {
+    libraryLink(for: item, server: server) == .libraryOnly
+  }
+
+  /// 「继续观看」卡片按下做什么。
+  enum ContinueWatchingAction: Equatable {
+    /// 在应用内从上次的位置接着播（起播位置由 `PlaybackResumePolicy` 决定）。
+    case play(PlaybackTarget)
+    case openInServerApp
+    case detail
+
+    /// 剧照角标上的图标，标出按下会做什么：接着播是播放图标，离开本 App 是跳转图标，
+    /// 打开详情页不带图标（同 `MediaCard` 的约定）。
+    var badgeIcon: String? {
+      switch self {
+      case .play: AppSymbol.play
+      case .openInServerApp: AppSymbol.openInLibrary
+      case .detail: nil
+      }
+    }
+  }
+
+  /// 这一行就是接着看，所以能在应用内播放时直接续播，不经过详情页，也不受「首页媒体在应用内打开」
+  /// 开关影响——那个开关只管「最近添加」，而且默认关闭。不能应用内播放时，支持深链的服务器跳到它自己的
+  /// App（同 Web），不支持深链的打开 MoviePilot 详情页。
+  func continueWatchingAction(for item: MediaServerPlayItem, server: String) -> ContinueWatchingAction {
+    if let itemID = inAppPlaybackItemID(item, server: server) {
+      // 电视剧的续播条目是单集：走带剧集上下文的那条，起播前认出这一集就有选集和连播。
+      return .play(
+        item.type == "电视剧"
+          ? .serverEpisode(serverName: server, itemID: itemID)
+          : .serverItem(serverName: server, itemID: itemID))
+    }
+    return Self.supportsMediaLibraryDeepLink(serverType: item.server_type) ? .openInServerApp : .detail
+  }
+
+  /// 「继续观看」条目没有应用内播放、这台服务器也不支持跳转时，按标题识别打开详情页。
+  /// 剧集的副标题是季集和集名，不能当年份送去识别（见 `ContinueWatchingDisplay.mediaInfo`）。
+  func continueWatchingDetailTarget(
+    for item: MediaServerPlayItem, using handler: MediaActionHandler
+  ) async -> MediaInfo? {
+    let info = ContinueWatchingDisplay.mediaInfo(
+      title: item.title, type: item.type, subtitle: item.subtitle)
+    return await handler.getTMDBJumpTarget(for: info)
   }
 
   /// 「最近添加」卡片按下（没跳到媒体服务器 App 时）去哪里。
@@ -477,10 +650,11 @@ class HomeViewModel: ObservableObject {
   /// 按下卡片去哪里。能在应用内播放的服务器上按条目自己的 TMDB 编号（与这份文件一一对应）打开详情页，没有编号的按标题识别，
   /// 认不出才直接播放；读列表时没读到的现读一次（期间显示「正在识别」）。服务器读不到时按标题、年份识别（识别不出时
   /// `handler` 会提示）。
-  func cardDestination(for item: MediaServerPlayItem, using handler: MediaActionHandler) async -> CardDestination? {
+  func cardDestination(
+    for item: MediaServerPlayItem, server: String, using handler: MediaActionHandler
+  ) async -> CardDestination? {
     let snapshot = apiService.sessionSnapshot()
-    let server = selectedLatestMediaServer
-    if let itemID = inAppPlaybackItemID(item) {
+    if let itemID = inAppPlaybackItemID(item, server: server) {
       let key = Self.itemKey(server: server, itemID: itemID)
       var link = libraryLinks[key]
       if link == nil {
@@ -515,7 +689,7 @@ class HomeViewModel: ObservableObject {
     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
     guard var target = await handler.getTMDBJumpTarget(for: info) else { return nil }
     // 服务器暂时读不到时也带上这份文件：MoviePilot 还没同步到它、之后服务器恢复时，详情页仍能播放（起播前按编号核对）。
-    if let itemID = inAppPlaybackItemID(item) {
+    if let itemID = inAppPlaybackItemID(item, server: server) {
       target.libraryItemHint = MediaServerItemRef(itemID: itemID, server: server)
     }
     return .detail(target)

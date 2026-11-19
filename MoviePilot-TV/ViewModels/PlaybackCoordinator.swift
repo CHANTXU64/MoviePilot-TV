@@ -41,6 +41,9 @@ enum PlaybackTarget: Equatable {
   case libraryItem(itemID: String, expected: LibraryItemExpectation, owner: String? = nil)
   /// 已知服务器名称和这台服务器自己的条目 ID，没有身份条件可核对（首页「最近添加」里没有 TMDB 编号、直接播放的条目）。
   case serverItem(serverName: String, itemID: String)
+  /// 媒体服务器上的一个单集（首页「继续观看」）。起播前按它所属的整剧查 MoviePilot，认出这一集就转成
+  /// 带队列上下文的按集播放（选集、上一集/下一集可用）；认不出或超时就退回 `serverItem` 直接播这份文件。
+  case serverEpisode(serverName: String, itemID: String)
   /// 详情页（TMDB 来源）的「继续播放」判断按服务器上的这份播（没有反证）。`judgement` 是判断时读到的这份和当成哪一集：
   /// 起播时现读的条目过不了和按集起播同一处复核（`ServerEpisodeIndex.admit`：编号、季号集号、路径变了，或播出日期
   /// 和那一集对不上），之前的判断不算数，不原样播，通知详情页按新数据重新判断（见 `prepare`）。
@@ -52,7 +55,7 @@ enum PlaybackTarget: Equatable {
   /// 服务器上的条目 ID（`libraryItem` 是入库表里的，`serverItem` 是这台服务器的）；单集为 nil。
   var itemID: String? {
     switch self {
-    case .libraryItem(let id, _, _), .serverItem(_, let id): id
+    case .libraryItem(let id, _, _), .serverItem(_, let id), .serverEpisode(_, let id): id
     case .seriesFile(_, let judgement, _): judgement.file?.id
     case .episode: nil
     }
@@ -656,7 +659,7 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     case .libraryItem(let id, let expectation, let libraryOwner):
       (itemID, expected, owner) = (id, expectation, libraryOwner)
       candidates = Self.playableServers(in: servers, preferring: libraryOwner)
-    case .serverItem(let serverName, let id):
+    case .serverItem(let serverName, let id), .serverEpisode(let serverName, let id):
       (itemID, expected, owner) = (id, nil, nil)
       candidates = servers.filter { $0.name == serverName && $0.supportsInAppPlayback }
     case .seriesFile(let serverName, let judgement, _):
@@ -1985,6 +1988,18 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     _ target: PlaybackTarget, servers: [MediaServerConf], media: MediaInfo?, preferredUserName: String?,
     certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
+    // 「继续观看」的单集：先试着补全剧集上下文。认出来就转成按集播（选集、上一集/下一集可用），
+    // 认不出或超时就退回直接播这份文件，不为补上下文一直耽误起播。
+    var target = target
+    if case .serverEpisode(let serverName, let id) = target {
+      if let queued = await queuedServerEpisode(
+        serverName: serverName, itemID: id, servers: servers, preferredUserName: preferredUserName)
+      {
+        target = .episode(queued, accepting: .consistentNumberMatches)
+      } else {
+        target = .serverItem(serverName: serverName, itemID: id)
+      }
+    }
     let itemID: String
     let expected: LibraryItemExpectation?
     var owner: String?
@@ -1998,12 +2013,15 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       owner = libraryOwner
       candidates = Self.playableServers(in: servers, preferring: libraryOwner)
       guard !candidates.isEmpty else { throw PlaybackError.noPlayableServer }
-    case .serverItem, .seriesFile:
+    case .serverItem, .seriesFile, .serverEpisode:
       let serverName: String
       if case .seriesFile(let name, let judgement, let tmdbID) = target, let file = judgement.file {
         (serverName, itemID) = (name, file.id)
         judged = (judgement, tmdbID)
       } else if case .serverItem(let name, let id) = target {
+        (serverName, itemID) = (name, id)
+      } else if case .serverEpisode(let name, let id) = target {
+        // 上面补上下文没成功时才会走到这里，和直接播服务器条目一样。
         (serverName, itemID) = (name, id)
       } else {
         throw PlaybackError.notFound
@@ -2058,6 +2076,49 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
       }
     }
     throw firstError ?? PlaybackError.notFound
+  }
+
+  /// 「继续观看」补剧集上下文最多等这么久：要读整剧详情和这一季的集列表，比只取显示信息宽一点。
+  /// 超时就退回直接播这份文件（没有选集和连播），不让起播一直等。
+  private static let serverEpisodeContextTimeout: Duration = .seconds(5)
+
+  /// 「继续观看」的单集：按 `SeriesId` 找到服务器上的整剧，再按整剧的外部编号查 MoviePilot 详情和这一季的集列表，
+  /// 认出这一集就建带队列上下文的按集目标（与详情页集列表起播同一条路）。
+  /// 复用播放界面信息那条链（`PlaybackMetadataLookup.seriesDetail` / `episodeInSeason`）。
+  /// 服务器读不到、不是单集、整剧或这一集认不出、超时都返回 nil，调用方退回直接播这份文件。
+  private func queuedServerEpisode(
+    serverName: String, itemID: String, servers: [MediaServerConf], preferredUserName: String?
+  ) async -> QueuedEpisode? {
+    guard let server = servers.first(where: { $0.name == serverName }), server.supportsInAppPlayback,
+      let apiService
+    else { return nil }
+    return await PlaybackMetadataLookup.withinTimeout(Self.serverEpisodeContextTimeout) {
+      try? await self.withConnection(to: server, preferredUserName: preferredUserName) {
+        connection -> QueuedEpisode? in
+        guard let item = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout),
+          item.kind == .episode, let seriesID = trimmedNonEmpty([item.seriesID])
+        else { return nil }
+        guard let detail = await PlaybackMetadataLookup.seriesDetail(
+          for: item, media: nil, on: connection, api: apiService),
+          let found = await PlaybackMetadataLookup.episodeInSeason(for: item, detail: detail, api: apiService)
+        else { return nil }
+        // 跨季的上一集/下一集按这份季目录走；详情没给季目录时至少带上当前季。
+        var seasons = detail.season_info?.compactMap(\.season_number) ?? []
+        if !seasons.contains(found.season) { seasons.append(found.season) }
+        guard let context = EpisodePlaybackContext(
+          media: detail, episodeGroup: nil, seasons: seasons,
+          libraryItem: MediaServerItemRef(itemID: seriesID, server: serverName))
+        else { return nil }
+        let episodes = found.list.enumerated().map {
+          MoviePilotEpisode($0.element, season: found.season, index: $0.offset)
+        }
+        guard let episode = episodes.first(where: { $0.tmdbEpisodeID == found.episode.id }) else { return nil }
+        var queued = QueuedEpisode(context: context, episode: episode, seasonEpisodes: episodes)
+        // 续播点在这份文件上，先试它：同一集在别的媒体库还有一份时，不为那份从头播。
+        queued.preferredFile = ServerFileRef(server: serverName, itemID: item.id)
+        return queued
+      }
+    }
   }
 
   /// 不是从详情页集列表起播（详情页的「播放」、首页最近入库）：播放信息和 MoviePilot 的条目信息同时取，
