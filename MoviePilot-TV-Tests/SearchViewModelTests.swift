@@ -344,6 +344,46 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertEqual(titleStreamRequestCount, 1)
   }
 
+  /// 旧版（不支持分页）流式资源搜索中途取消：状态复位，放行的迟到结果不再发布。
+  func testCancelResourceSearchResetsStateAndDropsLateResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    let gate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "cancel-resource")
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+    // 低于分页起始版本，走流式 searchStreamTask 而非 pagedSearch。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.13.14")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "cancel-resource"
+    await viewModel.autoSearch()
+
+    try await withTimeout("resource stream request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "cancel-resource")
+    }
+    XCTAssertTrue(viewModel.isLoading)
+
+    viewModel.cancelResourceSearch()
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSearched)
+
+    // 取消后才放行流：迟到事件不得把结果/加载态写回。
+    await gate.open()
+    try await Task.sleep(nanoseconds: 200_000_000)
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSearched)
+    XCTAssertTrue(viewModel.resourceResults.isEmpty)
+  }
+
   @MainActor
   func testResourceSearchForwardsProductionAllActiveSitesFilter() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))

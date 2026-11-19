@@ -121,17 +121,17 @@ struct EpisodeActionSheet: View {
     case .startTrial(let isRetry):
       title = cautious ? "仍要试看" : isRetry ? "重新试看" : "试看"
       systemImage = AppSymbol.subscriptionTrial
-      loadingTitle = "正在发起试看"
+      loadingTitle = "试看中"
       isLoading = entry.trial.isStarting
     case .cancelTrial:
       title = EpisodeTrialHoldNotice.cancelTitle
       systemImage = AppSymbol.unsubscribe
-      loadingTitle = "正在取消试看"
+      loadingTitle = "取消试看中"
       isLoading = isCancellingTrial
     case .recheck:
       title = "重新检查"
       systemImage = AppSymbol.retry
-      loadingTitle = "正在检查"
+      loadingTitle = "检查中"
       isLoading = isRechecking
     }
     return SheetActionButton(

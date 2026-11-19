@@ -1358,7 +1358,10 @@ struct MediaDetailView: View {
                   let isDirect = detail.canDirectlySubscribe
                   // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
                   // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
-                  let seasonWaiting = !isDirect && !preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
+                  // 详情本身加载失败时分季请求永不发起，不能永久转圈。
+                  let seasonWaiting =
+                    !isDirect && !preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
+                    && !preloadTask.isDetailFailed
                   let label = Self.headerSubscribeButtonTitle(
                     isSubscribed: isSubscribed,
                     detail: detail,

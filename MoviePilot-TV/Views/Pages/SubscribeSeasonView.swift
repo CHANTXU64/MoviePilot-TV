@@ -577,15 +577,15 @@ struct SeasonDetailSheet: View {
     case .subscribe:
       title = "订阅"
       systemImage = AppSymbol.subscribe
-      loadingTitle = "正在订阅"
+      loadingTitle = "订阅中"
     case .unsubscribe:
       title = "取消订阅"
       systemImage = AppSymbol.unsubscribe
-      loadingTitle = "正在取消订阅"
+      loadingTitle = "取消订阅中"
     case .cancelTrial:
       title = EpisodeTrialHoldNotice.cancelTitle
       systemImage = AppSymbol.unsubscribe
-      loadingTitle = "正在取消试看"
+      loadingTitle = "取消试看中"
     }
     return SheetActionButton(
       title: title, systemImage: systemImage, loadingTitle: loadingTitle, isLoading: panel.isProcessing,

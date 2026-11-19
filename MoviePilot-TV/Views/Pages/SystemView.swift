@@ -1005,7 +1005,7 @@ struct SystemView: View {
   }
 
   private var versionRequirementValue: String {
-    if viewModel.isCheckingBackendVersion { return "正在检查" }
+    if viewModel.isCheckingBackendVersion { return "正在检查…" }
     if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
     return "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)"
   }
