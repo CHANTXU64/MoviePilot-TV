@@ -466,6 +466,66 @@ final class HomeContinueWatchingRowTests: XCTestCase {
     XCTAssertNil(info, "会话变了要终止，不是退回标题识别")
   }
 
+  /// 旧加载任务还没收尾就重新进入页面（快速切 Tab）：这一轮跑完同样要结束 Loading。
+  /// 靠「已加载过」门闩提前返回会绕过关闭 Loading 的那一步，转圈永久停留。
+  func testReenteringBeforeTheCancelledLoadFinishesStillEndsLoading() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setLatestResult(server: "emby", .success)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+
+    let first = Task { await viewModel.loadData() }
+    try await waitUntil { !viewModel.latestMedia.isEmpty }
+    first.cancel()
+    // 不等旧任务收尾就重新进入。
+    await viewModel.loadData()
+    XCTAssertFalse(viewModel.isLoading, "旧任务还没收尾，重新进入这一轮跑完也要结束 Loading")
+    gate.signal()
+    await first.value
+  }
+
+  /// 刷新期间停用了一台服务器：旧请求不得拿最新条目配自己那份旧服务器列表，把已停用的服务器放回选择器。
+  /// 服务器列表和条目必须属于同一次读取。
+  func testConcurrentRefreshDoesNotResurrectADisabledServer() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+
+    let slow = Task { await viewModel.refreshContinueWatching() }
+    try await waitUntil { Self.playingReads(server: "emby") >= 1 }
+
+    // 期间停用了 jellyfin：轮询那一轮现拉配置，把新列表写回会话缓存。
+    HomeContinueWatchingURLProtocol.stub.setServersBody(
+      HomeContinueWatchingURLProtocol.serversBody(jellyfinEnabled: false))
+    await viewModel.refreshData(includeContinueWatching: false)
+    await viewModel.refreshContinueWatching()
+    XCTAssertEqual(viewModel.continueWatchingServers, ["emby"])
+
+    gate.signal()
+    await slow.value
+    XCTAssertEqual(
+      viewModel.continueWatchingServers, ["emby"], "旧请求不得把已停用的服务器放回选择器")
+  }
+
+  /// 读条目期间换了账号：不发布旧会话读到的结果。
+  func testSessionChangeDuringRowRefreshDoesNotPublish() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+
+    let pending = Task { await viewModel.refreshContinueWatching() }
+    try await waitUntil { Self.playingReads(server: "emby") >= 1 }
+    service.tokenForTesting = "another-token"
+    gate.signal()
+    await pending.value
+
+    XCTAssertTrue(viewModel.continueWatching.isEmpty, "换了账号就不发布旧会话读到的条目")
+    XCTAssertTrue(viewModel.continueWatchingServers.isEmpty)
+  }
+
   private static func resumeBody(percent: Int) -> String {
     #"[{"id":"e1","item_id":"e1","title":"某剧","type":"电视剧","subtitle":"S2:5 - 集名","percent":\#(percent),"server_type":"emby"}]"#
   }
@@ -546,6 +606,7 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
   private var playingFirstGates: [String: DispatchSemaphore] = [:]
   private var playingSeen: Set<String> = []
   private var configGate: DispatchSemaphore?
+  private var serversBody: String?
 
   func reset() {
     lock.lock()
@@ -557,6 +618,19 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
     playingFirstGates = [:]
     playingSeen = []
     configGate = nil
+    serversBody = nil
+  }
+
+  func setServersBody(_ json: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    serversBody = json
+  }
+
+  func takeServersBody() -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return serversBody
   }
 
   func setPlayingBody(server: String, _ json: String) {
@@ -650,8 +724,7 @@ private final class HomeContinueWatchingURLProtocol: URLProtocol {
     case "/api/v1/system/setting/MediaServers":
       respond(
         statusCode: 200,
-        body:
-          #"{"value":[{"name":"emby","type":"emby","enabled":true,"config":{"host":"http://emby.local","apikey":"k"}},{"name":"jellyfin","type":"jellyfin","enabled":true}]}"#,
+        body: Self.stub.takeServersBody() ?? Self.serversBody(jellyfinEnabled: true),
         after: Self.stub.takeConfigGate()
       )
     case "/api/v1/mediaserver/playing":
@@ -685,6 +758,10 @@ private final class HomeContinueWatchingURLProtocol: URLProtocol {
   }
 
   override func stopLoading() {}
+
+  static func serversBody(jellyfinEnabled: Bool) -> String {
+    #"{"value":[{"name":"emby","type":"emby","enabled":true,"config":{"host":"http://emby.local","apikey":"k"}},{"name":"jellyfin","type":"jellyfin","enabled":\#(jellyfinEnabled)}]}"#
+  }
 
   private static func playingItems(server: String) -> String {
     if server == "emby" {

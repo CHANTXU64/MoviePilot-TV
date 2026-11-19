@@ -65,10 +65,10 @@ class HomeViewModel: ObservableObject {
   static let continueWatchingCount = 20
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
   private var continueWatchingByServer: [String: [MediaServerPlayItem]] = [:]
-  /// 「继续观看」的读取走「最新者胜出」：页面激活、手动重试、进度写回通知三个入口可能同时在读，
-  /// 慢的旧请求不得覆盖快的新请求——这一行不跟轮询，覆盖错了旧进度会一直显示。
+  /// 「继续观看」的整次读取（服务器列表 + 条目）走「最新者胜出」：页面激活、手动重试、进度写回通知三个入口
+  /// 可能同时在读，慢的旧请求不得覆盖快的新请求——这一行不跟轮询，覆盖错了旧进度会一直显示。
   /// 复用 `CoalescingCache` 的强刷取代链，不手写代际计数器。ttl 0：不留缓存，每次都现读。
-  private let continueWatchingReads = CoalescingCache<String, ServerItemsRead>(
+  private let continueWatchingReads = CoalescingCache<String, ContinueWatchingRead>(
     ttl: 0, capacity: 1, renewsTTLOnAccess: false, cancelsAbandonedLoads: true)
   private var cancellables = Set<AnyCancellable>()
 
@@ -105,17 +105,9 @@ class HomeViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
-  private var hasLoaded = false
-
-  /// 页面每次成为当前 Tab 时调用（见 `HomeView` 的 `.task(id: isSelected)`）：首屏完整加载，
-  /// 之后重新刷一次——「继续观看」不跟轮询，只在页面重新激活和进度写回完成后重读。
+  /// 页面每次成为当前 Tab 时调用（见 `HomeView` 的 `.task(id: isSelected)`）：三个板块各自刷新、各自发布。
+  /// 不设「已加载过」门闩——每次进入都要刷新，门闩只会让快速切 Tab 时新旧任务交错、绕过结束 Loading 的那一步。
   func loadData() async {
-    guard !hasLoaded else {
-      await refreshData()
-      return
-    }
-    hasLoaded = true
-
     // 仅在还没有任何数据时显示全屏 Loading
     if latestMedia.isEmpty && continueWatching.isEmpty
       && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
@@ -125,24 +117,20 @@ class HomeViewModel: ObservableObject {
 
     await refreshData()
 
-    // 页面 .task 被取消（切 Tab 等）后复位门闩，重新出现时能立即重试
-    if Task.isCancelled {
-      hasLoaded = false
-      return
-    }
-
-    // 这一轮跑完就结束 Loading，不按进来时的快照决定：首屏被打断后重进，数组已经非空，
-    // 按「进来时是否为空」来关会让转圈永远停不下来（数据其实早就齐了，轮询也关不掉它）。
-    if isLoading { isLoading = false }
+    // 被取消（切走页面）就不动 Loading，交给下一次进入的那一轮跑完再关。
+    guard !Task.isCancelled else { return }
+    isLoading = false
   }
 
-  /// 刷新首页数据。`includeContinueWatching` 为 false 时只刷「最近添加」和订阅：
-  /// 「继续观看」不跟着定时轮询（见 `loadMediaServerRows`）。
+  /// 刷新首页数据：三个板块并发、各自发布结果，互不阻塞。
+  /// `includeContinueWatching` 为 false 时只刷「最近添加」和订阅（10 秒轮询用）：Jellyfin 后端会为每条
+  /// 续播条目向媒体服务器探测一次封面（`_get_resume_image`），持续轮询会把这份开销压到媒体服务器上；
+  /// Web 也只在页面激活时读。「继续观看」另由页面激活、手动重试和进度写回完成后触发。
   func refreshData(includeContinueWatching: Bool = true) async {
-    // 采用 TaskGroup 并发加载首页的两大板块：媒体服务器两行和我的订阅，提升首屏响应速度
     await withTaskGroup(of: Void.self) { group in
-      group.addTask {
-        await self.loadMediaServerRows(includeContinueWatching: includeContinueWatching)
+      group.addTask { await self.loadLatestMedia() }
+      if includeContinueWatching {
+        group.addTask { await self.loadContinueWatching() }
       }
       group.addTask { await self.refreshSubscriptions(forceRefresh: true) }
     }
@@ -151,59 +139,37 @@ class HomeViewModel: ObservableObject {
   /// 只重读「继续观看」：播放的停止上报和进度写回发完后调用（见 `PlaybackCoordinator.watchStateUpdates`）。
   /// 不碰「最近添加」和订阅，它们由轮询负责。
   func refreshContinueWatching() async {
-    await loadMediaServerRows(includeLatest: false, includeContinueWatching: true)
+    await loadContinueWatching()
   }
 
-  /// 读一次媒体服务器配置，再并发加载要刷的那几行。各行自己发布快照和失败标记，
-  /// 一行失败或读得慢不挡另一行。
-  /// 「继续观看」只在页面激活、重试和进度写回完成后读：Jellyfin 后端会为每条续播条目向媒体服务器探测一次封面
-  /// （`_get_resume_image`），跟着 10 秒轮询会把这份开销持续压到媒体服务器上；Web 也只在页面激活时读。
-  private func loadMediaServerRows(
-    includeLatest: Bool = true, includeContinueWatching: Bool = true
-  ) async {
+  /// 「最近添加」：现拉媒体服务器配置（写回会话缓存，详情页、播放和「继续观看」沿用同一份），
+  /// 再按启用服务器读列表。自己发布快照、失败标记和可选服务器，不等另一行。
+  private func loadLatestMedia() async {
     guard apiService.canRequestSuperUserEndpoints else {
-      clearMediaServerRows()
+      clearLatestMedia()
       if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
       return
     }
-    let sessionSnapshot = apiService.sessionSnapshot()
+    let session = apiService.sessionSnapshot()
     let servers: [MediaServerConf]
     do {
-      // 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）；每次现拉并写回会话缓存，详情页和播放沿用同一份
       servers = try await apiService.fetchCachedMediaServers(forceRefresh: true)
     } catch {
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      guard apiService.isSessionUnchanged(from: session) else { return }
       if error is CancellationError {
         Logger.debug("加载媒体服务器配置被取消")
       } else {
         Logger.error("加载媒体服务器配置失败: \(error)")
-        if includeLatest { latestLoadFailed = true }
-        if includeContinueWatching { continueWatchingLoadFailed = true }
+        latestLoadFailed = true
       }
       return
     }
-    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    guard apiService.isSessionUnchanged(from: session) else { return }
     let playableServers = Set(servers.filter(\.supportsInAppPlayback).map(\.name))
     if inAppPlayableServers != playableServers { inAppPlayableServers = playableServers }
-
     // 只保留启用服务器（保持后端返回顺序）
     let enabledServers = servers.filter { $0.enabled?.value ?? false }
-    await withTaskGroup(of: Void.self) { group in
-      if includeLatest {
-        group.addTask {
-          await self.loadLatestMedia(enabledServers, playableServers: playableServers, session: sessionSnapshot)
-        }
-      }
-      if includeContinueWatching {
-        group.addTask { await self.loadContinueWatching(enabledServers, session: sessionSnapshot) }
-      }
-    }
-  }
 
-  /// 从已启用的媒体服务器加载「最近添加」
-  private func loadLatestMedia(
-    _ enabledServers: [MediaServerConf], playableServers: Set<String>, session: APIServiceSessionSnapshot
-  ) async {
     let read = await readServerItems(enabledServers, row: .latest)
     guard apiService.isSessionUnchanged(from: session) else { return }
     // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
@@ -219,32 +185,51 @@ class HomeViewModel: ObservableObject {
     applyLatestMediaSelection()
   }
 
-  /// 从已启用的媒体服务器加载「继续观看」。快照、失败标记和选择规则与「最近添加」相同，各自独立。
-  /// 读取经 `continueWatchingReads` 的取代链：并发的几个入口都拿最新那次的结果，旧的不会覆盖新的。
-  private func loadContinueWatching(
-    _ enabledServers: [MediaServerConf], session: APIServiceSessionSnapshot
-  ) async {
-    let read: ServerItemsRead
+  /// 「继续观看」：自己读配置和条目、自己发布，不等「最近添加」。快照、失败标记和选择规则与它相同（共用 `mergedRow`）。
+  /// 整次读取经 `continueWatchingReads` 的取代链：并发的几个入口都拿最新那次的结果，旧的不会覆盖新的。
+  private func loadContinueWatching() async {
+    guard apiService.canRequestSuperUserEndpoints else {
+      clearContinueWatching()
+      return
+    }
+    let session = apiService.sessionSnapshot()
+    let read: ContinueWatchingRead
     do {
       read = try await continueWatchingReads.value(
         for: "continueWatching", forceRefresh: true, validate: { try Task.checkCancellation() }
       ) {
-        await self.readServerItems(enabledServers, row: .continueWatching)
+        // 配置用会话缓存：「最近添加」那一轮已经现拉过（轮询每 10 秒一次），这里不重复强刷。
+        let servers = try await self.apiService.fetchCachedMediaServers()
+        let enabled = servers.filter { $0.enabled?.value ?? false }
+        return ContinueWatchingRead(
+          enabledServers: enabled, items: await self.readServerItems(enabled, row: .continueWatching))
       }
-    } catch {
+    } catch is CancellationError {
       // 调用方被取消（切走页面、会话拆除）：不发布任何结果。
+      return
+    } catch {
+      guard apiService.isSessionUnchanged(from: session) else { return }
+      Logger.error("加载媒体服务器配置失败: \(error)")
+      continueWatchingLoadFailed = true
       return
     }
     guard apiService.isSessionUnchanged(from: session) else { return }
-    if !read.anyCancelled { continueWatchingLoadFailed = read.anyFailed }
+    if !read.items.anyCancelled { continueWatchingLoadFailed = read.items.anyFailed }
 
     let merged = Self.mergedRow(
-      read, enabledServers: enabledServers, previous: continueWatchingByServer,
+      read.items, enabledServers: read.enabledServers, previous: continueWatchingByServer,
       selected: selectedContinueWatchingServer)
     continueWatchingByServer = merged.byServer
     if continueWatchingServers != merged.servers { continueWatchingServers = merged.servers }
     selectedContinueWatchingServer = merged.selected
     applyContinueWatchingSelection()
+  }
+
+  /// 「继续观看」的一次完整读取：服务器列表和条目属于同一次读取，不能分开管理——
+  /// 否则并发的旧请求会拿最新条目配自己那份旧服务器列表，把已停用的服务器又放回选择器。
+  private struct ContinueWatchingRead {
+    var enabledServers: [MediaServerConf] = []
+    var items = ServerItemsRead()
   }
 
   /// 两行共用的快照与选择规则：这一轮读成功的服务器覆盖旧快照，失败/取消的保留上一轮，停用的随新列表移除；
@@ -330,13 +315,16 @@ class HomeViewModel: ObservableObject {
     case cancelled
   }
 
-  /// 读不到媒体服务器配置（没有超管权限）：两行都清空，不算加载失败。
-  private func clearMediaServerRows() {
+  /// 读不到媒体服务器配置（没有超管权限）：这一行清空，不算加载失败。两行各自清各自的。
+  private func clearLatestMedia() {
     latestMediaByServer = [:]
     latestMediaServers = []
     latestLoadFailed = false
     if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
     if !latestMedia.isEmpty { latestMedia = [] }
+  }
+
+  private func clearContinueWatching() {
     continueWatchingByServer = [:]
     continueWatchingServers = []
     continueWatchingLoadFailed = false
