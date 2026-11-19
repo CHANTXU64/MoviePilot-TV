@@ -397,7 +397,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
-    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared {"))
+    XCTAssertTrue(source.contains("if let preferredHeaderFocus {"))
     XCTAssertFalse(source.contains("isFocusEnabled"))
     XCTAssertFalse(source.contains("requestPreferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
@@ -407,8 +408,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("if let playbackTarget = viewModel.inAppPlaybackTarget"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
-    XCTAssertTrue(containerSource.contains(".allowsHitTesting(!isReady)"))
-    XCTAssertFalse(containerSource.contains(".allowsHitTesting(isReady)"))
+    // 渐进渲染：加载期头部按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
+    // 但 action 门禁忽略按下；只有第二页内容用 disabled 挡焦点。
+    XCTAssertTrue(source.contains("guard allowsRequests, !isEntryLoading else { return }"))
+    XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading)").count - 1, 1)
+    XCTAssertTrue(containerSource.contains("isEntryLoading: !isReady"))
+    XCTAssertFalse(containerSource.contains(".allowsHitTesting(!isReady)"))
     XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
     XCTAssertFalse(containerSource.contains(".focusable(!isReady)"))
     XCTAssertFalse(containerSource.contains(".disabled(!isReady)"))
@@ -840,37 +845,86 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
   }
 
-  func testMediaDetailLoadingPosterReleasesAfterFadeCompletes() throws {
-    let source = try Self.source(
-      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+  func testLoadingCoverReadinessRequiresFullDetailAndFirstRow() {
+    XCTAssertFalse(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: false, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: true
+      )
     )
+    XCTAssertFalse(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: false
+      )
+    )
+    XCTAssertTrue(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: true
+      )
+    )
+  }
 
+  func testLoadingCoverPreloadedSkipsFirstRowAndDirectWaitsForAppliedDetail() {
+    // 预载命中：有完整详情即就绪，不等首行内容，直出真实页。
     XCTAssertTrue(
-      source.contains(
-        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
-      )
-    )
-    XCTAssertTrue(
-      source.contains(
-        "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
-      )
-    )
-    XCTAssertTrue(
-      source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
-    )
-    XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
-    XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
-    XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
-    XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
-    XCTAssertFalse(
-      containsTrimmedLineSequence(
-        source,
-        ["if isReady {", "keepsLoadingPosterImage = false"]
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: true,
+        detailReady: false, contentReady: false
       )
     )
     XCTAssertFalse(
-      source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: false, wasPreloaded: false,
+        detailReady: false, contentReady: false
+      )
     )
+    XCTAssertTrue(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: false, wasPreloaded: false,
+        detailReady: false, contentReady: true
+      )
+    )
+  }
+
+  func testDetailEntryProgressiveRenderWiringInSource() throws {
+    let view = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let container = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    // 渐进渲染：容器立即渲染详情页，完整详情未到先用卡片媒体；不再整块遮罩交叉淡入。
+    XCTAssertTrue(container.contains("detail: preloadTask.fullDetail ?? media"))
+    XCTAssertTrue(container.contains("isEntryLoading: !isReady"))
+    XCTAssertTrue(container.contains("MediaDetailLoadingCover.isReady("))
+    XCTAssertFalse(container.contains("MediaLoadingView("))
+    // 标题移动进位，不淡入。
+    XCTAssertTrue(view.contains("entryTitleOffset"))
+    XCTAssertTrue(view.contains("initialValue: isEntryLoading && presentationStyle == .standard ? 28 : 0"))
+    XCTAssertTrue(view.contains("guard isEntryLoading, presentationStyle == .standard, !reduceMotion else"))
+    XCTAssertTrue(view.contains("withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }"))
+    // 按钮加载期胶囊在、文案透明、action 门禁不可按（但仍可聚焦保返回导航）；就绪后文案淡入。
+    XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
+    XCTAssertTrue(view.contains("guard allowsRequests, !isEntryLoading else { return }"))
+    XCTAssertTrue(view.contains(".transition(.opacity)"))
+    XCTAssertTrue(view.contains("if viewModel.hasAppliedFullDetail {"))
+    XCTAssertTrue(view.contains(".disabled(isEntryLoading)"))
+    XCTAssertTrue(view.contains(".accessibilityHidden(isEntryLoading)"))
+    XCTAssertTrue(view.contains("guard allowsRequests, presentationStyle == .direct, let detail else { return }"))
+    XCTAssertTrue(view.contains("viewModel.applyFullDetail(detail)"))
+    // 可变槽位就地占位，行高对齐真实 caption；加载感用占位上的斜向高光扫过，不用加载图标。
+    XCTAssertTrue(view.contains("placeholderLine(width:"))
+    XCTAssertTrue(view.contains("UIFont.preferredFont(forTextStyle: .caption1).lineHeight"))
+    XCTAssertTrue(view.contains("PlaceholderShimmer"))
+    XCTAssertTrue(view.contains("TimelineView(.animation)"))
+    XCTAssertTrue(view.contains("timeline.date.timeIntervalSinceReferenceDate / 2.0"))
+    XCTAssertTrue(view.contains(".white.opacity(0.5)"))
+    XCTAssertTrue(view.contains(".fill(Color.white.opacity(0.18))"))
+    XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.22 : 0)"))
+    XCTAssertTrue(view.contains(".mask(content)"))
+    XCTAssertTrue(view.contains("accessibilityReduceMotion"))
+    // 不预填卡片简介/评分。
+    XCTAssertFalse(container.contains("media.overview"))
+    XCTAssertFalse(container.contains("media.vote_average"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

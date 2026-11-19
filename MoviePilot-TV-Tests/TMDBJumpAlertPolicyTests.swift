@@ -99,7 +99,7 @@ final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
 
     XCTAssertTrue(detailView.contains("@State private var isTMDBJumpInFlight = false"))
     XCTAssertTrue(
-      detailView.contains("guard !isButtonLoading, !isTMDBJumpInFlight else { return }")
+      detailView.contains("!isButtonLoading, !isTMDBJumpInFlight else { return }")
     )
     XCTAssertTrue(detailView.contains("isTMDBJumpInFlight = true"))
     XCTAssertTrue(detailView.contains("defer { isTMDBJumpInFlight = false }"))

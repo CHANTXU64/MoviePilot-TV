@@ -12,10 +12,12 @@ struct ForkSubscribeSheet: View {
   var onFork: (Int) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.isPresented) private var isPresented
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @State private var isForking = false
   @State private var hasTruncatedText = false
   @State private var showsFullText = false
+  @State private var costlyToken = CostlyModalToken()
   @FocusState private var isConfirmFocused: Bool
 
   var body: some View {
@@ -65,6 +67,14 @@ struct ForkSubscribeSheet: View {
       ReadingSheet(title: share.displayTitle ?? "复用订阅", blocks: Self.fullTextBlocks(for: share))
     }
     .cancelOnExternalNavigation()
+    // 用 isPresented 注册贵弹窗令牌：退后台不变；令牌随视图销毁释放，登记自动失效。
+    .onChange(of: isPresented, initial: true) { _, presented in
+      if presented {
+        CostlyModalPresentation.register(costlyToken)
+      } else {
+        CostlyModalPresentation.unregister(costlyToken)
+      }
+    }
   }
 
   /// 「查看完整说明」的正文：分享说明全文，下面是关键词、识别词原文。

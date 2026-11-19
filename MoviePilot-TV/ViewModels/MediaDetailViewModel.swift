@@ -399,7 +399,7 @@ class MediaDetailViewModel: ObservableObject {
     }
   }
 
-  private var hasAppliedFullDetail = false
+  private(set) var hasAppliedFullDetail = false
 
   /// 页面重新激活时，对处于“成功空终态”的推荐/相似/演员分页各重试一次。
   func refreshSuccessEmptySections() async {
