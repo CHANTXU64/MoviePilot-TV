@@ -1134,12 +1134,20 @@ struct MediaDetailView: View {
 
   /// 入口加载期的就地占位行：与真实 caption 文本等高，细而淡。
   private func placeholderLine(width: CGFloat) -> some View {
-    RoundedRectangle(cornerRadius: 3)
-      .fill(Color.white.opacity(0.18))
-      .frame(width: width, height: Self.entryCaptionLineHeight * 0.4)
-      .frame(height: Self.entryCaptionLineHeight)
+    Text("\u{00A0}")
+      .font(.caption)
+      .frame(width: width)
+      .overlay {
+        RoundedRectangle(cornerRadius: 3)
+          .fill(Color.white.opacity(0.18))
+          .frame(height: Self.entryCaptionLineHeight * 0.4)
+      }
       .accessibilityHidden(true)
   }
+
+  /// 多行 caption 文本相比「单行 × 行数」多出的行距：占位两行需补 2pt 才等于真实两行文本高度，
+  /// 否则两行简介就绪后标题会被顶起约 2pt。
+  private static let entryCaptionInterlineSpacing: CGFloat = 2
 
   @ViewBuilder
   private func heroSection(scrollProxy: ScrollViewProxy) -> some View {
@@ -1187,7 +1195,7 @@ struct MediaDetailView: View {
 
           // Overview
           if isEntryLoading {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Self.entryCaptionInterlineSpacing) {
               placeholderLine(width: 720)
               placeholderLine(width: 640)
             }
