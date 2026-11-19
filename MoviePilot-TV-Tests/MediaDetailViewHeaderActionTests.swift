@@ -1605,6 +1605,21 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
   }
 
+  /// 嵌套 seasonViewModel 的加载态变化必须冒泡到 MediaPreloadTask，详情页顶部按钮才会刷新。
+  @MainActor
+  func testPreloadTaskForwardsSeasonViewModelChanges() {
+    let detail = MediaInfo(tmdb_id: 100_083, title: "转发观察", type: "电视剧")
+    let task = MediaPreloadTask(partialMedia: detail, apiService: nil)
+    let season = SubscribeSeasonViewModel(mediaInfo: detail, apiService: APIService.shared)
+    task.seasonViewModel = season
+
+    let forwarded = expectation(description: "seasonViewModel 变化转发到 preloadTask")
+    let cancellable = task.objectWillChange.sink { _ in forwarded.fulfill() }
+    defer { cancellable.cancel() }
+    season.isLoading = true
+    wait(for: [forwarded], timeout: 1)
+  }
+
   func testOtherInfoOnlyDependsOnSubscribeAndSearchActions() {
     XCTAssertTrue(
       MediaDetailView.shouldShowOtherInfo(
