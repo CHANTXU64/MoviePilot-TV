@@ -104,6 +104,27 @@ final class RecommendShelfOrderTests: XCTestCase {
     XCTAssertEqual(viewModel.paginator?.items.first?.title, "顺序测试电影")
   }
 
+  func testReenablingDifferentShelfAfterHideAllCreatesSinglePaginator() async throws {
+    let viewModel = RecommendViewModel(selectShelf: true, apiService: makeService())
+    await viewModel.refreshSources()
+    try await waitForItems(in: viewModel)
+
+    viewModel.saveEnableConfig(Dictionary(uniqueKeysWithValues: RecommendViewModel.allShelves.map { ($0.id, false) }))
+    viewModel.reloadLocalConfig()
+    XCTAssertNil(viewModel.paginator)
+
+    // 重开一个不同的货架（A→nil→B）：管道单一负责，不得与补偿路径重复创建。
+    viewModel.saveEnableConfig(["recommend/douban_showing": true])
+    viewModel.reloadLocalConfig()
+    XCTAssertEqual(viewModel.selectedShelf?.id, "recommend/douban_showing")
+    try await waitForItems(in: viewModel)
+    try await Task.sleep(for: .milliseconds(300))
+    let requests = RecommendOrderURLProtocol.requests.filter {
+      $0.url?.path.contains("recommend/douban_showing") == true
+    }
+    XCTAssertEqual(requests.count, 1, "A→nil→B 不得重复创建分页器")
+  }
+
   func testStaleDebouncedShelfDoesNotCreatePaginatorAfterHideAll() async throws {
     let viewModel = RecommendViewModel(selectShelf: true, apiService: makeService())
     await viewModel.refreshSources()

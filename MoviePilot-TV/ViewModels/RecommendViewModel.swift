@@ -142,15 +142,22 @@ class RecommendViewModel: ObservableObject {
     enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.id, true) })
     loadConfig()
     // 默认选中流行趋势
-    // 当 selectedShelf 改变时，自动创建一个新的 Paginator 实例
-    // sink 会因为 selectedShelf 的初始值而立即触发，所以无需手动调用 setupPaginator
+    // 当 selectedShelf 改变时，自动创建一个新的 Paginator 实例。
+    // 保留 nil（不 compactMap）：全隐藏→重开同一货架的 X→nil→X 不会被去重吞掉，
+    // 分页器生命周期由这条管道单一负责，nil 取消、非 nil 建立。
     $selectedShelf
-      .compactMap { $0 }
       .removeDuplicates()
       .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
       .sink { [weak self] shelf in
+        guard let self else { return }
+        guard let shelf else {
+          self.paginator?.cancel()
+          self.paginatorCancellable?.cancel()
+          self.paginator = nil
+          return
+        }
         // debounce 陈旧触发时货架可能已被隐藏或随分类切换失效，就地重验。
-        guard let self, self.filteredShelves.contains(where: { $0.id == shelf.id }) else { return }
+        guard self.filteredShelves.contains(where: { $0.id == shelf.id }) else { return }
         self.setupPaginator(for: shelf)
       }
       .store(in: &cancellables)
@@ -299,11 +306,6 @@ class RecommendViewModel: ObservableObject {
     }
     if selectedShelf == nil || !filteredShelves.contains(where: { $0.id == selectedShelf?.id }) {
       selectFirstVisibleShelf()
-    }
-    // 全隐藏后重新启用同一货架时 selectedShelf 经历 X→nil→X，compactMap 丢弃 nil
-    // 后 removeDuplicates 会把第二次 X 去重掉，分页器需要显式重建。
-    if hasHandledFirstActivation, let shelf = selectedShelf, paginator == nil {
-      setupPaginator(for: shelf)
     }
   }
 

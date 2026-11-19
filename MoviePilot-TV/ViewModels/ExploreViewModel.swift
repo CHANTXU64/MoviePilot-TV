@@ -672,7 +672,6 @@ class ExploreViewModel: ObservableObject {
   private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
   private var hasCompletedFirstSourceLoad = false
   private var hasHandledFirstActivation = false
-  private var resolvingStoredDefault = false
 
   nonisolated static let visibilityDefaultsKey = "MP_EXPLORE_VISIBILITY"
   nonisolated static let orderDefaultsKey = "MP_EXPLORE_ORDER"
@@ -687,14 +686,12 @@ class ExploreViewModel: ObservableObject {
     apiService: APIService = .shared,
     configuration: ExploreConfiguration = ExploreConfiguration(),
     loadsResults: Bool = true,
-    sourcePolicy: ExploreSourcePolicy = .browse,
-    restoredDefault: Bool = false
+    sourcePolicy: ExploreSourcePolicy = .browse
   ) {
     self.apiService = apiService
     self.configuration = configuration
     self.loadsResults = loadsResults
     self.sourcePolicy = sourcePolicy
-    self.resolvingStoredDefault = restoredDefault && configuration.selectedSource.descriptor != nil
     loadLocalConfig()
     pluginFilterControls = PluginFilterControlParser.parse(configuration.selectedSource.descriptor?.filter_ui ?? [])
     applySources()
@@ -1205,8 +1202,7 @@ class ExploreViewModel: ObservableObject {
     let saved = storedDefaultConfiguration()
     return ExploreViewModel(
       apiService: apiService,
-      configuration: saved ?? ExploreConfiguration(),
-      restoredDefault: saved != nil
+      configuration: saved ?? ExploreConfiguration()
     )
   }
 
@@ -1244,9 +1240,9 @@ class ExploreViewModel: ObservableObject {
   }
 
   /// 保存新默认后，下次进入探索页应用一次；普通 Tab 切换不打断会话内筛选。
+  /// 须在 refreshSources 之后调用，用最新来源快照解析，避免按旧快照回退。
   func consumePendingDefaultIfNeeded() {
     guard sourcePolicy == .browse, let pending = Self.consumePendingDefault() else { return }
-    resolvingStoredDefault = pending.selectedSource.descriptor != nil
     restoreConfiguration(pending)
   }
 
@@ -1361,15 +1357,10 @@ class ExploreViewModel: ObservableObject {
     let previousSource = selectedSource
     if let latest = availableSources.first(where: { $0.id == previousSource.id }) {
       if latest != previousSource {
-        if resolvingStoredDefault, let descriptor = latest.descriptor {
-          // 持久化默认按稳定 id 解析：用最新描述信息，保留仍适用的保存值。
-          selectedSource = latest
-          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
-          pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
-        } else {
-          selectedSource = latest
-          onSourceChanged(from: previousSource)
-        }
+        // 用最新描述解析；onSourceChanged 按 Web 合同语义处理筛选值：
+        // filter_params 合同不变则保留保存值，合同变化则重置为新默认（废弃字段不再发送）。
+        selectedSource = latest
+        onSourceChanged(from: previousSource)
       }
     } else if case .custom = previousSource, !hasCompletedFirstSourceLoad,
       sourceVisibility[previousSource.id] != false
@@ -1382,9 +1373,6 @@ class ExploreViewModel: ObservableObject {
     } else {
       teardownPaginator()
       return
-    }
-    if hasCompletedFirstSourceLoad {
-      resolvingStoredDefault = false
     }
     // 全隐藏后重新启用同一来源时配置未变，去重键不会触发，需要显式重建。
     // 门禁用本地首次激活标志（离线冷启动也成立）；网络成功只用于插件保留判断。

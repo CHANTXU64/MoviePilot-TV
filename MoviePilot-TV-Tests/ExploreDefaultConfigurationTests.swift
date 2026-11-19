@@ -43,8 +43,7 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
 
     let viewModel = ExploreViewModel(
       apiService: makeService(),
-      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration(),
-      restoredDefault: true
+      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration()
     )
     await viewModel.refreshSources()
     XCTAssertEqual(viewModel.selectedSource.id, "themoviedb")
@@ -55,11 +54,12 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
     XCTAssertTrue(viewModel.buildApiPath().contains("vote_count=500"))
   }
 
-  func testColdStartPluginDefaultResolvesToLatestDescriptorKeepingSavedValues() async throws {
+  func testPluginDefaultContractChangeResetsToNewDefaults() async throws {
     var saved = ExploreConfiguration(source: .custom(makeDescriptor(path: "plugin/discover/old")))
     saved.pluginFilterValues = ["sort": .string("hot")]
     ExploreViewModel.saveDefaultConfiguration(saved)
-    // 插件升级：api_path 变更、默认参数新增 lang；用户保存的 sort 必须保留。
+    // 插件升级：filter_params 合同变化（新增 lang）。对齐 Web ExtraSourceView：
+    // 合同变化时清空旧值、用新默认重建，废弃字段不再发送。
     ExploreVisibilityURLProtocol.setSources("""
       [{"name":"插件探索","mediaid_prefix":"plug","api_path":"plugin/discover/new",
         "filter_params":{"sort":"new","lang":"zh"},"filter_ui":[]}]
@@ -67,10 +67,9 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
 
     let viewModel = ExploreViewModel(
       apiService: makeService(),
-      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration(),
-      restoredDefault: true
+      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration()
     )
-    // 首次来源加载完成前：不回退、不丢筛选值。
+    // 首次来源加载完成前：不回退、保留保存值。
     XCTAssertEqual(viewModel.selectedSource.id, "custom:plug")
     XCTAssertEqual(viewModel.availableSources.first?.id, "custom:plug")
     XCTAssertEqual(viewModel.pluginFilterValues["sort"], .string("hot"))
@@ -78,11 +77,31 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
     await viewModel.refreshSources()
     XCTAssertEqual(viewModel.selectedSource.id, "custom:plug")
     XCTAssertEqual(viewModel.selectedSource.descriptor?.api_path, "plugin/discover/new")
-    XCTAssertEqual(viewModel.pluginFilterValues["sort"], .string("hot"))
+    XCTAssertEqual(viewModel.pluginFilterValues["sort"], .string("new"), "合同变化应重置为新默认")
     XCTAssertEqual(viewModel.pluginFilterValues["lang"], .string("zh"))
     XCTAssertTrue(viewModel.buildApiPath().hasPrefix("plugin/discover/new"))
+    XCTAssertFalse(viewModel.buildApiPath().contains("sort=hot"), "废弃的保存值不得再发送")
     // 运行时解析不覆盖持久化默认。
     XCTAssertEqual(ExploreViewModel.storedDefaultConfiguration(), saved)
+  }
+
+  func testPluginDefaultContractUnchangedPreservesSavedValues() async throws {
+    var saved = ExploreConfiguration(source: .custom(makeDescriptor(path: "plugin/discover/old")))
+    saved.pluginFilterValues = ["sort": .string("hot")]
+    ExploreViewModel.saveDefaultConfiguration(saved)
+    // 仅 api_path 变化、filter_params 合同不变：保留用户保存值。
+    ExploreVisibilityURLProtocol.setSources("""
+      [{"name":"插件探索","mediaid_prefix":"plug","api_path":"plugin/discover/new",
+        "filter_params":{"sort":"new"},"filter_ui":[]}]
+      """)
+
+    let viewModel = ExploreViewModel(
+      apiService: makeService(),
+      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration()
+    )
+    await viewModel.refreshSources()
+    XCTAssertEqual(viewModel.selectedSource.descriptor?.api_path, "plugin/discover/new")
+    XCTAssertEqual(viewModel.pluginFilterValues["sort"], .string("hot"), "合同不变应保留保存值")
   }
 
   func testPluginDefaultConfirmedAbsentFallsBackWithoutOverwritingStore() async throws {
@@ -92,8 +111,7 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
 
     let viewModel = ExploreViewModel(
       apiService: makeService(),
-      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration(),
-      restoredDefault: true
+      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration()
     )
     await viewModel.refreshSources()
     XCTAssertEqual(viewModel.selectedSource.id, "themoviedb")
@@ -108,8 +126,7 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
 
     let viewModel = ExploreViewModel(
       apiService: makeService(),
-      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration(),
-      restoredDefault: true
+      configuration: ExploreViewModel.storedDefaultConfiguration() ?? ExploreConfiguration()
     )
     await viewModel.refreshSources()
     XCTAssertEqual(viewModel.selectedSource.id, "themoviedb")
@@ -135,6 +152,32 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
     XCTAssertEqual(viewModel.selectedSource.id, "douban")
     XCTAssertEqual(viewModel.selectedType, .tvs)
     XCTAssertFalse(UserDefaults.standard.bool(forKey: ExploreViewModel.defaultPendingKey))
+  }
+
+  func testNewPluginDefaultAppliesAfterRefreshOnTabEntry() async throws {
+    // 探索页已打开，旧快照无新插件。
+    ExploreVisibilityURLProtocol.setSources("[]")
+    let service = makeService()
+    let browse = ExploreViewModel(apiService: service)
+    await browse.refreshSources()
+    XCTAssertEqual(browse.selectedSource.id, "themoviedb")
+
+    // 后端安装新插件；用户在设置选它做默认并保存筛选。
+    ExploreVisibilityURLProtocol.setSources("""
+      [{"name":"新插件","mediaid_prefix":"newplug","api_path":"plugin/discover/newplug",
+        "filter_params":{"sort":"new"},"filter_ui":[]}]
+      """)
+    var saved = ExploreConfiguration(source: .custom(DiscoverSourceDescriptor(
+      name: "新插件", mediaid_prefix: "newplug", api_path: "plugin/discover/newplug",
+      filter_params: ["sort": .string("new")], filter_ui: [], depends: nil)))
+    saved.pluginFilterValues = ["sort": .string("hot")]
+    ExploreViewModel.saveDefaultConfiguration(saved)
+
+    // 回到探索页：先刷新来源再消费默认（生产任务顺序），新插件应生效。
+    await browse.refreshSources()
+    browse.consumePendingDefaultIfNeeded()
+    XCTAssertEqual(browse.selectedSource.id, "custom:newplug")
+    XCTAssertEqual(browse.pluginFilterValues["sort"], .string("hot"))
   }
 
   func testDraftRestoreDoesNotWriteStorage() async throws {
@@ -184,7 +227,7 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
     let settings = ExploreViewModel(apiService: makeService(), loadsResults: false, sourcePolicy: .contentSettings)
     settings.saveSourceVisibility(["custom:plug": false])
     // 不刷新来源（首次加载未完成）：已隐藏的插件默认不得保留，应回退第一个可用来源。
-    let viewModel = ExploreViewModel(apiService: makeService(), configuration: saved, restoredDefault: true)
+    let viewModel = ExploreViewModel(apiService: makeService(), configuration: saved)
     XCTAssertEqual(viewModel.selectedSource.id, "themoviedb")
     XCTAssertFalse(viewModel.availableSources.contains { $0.id == "custom:plug" })
   }
@@ -198,6 +241,17 @@ final class ExploreDefaultConfigurationTests: XCTestCase {
     let source = try String(contentsOf: url)
     XCTAssertTrue(source.contains("viewModel.selectSource"))
     XCTAssertFalse(source.contains(".onChange(of: viewModel.selectedSource)"))
+  }
+
+  /// 接线守卫：探索页任务必须先刷新来源再消费默认，否则新插件默认会按旧快照回退。
+  func testExploreViewRefreshesSourcesBeforeConsumingDefaultInSource() throws {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("MoviePilot-TV/Views/Pages/ExploreView.swift")
+    let source = try String(contentsOf: url)
+    let refresh = try XCTUnwrap(source.range(of: "await viewModel.refreshSources()"))
+    let consume = try XCTUnwrap(source.range(of: "viewModel.consumePendingDefaultIfNeeded()"))
+    XCTAssertLessThan(refresh.lowerBound, consume.lowerBound, "必须先刷新来源再消费默认")
   }
 
   private func makeDescriptor(path: String) -> DiscoverSourceDescriptor {
