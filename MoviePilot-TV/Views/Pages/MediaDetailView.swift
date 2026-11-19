@@ -212,7 +212,6 @@ struct MediaDetailView: View {
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
   @State private var isTMDBJumpInFlight = false
   @State private var hasAppeared = false
-  @State private var hasRequestedDirectHeaderFocus = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var didReleaseAfterPop = false
 
@@ -677,9 +676,22 @@ struct MediaDetailView: View {
     }
     .onAppear {
       handleRouteRemovalIfNeeded()
-      if presentationStyle == .direct, !hasRequestedDirectHeaderFocus {
-        hasRequestedDirectHeaderFocus = true
-        focusedButton = preferredHeaderFocus
+    }
+    .task(id: presentationStyle) {
+      guard presentationStyle == .direct else { return }
+      // 栈还没可交互时写 FocusState 会被系统丢掉，并让 ScrollView 为把聚焦项拉进
+      // 可视区滚一次，表现为详情页向下偏移。等栈可交互后再补写，且只写一次。
+      for _ in 0..<10 {
+        guard !Task.isCancelled else { return }
+        if navigationCoordinator.isStackInteractive,
+          navigationCoordinator.topEntryID == routeID,
+          focusedButton == nil,
+          let target = preferredHeaderFocus
+        {
+          focusedButton = target
+          return
+        }
+        try? await Task.sleep(for: .milliseconds(100))
       }
     }
     .onChange(of: isEntryLoading) { _, loading in
