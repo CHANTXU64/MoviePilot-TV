@@ -41,6 +41,9 @@ class ContentViewModel: ObservableObject {
   private var backendVersionCheckKey: BackendVersionCheckKey?
   private var backendVersionWarningBaseURL: String?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
+  /// Top Shelf 交接的硬超时。`didPresent` 依赖 UIViewController 的 appear 回调，
+  /// 冷启动首次建栈时可能永远不触发，不能让 `isOpeningTopShelf` 无限期保持为真。
+  private var topShelfOpeningWatchdog: Task<Void, Never>?
 
   init(
     apiService: APIService = .shared,
@@ -77,6 +80,8 @@ class ContentViewModel: ObservableObject {
         {
           self.topShelfRoute = nil
           self.isOpeningTopShelf = false
+          self.topShelfOpeningWatchdog?.cancel()
+          self.topShelfOpeningWatchdog = nil
         }
         if sessionChanged {
           self.recommendNavigation.retire()
@@ -185,10 +190,45 @@ class ContentViewModel: ObservableObject {
     guard disposition(for: route) != .discard, topShelfRoute?.id != route.id else { return }
     topShelfRoute = route
     isOpeningTopShelf = true
+    startTopShelfOpeningWatchdog()
     clearBackendVersionWarning()
     accountPermissionWarning = nil
     NotificationCenter.default.post(
       name: .imageNavigationPresentationWillReset, object: apiService)
+  }
+
+  private func startTopShelfOpeningWatchdog() {
+    topShelfOpeningWatchdog?.cancel()
+    topShelfOpeningWatchdog = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(1.5))
+      // 只兜底已真正入栈的交接；仍在等待启动准备（.wait）的路由不入栈，不能提前解除或校正 Tab。
+      guard let self, !Task.isCancelled, self.isOpeningTopShelf,
+        let route = self.topShelfRoute,
+        self.navigation(for: route.targetTab).topEntryID == route.id
+      else { return }
+      self.finishTopShelfOpening(id: route.id)
+    }
+  }
+
+  /// 深链到达即解析并交接，不等待场景激活：让 TabView 首次挂载就停在入口所属 Tab，
+  /// 避免先以媒体库挂载、交接后再被 TabView 回写媒体库造成"详情→媒体库→详情"弹回。
+  /// 代价是激活瞬间焦点会先闪一下 Tab 栏（已接受的已知限制）；激活转场先展示后台旧帧也盖不住。
+  func handleTopShelfURL(_ url: URL, router: TopShelfNavigationRouter) {
+    guard router.handle(url), let route = router.pendingRoute else { return }
+    prepareTopShelfRoute(route)
+    reconcileTopShelfRoute(router: router)
+  }
+
+  /// 交接已接收的外部入口；未激活时也执行，让目标 Tab 与详情栈先就位。
+  /// Tab 容器若回写选择，由交接窗口的忽略/校正兜底。
+  func reconcileTopShelfRoute(router: TopShelfNavigationRouter) {
+    guard let route = router.pendingRoute else { return }
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    let disposition = withTransaction(transaction) { acceptTopShelfRoute(route) }
+    if disposition != .wait {
+      router.consume(id: route.id)
+    }
   }
 
   /// 先准备目标栈，再发布 Tab 选择；目标 View 首次挂载时路径已经包含详情。
@@ -199,6 +239,8 @@ class ContentViewModel: ObservableObject {
       navigation(for: route.targetTab).openExternal(
         route.navigationEntry, startsMediaLoad: !isPreparingStartupSession)
       selectedTab = route.targetTab
+      // .wait 期间看门狗可能已过期；真正入栈后重新计时，兜底首次建栈不触发 appear 的情况。
+      startTopShelfOpeningWatchdog()
     } else if disposition == .discard, topShelfRoute?.id == route.id {
       cancelTopShelfOpening()
     }
@@ -212,7 +254,17 @@ class ContentViewModel: ObservableObject {
 
   func finishTopShelfOpening(id: UUID) {
     guard topShelfRoute?.id == id else { return }
+    topShelfOpeningWatchdog?.cancel()
+    topShelfOpeningWatchdog = nil
     isOpeningTopShelf = false
+    // TabView 在冷启动/后台恢复时可能自己把 selection 回写成首页；交接完成后只校正一次，
+    // 避免详情已经在栈里却停在媒体库页。目标 Tab 可能因权限变化不可见，按可见集合解析。
+    if let route = topShelfRoute {
+      let target = Self.resolvedSelectedTab(route.targetTab, visibleTabs: visibleTabs)
+      if selectedTab != target {
+        selectedTab = target
+      }
+    }
   }
 
   func cancelTopShelfOpening() {
@@ -225,6 +277,8 @@ class ContentViewModel: ObservableObject {
 
   func endTopShelfPresentation(id: UUID? = nil) {
     if let id, topShelfRoute?.id != id { return }
+    topShelfOpeningWatchdog?.cancel()
+    topShelfOpeningWatchdog = nil
     topShelfRoute = nil
     isOpeningTopShelf = false
   }

@@ -40,16 +40,20 @@ struct ContentView: View {
       DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = enabled
     }
     .onOpenURL { url in
-      if topShelfNavigationRouter.handle(url), let route = topShelfNavigationRouter.pendingRoute {
-        viewModel.prepareTopShelfRoute(route)
-      }
+      // 深链常在 App 尚未激活时到达；立即交接，让 TabView 首次挂载即停在目标 Tab，避免弹回媒体库。
+      viewModel.handleTopShelfURL(url, router: topShelfNavigationRouter)
+      updateTopShelfPriority()
     }
     .onChange(of: topShelfNavigationRouter.pendingRoute?.id, initial: true) { _, _ in
       if let route = topShelfNavigationRouter.pendingRoute { viewModel.prepareTopShelfRoute(route) }
       updateTopShelfPriority()
     }
-    .onChange(of: viewModel.isPreparingStartupSession) { _, _ in
+    .onChange(of: viewModel.isPreparingStartupSession) { _, newValue in
       updateTopShelfPriority()
+      if !newValue {
+        // 启动准备期间只能 preview/wait；准备结束后补一次交接，避免先露出首页。
+        reconcileTopShelfRoute()
+      }
     }
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
     .onChange(of: scenePhase) { _, _ in updateTopShelfPriority() }
@@ -106,19 +110,9 @@ struct ContentView: View {
   }
 
   private func reconcileTopShelfRoute() {
-    // 后台的 Tab 容器仍会恢复上次选择；等前台激活后再交接外部导航。
-    guard scenePhase == .active else { return }
-    guard let route = topShelfNavigationRouter.pendingRoute else { return }
-    var transaction = Transaction()
-    transaction.disablesAnimations = true
-    let disposition = withTransaction(transaction) { viewModel.acceptTopShelfRoute(route) }
-    switch disposition {
-    case .wait:
-      break
-    case .preview, .open, .discard:
-      topShelfNavigationRouter.consume(id: route.id)
-      updateTopShelfPriority()
-    }
+    // 深链可能未激活时到达；此时就交接，让 TabView 首次挂载即停在目标 Tab，避免弹回媒体库。
+    viewModel.reconcileTopShelfRoute(router: topShelfNavigationRouter)
+    updateTopShelfPriority()
   }
 }
 
@@ -180,7 +174,11 @@ struct MainContentView: View {
     }
     .onChange(of: selectedTab) { _, tab in
       if let route = initialTopShelfRoute, tab != route.targetTab {
-        viewModel.endTopShelfPresentation()
+        // 交接尚未完成时 TabView 可能自行回写 selection，不能当成用户切走，
+        // 否则会清掉正在打开的详情路由。交接完成或超时后会校正一次 Tab。
+        if !viewModel.isOpeningTopShelf {
+          viewModel.endTopShelfPresentation()
+        }
       }
       checkTask?.cancel()
       checkTask = Task {
