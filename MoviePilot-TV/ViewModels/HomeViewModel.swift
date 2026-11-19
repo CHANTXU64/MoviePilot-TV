@@ -65,6 +65,11 @@ class HomeViewModel: ObservableObject {
   static let continueWatchingCount = 20
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
   private var continueWatchingByServer: [String: [MediaServerPlayItem]] = [:]
+  /// 「继续观看」的读取走「最新者胜出」：页面激活、手动重试、进度写回通知三个入口可能同时在读，
+  /// 慢的旧请求不得覆盖快的新请求——这一行不跟轮询，覆盖错了旧进度会一直显示。
+  /// 复用 `CoalescingCache` 的强刷取代链，不手写代际计数器。ttl 0：不留缓存，每次都现读。
+  private let continueWatchingReads = CoalescingCache<String, ServerItemsRead>(
+    ttl: 0, capacity: 1, renewsTTLOnAccess: false, cancelsAbandonedLoads: true)
   private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService? = nil) {
@@ -111,10 +116,10 @@ class HomeViewModel: ObservableObject {
     }
     hasLoaded = true
 
-    // 仅在首次加载（无数据时）显示全屏 Loading
-    let isFirstLoad = latestMedia.isEmpty && continueWatching.isEmpty
+    // 仅在还没有任何数据时显示全屏 Loading
+    if latestMedia.isEmpty && continueWatching.isEmpty
       && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
-    if isFirstLoad {
+    {
       isLoading = true
     }
 
@@ -126,9 +131,9 @@ class HomeViewModel: ObservableObject {
       return
     }
 
-    if isFirstLoad {
-      isLoading = false
-    }
+    // 这一轮跑完就结束 Loading，不按进来时的快照决定：首屏被打断后重进，数组已经非空，
+    // 按「进来时是否为空」来关会让转圈永远停不下来（数据其实早就齐了，轮询也关不掉它）。
+    if isLoading { isLoading = false }
   }
 
   /// 刷新首页数据。`includeContinueWatching` 为 false 时只刷「最近添加」和订阅：
@@ -215,10 +220,21 @@ class HomeViewModel: ObservableObject {
   }
 
   /// 从已启用的媒体服务器加载「继续观看」。快照、失败标记和选择规则与「最近添加」相同，各自独立。
+  /// 读取经 `continueWatchingReads` 的取代链：并发的几个入口都拿最新那次的结果，旧的不会覆盖新的。
   private func loadContinueWatching(
     _ enabledServers: [MediaServerConf], session: APIServiceSessionSnapshot
   ) async {
-    let read = await readServerItems(enabledServers, row: .continueWatching)
+    let read: ServerItemsRead
+    do {
+      read = try await continueWatchingReads.value(
+        for: "continueWatching", forceRefresh: true, validate: { try Task.checkCancellation() }
+      ) {
+        await self.readServerItems(enabledServers, row: .continueWatching)
+      }
+    } catch {
+      // 调用方被取消（切走页面、会话拆除）：不发布任何结果。
+      return
+    }
     guard apiService.isSessionUnchanged(from: session) else { return }
     if !read.anyCancelled { continueWatchingLoadFailed = read.anyFailed }
 
@@ -635,17 +651,17 @@ class HomeViewModel: ObservableObject {
   /// 「继续观看」条目识别用的媒体信息：优先按服务器上的外部编号认出是哪部片（电影用条目自己的，
   /// 单集用所属整剧的），读不到再按标题、年份识别——同名不同年的剧不会认错。
   /// 退回按标题时，剧集的副标题是季集和集名，不能当年份（见 `ContinueWatchingDisplay.mediaInfo`）。
-  func continueWatchingMediaInfo(for item: MediaServerPlayItem, server: String) async -> MediaInfo {
+  /// **期间换了账号返回 nil，调用方必须终止整个操作**：不能拿旧账号的媒体标题向新会话发识别请求。
+  /// 身份读不到（服务器没配置、条目不在、认不出）才退回按标题，两者不是一回事。
+  func continueWatchingMediaInfo(for item: MediaServerPlayItem, server: String) async -> MediaInfo? {
     let byTitle = ContinueWatchingDisplay.mediaInfo(
       title: item.title, type: item.type, subtitle: item.subtitle)
     guard let itemID = trimmedNonEmpty([item.item_id?.value]) else { return byTitle }
     let snapshot = apiService.sessionSnapshot()
-    guard
-      let identified = await apiService.sessionScope.playbackCoordinator.resumeItemIdentity(
-        serverName: server, itemID: itemID),
-      apiService.isSessionUnchanged(from: snapshot)
-    else { return byTitle }
-    return identified
+    let identified = await apiService.sessionScope.playbackCoordinator.resumeItemIdentity(
+      serverName: server, itemID: itemID)
+    guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
+    return identified ?? byTitle
   }
 
   /// 「继续观看」条目没有应用内播放、这台服务器也不支持跳转时，打开它的详情页。
@@ -656,6 +672,7 @@ class HomeViewModel: ObservableObject {
     handler.isRecognizingTmdb = true
     let info = await continueWatchingMediaInfo(for: item, server: server)
     handler.isRecognizingTmdb = false
+    guard let info else { return nil }
     return await handler.getTMDBJumpTarget(for: info)
   }
 

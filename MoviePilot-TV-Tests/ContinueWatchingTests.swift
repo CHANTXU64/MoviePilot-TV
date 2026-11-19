@@ -394,9 +394,102 @@ final class HomeContinueWatchingRowTests: XCTestCase {
 
     // 这台服务器没有配置，读不到条目。
     let info = await viewModel.continueWatchingMediaInfo(for: item, server: "jellyfin")
-    XCTAssertNil(info.tmdb_id)
-    XCTAssertEqual(info.title, "某片")
-    XCTAssertEqual(info.year, "2024")
+    XCTAssertNil(info?.tmdb_id)
+    XCTAssertEqual(info?.title, "某片")
+    XCTAssertEqual(info?.year, "2024")
+  }
+
+  /// 首屏加载被切 Tab 打断（最近添加已到、继续观看还在读）后再次进入：数据齐了就必须结束 Loading。
+  /// 按「进来时数组是否为空」决定要不要关，会让转圈永远停不下来，轮询也关不掉。
+  func testInterruptedFirstLoadEndsLoadingOnReentry() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setLatestResult(server: "emby", .success)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+
+    let first = Task { await viewModel.loadData() }
+    try await waitUntil { !viewModel.latestMedia.isEmpty }
+    first.cancel()
+    gate.signal()
+    await first.value
+    XCTAssertTrue(viewModel.isLoading, "首屏被打断，转圈还挂着")
+
+    await viewModel.loadData()
+    XCTAssertFalse(viewModel.isLoading, "这一轮跑完就要结束 Loading")
+    XCTAssertFalse(viewModel.continueWatching.isEmpty)
+  }
+
+  /// 并发刷新时最新结果胜出：页面激活、手动重试、进度写回通知三个入口可能同时在读，
+  /// 慢的旧请求不得把新进度覆盖回去——这一行不跟轮询，覆盖错了会一直显示旧进度。
+  func testConcurrentRefreshKeepsTheNewestProgress() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(server: "emby", Self.resumeBody(percent: 20))
+
+    let slow = Task { await viewModel.refreshContinueWatching() }
+    try await waitUntil { Self.playingReads(server: "emby") >= 1 }
+    // 播放结束、进度写回完成后变成 60%。
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(server: "emby", Self.resumeBody(percent: 60))
+    await viewModel.refreshContinueWatching()
+    XCTAssertEqual(
+      viewModel.continueWatching.first?.percent, 60,
+      "servers=\(viewModel.continueWatchingServers) selected=\(viewModel.selectedContinueWatchingServer) count=\(viewModel.continueWatching.count) failed=\(viewModel.continueWatchingLoadFailed) embyReads=\(Self.playingReads(server: "emby")) configReads=\(Self.configReads())")
+
+    gate.signal()
+    await slow.value
+    XCTAssertEqual(viewModel.continueWatching.first?.percent, 60, "慢的旧请求不得覆盖新进度")
+  }
+
+  /// 识别期间换了账号：必须终止整个操作，不能拿旧账号的媒体标题向新会话发识别请求。
+  /// 身份读不到（这台服务器没配置）才退回按标题，两者不是一回事。
+  func testIdentityResolutionAbortsWhenSessionChanges() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshData()
+    viewModel.selectedContinueWatchingServer = "jellyfin"
+    let item = try XCTUnwrap(viewModel.continueWatching.first)
+    let configReadsBefore = Self.configReads()
+
+    // 让身份读取停在读服务器配置那一步，期间换账号。
+    service.sessionScope.mediaServerConfigCache.invalidateAll()
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateNextConfigRead(gate)
+    let pending = Task { await viewModel.continueWatchingMediaInfo(for: item, server: "jellyfin") }
+    try await waitUntil { Self.configReads() > configReadsBefore }
+    service.tokenForTesting = "another-token"
+    gate.signal()
+
+    let info = await pending.value
+    XCTAssertNil(info, "会话变了要终止，不是退回标题识别")
+  }
+
+  private static func resumeBody(percent: Int) -> String {
+    #"[{"id":"e1","item_id":"e1","title":"某剧","type":"电视剧","subtitle":"S2:5 - 集名","percent":\#(percent),"server_type":"emby"}]"#
+  }
+
+  private static func playingReads(server: String) -> Int {
+    HomeContinueWatchingURLProtocol.stub.requestQueries().filter {
+      $0.path == "/api/v1/mediaserver/playing" && $0.server == server
+    }.count
+  }
+
+  private static func configReads() -> Int {
+    HomeContinueWatchingURLProtocol.stub.requestQueries().filter {
+      $0.path == "/api/v1/system/setting/MediaServers"
+    }.count
+  }
+
+  private func waitUntil(
+    _ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
+  ) async throws {
+    for _ in 0..<400 {
+      if condition() { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTFail("等待条件超时", file: file, line: line)
   }
 
   /// 刷新信号的接线（源码守卫，不代表真机验收）：数据刷新等进度写回完成，焦点恢复仍用播放器刚关那个信号。
@@ -449,6 +542,10 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
   private var playingResults: [String: HomePlayingResult] = [:]
   private var playingBodies: [String: String] = [:]
   private var latestResults: [String: HomeLatestRowResult] = [:]
+  /// 每台服务器第一次 playing 请求的门：用来造「旧请求慢、新请求快」的并发场景。
+  private var playingFirstGates: [String: DispatchSemaphore] = [:]
+  private var playingSeen: Set<String> = []
+  private var configGate: DispatchSemaphore?
 
   func reset() {
     lock.lock()
@@ -457,6 +554,9 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
     playingResults = ["emby": .success, "jellyfin": .success]
     playingBodies = [:]
     latestResults = [:]
+    playingFirstGates = [:]
+    playingSeen = []
+    configGate = nil
   }
 
   func setPlayingBody(server: String, _ json: String) {
@@ -465,10 +565,36 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
     playingBodies[server] = json
   }
 
-  func playingBody(for server: String) -> String? {
+  func gateFirstPlaying(server: String, _ gate: DispatchSemaphore) {
     lock.lock()
     defer { lock.unlock() }
-    return playingBodies[server]
+    playingFirstGates[server] = gate
+  }
+
+  func gateNextConfigRead(_ gate: DispatchSemaphore) {
+    lock.lock()
+    defer { lock.unlock() }
+    configGate = gate
+  }
+
+  func takeConfigGate() -> DispatchSemaphore? {
+    lock.lock()
+    defer { lock.unlock() }
+    let gate = configGate
+    configGate = nil
+    return gate
+  }
+
+  /// 请求到达时就定格结果和响应体（慢请求返回的是它出发时的数据），门只推迟响应。
+  func beginPlayingResponse(
+    for server: String
+  ) -> (result: HomePlayingResult, body: String?, gate: DispatchSemaphore?) {
+    lock.lock()
+    defer { lock.unlock() }
+    let first = !playingSeen.contains(server)
+    playingSeen.insert(server)
+    let gate = first ? playingFirstGates.removeValue(forKey: server) : nil
+    return (playingResults[server] ?? .successEmpty, playingBodies[server], gate)
   }
 
   func setPlayingResult(server: String, _ result: HomePlayingResult) {
@@ -481,12 +607,6 @@ private final class HomeContinueWatchingURLProtocolStub: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     latestResults[server] = result
-  }
-
-  func playingResult(for server: String) -> HomePlayingResult {
-    lock.lock()
-    defer { lock.unlock() }
-    return playingResults[server] ?? .successEmpty
   }
 
   func latestResult(for server: String) -> HomeLatestRowResult {
@@ -531,14 +651,16 @@ private final class HomeContinueWatchingURLProtocol: URLProtocol {
       respond(
         statusCode: 200,
         body:
-          #"{"value":[{"name":"emby","type":"emby","enabled":true,"config":{"host":"http://emby.local","apikey":"k"}},{"name":"jellyfin","type":"jellyfin","enabled":true}]}"#
+          #"{"value":[{"name":"emby","type":"emby","enabled":true,"config":{"host":"http://emby.local","apikey":"k"}},{"name":"jellyfin","type":"jellyfin","enabled":true}]}"#,
+        after: Self.stub.takeConfigGate()
       )
     case "/api/v1/mediaserver/playing":
-      switch Self.stub.playingResult(for: server ?? "") {
+      let name = server ?? ""
+      let snapshot = Self.stub.beginPlayingResponse(for: name)
+      switch snapshot.result {
       case .success:
         respond(
-          statusCode: 200,
-          body: Self.stub.playingBody(for: server ?? "") ?? Self.playingItems(server: server ?? ""))
+          statusCode: 200, body: snapshot.body ?? Self.playingItems(server: name), after: snapshot.gate)
       case .successEmpty:
         respond(statusCode: 200, body: "[]")
       case .httpStatus500:
@@ -578,6 +700,15 @@ private final class HomeContinueWatchingURLProtocol: URLProtocol {
       .queryItems?
       .first { $0.name == name }?
       .value
+  }
+
+  /// 等门放行再回包。在别的队列上等，不卡住加载线程上排在后面的其他请求。
+  private func respond(statusCode: Int, body: String, after gate: DispatchSemaphore?) {
+    guard let gate else { return respond(statusCode: statusCode, body: body) }
+    DispatchQueue.global().async {
+      _ = gate.wait(timeout: .now() + 10)
+      self.respond(statusCode: statusCode, body: body)
+    }
   }
 
   private func respond(statusCode: Int, body: String) {

@@ -565,7 +565,8 @@ private struct MediaServerSearchMenuItems: View {
   /// 识别和搜索用的媒体信息。年份只在确实是年份时给（剧集副标题是季集和集名，不是年份）。
   let info: MediaInfo
   /// 按下时先按服务器上的外部编号认出是哪部片（「继续观看」用）：同名不同年的剧不会搜错。
-  /// 认不出或期间换了账号就仍用 `info` 按标题识别。「最近添加」不传，维持原样。
+  /// 返回 nil 表示没认出来或期间换了账号：换账号由下面的会话守卫终止整个操作，认不出才用 `info` 按标题识别。
+  /// 「最近添加」不传，维持原样。
   var resolveIdentity: (@MainActor () async -> MediaInfo?)? = nil
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
@@ -582,11 +583,9 @@ private struct MediaServerSearchMenuItems: View {
           guard APIService.shared.canAccess(.search) else { return }
           let sessionSnapshot = APIService.shared.sessionSnapshot()
           var info = self.info
-          if let resolved = await resolveIdentity?(),
-            APIService.shared.isSessionUnchanged(from: sessionSnapshot)
-          {
-            info = resolved
-          }
+          if let resolved = await resolveIdentity?() { info = resolved }
+          // 期间换了账号就终止整个操作：不能拿旧账号的媒体标题向新会话发识别请求。
+          guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
           // 识别不出来会退回按标题搜索，动作照样完成，所以这里不弹「未识别到此媒体的TMDB信息」：
           // 否则弹窗与跳转同时发生。
           if let target = await mediaActionHandler.getTMDBJumpTarget(
@@ -616,11 +615,8 @@ private struct MediaServerSearchMenuItems: View {
           Task {
             let sessionSnapshot = APIService.shared.sessionSnapshot()
             var info = self.info
-            if let resolved = await resolveIdentity?(),
-              APIService.shared.isSessionUnchanged(from: sessionSnapshot)
-            {
-              info = resolved
-            }
+            if let resolved = await resolveIdentity?() { info = resolved }
+            guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
             if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(
               for: info, recognizeIfNeeded: true
             ) {
