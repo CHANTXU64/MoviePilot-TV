@@ -1055,7 +1055,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertNil(model.topShelfRoute)
   }
 
-  func testCostlyModalIsPreservedAndHandoffWaitsForUserDismiss() async throws {
+  func testCostlyModalCancelsTopShelfJumpAndKeepsSheet() async throws {
     let service = makeService()
     let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let router = TopShelfNavigationRouter(store: nil)
@@ -1083,33 +1083,27 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(100))
     XCTAssertNotNil(host.presentedViewController)
     model.handleTopShelfURL(try TopShelfDeepLink.url(for: payload(service: service)), router: router)
-    let id = try XCTUnwrap(router.pendingRoute?.id)
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertNotNil(host.presentedViewController, "贵弹窗不得被深链强制关闭")
-    XCTAssertNotNil(router.pendingRoute, "贵弹窗呈现中交接须延迟")
-    XCTAssertEqual(model.recommendNavigation.path.count, 0, "用户关完前不建详情栈")
-    XCTAssertEqual(model.topShelfRoute?.id, id)
-    // 用户自然关完贵弹窗 → 呈现就绪 → 交接完成。
+    XCTAssertNil(router.pendingRoute, "贵弹窗开着时取消跳转，不留 pending 监听")
+    XCTAssertEqual(model.recommendNavigation.path.count, 0, "不建详情栈")
+    XCTAssertFalse(model.isOpeningTopShelf, "取消后不留交接状态")
+    XCTAssertNil(model.topShelfRoute)
+    // 跳转已取消：关完面板也不会补跳。
     CostlyModalPresentation.unregister(costlyToken)
     host.dismiss(animated: false)
-    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-    while ContinuousClock.now < deadline {
-      if router.pendingRoute == nil && !model.isOpeningTopShelf { break }
-      try await Task.sleep(for: .milliseconds(25))
-    }
-    XCTAssertNil(router.pendingRoute)
-    XCTAssertEqual(model.recommendNavigation.path.count, 1, "用户关完贵弹窗后交接详情")
-    XCTAssertEqual(model.selectedTab, .recommend)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(model.recommendNavigation.path.count, 0, "取消后关面板也不补跳")
     XCTAssertFalse(model.isOpeningTopShelf)
     service.logout()
     XCTAssertNil(model.topShelfRoute)
   }
 
-  func testRealSubscribeSheetRegistersAndIsPreservedOnTopShelfEntry() async throws {
+  func testRealSubscribeSheetCancelsTopShelfJumpAndKeepsSheet() async throws {
     let service = makeService()
     let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let router = TopShelfNavigationRouter(store: nil)
-    // 纯宿主隔离验证真实 SubscribeSheet 的自注册与延迟交接。不用 ContentView 宿主：
+    // 纯宿主隔离验证真实 SubscribeSheet 的自注册与取消跳转。不用 ContentView 宿主：
     // 其启动任务会抢先呈现版本提示，占用 host 的呈现位导致订阅面板呈现不上（测试假象）。
     let host = UIHostingController(rootView: Color.clear)
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
@@ -1135,8 +1129,9 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     model.handleTopShelfURL(try TopShelfDeepLink.url(for: payload(service: service)), router: router)
     try await Task.sleep(for: .milliseconds(400))
     XCTAssertNotNil(host.presentedViewController, "订阅面板不得被 Top Shelf 强制关闭")
-    XCTAssertNotNil(router.pendingRoute, "订阅面板呈现中交接须延迟")
+    XCTAssertNil(router.pendingRoute, "贵弹窗开着时取消跳转，不留 pending 监听")
     XCTAssertEqual(model.recommendNavigation.path.count, 0)
+    XCTAssertFalse(model.isOpeningTopShelf, "取消后不留交接状态")
     service.logout()
   }
 

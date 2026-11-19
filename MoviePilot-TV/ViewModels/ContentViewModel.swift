@@ -216,22 +216,31 @@ class ContentViewModel: ObservableObject {
 
   /// 深链到达即解析并交接，不等待场景激活：让 TabView 首次挂载就停在入口所属 Tab，
   /// 避免先以媒体库挂载、交接后再被 TabView 回写媒体库造成"详情→媒体库→详情"弹回。
-  /// 例外：贵弹窗（订阅编辑/Fork）呈现中时延迟交接，等用户自然关完，不打断其工作。
+  /// 例外：贵弹窗（订阅编辑/Fork）呈现中时直接取消本次跳转——不打断用户工作，也不留
+  /// PresentationReadyAction 监听（其 30fps endEditing 会关掉用户正在输入的键盘）。
   /// 代价是激活瞬间焦点会先闪一下 Tab 栏（已接受的已知限制）；激活转场先展示后台旧帧也盖不住。
   func handleTopShelfURL(_ url: URL, router: TopShelfNavigationRouter) {
     guard router.handle(url), let route = router.pendingRoute else { return }
+    if CostlyModalPresentation.isPresenting {
+      router.consume(id: route.id)
+      return
+    }
     prepareTopShelfRoute(route)
     reconcileTopShelfRoute(router: router)
   }
 
   /// 交接已接收的外部入口；未激活时也执行，让目标 Tab 与详情栈先就位。
-  /// 任何模态呈现中（安全弹窗关闭转场、保留的贵弹窗）都延迟，留给 PresentationReadyAction
-  /// 在呈现就绪后触发，避免往转场里塞新详情。Tab 容器若回写选择，由交接窗口的忽略/校正兜底。
+  /// 贵弹窗呈现中：取消跳转并清交接状态，不打断订阅/Fork，也不留监听。
+  /// 安全弹窗关闭转场中：延迟，留给 PresentationReadyAction 呈现就绪后触发，避免往转场塞详情。
+  /// Tab 容器若回写选择，由交接窗口的忽略/校正兜底。
   func reconcileTopShelfRoute(router: TopShelfNavigationRouter) {
     guard let route = router.pendingRoute else { return }
-    // 贵弹窗（后台不 key 也靠标记）或 key window 上的模态/关闭转场呈现中：延迟交接，
-    // 留给 PresentationReadyAction 在呈现就绪后触发，避免往转场里塞新详情。
-    guard !CostlyModalPresentation.isPresenting, !PresentationReadyAction.isModalPresenting else { return }
+    if CostlyModalPresentation.isPresenting {
+      cancelTopShelfOpening()
+      router.consume(id: route.id)
+      return
+    }
+    guard !PresentationReadyAction.isModalPresenting else { return }
     var transaction = Transaction()
     transaction.disablesAnimations = true
     let disposition = withTransaction(transaction) { acceptTopShelfRoute(route) }
