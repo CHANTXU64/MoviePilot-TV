@@ -359,6 +359,7 @@ enum TVAPIContractCatalog {
     items.append(contentsOf: systemOperations)
     items.append(contentsOf: dashboardOperations)
     items.append(contentsOf: mediaOperations)
+    items.append(contentsOf: mediaMappingOperations(backendVersion: backendVersion))
     items.append(contentsOf: discoverOperations(backendVersion: backendVersion))
     items.append(contentsOf: personOperations)
     items.append(contentsOf: searchOperations(backendVersion: backendVersion))
@@ -592,6 +593,52 @@ enum TVAPIContractCatalog {
         coverage: read
       ),
     ]
+  }
+
+  private static func mediaMappingOperations(backendVersion: String?) -> [TVAPIOperation] {
+    guard BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: backendVersion) else {
+      return []
+    }
+    let mappingResponse = [
+      TVAPIFields.field("media_source", .string),
+      TVAPIFields.field("media_id", .string),
+      TVAPIFields.field("type", .string),
+      TVAPIFields.field("tmdb_id", .integer),
+      TVAPIFields.field("tmdb_type", .string),
+      TVAPIFields.field("tmdb_season", .integer),
+    ]
+    var operations = [
+      TVAPIOperationBuilder.get(
+        "/media/mapping",
+        query: [
+          TVAPIParam.query("media_source", alwaysSent: true),
+          TVAPIParam.query("media_id", alwaysSent: true),
+          TVAPIParam.query("type", alwaysSent: true),
+          TVAPIParam.query("season", type: .integer),
+        ],
+        dependedResponse: mappingResponse,
+        coverage: readDecode,
+        notes: ">= v3.2.7；非 TMDB 来源到 TMDB 的共享映射，未命中返回 data: null"
+      )
+    ]
+    if BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: backendVersion) {
+      operations.append(
+        TVAPIOperationBuilder.mutation(
+          "POST",
+          "/media/mapping/match",
+          body: [
+            TVAPIFields.field("media_source", .string, required: true),
+            TVAPIFields.field("media_id", .string, required: true),
+            TVAPIFields.field("type", .string, required: true),
+            TVAPIFields.field("season", .integer),
+          ],
+          dependedResponse: mappingResponse,
+          coverage: readDecode,
+          notes: ">= v3.2.9；共享映射未命中后按需查找，未命中返回 data: null；TV 只在 GET 未命中或失败时调用"
+        )
+      )
+    }
+    return operations
   }
 
   private static func discoverOperations(backendVersion: String?) -> [TVAPIOperation] {
@@ -1127,8 +1174,9 @@ enum TVAPIContractCatalog {
         pathParams: [TVAPIParam.path("subscribe_id", type: .integer)],
         coverage: sideEffect
       ),
-      // 单集试看跟踪搜索批次；运行时从 v3.2.6 起才调用（EpisodeTrialAvailability）。登记表最新只到 v3.2.5，
-      // 按版本登记会让源码扫描报未登记；发版登记 v3.2.6 后改为按试看门禁登记。
+      // 单集试看跟踪搜索批次。发起受 EpisodeTrialAvailability（>= v3.2.6）限制，但收尾（推进、取消、删除已有
+      // 试看）走 managingAPI()，只要求管理员、不查版本：版本读不出或后端降级时照样调用。所以两个批次端点都对
+      // 所有版本登记，按试看门禁登记会漏掉收尾路径。
       TVAPIOperationBuilder.get(
         "/subscribe/execution/batches/{batch_id}",
         pathParams: [TVAPIParam.path("batch_id")],

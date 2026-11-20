@@ -1327,7 +1327,7 @@ private struct BackendCompatibilityCollector {
   mutating func addLatestMedia(_ items: [MediaServerPlayItem], surface: String) {
     for item in items {
       addImage(
-        url: item.imageURLs.image,
+        url: item.imageURLs().image,
         rawURLString: item.image,
         surface: surface,
         record: item.title,

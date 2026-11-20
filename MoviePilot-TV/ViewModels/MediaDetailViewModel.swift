@@ -972,7 +972,7 @@ class MediaDetailViewModel: ObservableObject {
   /// 取消订阅状态标记
   @Published var isUnsubscribing = false
 
-  /// 预加载任务引用（由 View 注入，订阅操作需要读取 tmdbId 和回写 isSubscribed）
+  /// 预加载任务引用（由 View 注入，共享识别结果和订阅状态）
   var preloadTask: MediaPreloadTask?
   /// 从首页「最近添加」打开时那张卡在媒体服务器上的条目（见 `MediaInfo.libraryItemHint`）：入库查询查不到时用它播放。
   var libraryItemHint: MediaServerItemRef?
@@ -989,8 +989,8 @@ class MediaDetailViewModel: ObservableObject {
       poster: detail.poster_path,
       state: "N",
       last_update: nil,
-      // 完整详情是当前页面的权威身份；预识别 TMDB 仅在详情未提供时兜底。
-      tmdbid: detail.tmdb_id ?? preloadTask?.tmdbId,
+      tmdbid: MediaIdentifier.validNumericIdentifier(detail.tmdb_id)
+        ?? preloadTask?.mappedMovieTarget(for: detail)?.tmdb_id ?? preloadTask?.tmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
       anilistid: detail.anilist_id,
@@ -1000,14 +1000,35 @@ class MediaDetailViewModel: ObservableObject {
     )
   }
 
+  struct UnsubscribeConfirmation {
+    let message: String
+    let subscriptionID: Int?
+    let snapshot: APIServiceSessionSnapshot
+  }
+
   /// 取消当前媒体的订阅
   @discardableResult
-  func cancelSubscription() async -> Bool {
-    let snapshot = apiService.sessionSnapshot()
+  func cancelSubscription(confirmation: UnsubscribeConfirmation? = nil) async -> Bool {
+    let snapshot = confirmation?.snapshot ?? apiService.sessionSnapshot()
+    guard apiService.canAccess(.subscribe), apiService.isSessionUnchanged(from: snapshot),
+      !isUnsubscribing else { return false }
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
-    let didCancel = await deleteResolvedSubscription(snapshot: snapshot)
+    let didCancel: Bool
+    if let subscriptionID = confirmation?.subscriptionID {
+      do {
+        try apiService.validateSessionSnapshot(snapshot)
+        didCancel = try await apiService.deleteSubscription(id: subscriptionID)
+      } catch is CancellationError {
+        return false
+      } catch {
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        return false
+      }
+    } else {
+      didCancel = await deleteResolvedSubscription(snapshot: snapshot)
+    }
     guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     // 刷新所有订阅状态（包括全局和分季）
@@ -1037,27 +1058,16 @@ class MediaDetailViewModel: ObservableObject {
       // 刷新全局订阅状态
       if detail.canDirectlySubscribe {
         let detail = self.detail
-        let preloadTmdbId = self.preloadTask?.tmdbId
-        let tmdbMedia: MediaInfo? = {
-          guard detail.tmdb_id == nil, let tmdbId = preloadTmdbId else { return nil }
-          return MediaInfo(tmdb_id: tmdbId, type: detail.type)
-        }()
+        let preloadTask = self.preloadTask
         group.addTask {
+          if let preloadTask {
+            return await preloadTask.refreshDirectSubscription(for: detail, forceRefresh: forceRefresh)
+          }
           do {
-            var isSubscribed = try await self.apiService.checkSubscription(
+            _ = try await self.apiService.checkSubscription(
               media: detail,
               forceRefresh: forceRefresh
             )
-            // 豆瓣/Bangumi 来源：用识别到的 tmdbId 补查
-            if !isSubscribed, let tmdbMedia {
-              isSubscribed = try await self.apiService.checkSubscription(
-                media: tmdbMedia,
-                forceRefresh: forceRefresh
-              )
-            }
-            await MainActor.run {
-              self.preloadTask?.isSubscribed = isSubscribed
-            }
             return true
           } catch {
             Logger.error("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
@@ -1079,6 +1089,26 @@ class MediaDetailViewModel: ObservableObject {
       }
     }
     return resultCount > 0 && didRefreshAll
+  }
+
+  func prepareHeaderUnsubscribeConfirmation() async throws -> UnsubscribeConfirmation? {
+    let snapshot = apiService.sessionSnapshot()
+    let detail = self.detail
+    if let target = preloadTask?.mappedMovieTarget(for: detail) {
+      // 媒体级 DELETE 不区分电影与剧集，确认时冻结实际订阅记录。
+      let id = try await apiService.fetchExactMovieSubscriptionID(for: detail, mappedTo: target)
+      try apiService.validateSessionSnapshot(snapshot)
+      guard let id else { return nil }
+      return UnsubscribeConfirmation(
+        message: SubscriptionCancelConfirmation.headerMessage(for: detail),
+        subscriptionID: id,
+        snapshot: snapshot
+      )
+    }
+
+    let message = await headerUnsubscribeConfirmationMessage()
+    try apiService.validateSessionSnapshot(snapshot)
+    return UnsubscribeConfirmation(message: message, subscriptionID: nil, snapshot: snapshot)
   }
 
   private func deleteResolvedSubscription(snapshot: APIServiceSessionSnapshot) async -> Bool {

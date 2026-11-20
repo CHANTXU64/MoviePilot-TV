@@ -276,6 +276,12 @@ struct MediaCard: View {
       |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
   }
 
+  /// 服务端缩略该请求的 `maxWidth`：降采样取卡片点数的长边，`posterContent` 没传 `.scaleFactor`，
+  /// Kingfisher 默认 1.0。请求比这更大的像素会被客户端降采样扔掉，只多花下载和解码。
+  static func posterThumbnailMaxWidth(for downsamplingSize: CGSize) -> Int {
+    Int(ceil(max(downsamplingSize.width, downsamplingSize.height)))
+  }
+
   static let defaultGridColumns = DetailExpansionGridLayout.columns(width: defaultPosterSize.width, count: 6)
 
   let title: String

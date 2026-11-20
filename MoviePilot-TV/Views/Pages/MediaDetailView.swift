@@ -185,6 +185,7 @@ struct MediaDetailView: View {
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
   let presentationStyle: MediaDetailPresentationStyle
+  let initialEpisodeSeason: Int?
   @State private var cachedBackgroundFailed = false
   private var cachedContent: TopShelfCachedContent? {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
@@ -218,7 +219,7 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
-  @State private var unsubscribeConfirmationMessage = ""
+  @State private var unsubscribeConfirmation: MediaDetailViewModel.UnsubscribeConfirmation?
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
@@ -438,6 +439,7 @@ struct MediaDetailView: View {
   init(
     detail: MediaInfo,
     libraryItemHint: MediaServerItemRef? = nil,
+    initialEpisodeSeason: Int? = nil,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
@@ -456,6 +458,7 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.initialEpisodeSeason = initialEpisodeSeason
     self.presentationStyle = presentationStyle
     self.isEntryLoading = isEntryLoading
     self.entryStatusMessage = entryStatusMessage
@@ -599,6 +602,7 @@ struct MediaDetailView: View {
                       subscriptionSeasons: shouldShowSeasonSubscriptionSection
                         ? preloadTask.seasonViewModel : nil,
                       playback: viewModel.episodePlayback,
+                      initialSeason: initialEpisodeSeason,
                       rowHint: viewModel.episodeRowHint,
                       panelRequest: viewModel.episodePanelRequest,
                       defaultSeasons: viewModel.episodeSeasons,
@@ -830,11 +834,16 @@ struct MediaDetailView: View {
         }
       }
     }
-    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
-      Button("取消", role: .cancel) {}
+    .alert(
+      SubscriptionCancelConfirmation.title,
+      isPresented: $showUnsubscribeConfirm,
+      presenting: unsubscribeConfirmation
+    ) { confirmation in
+      Button("取消", role: .cancel) { unsubscribeConfirmation = nil }
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        unsubscribeConfirmation = nil
         Task {
-          guard await viewModel.cancelSubscription() else {
+          guard await viewModel.cancelSubscription(confirmation: confirmation) else {
             notificationManager.show(
               message: SubscriptionCancelConfirmation.failureMessage,
               type: .error
@@ -843,18 +852,15 @@ struct MediaDetailView: View {
           }
         }
       }
-    } message: {
-      Text(
-        unsubscribeConfirmationMessage.isEmpty
-          ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
-          : unsubscribeConfirmationMessage
-      )
+    } message: { confirmation in
+      Text(confirmation.message)
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
+      unsubscribeConfirmation = nil
       selectedDoubanDiscussion = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
@@ -1135,12 +1141,28 @@ struct MediaDetailView: View {
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {
-          unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           Task { @MainActor in
-            let message = await viewModel.headerUnsubscribeConfirmationMessage()
-            guard navigationCoordinator.isCurrent(source) else { return }
-            unsubscribeConfirmationMessage = message
-            showUnsubscribeConfirm = true
+            do {
+              let confirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+              guard navigationCoordinator.isCurrent(source) else { return }
+              if let confirmation {
+                unsubscribeConfirmation = confirmation
+                showUnsubscribeConfirm = true
+              } else {
+                notificationManager.show(
+                  message: "无法定位可安全取消的订阅，请刷新后重试。",
+                  type: .error
+                )
+              }
+            } catch is CancellationError {
+              return
+            } catch {
+              guard navigationCoordinator.isCurrent(source) else { return }
+              notificationManager.show(
+                message: SubscriptionCancelConfirmation.failureMessage,
+                type: .error
+              )
+            }
           }
         },
         startSubscribe: {
@@ -1296,9 +1318,13 @@ struct MediaDetailView: View {
               .accessibilityValue(isEntryLoading ? "加载中" : "")
             }
 
-            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
+            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
             if canJumpToTMDB {
-              let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
+              let preloadedTarget = preloadTask.tmdbTarget
+              let targetTmdbId =
+                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
+                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
               let isButtonLoading =
                 targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
 
@@ -1309,9 +1335,16 @@ struct MediaDetailView: View {
                 let navigationSource = navigationCoordinator.sourceToken()
                 Task {
                   defer { isTMDBJumpInFlight = false }
-                  if let target = await mediaActionHandler.getTMDBJumpTarget(
-                    for: viewModel.detail, targetTmdbId: targetTmdbId)
-                  {
+                  let target: MediaInfo?
+                  if let preloadedTarget {
+                    target = preloadedTarget
+                  } else {
+                    target = await mediaActionHandler.getTMDBJumpTarget(
+                      for: viewModel.detail,
+                      targetTmdbId: targetTmdbId
+                    )
+                  }
+                  if let target {
                     navigationCoordinator.push(
                       target,
                       loadingPosterURL: viewModel.detail.imageURLs.poster,

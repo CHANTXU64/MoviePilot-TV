@@ -172,7 +172,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         homeSource,
         [
           "let navigationSource = navigationCoordinator.sourceToken()",
-          "let loadingPosterURL = item.imageURLs.image",
+          "let loadingPosterURL = item.imageURLs().image",
           "Task {",
           "navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)",
         ]

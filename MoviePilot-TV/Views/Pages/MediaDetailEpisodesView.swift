@@ -9,6 +9,8 @@ struct MediaDetailEpisodesView: View {
   let subscriptionSeasons: SubscribeSeasonViewModel?
   /// 按集播放和试看；没有应用内播放时为 nil，按下单集只看简介。
   let playback: EpisodePlaybackSource?
+  /// TMDB 跳转指定的默认顺序季号。
+  var initialSeason: Int? = nil
   /// 默认显示的季和停在哪一集（看过的剧停在接着看的那一集），见 `MediaDetailViewModel.episodeRowHint`。
   var rowHint: EpisodeRowHint? = nil
   /// 详情页「继续播放」指向服务器上还没有的下一集时，请本行打开那一集的面板。
@@ -44,6 +46,7 @@ struct MediaDetailEpisodesView: View {
       catalog: catalog, allowsRequests: allowsRequests, playback: playback,
       trial: APIService.shared.sessionScope.episodeTrial,
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand),
+      initialSeason: groupID == nil ? initialSeason : nil,
       rowHint: rowHint,
       panelRequest: panelRequest,
       defaultSeasons: defaultSeasons,
@@ -1102,6 +1105,13 @@ enum MediaDetailEpisodeSeasons {
   static func tmdbID(for media: MediaInfo) -> Int? {
     guard media.type == "电视剧", media.identity?.source == "themoviedb" else { return nil }
     return MediaIdentifier.validNumericIdentifier(media.tmdb_id)
+  }
+
+  static func navigationSeason(for detail: MediaInfo, routeMedia: MediaInfo) -> Int? {
+    guard let season = routeMedia.tmdbSeasonHint, season >= 0,
+      let detailID = tmdbID(for: detail), detailID == tmdbID(for: routeMedia)
+    else { return nil }
+    return season
   }
 
   static func needsLookup(_ seasons: [TmdbSeason], media: MediaInfo) -> Bool {
