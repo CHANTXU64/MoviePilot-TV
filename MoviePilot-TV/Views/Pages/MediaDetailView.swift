@@ -219,7 +219,7 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
-  @State private var unsubscribeConfirmationMessage = ""
+  @State private var unsubscribeConfirmation: MediaDetailViewModel.UnsubscribeConfirmation?
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
@@ -834,11 +834,16 @@ struct MediaDetailView: View {
         }
       }
     }
-    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
-      Button("取消", role: .cancel) {}
+    .alert(
+      SubscriptionCancelConfirmation.title,
+      isPresented: $showUnsubscribeConfirm,
+      presenting: unsubscribeConfirmation
+    ) { confirmation in
+      Button("取消", role: .cancel) { unsubscribeConfirmation = nil }
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        unsubscribeConfirmation = nil
         Task {
-          guard await viewModel.cancelSubscription() else {
+          guard await viewModel.cancelSubscription(confirmation: confirmation) else {
             notificationManager.show(
               message: SubscriptionCancelConfirmation.failureMessage,
               type: .error
@@ -847,18 +852,15 @@ struct MediaDetailView: View {
           }
         }
       }
-    } message: {
-      Text(
-        unsubscribeConfirmationMessage.isEmpty
-          ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
-          : unsubscribeConfirmationMessage
-      )
+    } message: { confirmation in
+      Text(confirmation.message)
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
+      unsubscribeConfirmation = nil
       selectedDoubanDiscussion = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
@@ -1139,12 +1141,28 @@ struct MediaDetailView: View {
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {
-          unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           Task { @MainActor in
-            let message = await viewModel.headerUnsubscribeConfirmationMessage()
-            guard navigationCoordinator.isCurrent(source) else { return }
-            unsubscribeConfirmationMessage = message
-            showUnsubscribeConfirm = true
+            do {
+              let confirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+              guard navigationCoordinator.isCurrent(source) else { return }
+              if let confirmation {
+                unsubscribeConfirmation = confirmation
+                showUnsubscribeConfirm = true
+              } else {
+                notificationManager.show(
+                  message: "无法定位可安全取消的订阅，请刷新后重试。",
+                  type: .error
+                )
+              }
+            } catch is CancellationError {
+              return
+            } catch {
+              guard navigationCoordinator.isCurrent(source) else { return }
+              notificationManager.show(
+                message: SubscriptionCancelConfirmation.failureMessage,
+                type: .error
+              )
+            }
           }
         },
         startSubscribe: {

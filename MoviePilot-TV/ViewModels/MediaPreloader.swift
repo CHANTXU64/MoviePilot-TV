@@ -197,7 +197,8 @@ class MediaPreloadTask: ObservableObject {
   /// 旧名称识别的 ID，订阅链仍用它在原来源查询未命中时补查。
   @Published var tmdbId: Int?
   /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
-  @Published private(set) var tmdbTarget: MediaInfo?
+  var tmdbTarget: MediaInfo? { tmdbResolution?.target }
+  @Published private var tmdbResolution: TMDBTargetResolution?
   @Published var isTmdbRecognitionFinished = false
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
@@ -292,8 +293,8 @@ class MediaPreloadTask: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
           // ③ 分季信息（仅电视剧）
           group.addTask { await self.loadSeasonData(for: canonical) }
-          // ④ 订阅状态（旧名称识别结果此时可用于补查）
-          group.addTask { await self.checkSubscription(for: canonical) }
+          // ④ 直接订阅状态，电视剧由分季流程处理。
+          group.addTask { _ = await self.refreshDirectSubscription(for: canonical) }
         }
       })
   }
@@ -621,28 +622,51 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ④ 订阅状态
 
-  private func checkSubscription(for detail: MediaInfo) async {
-    guard let apiService else { return }
-    guard apiService.canAccess(.subscribe) else {
-      self.isSubscribed = false
-      return
-    }
-    // 电视剧的订阅是分季维度，由 seasonViewModel 内部处理，预加载阶段不查全局订阅
-    guard detail.canDirectlySubscribe else { return }
+  /// 电影订阅补查只接受同一来源条目的同类型共享映射。
+  func mappedMovieTarget(for media: MediaInfo) -> MediaInfo? {
+    guard let apiService, media.canDirectlySubscribe,
+      MediaIdentifier.validNumericIdentifier(media.tmdb_id) == nil,
+      let type = media.type, apiService.normalizeMediaType(type) == "movie",
+      case .mapping(let origin, let target) = tmdbResolution,
+      origin == media.identity, target.type == "电影"
+    else { return nil }
+    return target
+  }
 
+  func refreshDirectSubscription(for detail: MediaInfo, forceRefresh: Bool = false) async -> Bool {
+    guard let apiService else { return false }
+    guard apiService.canAccess(.subscribe) else {
+      isSubscribed = false
+      return true
+    }
+    guard detail.canDirectlySubscribe else { return false }
+
+    let snapshot = apiService.sessionSnapshot()
     do {
-      var subscribed = try await apiService.checkSubscription(media: detail)
-      // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
-      // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
+      var subscribed = try await apiService.checkSubscription(
+        media: detail, forceRefresh: forceRefresh
+      )
+      if !subscribed, let target = mappedMovieTarget(for: detail) {
+        subscribed = try await apiService.checkSubscription(
+          media: target, forceRefresh: forceRefresh, requireExactMovieIdentity: true
+        )
+      }
       if !subscribed, MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
         let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
       {
         let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-        subscribed = try await apiService.checkSubscription(media: tmdbMedia)
+        subscribed = try await apiService.checkSubscription(
+          media: tmdbMedia, forceRefresh: forceRefresh
+        )
       }
-      self.isSubscribed = subscribed
+      try apiService.validateSessionSnapshot(snapshot)
+      isSubscribed = subscribed
+      return true
+    } catch is CancellationError {
+      return false
     } catch {
       Logger.error("[MediaPreloadTask] 检查订阅状态失败: \(error)")
+      return false
     }
   }
 
@@ -655,27 +679,7 @@ class MediaPreloadTask: ObservableObject {
     }
     let detail = fullDetail ?? partialMedia
     if detail.canDirectlySubscribe {
-      // 电影等可直接订阅的类型：重新查询全局订阅状态
-      do {
-        var subscribed = try await apiService.checkSubscription(
-          media: detail,
-          forceRefresh: true
-        )
-        // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
-        // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
-        if !subscribed, MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
-          let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
-        {
-          let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-          subscribed = try await apiService.checkSubscription(
-            media: tmdbMedia,
-            forceRefresh: true
-          )
-        }
-        self.isSubscribed = subscribed
-      } catch {
-        Logger.error("[MediaPreloadTask] 刷新订阅状态失败: \(error)")
-      }
+      _ = await refreshDirectSubscription(for: detail, forceRefresh: true)
     } else if let seasonVM = seasonViewModel {
       // 电视剧：刷新分季订阅状态
       await seasonVM.checkSubscriptionStatus(forceRefresh: forceRefreshSeasonSnapshot)
@@ -693,7 +697,7 @@ class MediaPreloadTask: ObservableObject {
         for: media,
         apiService: apiService
       ) {
-        self.tmdbTarget = target
+        self.tmdbResolution = target
         return
       }
     } catch is CancellationError {
@@ -746,7 +750,10 @@ class MediaPreloadTask: ObservableObject {
         for: lookupMedia, apiService: apiService
       ) else { return }
       try Task.checkCancellation()
-      tmdbTarget = target
+      tmdbResolution = target
+      if isSubscribed != true, mappedMovieTarget(for: detail) != nil {
+        _ = await refreshDirectSubscription(for: detail)
+      }
     } catch is CancellationError {
       return
     } catch {

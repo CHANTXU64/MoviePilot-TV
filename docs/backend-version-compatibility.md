@@ -233,7 +233,7 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **其余后端变化（暂不跟进）**：知识库集中存储与检索、通知原生图片/文件及分渠道限制、音乐候选/歌单/播放队列、StarSpace RSS、同步盘客户端、Discord 绑定、私信与站点适配等，均无 TV 调用链或大屏入口；TV 的通知、媒体库、订阅和播放路径不受影响。`/mediaserver/exists`、`/media/status`、`/site/test` 等 TV 已用端点的字段与语义未变。
 - **Web 配套**：知识库实验室开关、原生音乐队列/封面、原生媒体卡片动作、主题与视觉调整、站点测试范围、插件多实例和智能助手面板高度等改动集中在 Web 界面或 iOS 原生壳；TV 是独立 SwiftUI 实现，不加载 Web 资源，页面层不跟进。
 - **必须修与候选**：必须修 = 无；本轮 Match 接入是用户明确要求的识别能力替换，不是上游破坏性变更。`docs/frontend-update-todo.md` 无需新增候选：Match 已实现，知识库、音乐、通知原生附件、StarSpace、同步盘和 Discord 均不适合当前 tvOS 媒体浏览路径。
-- **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。已在 tvOS 27.2 Simulator 上完成单版本 Debug 构建和定向回归：`python3 scripts/test-tvos.py` 构建通过；`SystemVersionInfoTests` 10 个、`OpenAPIContractCatalogIntegrityTests` 6 个、`APIServiceCompatibilityEndpointTests` 40 个、`MediaMappingTests` 20 个、`TMDBJumpAlertPolicyTests` 3 个，均 0 失败。完整套件、三版本矩阵和真实后端兼容测试未跑；Match 的 180 秒预算与真实后端忙/失败状态只按源码契约核对，未做真实中心压测。
+- **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。已在 tvOS 27.2 Simulator 上完成单版本 Debug 构建和定向回归：`python3 scripts/test-tvos.py` 构建通过；`SystemVersionInfoTests` 10 个、`OpenAPIContractCatalogIntegrityTests` 6 个、`APIServiceCompatibilityEndpointTests` 40 个、`MediaMappingTests` 27 个、`TMDBJumpAlertPolicyTests` 3 个，均 0 失败。完整套件、三版本矩阵和真实后端兼容测试未跑；Match 的 180 秒预算与真实后端忙/失败状态只按源码契约核对，未做真实中心压测。
 
 ## 跟进一个新版本
 

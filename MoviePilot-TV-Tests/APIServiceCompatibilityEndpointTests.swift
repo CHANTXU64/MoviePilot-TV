@@ -2661,6 +2661,133 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertFalse(methods.contains("DELETE"))
   }
 
+  func testSharedMovieMappingRestoresSubscriptionAndMenuCancelsByRecordID() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.7")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"123","title":"来源电影","type":"电影"}"#.utf8),
+      path: "/api/v1/media/123")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":902,"type":"电影","tmdbid":456,"media_source":"themoviedb","media_id":"456"}"#.utf8),
+      path: "/api/v1/subscribe/media/456")
+    await stub.setDetailLoadResponse(
+      Data(#"{"success":true}"#.utf8), path: "/api/v1/subscribe/902")
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+
+    await waitUntil(timeout: 3) { task.isSubscribed == true }
+    XCTAssertEqual(task.isSubscribed, true)
+    XCTAssertNil(task.tmdbId)
+    let viewModel = MediaDetailViewModel(detail: try XCTUnwrap(task.fullDetail), apiService: service)
+    viewModel.preloadTask = task
+    let request = viewModel.buildSubscribeRequest()
+    XCTAssertEqual(request.tmdbid, 456)
+    XCTAssertEqual(request.media_source, "douban")
+    XCTAssertEqual(request.media_id, "123")
+
+    let menu = SubscriptionHandler(apiService: service)
+    menu.handleSubscribe(item, expectedSubscribed: true)
+    await waitUntil(timeout: 3) { menu.unsubscribeConfirmationMessage != nil }
+    XCTAssertNotNil(menu.unsubscribeConfirmationMessage)
+    await stub.setDetailLoadResponse(Data("{}".utf8), path: "/api/v1/subscribe/media/456")
+    menu.confirmUnsubscribe()
+    await waitUntil(timeout: 3) { task.isSubscribed == false }
+    XCTAssertEqual(task.isSubscribed, false)
+
+    let paths = await stub.requestPaths()
+    let methods = await stub.requestMethods()
+    let queries = await stub.requestQueries()
+    XCTAssertEqual(zip(paths, methods).filter { $0.1 == "DELETE" }.map { $0.0 }, [
+      "/api/v1/subscribe/902"
+    ])
+    let mappedLookups = paths.indices.filter { paths[$0] == "/api/v1/subscribe/media/456" }
+    XCTAssertFalse(mappedLookups.isEmpty)
+    for index in mappedLookups {
+      let query = try XCTUnwrap(queries[index]?.removingPercentEncoding)
+      XCTAssertTrue(query.contains("mtype=电影"))
+      XCTAssertFalse(query.contains("title="))
+    }
+    XCTAssertFalse(paths.contains("/api/v1/media/mapping/match"))
+  }
+
+  func testOpenedMovieMatchRefreshesSubscriptionAndHeaderKeepsConfirmedRecordID() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.9")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"123","title":"来源电影","type":"电影"}"#.utf8),
+      path: "/api/v1/media/123")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8),
+      waitFor: matchGate)
+    let lookupPath = "/api/v1/subscribe/media/456"
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":902,"type":"电影","tmdbid":456}"#.utf8), path: lookupPath)
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+    await waitUntil(timeout: 3) { task.isSubscribed != nil }
+    XCTAssertEqual(task.isSubscribed, false)
+    let detail = try XCTUnwrap(task.fullDetail)
+    let match = Task { await task.matchTMDBForOpenedDetail(detail) }
+    await waitUntil(timeout: 3) { await stub.requestPaths().contains("/api/v1/media/mapping/match") }
+    XCTAssertEqual(task.isSubscribed, false)
+    await matchGate.open()
+    await match.value
+    XCTAssertEqual(task.isSubscribed, true)
+
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = task
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":903,"type":"电视剧","tmdbid":456,"season":2}"#.utf8), path: lookupPath)
+    let didRefresh = await viewModel.refreshSubscriptionStatus()
+    XCTAssertTrue(didRefresh)
+    XCTAssertFalse(viewModel.isSubscribed)
+    let wrongTypeConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+    XCTAssertNil(wrongTypeConfirmation)
+
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":903,"type":"电影","tmdbid":456,"media_source":"themoviedb","media_id":"789"}"#.utf8),
+      path: lookupPath)
+    let wrongIdentityConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+    XCTAssertNil(wrongIdentityConfirmation)
+
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":902,"type":"电影","tmdbid":456}"#.utf8), path: lookupPath)
+    let resolvedConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+    let confirmation = try XCTUnwrap(resolvedConfirmation)
+    XCTAssertEqual(confirmation.subscriptionID, 902)
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":904,"type":"电影","tmdbid":456}"#.utf8), path: lookupPath)
+    await stub.setDetailLoadResponse(
+      Data(#"{"success":true}"#.utf8), path: "/api/v1/subscribe/902")
+    let didCancel = await viewModel.cancelSubscription(confirmation: confirmation)
+    XCTAssertTrue(didCancel)
+    XCTAssertTrue(viewModel.isSubscribed)
+    let paths = await stub.requestPaths()
+    let methods = await stub.requestMethods()
+    XCTAssertEqual(zip(paths, methods).filter { $0.1 == "DELETE" }.map { $0.0 }, [
+      "/api/v1/subscribe/902"
+    ])
+  }
+
   func testMappedTMDBSeasonSurvivesWholeSeriesDetailAndWarmsThatSeason() async throws {
     installStub()
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

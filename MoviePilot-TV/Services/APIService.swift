@@ -3859,10 +3859,13 @@ class APIService: ObservableObject {
   func fetchSubscriptionLookup(
     media: MediaInfo,
     season: Int? = nil,
-    includeVideoMetadataFallback: Bool = true
+    includeVideoMetadataFallback: Bool = true,
+    requireExactMovieIdentity: Bool = false
   ) async throws -> SubscriptionLookupResult? {
     struct SubscribeLookupResp: Codable {
       let id: Int?
+      let type: String?
+      let season: Int?
       let tmdbid: Int?
       let doubanid: String?
       let bangumiid: Int?
@@ -3894,26 +3897,55 @@ class APIService: ObservableObject {
     }
     // 各版本 Web 都附带 title/year/mtype；v3.0.10-1 前的后端只在自身条件满足时使用回退参数，
     // 多发的参数会被忽略，所以这里不按后端版本区分。
-    let usesVideoMetadataFallback = includeVideoMetadataFallback
+    let usesVideoMetadataFallback = !requireExactMovieIdentity && includeVideoMetadataFallback
       && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
       extraParams: [
         "season": season.map(String.init),
-        "title": media.title,
+        "title": requireExactMovieIdentity ? nil : media.title,
         "year": usesVideoMetadataFallback ? media.year : nil,
-        "mtype": usesVideoMetadataFallback ? media.type : nil,
+        "mtype": requireExactMovieIdentity ? "电影" : (usesVideoMetadataFallback ? media.type : nil),
       ]
     )
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
+    if requireExactMovieIdentity {
+      let recordedIdentity = MediaIdentifier.resolve(
+        source: resp.media_source, mediaId: resp.media_id, tmdbId: resp.tmdbid,
+        doubanId: resp.doubanid, bangumiId: resp.bangumiid, anilistId: resp.anilistid,
+        legacyMediaId: resp.mediaid
+      )
+      // 上游也能按共同的 TMDB 身份命中另一来源的订阅。
+      let matchesTMDB = identity.source == "themoviedb"
+        && recordedIdentity?.source != "themoviedb"
+        && MediaIdentifier.validNumericIdentifier(resp.tmdbid).map(String.init) == identity.mediaId
+      guard id > 0, resp.type == "电影", resp.season == season,
+        recordedIdentity == identity || matchesTMDB
+      else { return nil }
+    }
     return SubscriptionLookupResult(
       id: id,
       mediaId: identity.mediaKey,
       isResolvedMediaId: resp.hasResolvedIdentity
     )
+  }
+
+  /// 为带共享映射的电影冻结精确订阅记录，优先原始来源。
+  func fetchExactMovieSubscriptionID(for media: MediaInfo, mappedTo target: MediaInfo) async throws
+    -> Int?
+  {
+    let snapshot = sessionSnapshot()
+    for candidate in [media, target] {
+      let result = try await fetchSubscriptionLookup(
+        media: candidate, requireExactMovieIdentity: true
+      )
+      try validateSessionSnapshot(snapshot)
+      if let result { return result.id }
+    }
+    return nil
   }
 
   /// 查询特定媒体（及特定季）命中的订阅 ID
@@ -3934,20 +3966,23 @@ class APIService: ObservableObject {
   func checkSubscription(
     media: MediaInfo,
     season: Int? = nil,
-    forceRefresh: Bool = false
+    forceRefresh: Bool = false,
+    requireExactMovieIdentity: Bool = false
   ) async throws -> Bool {
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    let key = "\(mediaId):\(season.map(String.init) ?? "")"
+    let key = "\(requireExactMovieIdentity):\(media.type ?? ""):\(mediaId):\(season.map(String.init) ?? "")"
     return try await sessionCachedValue(
       sessionScope.subscriptionStatusCache,
       key: key,
       forceRefresh: forceRefresh
     ) { [weak self] in
       guard let self else { throw CancellationError() }
-      return try await self.fetchSubscriptionLookup(media: media, season: season) != nil
+      return try await self.fetchSubscriptionLookup(
+        media: media, season: season, requireExactMovieIdentity: requireExactMovieIdentity
+      ) != nil
     }
   }
 

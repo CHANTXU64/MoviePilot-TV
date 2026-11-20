@@ -1,6 +1,17 @@
 import SwiftUI
 import Combine
 
+enum TMDBTargetResolution {
+  case mapping(origin: MediaIdentity, target: MediaInfo)
+  case recognition(MediaInfo)
+
+  var target: MediaInfo {
+    switch self {
+    case .mapping(_, let target), .recognition(let target): return target
+    }
+  }
+}
+
 @MainActor
 class MediaActionHandler: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -131,7 +142,7 @@ class MediaActionHandler: ObservableObject {
           if target == nil, notifyWhenUnrecognized {
             showTMDBNotFoundAlert = true
           }
-          return target
+          return target?.target
         } catch is CancellationError {
           return nil
         } catch {
@@ -147,7 +158,7 @@ class MediaActionHandler: ObservableObject {
           if let target = try await Self.sharedTMDBTarget(for: item, apiService: apiService) {
             isRecognizingTmdb = false
             guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
-            return target
+            return target.target
           }
         } catch is CancellationError {
           isRecognizingTmdb = false
@@ -201,7 +212,7 @@ class MediaActionHandler: ObservableObject {
   static func sharedTMDBTarget(
     for item: MediaInfo,
     apiService: APIService
-  ) async throws -> MediaInfo? {
+  ) async throws -> TMDBTargetResolution? {
     guard let identity = item.identity,
       let source = MediaIdentifier.normalizeSource(identity.source),
       source != "themoviedb",
@@ -235,7 +246,7 @@ class MediaActionHandler: ObservableObject {
   static func onDemandTMDBTarget(
     for item: MediaInfo,
     apiService: APIService
-  ) async throws -> MediaInfo? {
+  ) async throws -> TMDBTargetResolution? {
     let snapshot = apiService.sessionSnapshot()
     do {
       if let target = try await sharedTMDBTarget(for: item, apiService: apiService) {
@@ -255,7 +266,7 @@ class MediaActionHandler: ObservableObject {
       try apiService.validateSessionSnapshot(snapshot)
       let tmdbId = try await apiService.recognizeTmdbId(title: title, year: item.year, type: item.type)
       try apiService.validateSessionSnapshot(snapshot)
-      return tmdbId.map { tmdbJumpTarget(for: item, tmdbId: $0) }
+      return tmdbId.map { .recognition(tmdbJumpTarget(for: item, tmdbId: $0)) }
     }
   }
 
@@ -264,7 +275,7 @@ class MediaActionHandler: ObservableObject {
   private static func matchTMDBTarget(
     for item: MediaInfo,
     apiService: APIService
-  ) async throws -> MediaInfo? {
+  ) async throws -> TMDBTargetResolution? {
     guard let identity = item.identity,
       let source = MediaIdentifier.normalizeSource(identity.source),
       source != "themoviedb",
@@ -300,7 +311,7 @@ class MediaActionHandler: ObservableObject {
     source: String,
     mediaId: String,
     mediaType: String
-  ) -> MediaInfo? {
+  ) -> TMDBTargetResolution? {
     guard mapping.media_source == source,
       mapping.media_id == mediaId,
       mapping.type == mediaType,
@@ -315,7 +326,7 @@ class MediaActionHandler: ObservableObject {
     var target = tmdbJumpTarget(
       for: item, tmdbId: mapping.tmdb_id, type: targetType, season: .some(targetSeason))
     target.tmdbSeasonHint = targetSeason
-    return target
+    return .mapping(origin: MediaIdentity(source: source, mediaId: mediaId), target: target)
   }
 
   static func tmdbJumpTarget(
