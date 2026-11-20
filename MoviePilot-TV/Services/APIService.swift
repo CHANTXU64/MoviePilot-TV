@@ -434,9 +434,14 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
 
-  /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理，回退名称识别。
+  /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
   var supportsSharedMediaMapping: Bool {
     BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: settings?.BACKEND_VERSION)
+  }
+
+  /// 共享映射未命中后的按需查找从后端 v3.2.9 起才可用；版本读不出时按不可用处理。
+  var supportsMediaMappingMatch: Bool {
+    BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: settings?.BACKEND_VERSION)
   }
 
   var imageConfigurationIdentity: String {
@@ -1987,7 +1992,8 @@ class APIService: ObservableObject {
 
   /// 查询非 TMDB 来源到 TMDB 的共享映射。
   ///
-  /// 未命中、共享识别未启用或后端版本不足时返回 `nil`；网络/解码/业务失败抛出，调用方回退名称识别。
+  /// 未命中、共享识别未启用或后端版本不足时返回 `nil`；网络/解码/业务失败抛出。
+  /// v3.2.9 起调用方继续按需查找，低版本回退名称识别。
   /// 命中与未命中都在会话内短暂缓存，避免「TMDB 详情」每次按下都走一次 0.8s 预算的后端查询。
   func fetchMediaMapping(
     identity: MediaIdentity,
@@ -1995,12 +2001,123 @@ class APIService: ObservableObject {
     season: Int? = nil
   ) async throws -> MediaMapping? {
     guard supportsSharedMediaMapping,
-      let source = MediaIdentifier.normalizeSource(identity.source),
-      source != "themoviedb"
+      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season)
     else {
       return nil
     }
 
+    let key = mediaMappingCacheKey(
+      identity: MediaIdentity(source: query.source, mediaId: query.mediaId),
+      type: query.mediaType,
+      season: query.season)
+    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      let endpoint = try self.buildEndpoint(
+        path: "/media/mapping",
+        params: [
+          "media_source": query.source,
+          "media_id": query.mediaId,
+          "type": query.mediaType,
+          "season": query.season.map(String.init),
+        ]
+      )
+      // 后端查询预算 0.8s；1.5s 与 Web 一致，超时后调用方继续按需查找或名称识别。
+      let data = try await self.makeRequest(endpoint: endpoint, timeoutInterval: 1.5)
+      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
+        return .miss
+      }
+      return .mapping(mapping)
+    }
+    switch entry {
+    case .mapping(let mapping): return mapping
+    case .miss: return nil
+    }
+  }
+
+  /// 共享映射未命中后按需查找 TMDB 关系（`POST /media/mapping/match`）。
+  ///
+  /// 只由 v3.2.9 起的调用方在 GET 未命中后调用；返回 `nil` 表示后端完成查找后没有关系。
+  /// 查找失败不写入缓存，用户下一次动作会重试；同时查找由后端合并，客户端不另做并发控制。
+  func fetchMediaMappingMatch(
+    identity: MediaIdentity,
+    type: String,
+    season: Int? = nil
+  ) async throws -> MediaMapping? {
+    guard supportsMediaMappingMatch,
+      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season)
+    else {
+      return nil
+    }
+
+    // Match 使用独立缓存键，避免 GET 的未命中缓存把后续 Match 结果挡掉。
+    let key = "match|"
+      + mediaMappingCacheKey(
+        identity: MediaIdentity(source: query.source, mediaId: query.mediaId),
+        type: query.mediaType,
+        season: query.season)
+    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      let body = try JSONEncoder().encode(
+        MediaMappingMatchBody(
+          mediaSource: query.source,
+          mediaId: query.mediaId,
+          type: query.mediaType,
+          season: query.season
+        )
+      )
+      let data = try await self.makeRequest(
+        endpoint: "/media/mapping/match",
+        method: "POST",
+        body: body,
+        timeoutInterval: Self.mediaMappingMatchTimeout
+      )
+      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
+        return .miss
+      }
+      return .mapping(mapping)
+    }
+    switch entry {
+    case .mapping(let mapping): return mapping
+    case .miss: return nil
+    }
+  }
+
+  /// 后端按需查找的自身预算为 180s；客户端留出响应余量，不提前放弃。
+  private static let mediaMappingMatchTimeout: TimeInterval = 190
+
+  private struct MediaMappingLookupQuery {
+    let source: String
+    let mediaId: String
+    let mediaType: String
+    let season: Int?
+  }
+
+  private struct MediaMappingMatchBody: Encodable {
+    let mediaSource: String
+    let mediaId: String
+    let type: String
+    let season: Int?
+
+    enum CodingKeys: String, CodingKey {
+      case mediaSource = "media_source"
+      case mediaId = "media_id"
+      case type
+      case season
+    }
+  }
+
+  private func mediaMappingLookupQuery(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> MediaMappingLookupQuery? {
+    guard let source = MediaIdentifier.normalizeSource(identity.source),
+      source != "themoviedb"
+    else {
+      return nil
+    }
     let mediaType = normalizeMediaType(type)
     guard mediaType == "movie" || mediaType == "tv" else { return nil }
     guard let mediaId = MediaIdentifier.normalizedString(identity.mediaId),
@@ -2013,32 +2130,8 @@ class APIService: ObservableObject {
     // 电影不带季号；电视保留 0（特别季）并拒绝超出后端契约的负数/超大值。
     let querySeason = mediaType == "tv" ? season : nil
     if let querySeason, !(0...10000).contains(querySeason) { return nil }
-
-    let key = mediaMappingCacheKey(
-      identity: MediaIdentity(source: source, mediaId: mediaId), type: mediaType, season: querySeason)
-    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
-      [weak self] in
-      guard let self else { throw CancellationError() }
-      let endpoint = try self.buildEndpoint(
-        path: "/media/mapping",
-        params: [
-          "media_source": source,
-          "media_id": mediaId,
-          "type": mediaType,
-          "season": querySeason.map(String.init),
-        ]
-      )
-      // 后端查询预算 0.8s；1.5s 与 Web 一致，超时后回退名称识别。
-      let data = try await self.makeRequest(endpoint: endpoint, timeoutInterval: 1.5)
-      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
-        return .miss
-      }
-      return .mapping(mapping)
-    }
-    switch entry {
-    case .mapping(let mapping): return mapping
-    case .miss: return nil
-    }
+    return MediaMappingLookupQuery(
+      source: source, mediaId: mediaId, mediaType: mediaType, season: querySeason)
   }
 
   private func mediaMappingCacheKey(

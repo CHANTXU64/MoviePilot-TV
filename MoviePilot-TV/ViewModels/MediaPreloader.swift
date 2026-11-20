@@ -690,7 +690,47 @@ class MediaPreloadTask: ObservableObject {
     guard let apiService else { throw CancellationError() }
     defer { isTmdbRecognitionFinished = true }
 
-    // 共享映射优先于标题识别；没有可用关系时才走原有名称识别。
+    // v3.2.9 起：GET 共享映射未命中后交给后端按需查找，Match 无结果即终点，
+    // 不再回退名称识别。预加载没有用户可见提示，失败只记录日志。
+    // 纯标题条目没有可提交的身份，仍走低版本的名称识别路径。
+    let mediaType = media.type.map(apiService.normalizeMediaType)
+    let canUseOnDemandMatch =
+      media.identity != nil && (mediaType == "movie" || mediaType == "tv")
+    if apiService.supportsMediaMappingMatch && canUseOnDemandMatch {
+      do {
+        if let target = try await MediaActionHandler.sharedTMDBTarget(
+          for: media,
+          apiService: apiService
+        ) {
+          self.tmdbId = target.tmdb_id
+          self.tmdbTarget = target
+          return
+        }
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        // GET 是快速命中路径，失败后仍继续按需查找。
+        Logger.error("[MediaPreloadTask] TMDB 共享映射查询失败: \(error)")
+      }
+
+      do {
+        if let target = try await MediaActionHandler.matchTMDBTarget(
+          for: media,
+          apiService: apiService
+        ) {
+          self.tmdbId = target.tmdb_id
+          self.tmdbTarget = target
+          return
+        }
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        Logger.error("[MediaPreloadTask] TMDB 按需查找失败: \(error)")
+      }
+      return
+    }
+
+    // 低版本仍保持共享映射优先于标题识别；没有可用关系时才走原有名称识别。
     do {
       if let target = try await MediaActionHandler.sharedTMDBTarget(
         for: media,

@@ -113,8 +113,56 @@ class MediaActionHandler: ObservableObject {
 
     if tmdbIdToUse == nil {
       let title = item.title?.trimmingCharacters(in: .whitespaces) ?? ""
+      let itemMediaType = item.type.map(apiService.normalizeMediaType)
+      let hasMappableType = itemMediaType == "movie" || itemMediaType == "tv"
+      let canUseOnDemandMatch =
+        useSharedMapping && apiService.supportsMediaMappingMatch
+        && item.identity != nil && hasMappableType
       let canTrySharedMapping =
         useSharedMapping && apiService.supportsSharedMediaMapping && item.identity != nil
+
+      // v3.2.9 起：共享映射 GET 未命中后由后端按需查找，Match 是终点。
+      // 这条路径不再回退名称识别，否则会把后端已经明确判定为无关系的结果再猜一遍。
+      if canUseOnDemandMatch {
+        isRecognizingTmdb = true
+        do {
+          if let target = try await Self.sharedTMDBTarget(for: item, apiService: apiService) {
+            isRecognizingTmdb = false
+            guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+            return target
+          }
+        } catch is CancellationError {
+          isRecognizingTmdb = false
+          return nil
+        } catch {
+          // GET 只是快速命中缓存；失败时继续按需查找，不把查询失败当成媒体不存在。
+          Logger.error("TMDB 共享映射查询失败: \(error)")
+        }
+
+        do {
+          if let target = try await Self.matchTMDBTarget(for: item, apiService: apiService) {
+            isRecognizingTmdb = false
+            guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+            return target
+          }
+        } catch is CancellationError {
+          isRecognizingTmdb = false
+          return nil
+        } catch {
+          // 查找失败不是"媒体不存在"，也不回退名称识别；只记录日志，保持界面静默。
+          Logger.error("TMDB 按需查找失败: \(error)")
+          isRecognizingTmdb = false
+          return nil
+        }
+
+        // Match 返回 null 才是后端确认的无关系；复用现有未识别提示。
+        isRecognizingTmdb = false
+        guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+        if notifyWhenUnrecognized {
+          showTMDBNotFoundAlert = true
+        }
+        return nil
+      }
 
       if canTrySharedMapping {
         isRecognizingTmdb = true
@@ -170,7 +218,8 @@ class MediaActionHandler: ObservableObject {
     return Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
   }
 
-  /// 共享映射优先的完整 TMDB 目标；返回 nil 表示没有可用关系，调用方继续名称识别。
+  /// 共享映射的完整 TMDB 目标；返回 nil 表示没有可用关系。
+  /// v3.2.9 起调用方继续按需查找，低版本回退名称识别。
   /// 只接受与请求身份回显一致、且 TMDB 类型合法的映射，防止把别人的关系当成当前条目的目标。
   static func sharedTMDBTarget(
     for item: MediaInfo,
@@ -196,6 +245,57 @@ class MediaActionHandler: ObservableObject {
     else {
       return nil
     }
+    return mappingTMDBTarget(
+      for: item,
+      mapping: mapping,
+      source: source,
+      mediaId: mediaId,
+      mediaType: mediaType
+    )
+  }
+
+  /// 按需查找的完整 TMDB 目标；返回 nil 表示后端查找后确无关系。
+  /// 只由 `>= v3.2.9` 调用方在共享映射未命中后调用。
+  static func matchTMDBTarget(
+    for item: MediaInfo,
+    apiService: APIService
+  ) async throws -> MediaInfo? {
+    guard let identity = item.identity,
+      let source = MediaIdentifier.normalizeSource(identity.source),
+      source != "themoviedb",
+      let mediaId = MediaIdentifier.normalizedString(identity.mediaId),
+      let rawType = item.type
+    else {
+      return nil
+    }
+    let mediaType = apiService.normalizeMediaType(rawType)
+    guard mediaType == "movie" || mediaType == "tv" else { return nil }
+
+    guard
+      let mapping = try await apiService.fetchMediaMappingMatch(
+        identity: MediaIdentity(source: source, mediaId: mediaId),
+        type: rawType,
+        season: item.season
+      )
+    else {
+      return nil
+    }
+    return mappingTMDBTarget(
+      for: item,
+      mapping: mapping,
+      source: source,
+      mediaId: mediaId,
+      mediaType: mediaType
+    )
+  }
+
+  private static func mappingTMDBTarget(
+    for item: MediaInfo,
+    mapping: MediaMapping,
+    source: String,
+    mediaId: String,
+    mediaType: String
+  ) -> MediaInfo? {
     guard mapping.media_source == source,
       mapping.media_id == mediaId,
       mapping.type == mediaType,

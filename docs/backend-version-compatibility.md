@@ -38,6 +38,7 @@
 | v3.2.6 | 9afe190cdc22ffbd680b40925d26dec1ddb22bd4 | v3.2.7 | 季集列表返回 TMDB 单集 ID、`/mediaserver/exists` 返回条目所属服务器、搜索诊断告警带规则 ID、图片代理新增可选 `maxWidth`/`quality` 并改私有缓存、音乐手动整理新增曲目对齐与最终目录、Jellyfin 附加库类型专用路由、站点长限速改为延后、订阅身份转换与整包下载范围内部修正；`app/api` 零路由增删，schema 只有可选新增与默认值调整，TV 已调用接口的既有字段、必填项和订阅写回均未变；TV 三处 `since v3.2.6` 能力门禁（应用内播放、单集试看、本轮新增的媒体服务器卡片缩略）据此登记生效，首页媒体服务器卡片海报开始按版本追加 `maxWidth`（见下节） |
 | v3.2.7 | 742533080577622dd91efd786b96104e847e4eda | v3.2.7 | 新增非 TMDB 来源到 TMDB 的共享映射 `/media/mapping`、统一通知渠道授权 `/authorization/*`、媒体服务器流式播放/搜索/单集标识接口、渠道路径的下载可见性与整理历史 AI 重做人工身份授权；订阅身份查询新增可选 `episode_group` 过滤与共同 TMDB 身份回退；TV 接入共享映射（`>= v3.2.7`），其余新增端点无 TV 入口，媒体服务器新端点等待上游成熟后再评估（见下节） |
 | v3.2.8 | b88c7295d9a4711c87478f9d6307762c8ca73233 | v3.2.8 | 原生媒体流改为优先代理媒体服务器上游、新增单集展示元数据端点、媒体状态返回可选所属服务器、插件市场索引失败返回 424、站点认证空参数明确拒绝，以及订阅媒体库查询失败保留、无年份剧集别名消歧、SVG 海报、远端整理恢复和 IMDb 集号父剧集解析等内部修正；TV 已调用接口的参数、返回字段和订阅写回未变，无新增 TV 入口，仅登记版本（见下节） |
+| v3.2.9 | 195747fae33353bdd0d113b3bb9331b98ae13eef | v3.2.9 | 新增 `POST /media/mapping/match`（共享映射未命中后按需查找）、知识库集中存储、通知原生图片/文件与分渠道限制、音乐候选/歌单/播放队列、StarSpace RSS、同步盘客户端和 Discord 绑定等；`app/schemas/subscribe.py` 无 diff，订阅路由、身份与写回未变。TV 自该版本起在 `GET /media/mapping` 未命中后调用 Match，并停止该路径的名称识别回退（见下节） |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -221,6 +222,18 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **必须修与门禁**：必须修 = 无。v3.2.8 没有改变 TV 已调用接口的既有字段、必填项或订阅写回，因此只登记版本，不新增任何能力门禁；v3.2.7 的共享映射 `since v3.2.7` 门禁保持不变。`/mediaserver/episode-metadata` 与原生流端点没有 TV 调用，不进入契约目录。
 - **新增候选与不跟进**：`docs/frontend-update-todo.md` 的「媒体服务器流式播放与搜索」补充 v3.2.8 原生流与 `episode-metadata` 现状，仍不作为 TV 功能待办；插件市场 424、站点认证、Web 选集弹层和渠道授权搜索均不进入 TV TODO。
 - **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。版本登记和提示逻辑在 tvOS 27.2 Simulator 上做定向验证：`python3 scripts/test-tvos.py` 单版本 Debug 构建 `BUILD SUCCEEDED`，`SystemVersionInfoTests` 10 个用例、`OpenAPIContractCatalogIntegrityTests` 5 个用例均 0 失败。完整套件、三版本矩阵和真实中心未跑。
+
+### v3.2.9 核对范围与边界
+
+对照官方后端 [v3.2.8 → v3.2.9](https://github.com/jxxghp/MoviePilot/compare/v3.2.8...v3.2.9) 及各标签 `version.py` 指定的 Web [v3.2.8 → v3.2.9](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.8...v3.2.9)。后端基准提交 `b88c7295d9a4711c87478f9d6307762c8ca73233`，目标提交 `195747fae33353bdd0d113b3bb9331b98ae13eef`（33 个提交，含合并提交；`version.py` 将 `APP_VERSION`/`FRONTEND_VERSION` 同步到 `v3.2.9`）；Web 基准提交 `ac4db5264a791291b3819ab9967fdecd442cc2d6`，目标提交 `db17d9cb349e1024e3f9190c0e888704cb62c8ab`（23 个提交）。核对时点 2026-11-20，按仓库内提交对象核对。只新增目标精确版本 v3.2.9，不推断未登记热修复版本兼容。
+
+- **接口与契约（新增按需查找）**：`app/api` 本轮唯一新增是 `POST /media/mapping/match`（`app/api/endpoints/media.py`），请求模型 `MediaMappingMatchQuery` 要求 `media_source`、`media_id`、`type`（仅 `movie`/`tv`），`season` 可选且电影不允许带季号；成功响应为 `Response(success=True, data=MediaMapping | null)`。后端先读共享关系与本地 600 秒记录，未命中再按条目去重后查找，`MATCH_LIMIT=4`、`MATCH_TIMEOUT=180.0`，查找忙/失败/不可用分别映射 429/502/503。`app/schemas/subscribe.py` 无 diff，`/subscribe/*` 路由未增删，TV 已用的订阅、搜索、详情、下载、整理和媒体服务器端点参数/返回结构未变。
+- **TV 接入（v3.2.9 起）**：详情页与预加载的 TMDB 解析链改为「有效 `tmdb_id` → `GET /media/mapping`（1.5 秒快速命中，命中或未命中都短暂缓存）→ 未命中/GET 失败 → `POST /media/mapping/match`」。GET 命中时不再发 POST；Match 返回 `data: null` 时详情页动作沿用现有「未识别到此媒体的TMDB信息」提示；Match 网络/业务失败只记日志，不新增提示、不回退名称识别。回显的 `media_source`/`media_id`/`type` 与请求不一致、TMDB 类型非法或 `tmdb_id` 非正数时按无关系处理。`useSharedMapping: false` 的「搜索资源」等路径仍走原有名称识别：该路径不提交共享映射，且可能没有可用于 Match 的身份；纯标题条目也没有 `media_source`/`media_id` 可提交。
+- **版本门禁**：新增 `supportsMediaMappingMatch`，按 `BackendVersionGate.isAvailable(since: "v3.2.9")` 判定；已解析的更低版本、版本缺失或无法解析时完全不发 Match，保持原有 `GET /media/mapping` → 名称识别行为。契约目录只在 `>= v3.2.9` 登记 `POST /media/mapping/match`，v3.2.7 的 GET 条目和 `since v3.2.7` 门禁不变。Web 配套 v3.2.9 标签本身还没有 Match 的页面消费提交（`c3c0301b` 在后续分支），TV 按后端已发布的接口契约接入，不以 Web 入口是否存在为条件。
+- **其余后端变化（暂不跟进）**：知识库集中存储与检索、通知原生图片/文件及分渠道限制、音乐候选/歌单/播放队列、StarSpace RSS、同步盘客户端、Discord 绑定、私信与站点适配等，均无 TV 调用链或大屏入口；TV 的通知、媒体库、订阅和播放路径不受影响。`/mediaserver/exists`、`/media/status`、`/site/test` 等 TV 已用端点的字段与语义未变。
+- **Web 配套**：知识库实验室开关、原生音乐队列/封面、原生媒体卡片动作、主题与视觉调整、站点测试范围、插件多实例和智能助手面板高度等改动集中在 Web 界面或 iOS 原生壳；TV 是独立 SwiftUI 实现，不加载 Web 资源，页面层不跟进。
+- **必须修与候选**：必须修 = 无；本轮 Match 接入是用户明确要求的识别能力替换，不是上游破坏性变更。`docs/frontend-update-todo.md` 无需新增候选：Match 已实现，知识库、音乐、通知原生附件、StarSpace、同步盘和 Discord 均不适合当前 tvOS 媒体浏览路径。
+- **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。已在 tvOS 27.2 Simulator 上完成单版本 Debug 构建和定向回归：`python3 scripts/test-tvos.py` 构建通过；`SystemVersionInfoTests` 10 个、`OpenAPIContractCatalogIntegrityTests` 6 个、`APIServiceCompatibilityEndpointTests` 40 个、`MediaMappingTests` 20 个、`TMDBJumpAlertPolicyTests` 3 个，均 0 失败。完整套件、三版本矩阵和真实后端兼容测试未跑；Match 的 180 秒预算与真实后端忙/失败状态只按源码契约核对，未做真实中心压测。
 
 ## 跟进一个新版本
 

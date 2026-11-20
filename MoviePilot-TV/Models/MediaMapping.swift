@@ -1,8 +1,8 @@
 import Foundation
 
-/// 非 TMDB 来源到 TMDB 的共享映射（`GET /media/mapping`）。
+/// 非 TMDB 来源到 TMDB 的映射关系（`GET /media/mapping`、`POST /media/mapping/match`）。
 ///
-/// 后端在未命中、未启用共享识别或查询失败时返回 `data: null`；解码后为 `nil`。
+/// 后端在未命中或未启用共享识别时返回 `data: null`；解码后为 `nil`。
 nonisolated struct MediaMapping: Codable, Equatable, Sendable {
   let media_source: String
   let media_id: String

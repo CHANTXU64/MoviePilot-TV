@@ -599,7 +599,15 @@ enum TVAPIContractCatalog {
     guard BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: backendVersion) else {
       return []
     }
-    return [
+    let mappingResponse = [
+      TVAPIFields.field("media_source", .string),
+      TVAPIFields.field("media_id", .string),
+      TVAPIFields.field("type", .string),
+      TVAPIFields.field("tmdb_id", .integer),
+      TVAPIFields.field("tmdb_type", .string),
+      TVAPIFields.field("tmdb_season", .integer),
+    ]
+    var operations = [
       TVAPIOperationBuilder.get(
         "/media/mapping",
         query: [
@@ -608,18 +616,29 @@ enum TVAPIContractCatalog {
           TVAPIParam.query("type", alwaysSent: true),
           TVAPIParam.query("season", type: .integer),
         ],
-        dependedResponse: [
-          TVAPIFields.field("media_source", .string),
-          TVAPIFields.field("media_id", .string),
-          TVAPIFields.field("type", .string),
-          TVAPIFields.field("tmdb_id", .integer),
-          TVAPIFields.field("tmdb_type", .string),
-          TVAPIFields.field("tmdb_season", .integer),
-        ],
+        dependedResponse: mappingResponse,
         coverage: readDecode,
         notes: ">= v3.2.7；非 TMDB 来源到 TMDB 的共享映射，未命中返回 data: null"
       )
     ]
+    if BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: backendVersion) {
+      operations.append(
+        TVAPIOperationBuilder.mutation(
+          "POST",
+          "/media/mapping/match",
+          body: [
+            TVAPIFields.field("media_source", .string, required: true),
+            TVAPIFields.field("media_id", .string, required: true),
+            TVAPIFields.field("type", .string, required: true),
+            TVAPIFields.field("season", .integer),
+          ],
+          dependedResponse: mappingResponse,
+          coverage: readDecode,
+          notes: ">= v3.2.9；共享映射未命中后按需查找，未命中返回 data: null；TV 只在 GET 未命中或失败时调用"
+        )
+      )
+    }
+    return operations
   }
 
   private static func discoverOperations(backendVersion: String?) -> [TVAPIOperation] {
