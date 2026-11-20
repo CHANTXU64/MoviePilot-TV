@@ -66,19 +66,22 @@ struct MediaDetailContainerView: View {
     for sourceMedia: MediaInfo,
     fullDetail: MediaInfo?,
     recognizedTmdbId: Int?,
+    jumpTarget: MediaInfo? = nil,
     isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
   ) -> MediaInfo? {
     guard isEnabled,
       MediaIdentifier.validNumericIdentifier(sourceMedia.tmdb_id) == nil,
       sourceMedia.canJumpToTMDB,
-      let fullDetail,
-      let tmdbId =
-        MediaIdentifier.validNumericIdentifier(recognizedTmdbId)
-        ?? MediaIdentifier.validNumericIdentifier(fullDetail.tmdb_id)
+      let fullDetail
     else {
       return nil
     }
 
+    if let jumpTarget { return jumpTarget }
+    guard let tmdbId =
+      MediaIdentifier.validNumericIdentifier(recognizedTmdbId)
+      ?? MediaIdentifier.validNumericIdentifier(fullDetail.tmdb_id)
+    else { return nil }
     return MediaActionHandler.tmdbJumpTarget(for: fullDetail, tmdbId: tmdbId)
   }
 
@@ -98,6 +101,7 @@ struct MediaDetailContainerView: View {
 
 /// 内部辅助视图：通过 @ObservedObject 监听 MediaPreloadTask 的 @Published 属性变化，驱动 UI 刷新
 private struct MediaDetailContainerContent: View {
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   let media: MediaInfo
   @ObservedObject var preloadTask: MediaPreloadTask
   let routeID: UUID
@@ -163,8 +167,16 @@ private struct MediaDetailContainerContent: View {
     MediaDetailContainerView.tmdbPreloadTarget(
       for: media,
       fullDetail: preloadTask.fullDetail,
-      recognizedTmdbId: preloadTask.tmdbId
+      recognizedTmdbId: preloadTask.tmdbId,
+      jumpTarget: preloadTask.tmdbTarget
     )
+  }
+
+  private var detailForTMDBMatch: MediaInfo? {
+    guard allowsRequests, navigationCoordinator.isStackInteractive,
+      navigationCoordinator.topEntryID == routeID, preloadTask.isTmdbRecognitionFinished
+    else { return nil }
+    return preloadTask.fullDetail
   }
 
   var body: some View {
@@ -173,6 +185,8 @@ private struct MediaDetailContainerContent: View {
     MediaDetailView(
       detail: preloadTask.fullDetail ?? media,
       libraryItemHint: media.libraryItemHint,
+      initialEpisodeSeason: MediaDetailEpisodeSeasons.navigationSeason(
+        for: preloadTask.fullDetail ?? media, routeMedia: media),
       preloadTask: preloadTask,
       isContentReady: $isContentReady,
       routeID: routeID,
@@ -185,6 +199,10 @@ private struct MediaDetailContainerContent: View {
     )
     .onAppear { reportInitialContentReady() }
     .onChange(of: preloadTask.fullDetail) { _, _ in reportInitialContentReady() }
+    .task(id: detailForTMDBMatch?.id) { [detail = detailForTMDBMatch] in
+      guard let detail else { return }
+      await preloadTask.matchTMDBForOpenedDetail(detail)
+    }
     .task(id: tmdbPreloadTarget?.id) {
       guard allowsRequests, let target = tmdbPreloadTarget else { return }
       APIService.shared.mediaPreloader.preloadAuxiliary(

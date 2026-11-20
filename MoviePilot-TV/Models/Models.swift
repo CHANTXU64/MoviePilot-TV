@@ -485,6 +485,8 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   /// 从首页「最近添加」打开时，那张卡在媒体服务器上的条目（只在本机导航时带着，不编码、不参与身份比较）。
   /// MoviePilot 还没同步到这个条目时（入库查询查不到），详情页用它找到这份文件播放，起播前照常按编号核对。
   var libraryItemHint: MediaServerItemRef? = nil
+  /// 共享映射指定的 TMDB 季号，交给目标详情的剧集行选季。只在本机导航时携带。
+  var tmdbSeasonHint: Int? = nil
   /// Web 会把插件媒体对象直接作为 `media_in` 回传；保留未建模字段以免丢失插件契约。
   private let rawPayload: [String: JSONValue]?
 

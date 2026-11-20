@@ -185,6 +185,7 @@ struct MediaDetailView: View {
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
   let presentationStyle: MediaDetailPresentationStyle
+  let initialEpisodeSeason: Int?
   @State private var cachedBackgroundFailed = false
   private var cachedContent: TopShelfCachedContent? {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
@@ -438,6 +439,7 @@ struct MediaDetailView: View {
   init(
     detail: MediaInfo,
     libraryItemHint: MediaServerItemRef? = nil,
+    initialEpisodeSeason: Int? = nil,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
@@ -456,6 +458,7 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.initialEpisodeSeason = initialEpisodeSeason
     self.presentationStyle = presentationStyle
     self.isEntryLoading = isEntryLoading
     self.entryStatusMessage = entryStatusMessage
@@ -599,6 +602,7 @@ struct MediaDetailView: View {
                       subscriptionSeasons: shouldShowSeasonSubscriptionSection
                         ? preloadTask.seasonViewModel : nil,
                       playback: viewModel.episodePlayback,
+                      initialSeason: initialEpisodeSeason,
                       rowHint: viewModel.episodeRowHint,
                       panelRequest: viewModel.episodePanelRequest,
                       defaultSeasons: viewModel.episodeSeasons,

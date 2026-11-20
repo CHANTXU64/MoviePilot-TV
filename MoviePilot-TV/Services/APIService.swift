@@ -475,7 +475,7 @@ class APIService: ObservableObject {
     }
   }
 
-  private func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
+  func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
     try Task.checkCancellation()
     guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
   }
@@ -2067,12 +2067,20 @@ class APIService: ObservableObject {
           season: query.season
         )
       )
-      let data = try await self.makeRequest(
-        endpoint: "/media/mapping/match",
-        method: "POST",
-        body: body,
-        timeoutInterval: Self.mediaMappingMatchTimeout
-      )
+      let data: Data
+      do {
+        data = try await self.makeRequest(
+          endpoint: "/media/mapping/match",
+          method: "POST",
+          body: body,
+          timeoutInterval: Self.mediaMappingMatchTimeout
+        )
+      } catch APIError.serverMessage(let message)
+        where Self.httpStatusCode(fromServerMessage: message) == 429
+      {
+        // 只在 HTTP 层识别并发已满，响应体里的业务错误走正常解码。
+        throw MediaMappingMatchError.busy
+      }
       guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
         return .miss
       }
