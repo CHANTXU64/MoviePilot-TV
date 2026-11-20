@@ -103,11 +103,11 @@
 
 ### 媒体服务器流式播放与搜索
 
-- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`，用于已入库媒体的搜索、票据、Range 流式读取和单集标识。
-- 当前判断：等待上游成熟后再跟进，本轮不实现、不登记 TV 契约。新接口涉及票据、Range、重定向主机校验和字幕/歌词文件返回，TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest` 路径没有受影响；在真实后端与上游 Web 的调用方式稳定前，不做大屏入口或播放器改造。
+- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）。
+- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest` 路径没有受影响；在真实后端与上游 Web 的调用方式稳定前，不做大屏入口或播放器改造。
 - 可评估方向：
-  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。
-  - 新端点属于 `v3.2.7` 起的新行为，若未来接入必须按 `>= v3.2.7` 门禁并保留现有路径回退；不要在本轮把它们写成 TV 已支持。
+  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。`episode-metadata` 只有在未来出现「媒体库搜索直接选集」的大屏入口时再评估，不单独立项。
+  - `/stream-info`/`/stream` 等原生流端点属于 `v3.2.7` 起的新行为，若未来接入必须按 `>= v3.2.7` 门禁并保留现有路径回退；`/mediaserver/episode-metadata` 属于 `v3.2.8` 起的新行为，若未来接入必须单独按 `>= v3.2.8` 门禁。不要在本轮把它们写成 TV 已支持。
 
 ## 暂不作为 TV 功能待办
 

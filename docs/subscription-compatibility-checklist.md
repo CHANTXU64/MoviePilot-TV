@@ -64,6 +64,7 @@
 - MoviePilot v3.2.5 没有改动订阅端点、`app/schemas/subscribe.py`、数据库迁移和写入契约（该版本 `app/api`/`app/schemas` 整体零变化），v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效；`9b326f5fc` 的合集断档集号保留、`9eaaf5f71` 的整理入库后同步订阅事实以及各下载器/整理修复都只在后端下载与调度内部，不改变 `/subscribe/*` 与 `/download/*` 的请求与返回结构。
 - MoviePilot v3.2.6 没有改动订阅端点、`app/schemas/subscribe.py` 和写入契约（该版本 `app/api` 零路由增删，`app/schemas` 只有 TMDB、媒体服务器、搜索诊断和整理四处可选新增/默认值调整，订阅 schema 无 diff），v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效。该版本新增的唯一数据库迁移 `a7383c1d9e20_filter_rule_ids` 只重写 `systemconfig` 里的 `CustomFilterRules` 和 `UserFilterRuleGroups`（为解析不了的旧自定义规则 ID 分配稳定新 ID 并同步规则组引用），不触碰订阅表、订阅配置或全局配置。`549f3f32d` 在检查已有媒体时重试订阅身份转换、`020064274` 让整季包只下载订阅范围内的集、`6d9cf0608` 在累计集号映射后接受唯一视频文件，都是后端搜索、匹配与下载链的内部行为，不改变 `/subscribe/*` 与 `/download/*` 的请求与返回结构；TV 的订阅写回、取消确认与整理历史重做路径继续沿用既有门禁。
 - MoviePilot v3.2.7 没有改动订阅 schema 和写入契约（`app/schemas/subscribe.py` 无 diff，`/subscribe/*` 路由未增删），v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效。`/subscribe/media/{media_id}` 查询新增可选 `episode_group` 过滤和共同 TMDB 身份回退：TV 状态查询仍携带 `mtype`、标题和年份，可能通过共同 TMDB 身份命中跨源订阅；取消订阅仍用 `includeVideoMetadataFallback: false`（不发送 `mtype`/标题/年份）按原生身份查询，不能把状态查询回显的跨源 `media_source`/`media_id` 当作删除键，也不能把媒体级删除未命中时的 `success:true` 当成已删除。TV 不传 `episode_group`；`GET /download/` 的渠道路径只影响渠道成员，TV 的管理员路径不变；`/history/transfer/{history_id}/ai-redo` 的一次性人工身份授权不改变请求/响应结构。
+- MoviePilot v3.2.8 没有改动订阅 schema 和写入契约（`app/schemas/subscribe.py` 无 diff，`/subscribe/*` 路由未增删），v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效。`ea4d3cada`/`4020a1428` 让订阅补全在媒体库存在性查询失败时保留失败并跳过本轮，而不是把查询失败当成「未找到」；默认路径仍保持原有行为，TV 的订阅状态查询、写回和取消身份选择不受影响。
 
 ## 订阅匹配与取消
 

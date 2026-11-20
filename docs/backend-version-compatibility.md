@@ -37,6 +37,7 @@
 | v3.2.5 | 4ed5fa079897e4b02615abb01b78efc1d1272cae | v3.2.5 | 站点 HTTPS 重定向保留 Cookie、HDChina RSS 链接发现更新、Agent 选择回执时间戳与历史兼容导入、浏览器空闲会话回收、Transmission 瞬态 RPC 重试、整理保留 115/通用远端覆盖文件名、下载合集断档集号避免幽灵进度、Emby 剧集范围扩展上限、事件 outbox 隔离、LLM 请求超时、插件启动恢复事务归属与插件市场默认快照；该版本 `app/api`/`app/schemas` 零变化，TV 已调用接口的参数、返回结构和订阅写回均未变，无新增 TV 入口（见下节） |
 | v3.2.6 | 9afe190cdc22ffbd680b40925d26dec1ddb22bd4 | v3.2.7 | 季集列表返回 TMDB 单集 ID、`/mediaserver/exists` 返回条目所属服务器、搜索诊断告警带规则 ID、图片代理新增可选 `maxWidth`/`quality` 并改私有缓存、音乐手动整理新增曲目对齐与最终目录、Jellyfin 附加库类型专用路由、站点长限速改为延后、订阅身份转换与整包下载范围内部修正；`app/api` 零路由增删，schema 只有可选新增与默认值调整，TV 已调用接口的既有字段、必填项和订阅写回均未变；TV 三处 `since v3.2.6` 能力门禁（应用内播放、单集试看、本轮新增的媒体服务器卡片缩略）据此登记生效，首页媒体服务器卡片海报开始按版本追加 `maxWidth`（见下节） |
 | v3.2.7 | 742533080577622dd91efd786b96104e847e4eda | v3.2.7 | 新增非 TMDB 来源到 TMDB 的共享映射 `/media/mapping`、统一通知渠道授权 `/authorization/*`、媒体服务器流式播放/搜索/单集标识接口、渠道路径的下载可见性与整理历史 AI 重做人工身份授权；订阅身份查询新增可选 `episode_group` 过滤与共同 TMDB 身份回退；TV 接入共享映射（`>= v3.2.7`），其余新增端点无 TV 入口，媒体服务器新端点等待上游成熟后再评估（见下节） |
+| v3.2.8 | b88c7295d9a4711c87478f9d6307762c8ca73233 | v3.2.8 | 原生媒体流改为优先代理媒体服务器上游、新增单集展示元数据端点、媒体状态返回可选所属服务器、插件市场索引失败返回 424、站点认证空参数明确拒绝，以及订阅媒体库查询失败保留、无年份剧集别名消歧、SVG 海报、远端整理恢复和 IMDb 集号父剧集解析等内部修正；TV 已调用接口的参数、返回字段和订阅写回未变，无新增 TV 入口，仅登记版本（见下节） |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -208,6 +209,18 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **必须修与门禁**：必须修 = 共享映射接入。新增唯一门禁 `since v3.2.7`（`MediaMapping` 查询），按「新行为版本限制」执行：已解析且 `>= v3.2.7`（含热修复和未登记更新版本）才发起请求，低于该版本、版本读不出或无法解析时不走映射并回退名称识别。v3.2.6 的应用内播放、单集试看与媒体服务器缩略图门禁不变，不能因为登记表前移而改成更低或更高起始版本；媒体服务器新端点没有 TV 调用，不新增门禁。
 - **新增候选与不跟进**：`docs/frontend-update-todo.md` 在既有「资源搜索诊断面板」补入 `390bfd33`（隐藏不适用的规则提示），并新增媒体服务器流式接口「等待上游成熟后再跟进」；`/media/mapping` 本轮已实现，不再列为候选。`/authorization/*`、媒体服务器流式端点、Web 的渠道审批与原生壳改动不进入 TV 功能待办。
 - **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。OpenAPI 基线 `openapi-baseline.json`（v3.0.8）不需要变更；`/media/mapping` 仅在 `>= v3.2.7` 的契约目录返回，避免对旧基线报 `pathMissing`。共享映射的命中/`data:null`/`success:false`/版本门禁、预载映射优先、`tmdb_id == 0` 归一和「搜索资源」跳过路径已在 tvOS 27.2 Simulator 定向验证：`MediaMappingTests` 8 个、`TMDBJumpAlertCallSiteTests` 2 个、`TMDBJumpAlertPolicyTests` 3 个、`MediaPreloadPermissionTests` 23 个、`MediaDetailViewHeaderActionTests` 49 个、`TMDBDetailPreloadTests` 6 个，均 0 失败，单版本 Debug 构建通过。完整套件未跑，三版本矩阵未跑；真实中心映射需要同时启用 `MEDIA_RECOGNIZE_SHARE` 并配置 `MP_SERVER_HOST`，本轮未连真实中心验收。
+
+### v3.2.8 核对范围与边界
+
+对照官方后端 [v3.2.7 → v3.2.8](https://github.com/jxxghp/MoviePilot/compare/v3.2.7...v3.2.8) 及各标签 `version.py` 指定的 Web [v3.2.7 → v3.2.8](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.7...v3.2.8)。后端基准提交 `742533080577622dd91efd786b96104e847e4eda`，目标提交 `b88c7295d9a4711c87478f9d6307762c8ca73233`（38 个提交，含合并提交；发布对齐提交为 `fd0c8c066`，`version.py` 将 `APP_VERSION`/`FRONTEND_VERSION` 同步到 `v3.2.8`，标签末端 `b88c7295d` 只追加插件市场快照）；Web 基准提交 `282b52b7b9fa94c42d1b01c19ca89608e64226cb`，目标提交 `ac4db5264a791291b3819ab9967fdecd442cc2d6`（5 个提交，含合并提交）。旧 v3.2.7 节记录的 Web 目标 `90b36d29` 现已落在 v3.2.8；当前 v3.2.7 标签为 `282b52b7`，本轮按当前标签核对，不改写旧节。核对时点 2026-11-20，按仓库内提交对象核对。只新增目标精确版本 v3.2.8，不推断未登记热修复版本兼容。
+
+- **接口与契约（新增与行为变化）**：`app/api` 新增 `/mediaserver/episode-metadata`（按 `itemid`、`season` 和可选 `server` 返回单集展示信息）；`/mediaserver/stream`、`/mediaserver/stream-info` 等原生流改为优先代理媒体服务器上游，并把上游 405/501 映射为 501、拒绝 HTML/JSON 非媒体流；`/media/status` 增加可选 `server`（`app/schemas/media.py`），`/mediaserver/exists` 的 `item.id`/`item.server` 语义未变；插件市场索引不可用时返回 424；`/site/auth` 对空认证参数返回明确失败。`app/schemas/subscribe.py` 无 diff，`/subscribe/*` 路由未增删，TV 已用的搜索、详情、媒体服务器 `latest`/`exists`/`notexists`、下载、整理、站点和订阅端点参数/返回结构未变。
+- **媒体服务器原生流与单集元数据（暂不跟进）**：TV 的播放器直连 Emby/Jellyfin/Plex，当前不调用 `/mediaserver/stream*`；`/mediaserver/episode-metadata` 主要服务 Web 媒体库搜索的选集弹层，TV 已有 TMDB 季集和媒体服务器集标识，不构成兼容缺口。本轮不把这两个能力加入 TV 契约目录，不新增功能入口；若未来接入，`episode-metadata` 必须按 `>= v3.2.8` 门禁，原生流则继续沿用 v3.2.7 的起点与现有回退，不能把未登记版本当已支持。
+- **订阅与搜索内部修正**：`ea4d3cada`/`4020a1428` 把媒体库查询失败与“未找到”区分开，订阅补全显式要求失败时跳过本轮，默认路径仍保持既有行为；`378156b1e`/`545a879f7` 加强无年份电视剧别名的年份证据；`1206913e0` 恢复远端已移动未改名的整理任务；`cd11bbe3b` 支持 SVG 海报；`491fe8df8` 把 IMDb 单集号解析到父剧集；插件市场镜像回退、Agent 拒绝文案、LLM 思考级别和下载存在性内部调整均不改变 TV 写回。
+- **Web 配套**：`1d084c48 fix(proxy): preserve public host for native media streams`、`90b36d29 fix(resource): align search diagnostics columns`、`31cc2225 fix(ios): unify search filter and episode sheets`（新增 `MediaEpisodePickerDialog`，详情页与媒体库搜索共用选集布局）、`ac4db526 fix(user): simplify channel authorization search and refresh entry` 及合并提交。改动集中在 Web 搜索结果页、选集弹层、渠道授权和原生流反代；TV 是原生 SwiftUI，不加载 Web 资源，页面层不跟进。
+- **必须修与门禁**：必须修 = 无。v3.2.8 没有改变 TV 已调用接口的既有字段、必填项或订阅写回，因此只登记版本，不新增任何能力门禁；v3.2.7 的共享映射 `since v3.2.7` 门禁保持不变。`/mediaserver/episode-metadata` 与原生流端点没有 TV 调用，不进入契约目录。
+- **新增候选与不跟进**：`docs/frontend-update-todo.md` 的「媒体服务器流式播放与搜索」补充 v3.2.8 原生流与 `episode-metadata` 现状，仍不作为 TV 功能待办；插件市场 424、站点认证、Web 选集弹层和渠道授权搜索均不进入 TV TODO。
+- **验证边界**：契约部分为源码对照，未运行真实后端兼容测试。版本登记和提示逻辑在 tvOS 27.2 Simulator 上做定向验证：`python3 scripts/test-tvos.py` 单版本 Debug 构建 `BUILD SUCCEEDED`，`SystemVersionInfoTests` 10 个用例、`OpenAPIContractCatalogIntegrityTests` 5 个用例均 0 失败。完整套件、三版本矩阵和真实中心未跑。
 
 ## 跟进一个新版本
 
