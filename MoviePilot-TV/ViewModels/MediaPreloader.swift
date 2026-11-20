@@ -195,6 +195,8 @@ class MediaPreloadTask: ObservableObject {
 
   // 可选预加载数据（持久存在，加载完直接显示）
   @Published var tmdbId: Int?
+  /// 共享映射优先解析出的完整跳转目标；名称识别不写这里，避免绕过统一的目标门禁。
+  @Published private(set) var tmdbTarget: MediaInfo?
   @Published var isTmdbRecognitionFinished = false
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
@@ -267,7 +269,9 @@ class MediaPreloadTask: ObservableObject {
         // ⑤ TMDB 识别 — 必须先于 checkSubscription 完成，否则 fallback 查询会因 tmdbId 为 nil 而跳过
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
         async let tmdbRecognition: Void = {
-          if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
+          if MediaIdentifier.validNumericIdentifier(self.partialMedia.tmdb_id) == nil,
+            self.partialMedia.canJumpToTMDB
+          {
             try await self.recognizeTmdb(using: self.partialMedia)
           }
         }()
@@ -282,7 +286,8 @@ class MediaPreloadTask: ObservableObject {
         // 按最终 canonical media 补一次识别，让 isTmdbRecognitionFinished 明确落定，
         // 否则 Header 的 TMDB 跳转按钮会因「无目标且识别未结束」永久转圈（F-221）。
         if self.tmdbId == nil, !self.isTmdbRecognitionFinished,
-          canonical.tmdb_id == nil, canonical.canJumpToTMDB
+          MediaIdentifier.validNumericIdentifier(canonical.tmdb_id) == nil,
+          canonical.canJumpToTMDB
         {
           try? await self.recognizeTmdb(using: canonical)
         }
@@ -631,7 +636,9 @@ class MediaPreloadTask: ObservableObject {
       var subscribed = try await apiService.checkSubscription(media: detail)
       // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
       // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
-      if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
+      if !subscribed, MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
+        let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
+      {
         let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
         subscribed = try await apiService.checkSubscription(media: tmdbMedia)
       }
@@ -658,7 +665,9 @@ class MediaPreloadTask: ObservableObject {
         )
         // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
         // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
-        if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
+        if !subscribed, MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
+          let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
+        {
           let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
           subscribed = try await apiService.checkSubscription(
             media: tmdbMedia,
@@ -680,6 +689,24 @@ class MediaPreloadTask: ObservableObject {
   private func recognizeTmdb(using media: MediaInfo) async throws {
     guard let apiService else { throw CancellationError() }
     defer { isTmdbRecognitionFinished = true }
+
+    // 共享映射优先于标题识别；没有可用关系时才走原有名称识别。
+    do {
+      if let target = try await MediaActionHandler.sharedTMDBTarget(
+        for: media,
+        apiService: apiService
+      ) {
+        self.tmdbId = target.tmdb_id
+        self.tmdbTarget = target
+        return
+      }
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      // 映射是辅助查询：失败不能让原本可用的名称识别也失效。
+      Logger.error("[MediaPreloadTask] TMDB 共享映射查询失败: \(error)")
+    }
+
     // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
     // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
     let result: Int?
@@ -694,7 +721,7 @@ class MediaPreloadTask: ObservableObject {
     } catch {
       result = nil
     }
-    if let tmdbId = result {
+    if let tmdbId = MediaIdentifier.validNumericIdentifier(result) {
       self.tmdbId = tmdbId
     }
   }

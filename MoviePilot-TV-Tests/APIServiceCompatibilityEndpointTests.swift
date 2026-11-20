@@ -1639,6 +1639,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var subscriptionLookupResponse: Data?
   private var manualMediaResponses: [String: CompatibilityEndpointStubResponse] = [:]
   private var mediaServerExistsResponse: Data?
+  private var mediaMappingResponse: Data?
 
   func reset() {
     requests.removeAll()
@@ -1652,6 +1653,11 @@ private actor CompatibilityEndpointURLProtocolStub {
     subscriptionLookupResponse = nil
     manualMediaResponses.removeAll()
     mediaServerExistsResponse = nil
+    mediaMappingResponse = nil
+  }
+
+  func setMediaMappingResponse(_ response: Data?) {
+    mediaMappingResponse = response
   }
 
   func setMediaServerExistsResponse(_ response: Data?) {
@@ -1782,6 +1788,9 @@ private actor CompatibilityEndpointURLProtocolStub {
       data =
         mediaServerExistsResponse
         ?? #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
+    } else if url.path == "/api/v1/media/mapping" {
+      statusCode = 200
+      data = mediaMappingResponse ?? #"{"success":true,"data":null}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/anilist/credits/154587" {
       statusCode = 200
       data = #"[{"source":"anilist","id":95097,"name":"种崎敦美"}]"#.data(using: .utf8)!
@@ -1958,5 +1967,242 @@ private final class CompatibilityEndpointURLProtocolClientBox: @unchecked Sendab
 
   func fail(_ error: Error) {
     client?.urlProtocol(protocolInstance, didFailWithError: error)
+  }
+}
+
+@MainActor
+final class MediaMappingTests: XCTestCase {
+  private func configure(_ service: APIService, backendVersion: String) throws {
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "token"
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data("{\"BACKEND_VERSION\":\"\(backendVersion)\"}".utf8)
+    )
+  }
+
+  private func installStub() {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+  }
+
+  func testFetchMediaMappingDecodesHitAndSendsContractQuery() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv","tmdb_season":3}}"#
+          .utf8
+      )
+    )
+
+    let mapping = try await service.fetchMediaMapping(
+      identity: MediaIdentity(source: "douban", mediaId: "123"),
+      type: "电视剧",
+      season: 2
+    )
+
+    XCTAssertEqual(mapping?.tmdb_id, 456)
+    XCTAssertEqual(mapping?.tmdb_type, "tv")
+    XCTAssertEqual(mapping?.tmdb_season, 3)
+    let queries = await CompatibilityEndpointURLProtocol.stub.matchingQueries(
+      suffix: "/media/mapping"
+    ).compactMap { $0 }
+    let query = try XCTUnwrap(queries.last)
+    XCTAssertTrue(query.contains("media_source=douban"))
+    XCTAssertTrue(query.contains("media_id=123"))
+    XCTAssertTrue(query.contains("type=tv"))
+    XCTAssertTrue(query.contains("season=2"))
+  }
+
+  func testFetchMediaMappingTreatsNullDataAsMiss() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(#"{"success":true,"data":null,"message":"未找到对应的 TMDB 关系"}"#.utf8)
+    )
+
+    let identity = MediaIdentity(source: "douban", mediaId: "123")
+    let first = try await service.fetchMediaMapping(identity: identity, type: "电视剧", season: 2)
+    let second = try await service.fetchMediaMapping(identity: identity, type: "电视剧", season: 2)
+
+    XCTAssertNil(first)
+    XCTAssertNil(second)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping" }.count, 1)
+  }
+
+  func testFetchMediaMappingRejectsExplicitFailure() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(#"{"success":false,"message":"mapping failed"}"#.utf8)
+    )
+
+    do {
+      _ = try await service.fetchMediaMapping(
+        identity: MediaIdentity(source: "douban", mediaId: "123"),
+        type: "电视剧",
+        season: 2
+      )
+      XCTFail("Expected an explicit failure")
+    } catch {
+      guard case APIError.serverMessage(let message) = error else {
+        XCTFail("Expected serverMessage, got \(error)")
+        return
+      }
+      XCTAssertEqual(message, "mapping failed")
+    }
+  }
+
+  func testFetchMediaMappingIsGatedBeforeV327() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.6")
+
+    let mapping = try await service.fetchMediaMapping(
+      identity: MediaIdentity(source: "douban", mediaId: "123"),
+      type: "电视剧",
+      season: 2
+    )
+
+    XCTAssertNil(mapping)
+    XCTAssertFalse(service.supportsSharedMediaMapping)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.isEmpty)
+  }
+
+  func testActionHandlerPrefersSharedMappingAndKeepsTargetSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv","tmdb_season":3}}"#
+          .utf8
+      )
+    )
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", season: 2)
+    let handler = MediaActionHandler(apiService: service)
+
+    let first = await handler.getTMDBJumpTarget(for: item)
+    let second = await handler.getTMDBJumpTarget(for: item)
+
+    XCTAssertEqual(first?.tmdb_id, 456)
+    XCTAssertEqual(first?.type, "电视剧")
+    XCTAssertEqual(first?.season, 3)
+    XCTAssertEqual(first?.source, "tmdb")
+    XCTAssertEqual(second?.tmdb_id, 456)
+    XCTAssertFalse(handler.isRecognizingTmdb)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  func testActionHandlerCanSkipSharedMappingForSearch() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    let item = MediaInfo(douban_id: "123", source: "douban", type: "电视剧")
+    let handler = MediaActionHandler(apiService: service)
+
+    let target = await handler.getTMDBJumpTarget(
+      for: item,
+      notifyWhenUnrecognized: false,
+      useSharedMapping: false
+    )
+
+    XCTAssertNil(target)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.isEmpty)
+  }
+
+  func testActionHandlerTreatsZeroTmdbIdAsMissing() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8
+      )
+    )
+    let item = MediaInfo(
+      tmdb_id: 0, douban_id: "123", source: "douban", title: "测试电影", type: "电影")
+    let handler = MediaActionHandler(apiService: service)
+
+    let target = await handler.getTMDBJumpTarget(for: item)
+
+    XCTAssertEqual(target?.tmdb_id, 456)
+    XCTAssertEqual(target?.source, "tmdb")
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  func testPreloadUsesSharedMappingBeforeNameRecognition() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.7")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv","tmdb_season":3}}"#
+          .utf8
+      )
+    )
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", season: 2)
+    let task = MediaPreloadTask(partialMedia: item, apiService: service)
+    task.start()
+    defer { task.cancel() }
+
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
+
+    XCTAssertTrue(task.isTmdbRecognitionFinished)
+    XCTAssertEqual(task.tmdbId, 456)
+    XCTAssertEqual(task.tmdbTarget?.tmdb_id, 456)
+    XCTAssertEqual(task.tmdbTarget?.type, "电视剧")
+    XCTAssertEqual(task.tmdbTarget?.season, 3)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  private func waitUntil(
+    timeout: TimeInterval,
+    condition: @escaping @MainActor () -> Bool
+  ) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline {
+      try? await Task.sleep(for: .milliseconds(20))
+    }
   }
 }

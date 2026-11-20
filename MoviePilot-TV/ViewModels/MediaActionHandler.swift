@@ -69,7 +69,8 @@ class MediaActionHandler: ObservableObject {
     let snapshot = apiService.sessionSnapshot()
     var target = item
     if recognizeIfNeeded, item.identity == nil,
-      let recognized = await getTMDBJumpTarget(for: item, notifyWhenUnrecognized: false)
+      let recognized = await getTMDBJumpTarget(
+        for: item, notifyWhenUnrecognized: false, useSharedMapping: false)
     {
       target = recognized
     }
@@ -97,19 +98,47 @@ class MediaActionHandler: ObservableObject {
   ///   默认 `true`，适用于「TMDB详情页」这类**以 TMDB 为目标**的动作 —— 找不到就该告诉用户。
   ///   取 `false` 适用于「搜索资源」这类**识别失败可自愈**的调用方：拿不到 ID 会退回按标题
   ///   搜索，避免识别提示与结果跳转同时发生。
+  /// - Parameter useSharedMapping: 是否先查非 TMDB 来源到 TMDB 的共享映射。
+  ///   「搜索资源」这类不依赖 TMDB 目标的入口传 `false`，避免为辅助查询多等 1.5s。
   func getTMDBJumpTarget(
     for item: MediaInfo,
     targetTmdbId: Int? = nil,
-    notifyWhenUnrecognized: Bool = true
+    notifyWhenUnrecognized: Bool = true,
+    useSharedMapping: Bool = true
   ) async -> MediaInfo? {
     let snapshot = apiService.sessionSnapshot()
-    var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
+    let validTargetTmdbId = MediaIdentifier.validNumericIdentifier(targetTmdbId)
+    let validItemTmdbId = MediaIdentifier.validNumericIdentifier(item.tmdb_id)
+    var tmdbIdToUse: Int? = validTargetTmdbId ?? validItemTmdbId
 
     if tmdbIdToUse == nil {
       let title = item.title?.trimmingCharacters(in: .whitespaces) ?? ""
-      // 无标题无法识别，不属于"媒体不存在"，直接返回不弹提示。
-      guard !title.isEmpty else { return nil }
-      isRecognizingTmdb = true
+      let canTrySharedMapping =
+        useSharedMapping && apiService.supportsSharedMediaMapping && item.identity != nil
+
+      if canTrySharedMapping {
+        isRecognizingTmdb = true
+        do {
+          if let target = try await Self.sharedTMDBTarget(for: item, apiService: apiService) {
+            isRecognizingTmdb = false
+            guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+            return target
+          }
+        } catch is CancellationError {
+          isRecognizingTmdb = false
+          return nil
+        } catch {
+          // 映射是辅助查询：失败不能让原本可用的名称识别也失效。
+          Logger.error("TMDB 共享映射查询失败: \(error)")
+        }
+      }
+
+      // 无标题且映射未命中，不属于"媒体不存在"，直接返回不弹提示。
+      guard !title.isEmpty else {
+        isRecognizingTmdb = false
+        return nil
+      }
+      if !canTrySharedMapping { isRecognizingTmdb = true }
       do {
         tmdbIdToUse = try await apiService.recognizeTmdbId(
           title: title,
@@ -141,7 +170,58 @@ class MediaActionHandler: ObservableObject {
     return Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
   }
 
-  static func tmdbJumpTarget(for item: MediaInfo, tmdbId: Int) -> MediaInfo {
+  /// 共享映射优先的完整 TMDB 目标；返回 nil 表示没有可用关系，调用方继续名称识别。
+  /// 只接受与请求身份回显一致、且 TMDB 类型合法的映射，防止把别人的关系当成当前条目的目标。
+  static func sharedTMDBTarget(
+    for item: MediaInfo,
+    apiService: APIService
+  ) async throws -> MediaInfo? {
+    guard let identity = item.identity,
+      let source = MediaIdentifier.normalizeSource(identity.source),
+      source != "themoviedb",
+      let mediaId = MediaIdentifier.normalizedString(identity.mediaId),
+      let rawType = item.type
+    else {
+      return nil
+    }
+    let mediaType = apiService.normalizeMediaType(rawType)
+    guard mediaType == "movie" || mediaType == "tv" else { return nil }
+
+    guard
+      let mapping = try await apiService.fetchMediaMapping(
+        identity: MediaIdentity(source: source, mediaId: mediaId),
+        type: rawType,
+        season: item.season
+      )
+    else {
+      return nil
+    }
+    guard mapping.media_source == source,
+      mapping.media_id == mediaId,
+      mapping.type == mediaType,
+      mapping.tmdb_id > 0,
+      mapping.tmdb_type == "movie" || mapping.tmdb_type == "tv"
+    else {
+      return nil
+    }
+
+    let targetType = mapping.tmdb_type == "movie" ? "电影" : "电视剧"
+    let targetSeason = mapping.tmdb_type == "tv" ? (mapping.tmdb_season ?? item.season) : nil
+    return tmdbJumpTarget(
+      for: item, tmdbId: mapping.tmdb_id, type: targetType, season: .some(targetSeason))
+  }
+
+  static func tmdbJumpTarget(
+    for item: MediaInfo,
+    tmdbId: Int,
+    type: String? = nil,
+    season: Int?? = nil
+  ) -> MediaInfo {
+    let resolvedSeason: Int?
+    switch season {
+    case .some(let value): resolvedSeason = value
+    case .none: resolvedSeason = item.season
+    }
     return MediaInfo(
       tmdb_id: tmdbId,
       douban_id: nil,
@@ -155,9 +235,9 @@ class MediaActionHandler: ObservableObject {
       original_title: item.original_title,
       original_name: item.original_name,
       names: item.names,
-      type: item.type,
+      type: type ?? item.type,
       year: item.year,
-      season: item.season,
+      season: resolvedSeason,
       // 必须将图像路径设为 nil。
       // 此处创建的 MediaInfo 是一个用于导航的“部分对象”。
       // 如果保留旧的 poster/backdrop 路径，新页面在加载完成前会短暂显示旧页面的图像，导致闪烁。

@@ -74,7 +74,7 @@
 
 ### 资源搜索诊断面板
 
-- 来源：MoviePilot Backend `v3.2.4` 的搜索诊断：`app/schemas/search.py` 新增 `SearchDiagnostics` 等模型，SSE `done` 事件携带可选 `diagnostics`（各来源 outcome/`raw_count`、被过滤规则拒绝的原因、规则组是否适用、警告），`/search/last/context` 返回可选 `diagnostics` 并把上次搜索上下文改为按登录用户保存/读取。配套 Web `v3.2.4` 已实现诊断面板：`c1341f5d feat(resource): 显示搜索原因和规则未适用提示`（#901），随后 `4963ab48` 调整了诊断条的视觉权重。`v3.2.6` 的 `bbc779523 fix(filter): migrate legacy rule IDs and diagnose invalid groups` 又给 `SearchDiagnosticWarning` 增加可选 `rule_ids`（规则配置错误涉及的完整 ID，默认空列表、空值不序列化），并把现有解析器无法解析的旧自定义规则 ID 迁移为稳定新 ID。
+- 来源：MoviePilot Backend `v3.2.4` 的搜索诊断：`app/schemas/search.py` 新增 `SearchDiagnostics` 等模型，SSE `done` 事件携带可选 `diagnostics`（各来源 outcome/`raw_count`、被过滤规则拒绝的原因、规则组是否适用、警告），`/search/last/context` 返回可选 `diagnostics` 并把上次搜索上下文改为按登录用户保存/读取。配套 Web `v3.2.4` 已实现诊断面板：`c1341f5d feat(resource): 显示搜索原因和规则未适用提示`（#901），随后 `4963ab48` 调整了诊断条的视觉权重。`v3.2.6` 的 `bbc779523 fix(filter): migrate legacy rule IDs and diagnose invalid groups` 又给 `SearchDiagnosticWarning` 增加可选 `rule_ids`（规则配置错误涉及的完整 ID，默认空列表、空值不序列化），并把现有解析器无法解析的旧自定义规则 ID 迁移为稳定新 ID。Web `v3.2.7` 的 `390bfd33 fix(search): hide inapplicable rule notices`（#942）进一步隐藏不适用的规则提示；未来 TV 做诊断面板时，不适用的规则组不应显示为可操作规则，也不要渲染规则级跳转。
 - 当前判断：不属于兼容必修。TV 的 `MoviePilot-TV/Models/Models.swift` 中 `SearchStreamEvent` 未声明 `diagnostics`，SSE 解码时安全忽略新增字段，`/search/last/context` 也没有调用。TV 资源搜索的空状态（`PagedResourceResultsView` 的「未找到相关资源」）只能通过 `ResourceSearchSession.emptyDescription` 区分「本次尚未找到资源」「已收到的资源均被 TV 本地过滤规则排除」「没有符合当前筛选条件的资源」三种客户端原因，无法解释站点级别或后端过滤规则级别的「为什么没有」。
 - 可评估方向：
   - 在资源搜索结果页的空状态里展示后端诊断摘要：各来源是否返回、原始条数，被后端过滤规则拒绝的数量与原因分布，未适用的规则组，以及警告；有结果时是否展示按实际高频问题再定，避免占用大屏首屏空间。
@@ -100,6 +100,14 @@
   - 是否增加 TV 端订阅日历视图。
   - 是否改进第 0 季、特别篇、特殊季标签显示。
   - 是否在订阅卡片上展示更细的入库/缺失进度说明。
+
+### 媒体服务器流式播放与搜索
+
+- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`，用于已入库媒体的搜索、票据、Range 流式读取和单集标识。
+- 当前判断：等待上游成熟后再跟进，本轮不实现、不登记 TV 契约。新接口涉及票据、Range、重定向主机校验和字幕/歌词文件返回，TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest` 路径没有受影响；在真实后端与上游 Web 的调用方式稳定前，不做大屏入口或播放器改造。
+- 可评估方向：
+  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。
+  - 新端点属于 `v3.2.7` 起的新行为，若未来接入必须按 `>= v3.2.7` 门禁并保留现有路径回退；不要在本轮把它们写成 TV 已支持。
 
 ## 暂不作为 TV 功能待办
 

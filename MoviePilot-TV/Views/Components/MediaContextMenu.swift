@@ -44,12 +44,21 @@ struct MediaContextMenuItems: View {
         Button {
           let navigationSource = navigationCoordinator.sourceToken()
           Task {
-            // 优先传入预加载的 tmdbId，避免重复网络请求
+            // 优先传入预加载的映射目标或 tmdbId，避免重复网络请求
             // ⚠️ 此处在 Button 操作中（非 body 渲染），可安全使用 getTask
-            let preloadedTmdbId = APIService.shared.mediaPreloader.getTask(for: item)?.tmdbId
-            if let target = await mediaActionHandler.getTMDBJumpTarget(
-              for: item, targetTmdbId: preloadedTmdbId)
-            {
+            let preloadTask = APIService.shared.mediaPreloader.getTask(for: item)
+            let preloadedTarget = preloadTask?.tmdbTarget
+            let preloadedTmdbId = MediaIdentifier.validNumericIdentifier(preloadTask?.tmdbId)
+            let target: MediaInfo?
+            if let preloadedTarget {
+              target = preloadedTarget
+            } else {
+              target = await mediaActionHandler.getTMDBJumpTarget(
+                for: item,
+                targetTmdbId: preloadedTmdbId
+              )
+            }
+            if let target {
               navigationCoordinator.push(
                 target,
                 loadingPosterURL: item.imageURLs.poster,

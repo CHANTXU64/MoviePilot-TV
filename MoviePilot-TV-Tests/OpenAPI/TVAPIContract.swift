@@ -359,6 +359,7 @@ enum TVAPIContractCatalog {
     items.append(contentsOf: systemOperations)
     items.append(contentsOf: dashboardOperations)
     items.append(contentsOf: mediaOperations)
+    items.append(contentsOf: mediaMappingOperations(backendVersion: backendVersion))
     items.append(contentsOf: discoverOperations(backendVersion: backendVersion))
     items.append(contentsOf: personOperations)
     items.append(contentsOf: searchOperations(backendVersion: backendVersion))
@@ -591,6 +592,33 @@ enum TVAPIContractCatalog {
         body: TVAPIFields.mediaIdentity,
         coverage: read
       ),
+    ]
+  }
+
+  private static func mediaMappingOperations(backendVersion: String?) -> [TVAPIOperation] {
+    guard BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: backendVersion) else {
+      return []
+    }
+    return [
+      TVAPIOperationBuilder.get(
+        "/media/mapping",
+        query: [
+          TVAPIParam.query("media_source", alwaysSent: true),
+          TVAPIParam.query("media_id", alwaysSent: true),
+          TVAPIParam.query("type", alwaysSent: true),
+          TVAPIParam.query("season", type: .integer),
+        ],
+        dependedResponse: [
+          TVAPIFields.field("media_source", .string),
+          TVAPIFields.field("media_id", .string),
+          TVAPIFields.field("type", .string),
+          TVAPIFields.field("tmdb_id", .integer),
+          TVAPIFields.field("tmdb_type", .string),
+          TVAPIFields.field("tmdb_season", .integer),
+        ],
+        coverage: readDecode,
+        notes: ">= v3.2.7；非 TMDB 来源到 TMDB 的共享映射，未命中返回 data: null"
+      )
     ]
   }
 

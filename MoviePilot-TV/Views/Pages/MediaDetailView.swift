@@ -1296,9 +1296,13 @@ struct MediaDetailView: View {
               .accessibilityValue(isEntryLoading ? "加载中" : "")
             }
 
-            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
+            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
             if canJumpToTMDB {
-              let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
+              let preloadedTarget = preloadTask.tmdbTarget
+              let targetTmdbId =
+                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
+                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
               let isButtonLoading =
                 targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
 
@@ -1309,9 +1313,16 @@ struct MediaDetailView: View {
                 let navigationSource = navigationCoordinator.sourceToken()
                 Task {
                   defer { isTMDBJumpInFlight = false }
-                  if let target = await mediaActionHandler.getTMDBJumpTarget(
-                    for: viewModel.detail, targetTmdbId: targetTmdbId)
-                  {
+                  let target: MediaInfo?
+                  if let preloadedTarget {
+                    target = preloadedTarget
+                  } else {
+                    target = await mediaActionHandler.getTMDBJumpTarget(
+                      for: viewModel.detail,
+                      targetTmdbId: targetTmdbId
+                    )
+                  }
+                  if let target {
                     navigationCoordinator.push(
                       target,
                       loadingPosterURL: viewModel.detail.imageURLs.poster,

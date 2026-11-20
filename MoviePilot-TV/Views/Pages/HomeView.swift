@@ -317,7 +317,7 @@ private struct MediaSectionView: View {
                       // 识别不出来会走下面的 else 分支退回按标题搜索，动作照样完成 ——
                       // 因此不要弹「未识别到此媒体的TMDB信息」，否则弹窗与跳转同时发生（F-122）。
                       if let target = await mediaActionHandler.getTMDBJumpTarget(
-                        for: info, notifyWhenUnrecognized: false)
+                        for: info, notifyWhenUnrecognized: false, useSharedMapping: false)
                       {
                         if let request =
                           await mediaActionHandler.searchResourcesTargetUsingDefaultSites(

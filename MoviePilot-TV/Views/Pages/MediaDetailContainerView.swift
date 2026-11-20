@@ -69,10 +69,12 @@ struct MediaDetailContainerView: View {
     isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
   ) -> MediaInfo? {
     guard isEnabled,
-      sourceMedia.tmdb_id == nil,
+      MediaIdentifier.validNumericIdentifier(sourceMedia.tmdb_id) == nil,
       sourceMedia.canJumpToTMDB,
       let fullDetail,
-      let tmdbId = recognizedTmdbId ?? fullDetail.tmdb_id
+      let tmdbId =
+        MediaIdentifier.validNumericIdentifier(recognizedTmdbId)
+        ?? MediaIdentifier.validNumericIdentifier(fullDetail.tmdb_id)
     else {
       return nil
     }

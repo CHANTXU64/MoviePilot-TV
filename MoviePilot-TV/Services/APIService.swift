@@ -434,6 +434,11 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
 
+  /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理，回退名称识别。
+  var supportsSharedMediaMapping: Bool {
+    BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: settings?.BACKEND_VERSION)
+  }
+
   var imageConfigurationIdentity: String {
     let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
     return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")|\(mediaServerThumbnailSupported)"
@@ -1199,7 +1204,11 @@ class APIService: ObservableObject {
   }
 
   private func makeRequest(
-    endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false
+    endpoint: String,
+    method: String = "GET",
+    body: Data? = nil,
+    isForm: Bool = false,
+    timeoutInterval: TimeInterval? = nil
   ) async throws -> Data {
     let lease = currentLease()
     do {
@@ -1208,6 +1217,7 @@ class APIService: ObservableObject {
         method: method,
         body: body,
         isForm: isForm,
+        timeoutInterval: timeoutInterval,
         lease: lease,
         requireCurrentLease: true
       )
@@ -1407,6 +1417,7 @@ class APIService: ObservableObject {
     method: String,
     body: Data?,
     isForm: Bool,
+    timeoutInterval: TimeInterval? = nil,
     lease: APIServiceSessionLease,
     requireCurrentLease: Bool
   ) async throws -> Data {
@@ -1416,6 +1427,7 @@ class APIService: ObservableObject {
       method: method,
       body: body,
       isForm: isForm,
+      timeoutInterval: timeoutInterval,
       lease: lease
     )
     let (data, response) = try await send(
@@ -1442,6 +1454,7 @@ class APIService: ObservableObject {
     method: String,
     body: Data?,
     isForm: Bool,
+    timeoutInterval: TimeInterval? = nil,
     lease: APIServiceSessionLease
   ) throws -> URLRequest {
     guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
@@ -1455,7 +1468,9 @@ class APIService: ObservableObject {
       token: lease.token,
       cookieHeader: lease.runtime.cookieVault.cookieHeader(for: url)
     )
-    if endpoint == "/user/current" || endpoint == "/login/access-token" {
+    if let timeoutInterval {
+      request.timeoutInterval = timeoutInterval
+    } else if endpoint == "/user/current" || endpoint == "/login/access-token" {
       request.timeoutInterval = 10
     }
     return request
@@ -1963,11 +1978,105 @@ class APIService: ObservableObject {
   }
 
   /// 归一化媒体类型名称，统一转换为 API 识别的 'movie' 或 'tv'
-  private func normalizeMediaType(_ type: String) -> String {
+  func normalizeMediaType(_ type: String) -> String {
     let t = type.lowercased()
     if t == "电影" || t == "movie" { return "movie" }
     if t == "电视剧" || t == "剧集" || t == "tv" { return "tv" }
     return t
+  }
+
+  /// 查询非 TMDB 来源到 TMDB 的共享映射。
+  ///
+  /// 未命中、共享识别未启用或后端版本不足时返回 `nil`；网络/解码/业务失败抛出，调用方回退名称识别。
+  /// 命中与未命中都在会话内短暂缓存，避免「TMDB 详情」每次按下都走一次 0.8s 预算的后端查询。
+  func fetchMediaMapping(
+    identity: MediaIdentity,
+    type: String,
+    season: Int? = nil
+  ) async throws -> MediaMapping? {
+    guard supportsSharedMediaMapping,
+      let source = MediaIdentifier.normalizeSource(identity.source),
+      source != "themoviedb"
+    else {
+      return nil
+    }
+
+    let mediaType = normalizeMediaType(type)
+    guard mediaType == "movie" || mediaType == "tv" else { return nil }
+    guard let mediaId = MediaIdentifier.normalizedString(identity.mediaId),
+      mediaId != "0",
+      mediaId.count <= 256
+    else {
+      return nil
+    }
+
+    // 电影不带季号；电视保留 0（特别季）并拒绝超出后端契约的负数/超大值。
+    let querySeason = mediaType == "tv" ? season : nil
+    if let querySeason, !(0...10000).contains(querySeason) { return nil }
+
+    let key = mediaMappingCacheKey(
+      identity: MediaIdentity(source: source, mediaId: mediaId), type: mediaType, season: querySeason)
+    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      let endpoint = try self.buildEndpoint(
+        path: "/media/mapping",
+        params: [
+          "media_source": source,
+          "media_id": mediaId,
+          "type": mediaType,
+          "season": querySeason.map(String.init),
+        ]
+      )
+      // 后端查询预算 0.8s；1.5s 与 Web 一致，超时后回退名称识别。
+      let data = try await self.makeRequest(endpoint: endpoint, timeoutInterval: 1.5)
+      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
+        return .miss
+      }
+      return .mapping(mapping)
+    }
+    switch entry {
+    case .mapping(let mapping): return mapping
+    case .miss: return nil
+    }
+  }
+
+  private func mediaMappingCacheKey(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> String {
+    [identity.source, identity.mediaId, type, season.map(String.init) ?? "nil"]
+      .map { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0 }
+      .joined(separator: "|")
+  }
+
+  /// 可选数据响应：`data: null` 表示未命中，`success: false` 仍按失败抛出。
+  private func decodeOptionalOrUnwrap<T: Decodable>(
+    _ type: T.Type,
+    from data: Data
+  ) throws -> T? {
+    guard firstNonWhitespaceByte(in: data) == UInt8(ascii: "{") else {
+      throw APIError.decodingError(
+        DecodingError.dataCorrupted(
+          DecodingError.Context(
+            codingPath: [],
+            debugDescription: "Expected an object response for \(T.self)"
+          )
+        )
+      )
+    }
+    let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
+    if response.success == false {
+      throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+    }
+    if let wrappedData = response.data { return wrappedData }
+    // 后端明确成功且 data 为空就是“没有关系”；不要把成功响应里的提示文案误判为失败。
+    if response.success == true { return nil }
+    if let message = response.localizedMessage, !message.isEmpty {
+      throw APIError.serverMessage(message)
+    }
+    return nil
   }
 
   /// 同 `recognizeTmdbId`，结果在会话里记住（`libraryRecognitionCache`），认不出也记住；请求失败不记，下次再识别。

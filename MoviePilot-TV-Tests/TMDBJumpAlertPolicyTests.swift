@@ -62,8 +62,9 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
     let homeView = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
 
     XCTAssertTrue(
-      homeView.contains("for: info, notifyWhenUnrecognized: false)"),
-      "Home「搜索资源」识别失败会自愈为标题搜索，必须显式不弹提示"
+      homeView.contains(
+        "for: info, notifyWhenUnrecognized: false, useSharedMapping: false)"),
+      "Home「搜索资源」识别失败会自愈为标题搜索，必须显式不弹提示，且不为辅助映射多等查询"
     )
     // 首页卡片按下即打开详情页，长按菜单不再有「TMDB详情页」，也就不再有默认弹提示的调用。
     XCTAssertFalse(homeView.contains("Label(\"TMDB详情页\""))
