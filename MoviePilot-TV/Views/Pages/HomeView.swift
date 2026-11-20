@@ -167,6 +167,10 @@ enum HomeSubscribeFocusID {
 // MARK: - 子视图
 
 private struct MediaSectionView: View {
+  /// 卡片海报向服务端请求的缩略宽度，与卡片降采样后实际保留的像素一致。
+  private static let cardPosterPixelWidth = MediaCard.posterThumbnailMaxWidth(
+    for: MediaCard.defaultPosterSize)
+
   private var memoryOptimization = MemoryOptimizationSettings()
   let title: String
   let items: [MediaServerPlayItem]
@@ -252,7 +256,7 @@ private struct MediaSectionView: View {
               let playsDirectly = !opensApp && viewModel.playsDirectly(item)
               MediaCard(
                 title: item.title,
-                posterUrl: item.imageURLs.image,
+                posterUrl: item.imageURLs(cardPosterPixelWidth: Self.cardPosterPixelWidth).image,
                 posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
                 typeText: item.type,
                 ratingText: nil,
@@ -436,7 +440,8 @@ private struct MediaSectionView: View {
   /// 期间页面变了（已经进了别的页）就不再推入、不再起播。
   private func openDetail(_ item: MediaServerPlayItem) {
     let navigationSource = navigationCoordinator.sourceToken()
-    let loadingPosterURL = item.imageURLs.image
+    // 详情冷加载拿它当全屏背景兜底，不能降成卡片尺寸。
+    let loadingPosterURL = item.imageURLs().image
     Task {
       switch await viewModel.cardDestination(for: item, using: mediaActionHandler) {
       case .detail(let target):

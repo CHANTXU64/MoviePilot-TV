@@ -1127,8 +1127,9 @@ enum TVAPIContractCatalog {
         pathParams: [TVAPIParam.path("subscribe_id", type: .integer)],
         coverage: sideEffect
       ),
-      // 单集试看跟踪搜索批次；运行时从 v3.2.6 起才调用（EpisodeTrialAvailability）。登记表最新只到 v3.2.5，
-      // 按版本登记会让源码扫描报未登记；发版登记 v3.2.6 后改为按试看门禁登记。
+      // 单集试看跟踪搜索批次。发起受 EpisodeTrialAvailability（>= v3.2.6）限制，但收尾（推进、取消、删除已有
+      // 试看）走 managingAPI()，只要求管理员、不查版本：版本读不出或后端降级时照样调用。所以两个批次端点都对
+      // 所有版本登记，按试看门禁登记会漏掉收尾路径。
       TVAPIOperationBuilder.get(
         "/subscribe/execution/batches/{batch_id}",
         pathParams: [TVAPIParam.path("batch_id")],

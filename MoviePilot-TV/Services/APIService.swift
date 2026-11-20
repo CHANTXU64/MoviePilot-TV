@@ -333,6 +333,18 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
   )
 }
 
+/// 媒体服务器图片缩略：`/system/img/{proxy}` 从 v3.2.6 起接受 `maxWidth`，只改写 Emby/Jellyfin 的
+/// `/Items/{id}/Images/...` 地址。新行为版本限制：版本读不出或无法解析时不追加参数，继续取原图。
+nonisolated enum MediaServerImageThumbnail {
+  static let minimumBackendVersion = "v3.2.6"
+  /// 后端 `maxWidth` 的校验区间上限。
+  static let maximumWidth = 2048
+
+  static func supports(backendVersion: String?) -> Bool {
+    BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
+  }
+}
+
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
@@ -414,13 +426,17 @@ class APIService: ObservableObject {
         }
         self.useImageCache = false
       }
+      mediaServerThumbnailSupported = MediaServerImageThumbnail.supports(
+        backendVersion: settings?.BACKEND_VERSION)
     }
   }
   @Published var useImageCache: Bool = false
+  /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
+  private var mediaServerThumbnailSupported = false
 
   var imageConfigurationIdentity: String {
     let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
-    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
+    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")|\(mediaServerThumbnailSupported)"
   }
 
   /// 接口缓存随会话作用域存活；尚未创建作用域时没有缓存可失效。
@@ -3827,7 +3843,11 @@ class APIService: ObservableObject {
     return getMediaServerPosterImageURL(image: item.image, useCookies: item.use_cookies?.value)
   }
 
-  func getMediaServerPosterImageURL(image: String?, useCookies: Bool?) -> URL? {
+  /// - Parameter cardPosterPixelWidth: 卡片降采样后保留的像素宽度（见 `MediaCard.posterThumbnailMaxWidth`），
+  ///   给了才请求缩略图。详情入口把同一个 URL 当冷加载全屏背景兜底，那条路径必须不传，否则大屏背景会被降成卡片尺寸。
+  func getMediaServerPosterImageURL(
+    image: String?, useCookies: Bool?, cardPosterPixelWidth: Int? = nil
+  ) -> URL? {
     guard let path = image, !path.isEmpty else { return nil }
     guard let encodedUrl = encodeURIComponent(path)
     else {
@@ -3838,6 +3858,10 @@ class APIService: ObservableObject {
 
     if useCookies == true {
       urlString += "&use_cookies=true"
+    }
+
+    if let cardPosterPixelWidth, cardPosterPixelWidth > 0, mediaServerThumbnailSupported {
+      urlString += "&maxWidth=\(min(cardPosterPixelWidth, MediaServerImageThumbnail.maximumWidth))"
     }
 
     return URL(string: urlString)

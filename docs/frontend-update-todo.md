@@ -92,16 +92,6 @@
   - `submitted_count` 只在 `v3.2.4` 起存在，旧后端会缺该字段或返回默认 0；「已添加下载 N 个」必须按后端版本做 `>= v3.2.4` 门禁，低版本或版本读不出时不展示该行，不能把默认 0 当成「暂无资源」。「上次执行时间/错误」等既有字段可评估放宽到更低版本，但要先确认旧后端字段完整。
   - `execution_status` 是后端自动调度的执行快照，不是订阅记录本身：展示时要区分「等待下次执行/正在执行/执行失败」，不要把状态文案写回订阅，也不要据此触发新的搜索或取消。
 
-### 图片代理缩略参数（>= v3.2.6）
-
-- 来源：MoviePilot Backend `v3.2.6` 提交 `8e9e89c63 fix(image): request media thumbnails with identity-aware caching`（#7326）：`GET /system/img/{proxy}` 新增可选查询参数 `maxWidth`（`1..2048`，单位像素）与 `quality`（`0..100`）。两者只在校验原始地址后改写上游 Emby/Jellyfin 的 `/Items/{id}/Images/{Primary|Backdrop|Thumb}` 地址（同主机的查询参数，保留 tag、鉴权与子路径，已有更小尺寸或更低质量时沿用较小值），无法识别的图片协议原样返回；响应缓存头同时由 `public` 改为 `private`，并增加 `Vary: Cookie, Authorization`。
-- 当前判断：不属于兼容必修。TV 的 `displayImageURL` 只在 Bangumi 代理（`/api/v1/system/img/1?imgurl=&cache=`）与豆瓣域名（`/api/v1/system/img/0?imgurl=`）经过 `/system/img/{proxy}`；媒体服务器图片在开启全局图片缓存时走 `/api/v1/system/cache/image?url=`，关闭时直接用原始地址，TMDB 海报直接取 `image.tmdb.org` 或后端返回的地址（客户端已有把 `/t/p/original/` 换成 `/t/p/w500/` 的处理）。`/system/cache/image` 不接受这两个参数，所以缩略参数目前到不了 TV 实际加载的媒体服务器图片。
-- 可评估方向：
-  - 先确认覆盖面：`maxWidth`/`quality` 只影响 Emby/Jellyfin 的 `/Items/.../Images/...` 地址，TMDB、豆瓣、Bangumi 外链都不受影响。TV 若要用上，需要把这些媒体服务器图片从 `/system/cache/image` 换成 `/system/img/{proxy}`，属于图片缓存路径的替换（`cache=true` 与 `GLOBAL_IMAGE_CACHE` 的磁盘缓存行为不同），要单独评估，不能只加两个查询参数。
-  - 这是 `v3.2.6` 起才成立的新行为，必须按后端版本做 `>= v3.2.6` 门禁：低于该版本、版本读不出或无法解析时不带这两个参数、继续取原图；已解析且 `>= v3.2.6`（含热修复和未登记的更新版本）才追加。
-  - 带 `maxWidth`/`quality` 的响应与不带的是不同缓存键，切换路径或调整尺寸时要确认图片缓存 key 包含新参数，避免旧原图被当成缩略图复用；同时保留现有的资源令牌鉴权，不改成无鉴权直链。
-  - 收益集中在固定尺寸的卡片、列表行和详情背景；像素值按屏幕 scale 换算并受 2048 上限约束，实际画质与体积按 tvOS 端解码结果再评估。
-
 ### 订阅日历与特殊季显示
 
 - 来源：Web 在订阅日历、特殊季标签、订阅进度展示上有持续优化。

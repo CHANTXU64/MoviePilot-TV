@@ -1410,10 +1410,12 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   let server_type: MediaServerType?
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
-  @MainActor var imageURLs: ImageURLs {
+  /// `cardPosterPixelWidth` 只给卡片用；详情入口拿同一个 URL 当全屏背景兜底，不传，保持原图。
+  @MainActor func imageURLs(cardPosterPixelWidth: Int? = nil) -> ImageURLs {
     ImageURLs(
       image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
+        image: image, useCookies: use_cookies?.value,
+        cardPosterPixelWidth: cardPosterPixelWidth))
   }
 
   enum CodingKeys: String, CodingKey {
