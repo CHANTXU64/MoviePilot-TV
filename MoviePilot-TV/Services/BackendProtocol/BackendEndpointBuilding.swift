@@ -52,12 +52,9 @@ nonisolated protocol BackendEndpointBuilding: Sendable {
   /// v3 只按成对身份识别，不发送这两个参数。
   var includesDetailTitleFallback: Bool { get }
 
-  /// 后端版本是否已解析。未解析时不能安全选择订阅写回形状（v2 全量替换、v3 稀疏变更），
-  /// `saveSubscription` 会拒绝写入并提示重试。
-  var isResolved: Bool { get }
-
   /// `PUT /subscribe/` 的请求体。
   /// v3 只发变化字段；v2 的更新是整条替换，必须提交完整快照，否则未提交字段会被默认值覆盖。
+  /// 无法确定形状的实现必须抛 `APIError.backendVersionUnavailable`，由调用方提示重试。
   /// 调用方传入的 `draft` 必须是原订阅的完整副本，`original` 只用来计算变化。
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data
 }
@@ -112,7 +109,6 @@ nonisolated struct V3BackendEndpoints: BackendEndpointBuilding {
   var supportsMediaSourceCatalog: Bool { true }
   var mediaServerExistsHitIsSuccessFlag: Bool { false }
   var includesDetailTitleFallback: Bool { false }
-  var isResolved: Bool { true }
 
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data {
     try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))
@@ -121,7 +117,7 @@ nonisolated struct V3BackendEndpoints: BackendEndpointBuilding {
 
 nonisolated enum BackendEndpoints {
   /// 按后端版本选请求形状。读请求默认按 v3 发；版本解析不了时改用
-  /// `UnresolvedBackendEndpoints`，读仍按 v3，订阅写回会被拒绝，避免猜错协议覆盖数据。
+  /// `UnresolvedBackendEndpoints`，只拒绝订阅写回，避免猜错协议覆盖数据。
   /// 删除 `Services/BackendProtocol/MoviePilotV2` 后，把函数体固定为 `V3BackendEndpoints()`。
   static func resolve(backendVersion: String?) -> any BackendEndpointBuilding {
     guard let version = MoviePilotVersion(backendVersion) else {

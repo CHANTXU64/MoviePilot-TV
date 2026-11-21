@@ -6,7 +6,7 @@ import Foundation
 /// 删除 v2 支持的步骤（完整清单见 `docs/backend-version-compatibility.md` 的「删除 v2 支持」）：
 /// 1. 删除目录 `MoviePilot-TV/Services/BackendProtocol/MoviePilotV2/`；
 /// 2. 把 `BackendEndpoints.resolve` 的函数体改成 `return V3BackendEndpoints()`；
-/// 3. 删除 `TopShelfManager` 的 v2 可用性门禁、登记表里的 `v2.15.6` 和 README/文档/测试中的 v2 内容。
+/// 3. 删除 `TopShelfManager` 的 v2 可用性门禁与 `currentSessionSettings`、登记表里的 `v2.15.6` 和 README/文档/测试中的 v2 内容。
 /// `APIService` 只调用协议能力位，不需要逐处清理。
 nonisolated enum MoviePilotV2Support {
   /// 媒体身份从单值键改成成对参数的版本。
@@ -76,7 +76,6 @@ nonisolated struct MoviePilotV2Endpoints: BackendEndpointBuilding {
 
   /// v2 的详情接口在媒体键识别失败后靠 `title`/`year` 走名称识别，Web 详情也一直带这两个参数。
   var includesDetailTitleFallback: Bool { true }
-  var isResolved: Bool { true }
 
   /// v2 的 PUT /subscribe/ 会整条替换，必须提交完整快照。
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data {

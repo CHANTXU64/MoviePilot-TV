@@ -311,6 +311,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    // 这个用例钉住 v3 的 `success` 语义；未解析版本的 v2 兜底另有用例。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let media = try JSONDecoder().decode(
       MediaInfo.self,
@@ -394,6 +396,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    // 这个用例钉住 v3 的 `success` 语义；未解析版本的 v2 兜底另有用例。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let media = try JSONDecoder().decode(
       MediaInfo.self,
@@ -424,8 +428,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let blankServer = try await service.fetchMediaServerItemRef(media: media)
     XCTAssertEqual(blankServer, MediaServerItemRef(itemID: "7", server: nil))
 
-    // v2 的 `success:false` 不是“未入库”，而是失败 envelope：严格解包必须抛错，
-    // 不能把失败悄悄当成“未入库”。（v3 该端点已不再返回这种形态。）
+    // 已解析的 v3 把 `success:false` 当失败 envelope，严格解包必须抛错；
+    // 未解析版本对实际 v2 的兜底见 `testUnresolvedMediaServerExistsTreatsV2SuccessFalseAsMissing`。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":false,"data":{"item":{}}}"#.data(using: .utf8)!)
     do {
@@ -1709,6 +1713,59 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(query["year"], "2024")
     XCTAssertEqual(query["type_name"], "电影")
     XCTAssertNil(query["media_source"])
+  }
+
+  func testUnresolvedDetailAddsTitleAndYearFallback() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = nil
+
+    let media = MediaInfo(
+      source: "custom", media_id: "native-9", title: "示例片", type: "电影", year: "2024")
+    _ = try await service.fetchMediaDetail(media: media)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let path = try XCTUnwrap(paths.last { $0.hasPrefix("/api/v1/media/") })
+    let query = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: path))
+    // 未解析版本时仍按 v3 成对身份发；额外标题/年份让实际为 v2 的详情能走名称识别。
+    XCTAssertEqual(query["media_source"], "custom")
+    XCTAssertEqual(query["title"], "示例片")
+    XCTAssertEqual(query["year"], "2024")
+  }
+
+  func testUnresolvedMediaServerExistsTreatsV2SuccessFalseAsMissing() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = nil
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from:
+        #"{"tmdb_id":42,"title":"电影","year":"2026","type":"电影"}"#
+        .data(using: .utf8)!
+    )
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":false,"data":{"item":{}}}"#.data(using: .utf8)!)
+
+    let missing = try await service.fetchMediaServerItemRef(media: media)
+    XCTAssertNil(missing, "未解析版本下 v2 的 success=false 必须按未入库处理")
   }
 
   func testModernDetailRequestKeepsV3QueryShape() async throws {

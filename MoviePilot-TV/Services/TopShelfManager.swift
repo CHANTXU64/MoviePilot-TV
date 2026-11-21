@@ -66,6 +66,16 @@ final class TopShelfManager: ObservableObject {
   /// 当前 `apiService.settings` 属于哪个账号；切服后旧设置不能拿来判断新账号的后端版本。
   private var settingsProfileKey: String?
 
+  /// 只返回属于当前会话的设置。切服时 `$session` 先发布、`settings` 随后才清空，
+  /// 这段时间直接读 `apiService.settings` 会拿到旧账号的版本和凭据配置。
+  ///
+  /// 注意：`$settings` 的 sink 在 willSet 阶段执行，`handleSettingsChange` 内不要同步读这个属性，
+  /// 此时 `apiService.settings` 仍是旧值；需要版本时直接用回调参数。
+  private var currentSessionSettings: GlobalSettings? {
+    guard settingsProfileKey == apiService.session.profileKey else { return nil }
+    return apiService.settings
+  }
+
   init(
     apiService: APIService = .shared,
     store: TopShelfSharedStore? = TopShelfSharedStore.appGroupStore(),
@@ -134,6 +144,8 @@ final class TopShelfManager: ObservableObject {
         shelves: RecommendViewModel.allShelves
       )
     self.isExplicitlyDisabled = isExplicitlyDisabled
+    // 未调用 `start()` 的调用方也可能直接 `refreshNow()`；实例化时已有的设置就属于当前会话。
+    settingsProfileKey = apiService.settings == nil ? nil : apiService.session.profileKey
     selection = initialSelection
     status =
       store == nil
@@ -236,7 +248,7 @@ final class TopShelfManager: ObservableObject {
       status = selection == nil ? .disabled : .waitingForSession
       return
     }
-    guard let settings = apiService.settings else {
+    guard let settings = currentSessionSettings else {
       status = selection == nil ? .disabled : .waitingForConfiguration
       return
     }
@@ -248,7 +260,7 @@ final class TopShelfManager: ObservableObject {
       status = .unavailable
       return
     }
-    updateBackendAvailability(backendVersion: apiService.settings?.BACKEND_VERSION)
+    updateBackendAvailability(backendVersion: currentSessionSettings?.BACKEND_VERSION)
     guard isAvailableForCurrentBackend else {
       _ = stronglyInvalidate(for: apiService.session)
       status = .unavailable
@@ -622,7 +634,7 @@ final class TopShelfManager: ObservableObject {
     guard let store else { return }
     let previous = (try? store.loadState())?.refreshConfiguration
     guard isAvailableForCurrentBackend, let token = state.token,
-      isSelectionPermitted(in: state), selection != nil, let settings = apiService.settings
+      isSelectionPermitted(in: state), selection != nil, let settings = currentSessionSettings
     else {
       if let previous { TopShelfCredentials.delete(previous.sessionID) }
       try? store.setRefreshConfiguration(nil)

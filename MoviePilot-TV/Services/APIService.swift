@@ -439,7 +439,7 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
   /// 后端请求协议形状，随 settings 更新一次。v2 实现见 `Services/BackendProtocol/MoviePilotV2`。
-  /// 初始值按“版本未读到”处理：读请求沿用 v3，订阅写回会被拒绝，等设置到达后再保存。
+  /// 初始值按“版本未读到”处理：读请求带 v2 兜底，订阅写回由协议实现拒绝，等设置到达后再保存。
   private var backendEndpoints: any BackendEndpointBuilding = UnresolvedBackendEndpoints()
 
   /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
@@ -2924,7 +2924,11 @@ class APIService: ObservableObject {
     if backendEndpoints.mediaServerExistsHitIsSuccessFlag {
       // v2 用 success 表示是否入库，未入库不是错误；v3 的 success 恒为 true，走原解包。
       let response = try JSONDecoder().decode(ApiResponse<MediaServerExistsData>.self, from: data)
-      guard response.success != false, let unwrapped = response.data else { return nil }
+      if response.success == false {
+        Logger.debug("[MediaServerExists] success=false，按未入库处理（v2 语义）")
+        return nil
+      }
+      guard let unwrapped = response.data else { return nil }
       result = unwrapped
     } else {
       result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
@@ -3629,13 +3633,10 @@ class APIService: ObservableObject {
 
   /// 更新订阅编辑草稿（PUT /subscribe/）；新增订阅使用 addSubscription。
   /// v3 只提交变化字段，v2 必须提交完整快照，差异由 `backendEndpoints.subscriptionUpdateBody` 承担。
-  /// 版本未解析时拒绝写入：猜错形状会把旧草稿整条写回或清空 v2 配置。
+  /// 版本未解析时由协议实现拒绝写入，避免猜错形状把旧草稿整条写回或清空 v2 配置。
   func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
-    guard backendEndpoints.isResolved else {
-      throw APIError.backendVersionUnavailable
-    }
     let body = try backendEndpoints.subscriptionUpdateBody(original: original, draft: draft)
     let endpoint = "/subscribe/"
     let data = try await makeRequest(

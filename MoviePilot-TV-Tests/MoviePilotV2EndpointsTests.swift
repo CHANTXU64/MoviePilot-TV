@@ -27,7 +27,7 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertTrue(
       BackendEndpoints.resolve(backendVersion: "v3.2.9") is V3BackendEndpoints
     )
-    // 版本读不出或解析不了时不能确认是 v3，读请求按 v3 发、订阅写回走全量快照。
+    // 版本读不出或解析不了时读请求带 v2 兜底，订阅写回直接拒绝。
     XCTAssertTrue(BackendEndpoints.resolve(backendVersion: nil) is UnresolvedBackendEndpoints)
     XCTAssertTrue(
       BackendEndpoints.resolve(backendVersion: "v3.0.0-beta") is UnresolvedBackendEndpoints)
@@ -110,7 +110,6 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     )
     var draft = original
     draft.keyword = "新关键词"
-    XCTAssertTrue(MoviePilotV2Endpoints().isResolved)
     let data = try MoviePilotV2Endpoints().subscriptionUpdateBody(
       original: original, draft: draft)
     let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -134,7 +133,7 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertNil(body["media_category_id"])
   }
 
-  func testUnresolvedVersionReadsLikeV3ButRejectsSubscriptionWrite() throws {
+  func testUnresolvedVersionUsesReadFallbacksButRejectsSubscriptionWrite() throws {
     let endpoints = BackendEndpoints.resolve(backendVersion: "v3.0.0-beta")
     let identity = MediaIdentity(source: "themoviedb", mediaId: "12345")
     let spec = try endpoints.mediaIdentityEndpoint(
@@ -143,8 +142,8 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertEqual(spec.params["media_source"], "themoviedb")
     XCTAssertEqual(endpoints.subscriptionMaintenanceMethod, "POST")
     XCTAssertTrue(endpoints.supportsMediaSourceCatalog)
-    XCTAssertFalse(endpoints.includesDetailTitleFallback)
-    XCTAssertFalse(endpoints.isResolved)
+    XCTAssertTrue(endpoints.includesDetailTitleFallback)
+    XCTAssertTrue(endpoints.mediaServerExistsHitIsSuccessFlag)
 
     let original = try makeSubscribe(
       #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2]}"#)
