@@ -6,10 +6,10 @@ nonisolated private func specified(_ value: String?) -> String? { value?.isEmpty
 
 /// 单集试看的入口判断，试看服务和设置页共用。
 nonisolated enum EpisodeTrialAvailability {
-  /// 试看从 MoviePilot v3.2.6 起开放：整季包从这个版本起只下载订阅范围内的集，单集试看才不会整季下载；
-  /// 按集定位也依赖这个版本起季集列表返回的 TMDB 单集 ID。
-  /// 极性属于「新行为版本限制」：低于该版本、读不出或无法解析时不提供；可解析且不低于该版本（含热修复）时提供。
-  static let minimumBackendVersion = "v3.2.6"
+  /// 试看依赖 MoviePilot PR 7505（b8c3465de）在复用季包时追加目标集并记录本次受理。
+  /// 2026-11-21 官方将 v3.2.9 标签由 195747fae 前移至 b186df432。早期构建缺少修复，两者都报告 v3.2.9。
+  /// 版本号无法区分这两种构建，入口仅向可解析的 v3.2.10 及以上版本开放。
+  static let minimumBackendVersion = "v3.2.10"
 
   static func supports(backendVersion: String?) -> Bool {
     BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
@@ -217,8 +217,8 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case submissionUnconfirmed
   /// `progress` 是下载器报的百分比（0–100），`remainingSeconds` 是 TV 按平均速度估的还要多久（见 `EpisodeTrialDownloadETA`）。
   case downloading(progress: Double?, remainingSeconds: Int? = nil)
-  /// 下载器、整理队列和整理记录都明确查不到这个下载：下载器只列出还在下载的任务，通常是已经下完、等 MoviePilot 整理。
-  /// 一直查不到时按 `EpisodeTrialService.missingDownloadLimit` 结束。
+  /// 有这次的下载记录，但下载列表、整理队列和整理记录里都还没有这一集：通常是已经下完、等 MoviePilot 整理
+  /// （v3.2.10 起 MoviePilot 确认下载器选中了这一集才写下载记录）。一直这样时按 `EpisodeTrialService.missingDownloadLimit` 结束。
   case waitingForOrganization
   case organizing
   /// 整理完成，等媒体服务器把这一集入库。
@@ -506,11 +506,49 @@ nonisolated struct EpisodeTrialBatch: Decodable {
 }
 
 nonisolated struct EpisodeTrialTransferJob: Decodable {
+  struct Media: Decodable {
+    let media_source: String?
+    let media_id: String?
+    let episode_group: String?
+  }
+
   struct Transfer: Decodable {
+    struct Metadata: Decodable {
+      let begin_season: Int?
+      let end_season: Int?
+      let season_episode: String?
+      let episode_list: [Int]?
+
+      var reportedSeason: Int? {
+        guard let match = season_episode?.prefixMatch(of: /S([0-9]+)(?: |$)/) else { return nil }
+        return Int(match.1)
+      }
+    }
+
     let downloader: String?
     let download_hash: String?
+    let meta: Metadata?
   }
+
+  let media: Media?
+  let season: Int?
   let tasks: [Transfer]?
+
+  func downloader(for target: EpisodeTrialTarget, hash: String, expectedDownloader: String?) -> String? {
+    guard let media, let identity = MediaIdentifier.resolve(source: media.media_source, mediaId: media.media_id),
+      target.identities.contains(identity), trimmedNonEmpty([media.episode_group]) == target.episodeGroup
+    else { return nil }
+
+    return tasks?.lazy.compactMap { task -> String? in
+      guard task.download_hash == hash, let downloader = trimmedNonEmpty([task.downloader]),
+        expectedDownloader == nil || downloader == expectedDownloader,
+        let meta = task.meta, (meta.begin_season ?? meta.reportedSeason ?? season) == target.season,
+        meta.end_season == nil || meta.end_season == target.season,
+        meta.episode_list?.contains(target.episodeNumber) == true
+      else { return nil }
+      return downloader
+    }.first
+  }
 }
 
 /// 下载和整理历史都能提供媒体身份和季集范围。历史未注明下载器，须结合可信的下载回执或实时任务。
@@ -533,13 +571,14 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let download_hash: String?
   let downloader: String?
   let status: Bool?
+  let date: String?
   let note: Note?
   /// 整理后的位置（只有整理记录有）：叫媒体服务器入库时按它找媒体库。
   let location: TransferredFileLocation
 
   private enum CodingKeys: String, CodingKey {
     case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
-    case note, dest, dest_fileitem, category
+    case date, note, dest, dest_fileitem, category
   }
 
   init(from decoder: Decoder) throws {
@@ -554,6 +593,7 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     download_hash = try values.decodeIfPresent(String.self, forKey: .download_hash)
     downloader = try? values.decodeIfPresent(String.self, forKey: .downloader)
     status = try? values.decodeIfPresent(Bool.self, forKey: .status)
+    date = try? values.decodeIfPresent(String.self, forKey: .date)
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
     let fileItem = (try? values.decodeIfPresent(MoviePilotFileItem.self, forKey: .dest_fileitem)) ?? nil
     let dest = (try? values.decodeIfPresent(String.self, forKey: .dest)) ?? nil

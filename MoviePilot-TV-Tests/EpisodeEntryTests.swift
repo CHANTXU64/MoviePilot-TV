@@ -155,10 +155,16 @@ final class EpisodeEntryTests: XCTestCase {
     let unknownProgress = entry(.notOnServer, trial: trial(.downloading(progress: nil)))
     XCTAssertEqual(unknownProgress.panel.detail, "正在下载，下完还要整理和入库才能播放")
 
+    XCTAssertEqual(
+      unknownProgress.cardStatus,
+      .trialInProgress(EpisodeEntry.TrialIndicator(label: "下载中", fraction: nil, stage: .download)),
+      "整包下载没有这一集的百分比，只显示下载中")
+    XCTAssertFalse(unknownProgress.canStartTrial)
+
     let waiting = entry(.notOnServer, trial: trial(.waitingForOrganization, subscriptionID: 81))
     XCTAssertEqual(
       waiting.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "等待整理", fraction: nil, stage: .organize)))
-    XCTAssertEqual(waiting.panel.detail, "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理")
+    XCTAssertEqual(waiting.panel.detail, "已经下完，等 MoviePilot 整理，整理完还要入库才能播放")
 
     let organizing = entry(.notOnServer, trial: trial(.organizing))
     XCTAssertEqual(organizing.panel.detail, "MoviePilot 正在整理，整理完还要入库才能播放")

@@ -434,7 +434,7 @@ nonisolated struct EpisodeEntry: Equatable, Sendable {
       let eta = remaining.map { "，还需\(EpisodeTrialDownloadETA.text(seconds: $0))" } ?? ""
       return "正在下载\(percent)\(eta)，下完还要整理和入库才能播放"
     case .waitingForOrganization:
-      return "下载器里已经看不到这个任务，多半已经下完，在等 MoviePilot 整理"
+      return "已经下完，等 MoviePilot 整理，整理完还要入库才能播放"
     case .organizing:
       return "MoviePilot 正在整理，整理完还要入库才能播放"
     case .waitingForLibrary:
