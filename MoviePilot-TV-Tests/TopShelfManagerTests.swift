@@ -963,6 +963,38 @@ final class TopShelfManagerTests: XCTestCase {
     XCTAssertNil(try fixture.store.loadState()?.snapshot)
   }
 
+  func testBackendVersionSwitchUpdatesAvailabilityImmediately() async throws {
+    let fixture = try ManagerFixture()
+    defer { fixture.cleanup() }
+    let service = makeService(userID: 861)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+    let manager = TopShelfManager(
+      apiService: service, store: fixture.store, defaults: fixture.defaults,
+      fetchSources: { [] },
+      fetchRecommendations: { _ in
+        XCTFail("本次只验证可用性切换，不应请求主屏推荐")
+        return []
+      },
+      fetchDetail: { $0 },
+      fetchImage: { _ in TopShelfImageResource(data: TopShelfTestArtwork.data, fileExtension: "gif")
+      },
+      notifyChange: {}
+    )
+
+    manager.start(refreshImmediately: false)
+    XCTAssertFalse(manager.isAvailableForCurrentBackend)
+
+    // @Published 在 willSet 阶段发值，回调里 apiService.settings 还是旧值；
+    // 必须直接用新设置判断，否则 v2→v3 会提前返回，货架入口一直隐藏。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
+    XCTAssertTrue(manager.isAvailableForCurrentBackend)
+
+    // 反向切换同样要立即生效，并清掉旧货架的可用状态。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+    XCTAssertFalse(manager.isAvailableForCurrentBackend)
+    XCTAssertEqual(manager.status, .unavailable)
+  }
+
   private func makeService(userID: Int) -> APIService {
     let service = APIService.isolatedTestingInstance()
     let user = token(userID: userID, token: "token-\(userID)")

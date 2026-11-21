@@ -4,11 +4,20 @@ import Foundation
 /// 请求里没出现的字段会被 `None`/`0`/`[]` 覆盖。v3 才改成只写请求中出现的字段。
 ///
 /// 因此 v2 必须提交完整快照，而不是 `SubscriptionWriteDTO` 的稀疏变更；编辑里没动过的
-/// 站点、保存路径、过滤组等才不会被清空。这里只列 v2 认识且允许公共写入的字段，
-/// v3 新增字段（音乐、`search_interval`、`media_category_id` 等）不发给 v2。
+/// 站点、保存路径、过滤组等才不会被清空。这里只列 v2 认识且允许公共写入的字段。
+///
+/// `includesStableClassificationID` 只给 `UnresolvedBackendEndpoints` 用：版本读不出时后端
+/// 可能是 v3，v3.2.9 收到只有 `media_category` 路径的载荷会把 `media_category_id` 清空，
+/// 因此补发已有的稳定 ID。v2 不认识这个键（pydantic 默认忽略未知字段），不会受影响。
 nonisolated struct V2SubscriptionUpdateBody: Encodable {
   private typealias CodingKeys = Subscribe.CodingKeys
   let draft: Subscribe
+  let includesStableClassificationID: Bool
+
+  init(draft: Subscribe, includesStableClassificationID: Bool = false) {
+    self.draft = draft
+    self.includesStableClassificationID = includesStableClassificationID
+  }
 
   func encode(to encoder: Encoder) throws {
     guard let id = draft.id, id > 0 else {
@@ -46,6 +55,9 @@ nonisolated struct V2SubscriptionUpdateBody: Encodable {
     try container.encode(draft.search_imdbid, forKey: .search_imdbid)
     try container.encode(draft.custom_words, forKey: .custom_words)
     try container.encode(draft.media_category, forKey: .media_category)
+    if includesStableClassificationID, let categoryID = draft.media_category_id, !categoryID.isEmpty {
+      try container.encode(categoryID, forKey: .media_category_id)
+    }
     try container.encode(draft.filter_groups, forKey: .filter_groups)
     try container.encode(draft.episode_group, forKey: .episode_group)
   }

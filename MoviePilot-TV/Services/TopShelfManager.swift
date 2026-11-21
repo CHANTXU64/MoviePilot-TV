@@ -243,7 +243,7 @@ final class TopShelfManager: ObservableObject {
       status = .unavailable
       return
     }
-    updateBackendAvailability()
+    updateBackendAvailability(backendVersion: apiService.settings?.BACKEND_VERSION)
     guard isAvailableForCurrentBackend else {
       _ = stronglyInvalidate(for: apiService.session)
       status = .unavailable
@@ -423,7 +423,7 @@ final class TopShelfManager: ObservableObject {
     _ state: APIServiceSessionState,
     scheduleRefresh shouldRefresh: Bool
   ) {
-    updateBackendAvailability()
+    updateBackendAvailability(backendVersion: apiService.settings?.BACKEND_VERSION)
     refreshTask?.cancel()
     refreshTask = nil
     if sourceSessionID != state.imageNamespace {
@@ -509,7 +509,7 @@ final class TopShelfManager: ObservableObject {
 
   private func handleSettingsChange(_ settings: GlobalSettings?) {
     guard let settings else { return }
-    updateBackendAvailability()
+    updateBackendAvailability(backendVersion: settings.BACKEND_VERSION)
     guard isAvailableForCurrentBackend else {
       _ = stronglyInvalidate(for: apiService.session)
       status = .unavailable
@@ -532,9 +532,10 @@ final class TopShelfManager: ObservableObject {
 
   /// v2 后端没有成对媒体身份，货架详情取不到，不开放主屏货架。
   /// 删除 v2 支持时连同 `isAvailableForCurrentBackend` 和这几个 guard 一并删掉。
-  private func updateBackendAvailability() {
-    let available = !MoviePilotV2Support.isLegacy(
-      backendVersion: apiService.settings?.BACKEND_VERSION)
+  /// 必须用调用方手上的版本判断：`@Published` 的 sink 在 willSet 阶段收到新设置，
+  /// 此时 `apiService.settings` 还是旧值，重新读取会把 v2/v3 切换判反。
+  private func updateBackendAvailability(backendVersion: String?) {
+    let available = !MoviePilotV2Support.isLegacy(backendVersion: backendVersion)
     guard available != isAvailableForCurrentBackend else { return }
     isAvailableForCurrentBackend = available
   }

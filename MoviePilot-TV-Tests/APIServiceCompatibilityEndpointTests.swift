@@ -1593,7 +1593,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let original = try JSONDecoder().decode(
       Subscribe.self,
       from:
-        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv"}"#
+        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv","media_category":"日番","media_category_id":"cat-1"}"#
         .data(using: .utf8)!)
     var draft = original
     draft.keyword = "新关键词"
@@ -1603,6 +1603,95 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
     XCTAssertEqual(body["sites"] as? [Int], [1, 2])
     XCTAssertEqual(body["save_path"] as? String, "/media/tv")
+    // v3.2.9 收到只有路径的载荷会把稳定分类 ID 清空；版本读不出时必须把 ID 一起带上。
+    XCTAssertEqual(body["media_category"] as? String, "日番")
+    XCTAssertEqual(body["media_category_id"] as? String, "cat-1")
+  }
+
+  func testColdStartWithoutLoadedSettingsStillSendsFullSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    // 模拟 /system/global 失败或超时：会话已恢复、主界面已开放，但版本一直读不到。
+    service.settings = nil
+
+    let original = try JSONDecoder().decode(
+      Subscribe.self,
+      from: #"{"id":9,"name":"冷启动","type":"电视剧","sites":[3],"save_path":"/media/show"}"#
+        .data(using: .utf8)!)
+    var draft = original
+    draft.keyword = "新关键词"
+    _ = try await service.saveSubscription(original: original, draft: draft)
+
+    let captured = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
+    // v2 的 PUT 是整条替换；缺 name 会被写成 NULL，缺站点/路径会被默认值覆盖。
+    XCTAssertEqual(body["name"] as? String, "冷启动")
+    XCTAssertEqual(body["sites"] as? [Int], [3])
+    XCTAssertEqual(body["save_path"] as? String, "/media/show")
+  }
+
+  func testLegacyDetailRequestAddsTitleAndYearFallback() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+
+    let media = MediaInfo(
+      source: "custom", media_id: "native-9", title: "示例片", type: "电影", year: "2024")
+    _ = try await service.fetchMediaDetail(media: media)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let path = try XCTUnwrap(paths.last { $0.hasPrefix("/api/v1/media/") })
+    let query = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: path))
+    // v2 的媒体键识别失败后会按 title/year 走名称识别，Web 详情也一直带这两个参数。
+    XCTAssertEqual(query["title"], "示例片")
+    XCTAssertEqual(query["year"], "2024")
+    XCTAssertEqual(query["type_name"], "电影")
+    XCTAssertNil(query["media_source"])
+  }
+
+  func testModernDetailRequestKeepsV3QueryShape() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
+
+    let media = MediaInfo(
+      source: "custom", media_id: "native-9", title: "示例片", type: "电影", year: "2024")
+    _ = try await service.fetchMediaDetail(media: media)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let path = try XCTUnwrap(paths.last { $0.hasPrefix("/api/v1/media/") })
+    let query = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: path))
+    // v3 只按成对身份识别，不多发 title/year，保持现有请求形状。
+    XCTAssertEqual(query["media_source"], "custom")
+    XCTAssertEqual(query["type_name"], "电影")
+    XCTAssertNil(query["title"])
+    XCTAssertNil(query["year"])
   }
 
   func testLegacyBackendSkipsMediaSourceCatalogRequest() async throws {

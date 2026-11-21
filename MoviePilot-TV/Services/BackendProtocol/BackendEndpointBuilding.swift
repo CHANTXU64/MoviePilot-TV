@@ -47,6 +47,11 @@ nonisolated protocol BackendEndpointBuilding: Sendable {
   /// v2 命中与未命中都返回 200，`success=false` 表示未入库；v3 起 `success` 恒为 `true`。
   var mediaServerExistsHitIsSuccessFlag: Bool { get }
 
+  /// 详情请求是否补 `title`/`year`。
+  /// v2 在媒体键无法识别时用标题/年份做名称识别兜底（Web 详情也一直带这两个参数）；
+  /// v3 只按成对身份识别，不发送这两个参数。
+  var includesDetailTitleFallback: Bool { get }
+
   /// `PUT /subscribe/` 的请求体。
   /// v3 只发变化字段；v2 的更新是整条替换，必须提交完整快照，否则未提交字段会被默认值覆盖。
   /// 调用方传入的 `draft` 必须是原订阅的完整副本，`original` 只用来计算变化。
@@ -102,6 +107,7 @@ nonisolated struct V3BackendEndpoints: BackendEndpointBuilding {
   var subscriptionMaintenanceMethod: String { "POST" }
   var supportsMediaSourceCatalog: Bool { true }
   var mediaServerExistsHitIsSuccessFlag: Bool { false }
+  var includesDetailTitleFallback: Bool { false }
 
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data {
     try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))

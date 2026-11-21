@@ -14,6 +14,7 @@ nonisolated struct UnresolvedBackendEndpoints: BackendEndpointBuilding {
   var subscriptionMaintenanceMethod: String { modern.subscriptionMaintenanceMethod }
   var supportsMediaSourceCatalog: Bool { modern.supportsMediaSourceCatalog }
   var mediaServerExistsHitIsSuccessFlag: Bool { modern.mediaServerExistsHitIsSuccessFlag }
+  var includesDetailTitleFallback: Bool { modern.includesDetailTitleFallback }
 
   func mediaIdentityEndpoint(
     pathPrefix: String,
@@ -39,6 +40,7 @@ nonisolated struct UnresolvedBackendEndpoints: BackendEndpointBuilding {
   }
 
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data {
-    try JSONEncoder().encode(V2SubscriptionUpdateBody(draft: draft))
+    try JSONEncoder().encode(
+      V2SubscriptionUpdateBody(draft: draft, includesStableClassificationID: true))
   }
 }

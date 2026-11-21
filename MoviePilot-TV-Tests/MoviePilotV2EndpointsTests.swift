@@ -82,10 +82,12 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertEqual(MoviePilotV2Endpoints().subscriptionMaintenanceMethod, "GET")
     XCTAssertFalse(MoviePilotV2Endpoints().supportsMediaSourceCatalog)
     XCTAssertTrue(MoviePilotV2Endpoints().mediaServerExistsHitIsSuccessFlag)
+    XCTAssertTrue(MoviePilotV2Endpoints().includesDetailTitleFallback)
     XCTAssertEqual(V3BackendEndpoints().mediaSourceQueryKey, "media_source")
     XCTAssertEqual(V3BackendEndpoints().subscriptionMaintenanceMethod, "POST")
     XCTAssertTrue(V3BackendEndpoints().supportsMediaSourceCatalog)
     XCTAssertFalse(V3BackendEndpoints().mediaServerExistsHitIsSuccessFlag)
+    XCTAssertFalse(V3BackendEndpoints().includesDetailTitleFallback)
   }
 
   private func makeSubscribe(_ json: String) throws -> Subscribe {
@@ -104,7 +106,7 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
 
   func testV2SubscriptionUpdateSendsFullSnapshot() throws {
     let original = try makeSubscribe(
-      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2], "quality": "4K", "save_path": "/media/tv"}"#
+      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2], "quality": "4K", "save_path": "/media/tv", "media_category": "日番", "media_category_id": "cat-1"}"#
     )
     var draft = original
     draft.keyword = "新关键词"
@@ -127,6 +129,8 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
         "best_version", "best_version_full", "save_path", "search_imdbid", "custom_words",
         "media_category", "filter_groups", "episode_group",
       ]))
+    // v2 不认识稳定分类 ID，不能把 v3 的键发给它。
+    XCTAssertNil(body["media_category_id"])
   }
 
   func testUnresolvedVersionReadsLikeV3ButWritesFullSnapshot() throws {
@@ -138,14 +142,30 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertEqual(spec.params["media_source"], "themoviedb")
     XCTAssertEqual(endpoints.subscriptionMaintenanceMethod, "POST")
     XCTAssertTrue(endpoints.supportsMediaSourceCatalog)
+    XCTAssertFalse(endpoints.includesDetailTitleFallback)
 
     let original = try makeSubscribe(
-      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2]}"#)
+      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2], "media_category": "日番", "media_category_id": "cat-1"}"#
+    )
     var draft = original
     draft.keyword = "新关键词"
     let data = try endpoints.subscriptionUpdateBody(original: original, draft: draft)
     let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     XCTAssertEqual(body["sites"] as? [Int], [1, 2])
     XCTAssertEqual(body["keyword"] as? String, "新关键词")
+    // 版本读不出时后端可能是 v3.2.9：只带路径而不带稳定 ID 会把 media_category_id 清空。
+    XCTAssertEqual(body["media_category"] as? String, "日番")
+    XCTAssertEqual(body["media_category_id"] as? String, "cat-1")
+  }
+
+  func testUnresolvedFullSnapshotOmitsAbsentClassificationID() throws {
+    let endpoints = BackendEndpoints.resolve(backendVersion: nil)
+    let original = try makeSubscribe(
+      #"{"id": 8, "name": "示例", "type": "电影", "media_category": "电影"}"#)
+    let data = try endpoints.subscriptionUpdateBody(original: original, draft: original)
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    // 没有稳定 ID 时不能补一个 null：v3 会把路径一起清掉。
+    XCTAssertNil(body["media_category_id"])
+    XCTAssertEqual(body["media_category"] as? String, "电影")
   }
 }

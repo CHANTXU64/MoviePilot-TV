@@ -435,7 +435,8 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
   /// 后端请求协议形状，随 settings 更新一次。v2 实现见 `Services/BackendProtocol/MoviePilotV2`。
-  private var backendEndpoints: any BackendEndpointBuilding = V3BackendEndpoints()
+  /// 初始值按“版本未读到”处理：设置请求失败时保存订阅仍走完整快照，不会用 v3 稀疏体覆盖 v2。
+  private var backendEndpoints: any BackendEndpointBuilding = UnresolvedBackendEndpoints()
 
   /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
   var supportsSharedMediaMapping: Bool {
@@ -3288,12 +3289,16 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，并可能导致上层视图显示“无数据”。
       throw APIError.invalidURL
     }
+    var params: [String: String?] = ["type_name": media.type]
+    if backendEndpoints.includesDetailTitleFallback {
+      // v2 的媒体键识别失败后，后端用标题/年份走名称识别；Web 详情也一直带这两个参数。
+      params["title"] = media.title
+      params["year"] = media.year
+    }
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/media",
       media: media,
-      extraParams: [
-        "type_name": media.type
-      ]
+      extraParams: params
     )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(MediaInfo.self, from: data)
