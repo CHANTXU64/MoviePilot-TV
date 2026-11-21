@@ -370,9 +370,9 @@ struct MediaDetailView: View {
     return false
   }
 
-  /// 第二页第一个能聚焦的行。没有分季时分季订阅行也有「重新查询」可聚焦。
+  /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
   private var firstVisibleRow: String {
-    if shouldShowSeasonSubscriptionSection {
+    if shouldShowSeasonSubscriptionSection && !isSeasonInformationUnavailable {
       return "season"
     }
     if episodeTMDBID != nil {

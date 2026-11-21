@@ -356,18 +356,8 @@ struct SubscribeSeasonContentView: View {
           .foregroundColor(.gray)
         Text("未查询到季集信息")
           .foregroundColor(.secondary)
-        // 详情页按「分季订阅」把焦点交到这一行，空态也要有能聚焦的控件；后端识别结果可能变，空结果也不缓存。
-        Button {
-          Task { await viewModel.retryLoadData() }
-        } label: {
-          HStack(spacing: 8) {
-            Image(systemName: AppSymbol.retry)
-            Text("重新查询")
-          }
-        }
       }
       .frame(maxWidth: .infinity, minHeight: 200)
-      .focusSection()
     }
   }
 
