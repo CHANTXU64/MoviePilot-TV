@@ -185,6 +185,7 @@ struct MediaDetailView: View {
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
   let presentationStyle: MediaDetailPresentationStyle
+  let initialEpisodeSeason: Int?
   @State private var cachedBackgroundFailed = false
   private var cachedContent: TopShelfCachedContent? {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
@@ -210,7 +211,8 @@ struct MediaDetailView: View {
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
-  @State private var isTMDBJumpInFlight = false
+  /// TMDB 按钮按下后的识别与跳转；离开页面时取消。
+  @State private var tmdbJumpTask: Task<Void, Never>?
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var didReleaseAfterPop = false
@@ -218,7 +220,7 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
-  @State private var unsubscribeConfirmationMessage = ""
+  @State private var unsubscribeConfirmation: MediaDetailViewModel.UnsubscribeConfirmation?
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
@@ -438,6 +440,7 @@ struct MediaDetailView: View {
   init(
     detail: MediaInfo,
     libraryItemHint: MediaServerItemRef? = nil,
+    initialEpisodeSeason: Int? = nil,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
@@ -456,6 +459,7 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.initialEpisodeSeason = initialEpisodeSeason
     self.presentationStyle = presentationStyle
     self.isEntryLoading = isEntryLoading
     self.entryStatusMessage = entryStatusMessage
@@ -599,6 +603,7 @@ struct MediaDetailView: View {
                       subscriptionSeasons: shouldShowSeasonSubscriptionSection
                         ? preloadTask.seasonViewModel : nil,
                       playback: viewModel.episodePlayback,
+                      initialSeason: initialEpisodeSeason,
                       rowHint: viewModel.episodeRowHint,
                       panelRequest: viewModel.episodePanelRequest,
                       defaultSeasons: viewModel.episodeSeasons,
@@ -672,6 +677,7 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      tmdbJumpTask?.cancel()
       handleRouteRemovalIfNeeded()
     }
     .onAppear {
@@ -830,11 +836,16 @@ struct MediaDetailView: View {
         }
       }
     }
-    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
-      Button("取消", role: .cancel) {}
+    .alert(
+      SubscriptionCancelConfirmation.title,
+      isPresented: $showUnsubscribeConfirm,
+      presenting: unsubscribeConfirmation
+    ) { confirmation in
+      Button("取消", role: .cancel) { unsubscribeConfirmation = nil }
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        unsubscribeConfirmation = nil
         Task {
-          guard await viewModel.cancelSubscription() else {
+          guard await viewModel.cancelSubscription(confirmation: confirmation) else {
             notificationManager.show(
               message: SubscriptionCancelConfirmation.failureMessage,
               type: .error
@@ -843,18 +854,15 @@ struct MediaDetailView: View {
           }
         }
       }
-    } message: {
-      Text(
-        unsubscribeConfirmationMessage.isEmpty
-          ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
-          : unsubscribeConfirmationMessage
-      )
+    } message: { confirmation in
+      Text(confirmation.message)
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
+      unsubscribeConfirmation = nil
       selectedDoubanDiscussion = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
@@ -1136,12 +1144,28 @@ struct MediaDetailView: View {
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {
-          unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           Task { @MainActor in
-            let message = await viewModel.headerUnsubscribeConfirmationMessage()
-            guard navigationCoordinator.isCurrent(source) else { return }
-            unsubscribeConfirmationMessage = message
-            showUnsubscribeConfirm = true
+            do {
+              let confirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+              guard navigationCoordinator.isCurrent(source) else { return }
+              if let confirmation {
+                unsubscribeConfirmation = confirmation
+                showUnsubscribeConfirm = true
+              } else {
+                notificationManager.show(
+                  message: "无法确认是哪条订阅，请到订阅列表里取消。",
+                  type: .error
+                )
+              }
+            } catch is CancellationError {
+              return
+            } catch {
+              guard navigationCoordinator.isCurrent(source) else { return }
+              notificationManager.show(
+                message: SubscriptionCancelConfirmation.failureMessage,
+                type: .error
+              )
+            }
           }
         },
         startSubscribe: {
@@ -1297,22 +1321,45 @@ struct MediaDetailView: View {
               .accessibilityValue(isEntryLoading ? "加载中" : "")
             }
 
-            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
+            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
             if canJumpToTMDB {
-              let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
+              let preloadedTarget = preloadTask.tmdbTarget
+              let targetTmdbId =
+                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
+                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
               let isButtonLoading =
-                targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
+                targetTmdbId == nil
+                && (!preloadTask.isTmdbRecognitionFinished || preloadTask.isOpenedDetailTMDBPending)
 
               Button(action: {
-                // 预识别期间沿用原有禁用门禁；其余重复 Select 只在动作入口被忽略。
-                guard allowsRequests, !isEntryLoading, !isButtonLoading, !isTMDBJumpInFlight else { return }
-                isTMDBJumpInFlight = true
+                guard allowsRequests, !isEntryLoading, tmdbJumpTask == nil else { return }
                 let navigationSource = navigationCoordinator.sourceToken()
-                Task {
-                  defer { isTMDBJumpInFlight = false }
-                  if let target = await mediaActionHandler.getTMDBJumpTarget(
-                    for: viewModel.detail, targetTmdbId: targetTmdbId)
+                let waitsForIdentification = isButtonLoading
+                tmdbJumpTask = Task {
+                  defer { tmdbJumpTask = nil }
+                  // 识别还没结束时等它的结果，不另起一次；按钮一直在转圈。
+                  if waitsForIdentification { await preloadTask.waitForTMDBIdentification() }
+                  guard !Task.isCancelled else { return }
+                  let target: MediaInfo?
+                  if let preloadedTarget = preloadTask.tmdbTarget {
+                    target = preloadedTarget
+                  } else if waitsForIdentification,
+                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
                   {
+                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
+                    mediaActionHandler.showTMDBNotFoundAlert = true
+                    target = nil
+                  } else {
+                    // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
+                    target = await mediaActionHandler.getTMDBJumpTarget(
+                      for: viewModel.detail,
+                      targetTmdbId: MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                        ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id),
+                      useSharedMapping: !waitsForIdentification
+                    )
+                  }
+                  if let target {
                     navigationCoordinator.push(
                       target,
                       loadingPosterURL: viewModel.detail.imageURLs.poster,
@@ -1330,9 +1377,8 @@ struct MediaDetailView: View {
                 .foregroundColor(.primary)
                 .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .disabled(isButtonLoading)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryLoading || isButtonLoading ? "加载中" : "")
             }
 
             if canSubscribeMedia {

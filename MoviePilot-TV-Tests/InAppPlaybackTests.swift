@@ -1898,6 +1898,43 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.host == "lan.playback-tests.local" })
   }
 
+  /// 起播焦点交接（`PlaybackFocusHandoff.play`）：起播被同步拒绝时不留焦点目标，接受了才留着；
+  /// 已有播放在准备时这次不起播，也不把目标错改成后按的那个控件。
+  func testFocusHandoffRegistersTargetOnlyWhenPlayIsAccepted() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let handoff = PlaybackFocusHandoff()
+    let card = PlaybackFocusTarget.homeMedia(ownerID: UUID(), itemID: "m1")
+    let target = PlaybackTarget.serverItem(serverName: "emby", itemID: "m1")
+
+    // 设置里关了应用内播放：同步拒绝，目标不留给下一次播放。
+    enabledInSettings = false
+    let rejected = makeCoordinator(makeService())
+    handoff.play(returningTo: card, on: rejected) { rejected.play(target) }
+    XCTAssertFalse(rejected.isBusy)
+    XCTAssertNil(handoff.target, "起播没被接受就不该留下焦点目标")
+
+    enabledInSettings = true
+    let coordinator = makeCoordinator(makeService())
+    handoff.play(returningTo: card, on: coordinator) { coordinator.play(target) }
+    XCTAssertTrue(coordinator.isBusy)
+    XCTAssertEqual(handoff.target, card, "起播被接受：退出播放时焦点回到这张卡")
+
+    let otherCard = PlaybackFocusTarget.homeMedia(ownerID: UUID(), itemID: "m2")
+    var startedAgain = false
+    handoff.play(returningTo: otherCard, on: coordinator) { startedAgain = true }
+    XCTAssertFalse(startedAgain, "忙时不该再起播")
+    XCTAssertEqual(handoff.target, card, "忙时不该改焦点目标")
+
+    let task = coordinator.resolveTaskForTesting
+    coordinator.cancelResolving()
+    await task?.value
+  }
+
   func testSessionChangeDuringResolveDropsResult() async throws {
     let gate = DispatchSemaphore(value: 0)
     PlaybackURLProtocol.stub.configure {
@@ -6754,6 +6791,181 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(shown.landscapeImageURL?.path, "/Items/e1/Images/Primary")
     XCTAssertEqual(shown.seriesName, "MP 剧名", "剧还是认得出的，剧名和海报照样用 MoviePilot 的")
     XCTAssertEqual(shown.portraitImageURL?.lastPathComponent, "mp-series.jpg")
+    coordinator.endCurrentSession()
+  }
+
+  /// 「继续观看」的单集：服务器上有这一集和它所属的整剧，MoviePilot 有整剧详情和这一季的集列表。
+  /// `seriesProviderIDs` 给空对象时整剧认不出，用来验证退回直接播。
+  private func configureResumableEpisode(
+    seriesProviderIDs: String = #"{"Tmdb":"100"}"#, episodesStatus: Int? = nil
+  ) {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(Self.lan)|tmdb.100": Self.series()]
+      // stub 里显式给了状态就一律回错误体，正常路径不能设。
+      if let episodesStatus { $0.episodesStatus["\(Self.lan)|s1"] = episodesStatus }
+      $0.items = [
+        "\(Self.lan)|e1":
+          #"{"Id":"e1","Type":"Episode","Name":"Emby 集名","SeriesId":"s1","SeriesName":"Emby 剧名","ParentIndexNumber":1,"IndexNumber":2,"PremiereDate":"2024-01-08T00:00:00.0000000Z","ProviderIds":{"Tmdb":"12"}}"#,
+        "\(Self.lan)|s1": #"{"Id":"s1","Type":"Series","Name":"Emby 剧名","ProviderIds":\#(seriesProviderIDs)}"#,
+      ]
+      $0.episodes = [
+        "\(Self.lan)|s1": Self.embyEpisodes(Self.embyEpisode("e1", season: 1, episode: 2, tmdb: 12))
+      ]
+      $0.mediaDetails = [
+        "/api/v1/media/100":
+          #"{"tmdb_id":100,"source":"themoviedb","type":"电视剧","title":"MP 剧名","poster_path":"/mp-series.jpg","season_info":[{"season_number":2},{"season_number":0},{"season_number":1},{"season_number":1},{"season_number":-1}]}"#
+      ]
+      $0.tmdbEpisodes = [
+        "/api/v1/tmdb/100/1":
+          #"[{"id":11,"episode_number":1,"name":"第一集","air_date":"2024-01-01"},{"id":12,"episode_number":2,"name":"MP 集名","air_date":"2024-01-08"}]"#
+      ]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+  }
+
+  /// 「继续观看」的单集起播前认出这一集：带剧集上下文，选集面板有内容，播的仍是续播点那份文件。
+  func testServerEpisodeResolvesQueueContextAndPlaysTheResumeFile() async throws {
+    configureResumableEpisode()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    let queued = try XCTUnwrap(session.episode, "认出这一集就要带队列上下文，否则选集面板是空的")
+    XCTAssertEqual(queued.episode.tmdbEpisodeID, 12)
+    XCTAssertEqual(queued.preferredFile, ServerFileRef(server: "emby", itemID: "e1"))
+    XCTAssertEqual(
+      queued.context.seasons, [1, 2, 0],
+      "跨季连播按详情页那份季目录：去重、丢掉非法季号、特别篇排在最后")
+    let panel = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
+    XCTAssertFalse(panel.isEmpty, "选集面板要有内容")
+    coordinator.endCurrentSession()
+  }
+
+  /// 整剧认不出（没有 TMDB 编号）时退回直接播这份文件：仍能播，但没有队列上下文，
+  /// 播放器据此不挂空的选集面板。
+  func testServerEpisodeFallsBackToDirectPlayWhenSeriesUnrecognized() async throws {
+    configureResumableEpisode(seriesProviderIDs: #"{}"#)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    XCTAssertNil(session.episode, "认不出整剧就不带上下文")
+    coordinator.endCurrentSession()
+  }
+
+  /// 集索引读不到（服务器报错）时仍然播用户点的那份文件：续播点就在它上面，不能因为读不到索引就报错。
+  /// 上下文来自 TMDB，不依赖集索引，照样挂上去；选集面板打开时再自己读。
+  func testServerEpisodePlaysTheClickedFileWhenTheEpisodeIndexFails() async throws {
+    configureResumableEpisode(episodesStatus: 500)
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure, "本来能播的文件不能因为集索引读不到就报错")
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1", "播的就是点的那份文件")
+    XCTAssertNotNil(session.episode, "上下文来自 TMDB，不依赖集索引")
+    coordinator.endCurrentSession()
+  }
+
+  /// 集索引里没有这一集（服务器上的编号与 TMDB 对不上）时仍然播这份文件。按集播放的身份门是给
+  /// 「指定了哪一集、没指定文件」的详情页入口用的；续播入口没有集列表，拦下来只会报「请在集列表里确认」这种做不到的事。
+  func testServerEpisodePlaysTheClickedFileWhenTheIndexDoesNotKnowThatEpisode() async throws {
+    configureResumableEpisode()
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e9", season: 1, episode: 9, tmdb: 99))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    XCTAssertEqual(session.episode?.episode.tmdbEpisodeID, 12, "上下文仍按 TMDB 认出是第 2 集")
+    coordinator.endCurrentSession()
+  }
+
+  /// 「继续观看」的详情/搜索入口按服务器上的外部编号认出是哪部片：单集给的是所属整剧的编号，不是单集自己的。
+  func testResumeItemIdentityUsesTheSeriesForAnEpisode() async throws {
+    configureResumableEpisode()
+    let coordinator = makeCoordinator(makeService())
+    let resolved = await coordinator.resumeItemIdentity(serverName: "emby", itemID: "e1")
+    let info = try XCTUnwrap(resolved)
+    XCTAssertEqual(info.tmdb_id, 100, "12 是单集自己的编号，打开详情页要用整剧的 100")
+    XCTAssertEqual(info.type, "电视剧")
+  }
+
+  /// 电影用条目自己的外部编号。
+  func testResumeItemIdentityUsesTheItemsOwnExternalIDForAMovie() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["\(Self.lan)|m1": #"{"Id":"m1","Type":"Movie","Name":"某片","ProviderIds":{"Tmdb":"777"}}"#]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let resolved = await coordinator.resumeItemIdentity(serverName: "emby", itemID: "m1")
+    let info = try XCTUnwrap(resolved)
+    XCTAssertEqual(info.tmdb_id, 777)
+    XCTAssertEqual(info.type, "电影")
+    XCTAssertEqual(info.title, "某片")
+  }
+
+  /// 应用内播放不可用（后端太旧）时也要能认出身份：详情入口正是这种时候才走的，
+  /// 所以不能沿用要求应用内播放可用的 `libraryItemLinks`。
+  func testResumeItemIdentityWorksWhenInAppPlaybackIsUnavailable() async throws {
+    configureResumableEpisode()
+    backendVersion = "v3.2.5"
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    let links = await coordinator.libraryItemLinks(serverName: "emby", itemIDs: ["s1"])
+    XCTAssertNil(links, "应用内播放不可用时既有那条读不到")
+    let resolved = await coordinator.resumeItemIdentity(serverName: "emby", itemID: "e1")
+    let info = try XCTUnwrap(resolved)
+    XCTAssertEqual(info.tmdb_id, 100)
+  }
+
+  /// 只有豆瓣编号的电影也按编号认：查 MoviePilot 详情（和单集查整剧同一跳），不退回按标题识别。
+  func testResumeItemIdentityLooksUpADoubanOnlyMovie() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["\(Self.lan)|m1": #"{"Id":"m1","Type":"Movie","Name":"某片","ProviderIds":{"Douban":"3541415"}}"#]
+      $0.mediaDetails = [
+        "/api/v1/media/3541415":
+          #"{"tmdb_id":777,"douban_id":"3541415","source":"douban","type":"电影","title":"MP 片名"}"#
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let resolved = await coordinator.resumeItemIdentity(serverName: "emby", itemID: "m1")
+    let info = try XCTUnwrap(resolved, "有豆瓣编号就不该退回按标题")
+    XCTAssertEqual(info.tmdb_id, 777)
+    XCTAssertEqual(info.title, "MP 片名")
+  }
+
+  /// 服务器上的单集和 TMDB 集列表都没有单集编号（只能按集号对上）时，队列里的当前集必须是对上的那一集。
+  /// 按编号在列表里再找一遍会 `nil == nil` 命中排在前面的第 1 集，播完就从第 1 集往下接、跳回第 2 集。
+  func testServerEpisodeWithoutTmdbEpisodeIDsQueuesTheMatchedEpisode() async throws {
+    configureResumableEpisode()
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e1"] =
+        #"{"Id":"e1","Type":"Episode","Name":"Emby 集名","SeriesId":"s1","SeriesName":"Emby 剧名","ParentIndexNumber":1,"IndexNumber":2,"PremiereDate":"2024-01-08T00:00:00.0000000Z","ProviderIds":{}}"#
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] =
+        #"[{"episode_number":1,"name":"第一集","air_date":"2024-01-01"},{"episode_number":2,"name":"MP 集名","air_date":"2024-01-08"}]"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    let queued = try XCTUnwrap(session.episode)
+    XCTAssertEqual(queued.episode.episodeNumber, 2, "当前集要是按集号对上的第 2 集，不是排在前面的第 1 集")
+    XCTAssertEqual(queued.episode.name, "MP 集名")
     coordinator.endCurrentSession()
   }
 

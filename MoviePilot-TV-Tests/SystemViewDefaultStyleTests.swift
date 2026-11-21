@@ -482,7 +482,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
     XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
     XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
-    XCTAssertTrue(detailSource.contains("guard await viewModel.cancelSubscription() else"))
+    XCTAssertTrue(
+      detailSource.contains("guard await viewModel.cancelSubscription(confirmation: confirmation) else")
+    )
     XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
   }
 

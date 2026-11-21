@@ -413,7 +413,9 @@ final class MediaSession {
       itemObservations.append(segments.observe(self))
     }
 
-    if baseItem.type == .episode {
+    // 只有带剧集上下文起播（详情页集列表、认出这一集的「继续观看」）才有选集和上一集/下一集。
+    // 没有上下文时取集列表恒为空，挂上面板只会是个空面板，所以不挂。
+    if baseItem.type == .episode, session.episode != nil {
       if queue == nil {
         let queue = MoviePilotEpisodeQueue()
         self.queue = queue

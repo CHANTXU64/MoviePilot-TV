@@ -5,8 +5,9 @@ import SwiftUI
 /// - 聚焦：图片放大、阴影浮起、左上高光淡入，弹簧动画。
 /// - 按下：缩回接近原尺寸、阴影变淡、压暗一点，和聚焦区分开。
 /// - 卡片容器挂 `posterCardFocusAnimation`，图片、高光、阴影在同一次弹簧动画里变化。
-/// - 标题聚焦时加宽，用 `posterCardTitleAnimation` 单独走不回弹的 easeOut（和图片同时起步、慢慢停）：
-///   宽度每变一点，单行标题就重新截断、居中位置跳半个字宽，弹簧冲过头再回来会让标题来回抖。
+/// - 标题聚焦时加宽并下移，用 `posterCardTitleLayout` 统一排版，加宽单独走不回弹的 easeOut
+///   （和图片同时起步、慢慢停）：宽度每变一点，单行标题就重新截断、居中位置跳半个字宽，
+///   弹簧冲过头再回来会让标题来回抖。
 ///
 /// 放大按「左右各多出固定点数」换算倍数，宽窄不同的卡片浮起的距离一致，
 /// 也不会挤到 40–44pt 间距外的相邻卡片。
@@ -141,6 +142,28 @@ private struct PosterCardFocusAnimation: ViewModifier {
   }
 }
 
+/// 竖排图片卡下面那行标题的聚焦几何，海报卡、人物卡和剧照卡共用。
+private struct PosterCardTitleLayout: ViewModifier {
+  let isFocused: Bool
+  let width: CGFloat
+  let imageSize: CGSize
+  let stackSpacing: CGFloat
+
+  func body(content: Content) -> some View {
+    content
+      .frame(
+        maxWidth: isFocused ? width + PosterCardFocus.focusedTextExtraWidth : width,
+        alignment: .center)
+      .frame(width: width + PosterCardFocus.focusedTextExtraWidth)
+      .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
+      .offset(
+        y: isFocused
+          ? PosterCardFocus.focusedTextOffset(forImageSize: imageSize, stackSpacing: stackSpacing)
+          : 0)
+      .posterCardTitleAnimation(isFocused: isFocused)
+  }
+}
+
 extension View {
   /// 卡片图片的聚焦与按下外观：高光、圆角裁切、压暗、阴影、放大。
   /// 挂在未裁切、已定尺寸的图片上（裁切由这里完成），并放在 `PosterCardButtonStyle` 按钮的 label 里，才能拿到按下状态。
@@ -158,7 +181,19 @@ extension View {
   }
 
   /// 卡片标题的聚焦动画：覆盖容器的弹簧动画，加宽过程单调不回弹。
-  func posterCardTitleAnimation(isFocused: Bool) -> some View {
+  fileprivate func posterCardTitleAnimation(isFocused: Bool) -> some View {
     modifier(PosterCardFocusAnimation(isFocused: isFocused, animation: PosterCardFocus.titleAnimation))
+  }
+
+  /// 卡片标题的聚焦布局：可用宽度跟图片一起向左右各多出 `focusedTextExtraWidth` 并居中，外框固定成
+  /// 加宽后的宽度、再用负 padding 把布局占位缩回卡片宽度（不挤到相邻卡片）；聚焦时整体下移让开放大后的图片底边。
+  /// 挂在已定好行数、已 `compositingGroup()` 的标题上。`stackSpacing` 是卡片里图片与标题的间距，
+  /// 必须小于「图片聚焦向下长出的高度 + 5」，否则下移量算成 0，标题就钉在原地不动。
+  func posterCardTitleLayout(
+    isFocused: Bool, width: CGFloat, imageSize: CGSize, stackSpacing: CGFloat = 10
+  ) -> some View {
+    modifier(
+      PosterCardTitleLayout(
+        isFocused: isFocused, width: width, imageSize: imageSize, stackSpacing: stackSpacing))
   }
 }

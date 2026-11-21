@@ -276,6 +276,12 @@ struct MediaCard: View {
       |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
   }
 
+  /// 服务端缩略该请求的 `maxWidth`：降采样取卡片点数的长边，`posterContent` 没传 `.scaleFactor`，
+  /// Kingfisher 默认 1.0。请求比这更大的像素会被客户端降采样扔掉，只多花下载和解码。
+  static func posterThumbnailMaxWidth(for downsamplingSize: CGSize) -> Int {
+    Int(ceil(max(downsamplingSize.width, downsamplingSize.height)))
+  }
+
   static let defaultGridColumns = DetailExpansionGridLayout.columns(width: defaultPosterSize.width, count: 6)
 
   let title: String
@@ -381,27 +387,22 @@ struct MediaCard: View {
 
   // 提取文本内容以实现统一动画
   private var textInfoView: some View {
-    VStack(spacing: 4) {
-      VStack {
-        Text(title)
-          .font(.caption)
-          .foregroundStyle(isFocused ? .primary : .secondary)
+    VStack {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(isFocused ? .primary : .secondary)
 
-        // 仅在明确提供 subTitleBelow 时显示
-        if let subTitleBelow = subTitleBelow, !subTitleBelow.isEmpty {
-          Text(subTitleBelow)
-            .font(.caption2)
-            .foregroundStyle(isFocused ? .secondary : .tertiary)
-        }
+      // 仅在明确提供 subTitleBelow 时显示
+      if let subTitleBelow = subTitleBelow, !subTitleBelow.isEmpty {
+        Text(subTitleBelow)
+          .font(.caption2)
+          .foregroundStyle(isFocused ? .secondary : .tertiary)
       }
-      .lineLimit(1)
-      .compositingGroup()
-      .frame(maxWidth: isFocused ? width + PosterCardFocus.focusedTextExtraWidth : width, alignment: .center)
     }
-    .frame(width: width + PosterCardFocus.focusedTextExtraWidth)
-    .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
-    .offset(y: isFocused ? PosterCardFocus.focusedTextOffset(forImageSize: CGSize(width: width, height: height)) : 0)
-    .posterCardTitleAnimation(isFocused: isFocused)
+    .lineLimit(1)
+    .compositingGroup()
+    .posterCardTitleLayout(
+      isFocused: isFocused, width: width, imageSize: CGSize(width: width, height: height))
   }
 
   // 提取的海报内容 - Apple TV 风格设计

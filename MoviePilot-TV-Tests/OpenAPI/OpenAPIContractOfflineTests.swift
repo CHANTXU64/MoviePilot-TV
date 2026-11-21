@@ -1564,6 +1564,32 @@ final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
     }
   }
 
+  func testMediaMappingMatchCatalogFollowsVersionGate() {
+    let expectations: [(String?, Bool, Int)] = [
+      (nil, false, 0), ("unknown", false, 0), ("v3.2.6", false, 0), ("v3.2.8", false, 1),
+      ("v3.2.9", true, 2), ("v3.2.9-1", true, 2), ("v3.3.0", true, 2),
+    ]
+    for (version, registered, expectedMappingCount) in expectations {
+      let mapping = TVAPIContractCatalog.operations(backendVersion: version).filter {
+        $0.pathTemplate == "/media/mapping" || $0.pathTemplate == "/media/mapping/match"
+      }
+      XCTAssertEqual(mapping.count, expectedMappingCount, version ?? "nil")
+      let match = mapping.filter { $0.pathTemplate == "/media/mapping/match" }
+      XCTAssertEqual(match.count, registered ? 1 : 0, version ?? "nil")
+      for operation in match {
+        XCTAssertEqual(operation.method, "POST")
+        XCTAssertEqual(
+          Set(operation.bodyFields.filter(\.required).map(\.name)),
+          ["media_source", "media_id", "type"]
+        )
+        XCTAssertEqual(
+          operation.bodyFields.first { $0.name == "season" }?.required,
+          false
+        )
+      }
+    }
+  }
+
   func testSubtitleStreamsNeverUseTorrentPagingParameters() {
     for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2-1", "v3.1.5"] {
       let streams = TVAPIContractCatalog.operations(backendVersion: version).filter {

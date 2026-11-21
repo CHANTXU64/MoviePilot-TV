@@ -333,6 +333,18 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
   )
 }
 
+/// 媒体服务器图片缩略：`/system/img/{proxy}` 从 v3.2.6 起接受 `maxWidth`，只改写 Emby/Jellyfin 的
+/// `/Items/{id}/Images/...` 地址。新行为版本限制：版本读不出或无法解析时不追加参数，继续取原图。
+nonisolated enum MediaServerImageThumbnail {
+  static let minimumBackendVersion = "v3.2.6"
+  /// 后端 `maxWidth` 的校验区间上限。
+  static let maximumWidth = 2048
+
+  static func supports(backendVersion: String?) -> Bool {
+    BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
+  }
+}
+
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
@@ -414,13 +426,27 @@ class APIService: ObservableObject {
         }
         self.useImageCache = false
       }
+      mediaServerThumbnailSupported = MediaServerImageThumbnail.supports(
+        backendVersion: settings?.BACKEND_VERSION)
     }
   }
   @Published var useImageCache: Bool = false
+  /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
+  private var mediaServerThumbnailSupported = false
+
+  /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
+  var supportsSharedMediaMapping: Bool {
+    BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: settings?.BACKEND_VERSION)
+  }
+
+  /// 共享映射未命中后的按需查找从后端 v3.2.9 起才可用；版本读不出时按不可用处理。
+  var supportsMediaMappingMatch: Bool {
+    BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: settings?.BACKEND_VERSION)
+  }
 
   var imageConfigurationIdentity: String {
     let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
-    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
+    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")|\(mediaServerThumbnailSupported)"
   }
 
   /// 接口缓存随会话作用域存活；尚未创建作用域时没有缓存可失效。
@@ -449,7 +475,7 @@ class APIService: ObservableObject {
     }
   }
 
-  private func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
+  func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
     try Task.checkCancellation()
     guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
   }
@@ -1183,7 +1209,11 @@ class APIService: ObservableObject {
   }
 
   private func makeRequest(
-    endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false
+    endpoint: String,
+    method: String = "GET",
+    body: Data? = nil,
+    isForm: Bool = false,
+    timeoutInterval: TimeInterval? = nil
   ) async throws -> Data {
     let lease = currentLease()
     do {
@@ -1192,6 +1222,7 @@ class APIService: ObservableObject {
         method: method,
         body: body,
         isForm: isForm,
+        timeoutInterval: timeoutInterval,
         lease: lease,
         requireCurrentLease: true
       )
@@ -1391,6 +1422,7 @@ class APIService: ObservableObject {
     method: String,
     body: Data?,
     isForm: Bool,
+    timeoutInterval: TimeInterval? = nil,
     lease: APIServiceSessionLease,
     requireCurrentLease: Bool
   ) async throws -> Data {
@@ -1400,6 +1432,7 @@ class APIService: ObservableObject {
       method: method,
       body: body,
       isForm: isForm,
+      timeoutInterval: timeoutInterval,
       lease: lease
     )
     let (data, response) = try await send(
@@ -1426,6 +1459,7 @@ class APIService: ObservableObject {
     method: String,
     body: Data?,
     isForm: Bool,
+    timeoutInterval: TimeInterval? = nil,
     lease: APIServiceSessionLease
   ) throws -> URLRequest {
     guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
@@ -1439,7 +1473,9 @@ class APIService: ObservableObject {
       token: lease.token,
       cookieHeader: lease.runtime.cookieVault.cookieHeader(for: url)
     )
-    if endpoint == "/user/current" || endpoint == "/login/access-token" {
+    if let timeoutInterval {
+      request.timeoutInterval = timeoutInterval
+    } else if endpoint == "/user/current" || endpoint == "/login/access-token" {
       request.timeoutInterval = 10
     }
     return request
@@ -1947,11 +1983,222 @@ class APIService: ObservableObject {
   }
 
   /// 归一化媒体类型名称，统一转换为 API 识别的 'movie' 或 'tv'
-  private func normalizeMediaType(_ type: String) -> String {
+  func normalizeMediaType(_ type: String) -> String {
     let t = type.lowercased()
     if t == "电影" || t == "movie" { return "movie" }
     if t == "电视剧" || t == "剧集" || t == "tv" { return "tv" }
     return t
+  }
+
+  /// 查询非 TMDB 来源到 TMDB 的共享映射。
+  ///
+  /// 未命中、共享识别未启用或后端版本不足时返回 `nil`；网络/解码/业务失败抛出。
+  /// v3.2.9 起调用方继续按需查找，低版本回退名称识别。
+  /// 命中与未命中都在会话内短暂缓存，避免「TMDB 详情」每次按下都走一次 0.8s 预算的后端查询。
+  func fetchMediaMapping(
+    identity: MediaIdentity,
+    type: String,
+    season: Int? = nil
+  ) async throws -> MediaMapping? {
+    guard supportsSharedMediaMapping,
+      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season)
+    else {
+      return nil
+    }
+
+    let key = mediaMappingCacheKey(
+      identity: MediaIdentity(source: query.source, mediaId: query.mediaId),
+      type: query.mediaType,
+      season: query.season)
+    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      let endpoint = try self.buildEndpoint(
+        path: "/media/mapping",
+        params: [
+          "media_source": query.source,
+          "media_id": query.mediaId,
+          "type": query.mediaType,
+          "season": query.season.map(String.init),
+        ]
+      )
+      // 后端查询预算 0.8s；1.5s 与 Web 一致，超时后调用方继续按需查找或名称识别。
+      let data = try await self.makeRequest(endpoint: endpoint, timeoutInterval: 1.5)
+      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
+        return .miss
+      }
+      return .mapping(mapping)
+    }
+    switch entry {
+    case .mapping(let mapping): return mapping
+    case .miss: return nil
+    }
+  }
+
+  /// 条目能否按需查找：v3.2.9 起，且来源在后端有内置的 TMDB 转换、请求合法。
+  func canRequestMediaMappingMatch(identity: MediaIdentity, type: String, season: Int?) -> Bool {
+    mediaMappingMatchQuery(identity: identity, type: type, season: season) != nil
+  }
+
+  /// 共享映射未命中后按需查找 TMDB 关系（`POST /media/mapping/match`）。
+  ///
+  /// 返回 `nil` 表示后端完成查找后没有关系，或条目不能按需查找。
+  /// 查找失败不写入缓存，用户下一次动作会重试；同时查找由后端合并，客户端不另做并发控制。
+  func fetchMediaMappingMatch(
+    identity: MediaIdentity,
+    type: String,
+    season: Int? = nil
+  ) async throws -> MediaMapping? {
+    guard let query = mediaMappingMatchQuery(identity: identity, type: type, season: season) else {
+      return nil
+    }
+
+    // Match 使用独立缓存键，避免 GET 的未命中缓存把后续 Match 结果挡掉。
+    let key = "match|"
+      + mediaMappingCacheKey(
+        identity: MediaIdentity(source: query.source, mediaId: query.mediaId),
+        type: query.mediaType,
+        season: query.season)
+    let entry = try await sessionCachedValue(sessionScope.mediaMappingCache, key: key) {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      let body = try JSONEncoder().encode(
+        MediaMappingMatchBody(
+          mediaSource: query.source,
+          mediaId: query.mediaId,
+          type: query.mediaType,
+          season: query.season
+        )
+      )
+      let data = try await self.makeRequest(
+        endpoint: "/media/mapping/match",
+        method: "POST",
+        body: body,
+        timeoutInterval: Self.mediaMappingMatchTimeout
+      )
+      guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
+        return .miss
+      }
+      return .mapping(mapping)
+    }
+    switch entry {
+    case .mapping(let mapping): return mapping
+    case .miss: return nil
+    }
+  }
+
+  /// 与 Web 一致等 60s；超时后调用方改用名称识别。后端查找不随请求断开而停，
+  /// 结论保留 10 分钟，下次查找直接复用。
+  private static let mediaMappingMatchTimeout: TimeInterval = 60
+
+  /// 后端内置了到 TMDB 转换的来源（v3.2.9 `_PROJECTION_RULES`）。按需查找只发给它们；
+  /// 预载的名称识别也只对它们做，插件等其他来源只在用户按下 TMDB 时识别。
+  static let tmdbConvertibleSources: Set<String> = ["douban", "bangumi", "anilist"]
+  /// 后端只接受纯数字 ID 的来源。
+  private static let numericMediaMappingMatchSources: Set<String> = ["bangumi", "anilist"]
+
+  private func mediaMappingMatchQuery(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> MediaMappingLookupQuery? {
+    guard supportsMediaMappingMatch,
+      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season),
+      Self.tmdbConvertibleSources.contains(query.source)
+    else {
+      return nil
+    }
+    if Self.numericMediaMappingMatchSources.contains(query.source),
+      !query.mediaId.allSatisfy({ $0.isASCII && $0.isNumber })
+    {
+      return nil
+    }
+    return query
+  }
+
+  private struct MediaMappingLookupQuery {
+    let source: String
+    let mediaId: String
+    let mediaType: String
+    let season: Int?
+  }
+
+  private struct MediaMappingMatchBody: Encodable {
+    let mediaSource: String
+    let mediaId: String
+    let type: String
+    let season: Int?
+
+    enum CodingKeys: String, CodingKey {
+      case mediaSource = "media_source"
+      case mediaId = "media_id"
+      case type
+      case season
+    }
+  }
+
+  private func mediaMappingLookupQuery(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> MediaMappingLookupQuery? {
+    guard let source = MediaIdentifier.normalizeSource(identity.source),
+      source != "themoviedb"
+    else {
+      return nil
+    }
+    let mediaType = normalizeMediaType(type)
+    guard mediaType == "movie" || mediaType == "tv" else { return nil }
+    guard let mediaId = MediaIdentifier.normalizedString(identity.mediaId),
+      mediaId != "0",
+      mediaId.count <= 256
+    else {
+      return nil
+    }
+
+    // 电影不带季号；电视保留 0（特别季）并拒绝超出后端契约的负数/超大值。
+    let querySeason = mediaType == "tv" ? season : nil
+    if let querySeason, !(0...10000).contains(querySeason) { return nil }
+    return MediaMappingLookupQuery(
+      source: source, mediaId: mediaId, mediaType: mediaType, season: querySeason)
+  }
+
+  private func mediaMappingCacheKey(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> String {
+    [identity.source, identity.mediaId, type, season.map(String.init) ?? "nil"]
+      .map { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0 }
+      .joined(separator: "|")
+  }
+
+  /// 可选数据响应：`data: null` 表示未命中，`success: false` 仍按失败抛出。
+  private func decodeOptionalOrUnwrap<T: Decodable>(
+    _ type: T.Type,
+    from data: Data
+  ) throws -> T? {
+    guard firstNonWhitespaceByte(in: data) == UInt8(ascii: "{") else {
+      throw APIError.decodingError(
+        DecodingError.dataCorrupted(
+          DecodingError.Context(
+            codingPath: [],
+            debugDescription: "Expected an object response for \(T.self)"
+          )
+        )
+      )
+    }
+    let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
+    if response.success == false {
+      throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+    }
+    if let wrappedData = response.data { return wrappedData }
+    // 后端明确成功且 data 为空就是“没有关系”；不要把成功响应里的提示文案误判为失败。
+    if response.success == true { return nil }
+    if let message = response.localizedMessage, !message.isEmpty {
+      throw APIError.serverMessage(message)
+    }
+    return nil
   }
 
   /// 同 `recognizeTmdbId`，结果在会话里记住（`libraryRecognitionCache`），认不出也记住；请求失败不记，下次再识别。
@@ -2626,6 +2873,18 @@ class APIService: ObservableObject {
   /// - 应用场景: 首页仪表盘展示最近添加的影片
   func fetchMediaServerLatest(server: String) async throws -> [MediaServerPlayItem] {
     let endpoint = try buildEndpoint(path: "/mediaserver/latest", params: ["server": server])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
+  }
+
+  /// 获取媒体服务器「继续观看」（后端叫正在播放）条目
+  /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerPlaying.vue（`mediaserver/playing`）
+  /// - 应用场景: 媒体库页「继续观看」行。条目是电影或单集，带 `percent` 已播放百分比；
+  ///   剧集的 `title` 是剧名、`subtitle` 是「S2:5 - 集名」（Plex 为「S2:E5 - 集名」），不是年份。
+  /// - 备注: 接口与字段自 v3.0.4 起未变，各台已启用服务器分别读取，由调用方按行选择服务器。
+  func fetchMediaServerPlaying(server: String, count: Int) async throws -> [MediaServerPlayItem] {
+    let endpoint = try buildEndpoint(
+      path: "/mediaserver/playing", params: ["server": server, "count": String(count)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
@@ -3633,10 +3892,13 @@ class APIService: ObservableObject {
   func fetchSubscriptionLookup(
     media: MediaInfo,
     season: Int? = nil,
-    includeVideoMetadataFallback: Bool = true
+    includeVideoMetadataFallback: Bool = true,
+    requireExactMovieIdentity: Bool = false
   ) async throws -> SubscriptionLookupResult? {
     struct SubscribeLookupResp: Codable {
       let id: Int?
+      let type: String?
+      let season: Int?
       let tmdbid: Int?
       let doubanid: String?
       let bangumiid: Int?
@@ -3668,26 +3930,55 @@ class APIService: ObservableObject {
     }
     // 各版本 Web 都附带 title/year/mtype；v3.0.10-1 前的后端只在自身条件满足时使用回退参数，
     // 多发的参数会被忽略，所以这里不按后端版本区分。
-    let usesVideoMetadataFallback = includeVideoMetadataFallback
+    let usesVideoMetadataFallback = !requireExactMovieIdentity && includeVideoMetadataFallback
       && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
       extraParams: [
         "season": season.map(String.init),
-        "title": media.title,
+        "title": requireExactMovieIdentity ? nil : media.title,
         "year": usesVideoMetadataFallback ? media.year : nil,
-        "mtype": usesVideoMetadataFallback ? media.type : nil,
+        "mtype": requireExactMovieIdentity ? "电影" : (usesVideoMetadataFallback ? media.type : nil),
       ]
     )
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
+    if requireExactMovieIdentity {
+      let recordedIdentity = MediaIdentifier.resolve(
+        source: resp.media_source, mediaId: resp.media_id, tmdbId: resp.tmdbid,
+        doubanId: resp.doubanid, bangumiId: resp.bangumiid, anilistId: resp.anilistid,
+        legacyMediaId: resp.mediaid
+      )
+      // 上游也能按共同的 TMDB 身份命中另一来源的订阅。
+      let matchesTMDB = identity.source == "themoviedb"
+        && recordedIdentity?.source != "themoviedb"
+        && MediaIdentifier.validNumericIdentifier(resp.tmdbid).map(String.init) == identity.mediaId
+      guard id > 0, resp.type == "电影", resp.season == season,
+        recordedIdentity == identity || matchesTMDB
+      else { return nil }
+    }
     return SubscriptionLookupResult(
       id: id,
       mediaId: identity.mediaKey,
       isResolvedMediaId: resp.hasResolvedIdentity
     )
+  }
+
+  /// 为带共享映射的电影冻结精确订阅记录，优先原始来源。
+  func fetchExactMovieSubscriptionID(for media: MediaInfo, mappedTo target: MediaInfo) async throws
+    -> Int?
+  {
+    let snapshot = sessionSnapshot()
+    for candidate in [media, target] {
+      let result = try await fetchSubscriptionLookup(
+        media: candidate, requireExactMovieIdentity: true
+      )
+      try validateSessionSnapshot(snapshot)
+      if let result { return result.id }
+    }
+    return nil
   }
 
   /// 查询特定媒体（及特定季）命中的订阅 ID
@@ -3708,20 +3999,23 @@ class APIService: ObservableObject {
   func checkSubscription(
     media: MediaInfo,
     season: Int? = nil,
-    forceRefresh: Bool = false
+    forceRefresh: Bool = false,
+    requireExactMovieIdentity: Bool = false
   ) async throws -> Bool {
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    let key = "\(mediaId):\(season.map(String.init) ?? "")"
+    let key = "\(requireExactMovieIdentity):\(media.type ?? ""):\(mediaId):\(season.map(String.init) ?? "")"
     return try await sessionCachedValue(
       sessionScope.subscriptionStatusCache,
       key: key,
       forceRefresh: forceRefresh
     ) { [weak self] in
       guard let self else { throw CancellationError() }
-      return try await self.fetchSubscriptionLookup(media: media, season: season) != nil
+      return try await self.fetchSubscriptionLookup(
+        media: media, season: season, requireExactMovieIdentity: requireExactMovieIdentity
+      ) != nil
     }
   }
 
@@ -3827,7 +4121,11 @@ class APIService: ObservableObject {
     return getMediaServerPosterImageURL(image: item.image, useCookies: item.use_cookies?.value)
   }
 
-  func getMediaServerPosterImageURL(image: String?, useCookies: Bool?) -> URL? {
+  /// - Parameter cardPosterPixelWidth: 卡片降采样后保留的像素宽度（见 `MediaCard.posterThumbnailMaxWidth`），
+  ///   给了才请求缩略图。详情入口把同一个 URL 当冷加载全屏背景兜底，那条路径必须不传，否则大屏背景会被降成卡片尺寸。
+  func getMediaServerPosterImageURL(
+    image: String?, useCookies: Bool?, cardPosterPixelWidth: Int? = nil
+  ) -> URL? {
     guard let path = image, !path.isEmpty else { return nil }
     guard let encodedUrl = encodeURIComponent(path)
     else {
@@ -3838,6 +4136,10 @@ class APIService: ObservableObject {
 
     if useCookies == true {
       urlString += "&use_cookies=true"
+    }
+
+    if let cardPosterPixelWidth, cardPosterPixelWidth > 0, mediaServerThumbnailSupported {
+      urlString += "&maxWidth=\(min(cardPosterPixelWidth, MediaServerImageThumbnail.maximumWidth))"
     }
 
     return URL(string: urlString)

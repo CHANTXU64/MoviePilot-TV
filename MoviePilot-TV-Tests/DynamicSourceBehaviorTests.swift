@@ -161,6 +161,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         "@EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator"
       )
     )
+    // 三个异步跳转入口：打开详情（最近添加与继续观看共用）、搜索资源、搜索字幕。
     XCTAssertEqual(
       homeSource.components(
         separatedBy: "let navigationSource = navigationCoordinator.sourceToken()"
@@ -172,7 +173,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         homeSource,
         [
           "let navigationSource = navigationCoordinator.sourceToken()",
-          "let loadingPosterURL = item.imageURLs.image",
+          "let loadingPosterURL = item.imageURLs().image",
           "Task {",
           "navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)",
         ]
@@ -190,6 +191,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         ]
       )
     )
+    // 打开详情（两行共用）、搜索资源（识别成功与退回标题搜索两条）、搜索字幕。
     XCTAssertEqual(
       homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
       4
