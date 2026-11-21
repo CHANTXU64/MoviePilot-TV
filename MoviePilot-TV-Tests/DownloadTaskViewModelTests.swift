@@ -560,6 +560,71 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.downloads.isEmpty, "真拿到空列表后才显示「暂无下载任务」")
   }
 
+  func testFirstLoadFailureBelongsToTheDownloaderThatFailed() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "a", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.selectedClient, "a")
+    XCTAssertEqual(viewModel.firstLoadState, .failed)
+
+    viewModel.selectedClient = "b"
+    XCTAssertEqual(viewModel.firstLoadState, .loading, "切到别的下载器后不沿用上一个下载器的失败文字")
+  }
+
+  func testStaleFailureFromPreviousDownloaderDoesNotShowWhileNewDownloaderLoads() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let aGate = DownloadTaskAsyncGate()
+    let bGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "a", statusCode: 500, waitFor: aGate)
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "b", waitFor: bGate)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    let aTask = Task { @MainActor in await viewModel.initialLoad() }
+    defer { aTask.cancel() }
+    try await withTimeout("a request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "a")
+    }
+
+    viewModel.selectedClient = "b"
+    let bTask = Task { @MainActor in await viewModel.loadDownloads() }
+    defer { bTask.cancel() }
+    try await withTimeout("b request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "b")
+    }
+
+    await aGate.open()
+    try await withTimeout("stale a load to finish") { await aTask.value }
+    XCTAssertEqual(viewModel.firstLoadState, .loading, "旧下载器晚到的失败不能显示到正在加载的新下载器上")
+
+    await bGate.open()
+    try await withTimeout("b load to finish") { await bTask.value }
+    XCTAssertNil(viewModel.firstLoadState)
+  }
+
   func testFirstLoadStateIsNilWithoutDownloadersOrWhenDownloaderListFails() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }

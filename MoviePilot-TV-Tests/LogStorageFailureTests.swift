@@ -199,6 +199,20 @@ final class LogStorageFailureTests: XCTestCase {
 
 @MainActor
 final class LogViewerStorageFailureTests: XCTestCase {
+  func testEmptyStateWaitsForTheFirstRead() async throws {
+    let fixture = try LogFailureFixture()
+    defer { fixture.cleanUp() }
+    let store = fixture.makeStore()
+    let viewModel = LogViewerViewModel(store: store, now: { fixture.now }, calendar: fixture.calendar)
+
+    XCTAssertFalse(viewModel.showsEmptyState, "第一次读取还没开始时不能先显示「没有符合条件的日志」")
+    XCTAssertTrue(viewModel.showsLoadingState)
+
+    await viewModel.reloadRecords()
+    XCTAssertTrue(viewModel.showsEmptyState)
+    XCTAssertFalse(viewModel.showsLoadingState)
+  }
+
   func testReadFailureSuppressesEmptyStateAndSuccessfulRetryRestoresIt() async throws {
     let fixture = try LogFailureFixture()
     defer { fixture.cleanUp() }

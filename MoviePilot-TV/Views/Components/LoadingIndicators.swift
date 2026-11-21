@@ -155,3 +155,15 @@ struct BlockingProgressOverlay: View {
     }
   }
 }
+
+extension View {
+  /// 整页首次加载：挂在页面 ScrollView 外层，转圈居中在当前可视区域，和发现页、推荐页的整页转圈同一位置。
+  /// 不占布局、不可聚焦，页头照常显示、可操作；区块内的加载仍用 `FirstLoadIndicator` 留在原位。
+  func firstLoadOverlay(_ isLoading: Bool) -> some View {
+    overlay {
+      if isLoading {
+        ProgressView()
+      }
+    }
+  }
+}

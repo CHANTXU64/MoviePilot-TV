@@ -127,6 +127,12 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var errorMessage: String?
   @Published var hasSeasonLoadError = false
 
+  /// 加载态：加载中，或首次加载还没开始且没有预带的季信息。
+  /// 独立季订阅页第一帧时加载任务还没跑，不能先显示「未查询到季集信息」。
+  var showsLoadingState: Bool {
+    isLoading || (!hasLoaded && seasonInfos.isEmpty && !hasSeasonLoadError)
+  }
+
   // 各季的订阅状态
   @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
   @Published var subscribedSeasons: Set<Int> = []

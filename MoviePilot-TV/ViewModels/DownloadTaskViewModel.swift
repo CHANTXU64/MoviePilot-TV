@@ -12,7 +12,8 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var downloads: [DownloadingInfo] = []
   @Published private(set) var loadedClient: String = ""
   @Published private(set) var clientsLoadFailed = false
-  @Published private(set) var downloadsLoadFailed = false
+  /// 第一次结果之前任务列表请求失败的下载器。绑定下载器：切到别的下载器后不沿用失败文字。
+  @Published private(set) var downloadsLoadFailedClient: String?
   @Published var errorMessage: String?
 
   var canOperateDownloads: Bool {
@@ -46,7 +47,7 @@ class DownloadTaskViewModel: ObservableObject {
     guard apiService.canAccess(.manage), !clientsLoadFailed else { return nil }
     if hasLoadedClients && selectedClient.isEmpty { return nil }
     guard loadedClient.isEmpty else { return nil }
-    return downloadsLoadFailed ? .failed : .loading
+    return downloadsLoadFailedClient == selectedClient ? .failed : .loading
   }
 
   /// 主 Tab 生命周期门禁。generation 让“切走后又快速切回”的旧独立 Task 也无法写回。
@@ -169,7 +170,7 @@ class DownloadTaskViewModel: ObservableObject {
       if loadedClient != clientName {
         loadedClient = clientName
       }
-      downloadsLoadFailed = false
+      downloadsLoadFailedClient = nil
       consecutiveDownloadsFailures = 0
     } catch is CancellationError {
       return
@@ -178,7 +179,10 @@ class DownloadTaskViewModel: ObservableObject {
         currentPresentationGeneration == presentationGeneration,
         !Task.isCancelled
       else { return }
-      downloadsLoadFailed = true
+      // 和成功路径同一套校验：切换下载器或有更新的请求后，旧请求的失败不能显示到当前下载器上。
+      if selectedClient == clientName, currentGeneration == downloadLoadGeneration {
+        downloadsLoadFailedClient = clientName
+      }
       consecutiveDownloadsFailures += 1
       reportPollingFailureIfNeeded(
         &consecutiveDownloadsFailures,
@@ -192,7 +196,7 @@ class DownloadTaskViewModel: ObservableObject {
     downloadLoadGeneration += 1
     hasLoadedClients = false
     clientsLoadFailed = false
-    downloadsLoadFailed = false
+    downloadsLoadFailedClient = nil
     clients = []
     selectedClient = ""
     downloads = []
