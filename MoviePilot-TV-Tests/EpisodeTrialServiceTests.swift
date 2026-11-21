@@ -1155,30 +1155,66 @@ final class EpisodeTrialServiceTests: XCTestCase {
     }
   }
 
-  func testReceiptWithoutConfirmedSelectionUsesTheOnlyDownloaderWithTheTask() async throws {
-    // MoviePilot 这次没写确认记录：只有一台下载器在下这个 hash，就按它跟踪，照常显示单集百分比。
-    try await withService { _, service, _, request in
-      _ = await service.start(request)
-      backend.finishSearch(submitted: true, confirmedDownloaders: nil)
-      let single = await service.refresh(request)
-      XCTAssertEqual(single, .downloading(progress: 42))
-    }
-    backend.reset()
-    try await withService { _, service, _, request in
-      _ = await service.start(request)
-      backend.finishSearch(submitted: true, seasonEpisode: "S02 E01-E10", confirmedDownloaders: nil)
-      let pack = await service.refresh(request)
-      XCTAssertEqual(pack, .downloading(progress: nil))
+  func testReceiptWithoutConfirmedSelectionDoesNotGuessTheDownloader() async throws {
+    // 没有确认记录时认不出本次是哪台下载器，在下的同 hash 任务不论单集还是季包都不推断成本次的下载。
+    for seasonEpisode in ["S02 E05", "S02 E01-E10"] {
+      backend.reset()
+      try await withService { _, service, _, request in
+        _ = await service.start(request)
+        backend.finishSearch(submitted: true, seasonEpisode: seasonEpisode, confirmedDownloaders: nil)
+        let unconfirmed = await service.refresh(request)
+        XCTAssertEqual(unconfirmed, .submissionUnconfirmed, seasonEpisode)
+      }
     }
   }
 
-  func testReceiptWithoutConfirmedSelectionStaysUnconfirmedWhenTwoDownloadersHaveTheTask() async throws {
+  func testDownloaderOutsideTheConfirmedListDoesNotHoldTheTrial() async throws {
+    let clock = ClockBox()
+    try await withService(now: { clock.now }) { _, service, _, request in
+      _ = await service.start(request)
+      backend.finishSearch(
+        submitted: true, seasonEpisode: "S02 E01-E10", confirmedDownloaders: ["fixture-client", "third-client"])
+      backend.addOtherDownload(hash: "target-hash", seasonEpisode: "S02 E01-E10")
+      let unconfirmed = await service.refresh(request)
+      XCTAssertEqual(unconfirmed, .submissionUnconfirmed)
+
+      backend.finishDownload("target-hash")
+      let waiting = await service.refresh(request)
+      XCTAssertEqual(waiting, .waitingForOrganization, "确认记录之外的下载器在下同一种子，不算本次的任务")
+      clock.advance(by: EpisodeTrialService.missingDownloadLimit)
+      let expired = await service.refresh(request)
+      XCTAssertEqual(expired, EpisodeTrialService.downloadGone)
+    }
+  }
+
+  func testFailedQueueItemDoesNotHideTheOrganizationFailure() async throws {
     try await withService { _, service, _, request in
       _ = await service.start(request)
-      backend.finishSearch(submitted: true, seasonEpisode: "S02 E01-E10", confirmedDownloaders: nil)
-      backend.addOtherDownload(hash: "target-hash", seasonEpisode: "S02 E01-E10")
-      let both = await service.refresh(request)
-      XCTAssertEqual(both, .submissionUnconfirmed)
+      backend.finishSearch(submitted: true)
+      _ = await service.refresh(request)
+      backend.organize("target-hash", succeeded: false)
+      // 同一作业的其他集还没整理完，失败的这一集留在队列里。
+      backend.moveToQueue("target-hash", state: "failed")
+      let failed = await service.refresh(request)
+      XCTAssertEqual(failed, .concluded(.organizationFailed))
+
+      let again = await service.start(request)
+      XCTAssertEqual(again, .searching, "队列里失败的任务不挡住重新试看")
+    }
+  }
+
+  func testReusedSubscriptionIDDoesNotPickUpAnEarlierTrialsDownload() async throws {
+    // MoviePilot 删掉 ID 最大的订阅后，下一条订阅沿用这个 ID：上一次试看的下载记录带着同一个订阅 ID。
+    try await withService { _, service, _, request in
+      backend.addEarlierTrialDownload(subscriptionID: 81, date: "2026-11-20 09:00:00")
+      _ = await service.start(request)
+      XCTAssertEqual(service.credentials.first?.subscriptionID, 81)
+      XCTAssertEqual(service.credentials.first?.subscribedAt, FakeMoviePilot.subscribedAt)
+
+      backend.loseBatch()
+      let ended = await service.refresh(request)
+      XCTAssertEqual(ended, EpisodeTrialService.batchLost)
+      XCTAssertFalse(service.snapshot(key: request.key, seasonKey: request.seasonKey).isFollowingDownload)
     }
   }
 
@@ -2047,6 +2083,8 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   /// 整理记录里整理后的文件路径。
   static let organizedPath = "/media/电视剧/国产剧/试看测试 (2025)/Season 2/试看测试 - S02E05.mkv"
   private static let finishedStates: Set<String> = ["completed", "failed", "cancelled", "skipped"]
+  /// 新建订阅的添加时间，早于 `finishSearch` 写的下载记录。
+  static let subscribedAt = "2026-11-21 12:00:00"
 
   private let lock = NSLock()
   private var rows: [Int: [String: Any]] = [:]
@@ -2063,7 +2101,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   private var offlineClient = false
   /// 下载器暂时连不上（查下载中的任务失败）。
   private var downloaderFails = false
-  private var queue: [String: (episode: Int, season: Int?, seasonEpisode: String?)] = [:]
+  private var queue: [String: (episode: Int, season: Int?, seasonEpisode: String?, state: String?)] = [:]
   private var transfers: [String: (succeeded: Bool, date: String)] = [:]
   private var requests: [String] = []
   private var allRequests: [String] = []
@@ -2227,7 +2265,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       downloading["target-hash"] = 42
       downloadSeasonEpisodes["target-hash"] = seasonEpisode
       guard recordsHistory else { return }
-      // `confirmedDownloaders` 为 nil：MoviePilot 这次没写确认记录（受理后读不到文件列表、插件下载器）。
+      // `confirmedDownloaders` 为 nil：没有确认记录（v3.2.10 之前的 MoviePilot 写的下载记录）。
       var note: [String: Any] = ["subscription_download": ["subscription_id": 81]]
       if let confirmedDownloaders {
         note["confirmed_selection"] = [
@@ -2255,6 +2293,17 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
     }
   }
 
+  /// 上一次试看留下的下载记录（带订阅 ID），那次的下载早已不在下载器里。
+  func addEarlierTrialDownload(subscriptionID: Int, date: String) {
+    lock.withLock {
+      history.append([
+        "id": 1, "title": "MP 识别标题", "media_source": "tmdb", "media_id": "91", "seasons": "S02", "episodes": "E05",
+        "download_hash": "earlier-trial-hash", "date": date,
+        "note": ["subscription_download": ["subscription_id": subscriptionID]],
+      ])
+    }
+  }
+
   func pushHistoryToSecondPage() { lock.withLock { historyOnSecondPage = true } }
   func clearDownloadHistory() { lock.withLock { history = [] } }
   func addOtherDownload(hash: String, seasonEpisode: String) {
@@ -2266,11 +2315,12 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
   func setProgress(_ hash: String, _ progress: Double) { lock.withLock { downloading[hash] = progress } }
 
   func moveToQueue(
-    _ hash: String, episode: Int = 5, season: Int? = 2, seasonEpisode: String? = nil, keepDownloading: Bool = false
+    _ hash: String, episode: Int = 5, season: Int? = 2, seasonEpisode: String? = nil, state: String? = nil,
+    keepDownloading: Bool = false
   ) {
     lock.withLock {
       if !keepDownloading { downloading.removeValue(forKey: hash) }
-      queue[hash] = (episode, season, seasonEpisode)
+      queue[hash] = (episode, season, seasonEpisode, state)
     }
   }
 
@@ -2376,6 +2426,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
       if query["name"] == "other-client" {
         return otherDownloads.map { ["hash": $0.key, "season_episode": $0.value, "progress": 30] as [String: Any] }
       }
+      guard query["name"] == "fixture-client" else { return [] as [Any] }
       return downloading.map { hash, progress -> [String: Any] in
         var task: [String: Any] = ["hash": hash, "season_episode": downloadSeasonEpisodes[hash] ?? ""]
         if let progress { task["progress"] = progress }
@@ -2393,7 +2444,9 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
         return [
           "media": ["media_source": "tmdb", "media_id": "91"],
           "season": season,
-          "tasks": [["downloader": "fixture-client", "download_hash": hash, "meta": meta]],
+          "tasks": [
+            ["downloader": "fixture-client", "download_hash": hash, "meta": meta, "state": entry.state.map { $0 as Any } ?? NSNull()]
+          ],
         ]
       }
     case ("GET", "history/transfer"):
@@ -2457,6 +2510,7 @@ nonisolated private final class FakeMoviePilot: @unchecked Sendable {
     }
     fields["username"] = "fixture"
     fields["state"] = "N"
+    fields["date"] = Self.subscribedAt
     fields["execution_status"] = ["source": "new", "batch_id": "fedcba9876543210fedcba9876543210"]
     let id = nextID
     nextID += 1

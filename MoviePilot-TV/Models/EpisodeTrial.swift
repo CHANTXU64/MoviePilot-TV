@@ -376,6 +376,9 @@ nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
   var fingerprints: Set<String> = []
   /// 补搜回执给的批次；回执丢了从订阅行的手动搜索状态补。
   var batchID: String?
+  /// 订阅的添加时间（MoviePilot 建订阅时按自己的时钟写入），第一次读到带着本机标记的订阅时记下。
+  /// 订阅 ID 删掉后会被复用，交接下载跟踪时据此排除更早的下载记录。旧版本解码时忽略这个字段。
+  var subscribedAt: String?
   /// 用户要求取消。发出停止请求之前就保存，App 中途退出后接着收尾。
   var cancelRequested = false
   /// 重试也不会变的失败的说明。记下后不再推进，只停掉搜索、核对后删掉订阅，结局显示这段说明。
@@ -528,20 +531,25 @@ nonisolated struct EpisodeTrialTransferJob: Decodable {
     let downloader: String?
     let download_hash: String?
     let meta: Metadata?
+    /// waiting、running、completed、failed。作业里其他任务结束前，结束的任务仍留在队列里。
+    let state: String?
   }
 
   let media: Media?
   let season: Int?
   let tasks: [Transfer]?
 
-  func downloader(for target: EpisodeTrialTarget, hash: String, expectedDownloader: String?) -> String? {
+  /// 队列里这一集对应的下载器；`among` 不为 nil 时只认其中的下载器。
+  /// 整理失败的任务不算：失败已经写进整理记录，不能当成还在整理，也不该挡住重新试看。
+  /// 整理完成的任务仍算：刚整理好、还没入库时，重新试看会再下一遍。
+  func downloader(for target: EpisodeTrialTarget, hash: String, among downloaders: [String]?) -> String? {
     guard let media, let identity = MediaIdentifier.resolve(source: media.media_source, mediaId: media.media_id),
       target.identities.contains(identity), trimmedNonEmpty([media.episode_group]) == target.episodeGroup
     else { return nil }
 
     return tasks?.lazy.compactMap { task -> String? in
-      guard task.download_hash == hash, let downloader = trimmedNonEmpty([task.downloader]),
-        expectedDownloader == nil || downloader == expectedDownloader,
+      guard task.download_hash == hash, task.state != "failed", let downloader = trimmedNonEmpty([task.downloader]),
+        downloaders?.contains(downloader) ?? true,
         let meta = task.meta, (meta.begin_season ?? meta.reportedSeason ?? season) == target.season,
         meta.end_season == nil || meta.end_season == target.season,
         meta.episode_list?.contains(target.episodeNumber) == true
@@ -551,7 +559,7 @@ nonisolated struct EpisodeTrialTransferJob: Decodable {
   }
 }
 
-/// 下载和整理历史都能提供媒体身份和季集范围。历史未注明下载器，须结合可信的下载回执或实时任务。
+/// 下载和整理历史都能提供媒体身份和季集范围。两个接口都不返回下载器，下载记录只能按确认记录认定。
 nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   struct Note: Decodable, Sendable {
     struct Subscription: Decodable, Sendable {
@@ -589,7 +597,6 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let episodes: String?
   let episode_group: String?
   let download_hash: String?
-  let downloader: String?
   let status: Bool?
   let date: String?
   let note: Note?
@@ -597,7 +604,7 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let location: TransferredFileLocation
 
   private enum CodingKeys: String, CodingKey {
-    case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
+    case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, status
     case date, note, dest, dest_fileitem, category
   }
 
@@ -611,7 +618,6 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     episodes = try values.decodeIfPresent(String.self, forKey: .episodes)
     episode_group = try values.decodeIfPresent(String.self, forKey: .episode_group)
     download_hash = try values.decodeIfPresent(String.self, forKey: .download_hash)
-    downloader = try? values.decodeIfPresent(String.self, forKey: .downloader)
     status = try? values.decodeIfPresent(Bool.self, forKey: .status)
     date = try? values.decodeIfPresent(String.self, forKey: .date)
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
