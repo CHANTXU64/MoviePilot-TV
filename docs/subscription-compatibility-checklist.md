@@ -2,7 +2,7 @@
 
 本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索和客户端并发/状态安全边界分别由 `.agents/prompts/frontend-update.md`、`.agents/engineering-invariants.md` 与测试代码负责，不在这里重复。
 
-当前 TV 端最早维护 MoviePilot `v3.0.4`，兼容按精确版本登记，AI 对照官方源码确认 TV 实际用到的接口、字段和写回未受影响即可登记，规则见 [后端版本兼容维护](backend-version-compatibility.md)。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
+当前 TV 端最低维护 MoviePilot `v2.15.6`（v2 的单值媒体键、GET 订阅搜索/重置由 `MoviePilotV2Endpoints` 适配），v3 线从 `v3.0.4` 起；兼容按精确版本登记，AI 对照官方源码确认 TV 实际用到的接口、字段和写回未受影响即可登记，规则见 [后端版本兼容维护](backend-version-compatibility.md)。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
 
 ## 使用原则
 

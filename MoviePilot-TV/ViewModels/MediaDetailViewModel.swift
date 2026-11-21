@@ -1188,6 +1188,10 @@ class MediaDetailViewModel: ObservableObject {
         fallbackSubscriptionId = subscription.id
       } catch is CancellationError {
         return false
+      } catch APIError.backendVersionUnavailable {
+        // 该删的是媒体级目标，不能退回去删前一个候选查到的订阅 ID；等版本读到后再取消。
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: 后端版本未知，不按媒体删除")
+        return false
       } catch {
         Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }

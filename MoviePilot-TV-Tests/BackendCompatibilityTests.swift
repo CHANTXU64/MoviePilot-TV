@@ -490,7 +490,7 @@ private extension Error {
           || message.localizedCaseInsensitiveContains("unauthorized")
       case .unknown, .gatewayStatus:
         return false
-      case .invalidURL, .networkError, .decodingError:
+      case .invalidURL, .networkError, .decodingError, .backendVersionUnavailable:
         return false
       }
     }

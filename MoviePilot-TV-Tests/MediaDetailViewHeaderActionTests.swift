@@ -418,6 +418,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
@@ -649,6 +651,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-title-fallback-douban",
@@ -686,6 +690,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-minimal-alias-douban",
@@ -706,6 +712,42 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
+  }
+
+  /// 版本未知时媒体级删除被拒，不能退回去删前一个候选查到的订阅 ID（这里是 7001）。
+  @MainActor
+  func testCancelSubscriptionWithUnknownBackendVersionDoesNotFallBackToSubscriptionID() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+    service.settings = nil
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-minimal-alias-douban",
+      title: "原始 ID 最小响应",
+      type: "电视剧"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+
+    await viewModel.cancelSubscription()
+
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+
+    XCTAssertEqual(deletedSubscriptionIDs, [])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), [])
   }
 
   /// 清单要求 lookup 只用于确认：删除目标必须是本次查询使用的媒体身份。
@@ -813,6 +855,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       bangumi_id: 12_345,
@@ -1332,6 +1376,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let success = try await service.deleteSubscription(
       mediaId: "custom:abc/def value",
