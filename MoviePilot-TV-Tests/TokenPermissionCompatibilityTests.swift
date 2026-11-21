@@ -411,7 +411,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
 
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: token),
-      [.home, .recommend, .explore, .search, .status, .system]
+      [.home, .subscriptions, .recommend, .explore, .search, .status, .system]
     )
   }
 

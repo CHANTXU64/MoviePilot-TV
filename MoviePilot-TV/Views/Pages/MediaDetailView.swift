@@ -208,6 +208,7 @@ struct MediaDetailView: View {
   private var isEntryStillLoading: Bool { isEntryLoading && !preloadTask.isDetailFailed }
   let entryStatusMessage: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.openURL) private var openURL
   @State private var entryTitleOffset: CGFloat = 28
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
@@ -247,10 +248,9 @@ struct MediaDetailView: View {
   /// 第二页当前含焦点的行，取值与 `firstVisibleRow` 相同。
   @FocusState private var focusedContentRow: String?
   enum ButtonField {
-    case play, subscribe, search, subtitleSearch, sites, otherInfo
+    case play, subscribe, search, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
-  @State private var lastFocusedButton: ButtonField?
   @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
   /// 播放结束后等着把焦点补写回「播放」（见 `playbackFocusReturn`）。
   @State private var playButtonRestore = PlaybackFocusRestore<ButtonField>()
@@ -355,22 +355,9 @@ struct MediaDetailView: View {
     )
   }
 
-  private var shouldShowSiteFilter: Bool {
-    guard canSearchResources else { return false }
-    if focusedButton == .search || focusedButton == .subtitleSearch || focusedButton == .sites {
-      return true
-    }
-    if focusedButton == nil
-      && (lastFocusedButton == .search || lastFocusedButton == .subtitleSearch
-        || lastFocusedButton == .sites)
-    {
-      return true
-    }
-    return false
-  }
-
+  /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
   private var firstVisibleRow: String {
-    if shouldShowSeasonSubscriptionSection {
+    if shouldShowSeasonSubscriptionSection && !isSeasonInformationUnavailable {
       return "season"
     }
     if episodeTMDBID != nil {
@@ -408,15 +395,7 @@ struct MediaDetailView: View {
   }
 
   private var shouldShowSeasonSubscriptionSection: Bool {
-    Self.shouldShowSeasonSubscriptionSection(
-      canSubscribeMedia: canSubscribeMedia,
-      detail: viewModel.detail,
-      isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
-      seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError,
-      isSeasonLoading: isSeasonLoading,
-      hasSelectedEpisodeGroup: trimmedNonEmpty([preloadTask.seasonViewModel?.selectedGroupId]) != nil
-    )
+    Self.shouldShowSeasonSubscriptionSection(canSubscribeMedia: canSubscribeMedia, detail: viewModel.detail)
   }
 
   private var isSeasonInformationUnavailable: Bool {
@@ -433,6 +412,24 @@ struct MediaDetailView: View {
   /// 从 ViewModel 读取的订阅状态（ViewModel 代理到 preloadTask）
   private var isSubscribed: Bool {
     viewModel.isSubscribed
+  }
+
+  private var heroPlayLabel: HeroPlayLabel? {
+    Self.heroPlayLabel(
+      isReady: viewModel.isPlayLabelReady,
+      seriesAction: viewModel.seriesPlayAction,
+      movieProgress: viewModel.movieProgress
+    )
+  }
+
+  /// 按钮行里会在加载后改变的内容：播放、跳转媒体库按钮出现，播放写上文字，订阅状态变化。变化时其余按钮平滑让位。
+  private var heroButtonsAnimationKey: HeroButtonsAnimationKey {
+    HeroButtonsAnimationKey(
+      showsPlay: viewModel.inAppPlaybackTarget != nil,
+      playLabel: heroPlayLabel,
+      showsLibraryApp: viewModel.libraryAppURL != nil,
+      isSubscribed: isSubscribed
+    )
   }
 
   init(
@@ -852,11 +849,6 @@ struct MediaDetailView: View {
         avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
       )
     }
-    .onChange(of: focusedButton) { _, newValue in
-      if let newValue = newValue {
-        lastFocusedButton = newValue
-      }
-    }
     // 头部「播放」起播：盖播放器前交回焦点，准备期取消时补写回来（详情页已不在栈顶就不写）。
     .playbackFocusReturn(
       $playButtonRestore, focused: focusedButton, focus: $focusedButton, isEnabled: allowsRequests,
@@ -1022,20 +1014,10 @@ struct MediaDetailView: View {
 
   // Xcode 27.2 的 Release 优化器内联此判断时可能触发 SIL 校验崩溃。
   @inline(never)
-  static func shouldShowSeasonSubscriptionSection(
-    canSubscribeMedia: Bool,
-    detail: MediaInfo,
-    isSeasonDataLoaded: Bool,
-    seasonCount: Int?,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool = false,
-    hasSelectedEpisodeGroup: Bool = false
-  ) -> Bool {
-    guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
-      return false
-    }
-    if isSeasonLoading || hasSeasonLoadError || hasSelectedEpisodeGroup { return true }
-    return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
+  /// 能订阅的剧一直显示分季订阅行：加载中、加载失败（可重试）、没有分季（说明查不到）都在这一行里显示，
+  /// 头部「分季订阅」按下后总能在第二页看到结果。
+  static func shouldShowSeasonSubscriptionSection(canSubscribeMedia: Bool, detail: MediaInfo) -> Bool {
+    canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
   }
 
   static func shouldShowOtherInfo(
@@ -1057,22 +1039,38 @@ struct MediaDetailView: View {
       && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError && !isSeasonLoading
   }
 
-  static func headerSubscribeButtonTitle(
-    isSubscribed: Bool,
-    detail: MediaInfo,
-    isSeasonInformationUnavailable: Bool,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool,
-    isInLibrary: Bool = false
-  ) -> String {
+  /// 剧的文案固定是「分季订阅」：加载中、加载失败、没有分季只换前导图标，按钮宽度不变。
+  static func headerSubscribeButtonTitle(isSubscribed: Bool, detail: MediaInfo) -> String {
     if detail.canDirectlySubscribe {
-      let title = isSubscribed ? "已订阅" : "订阅"
-      return isInLibrary ? "\(title)（已入库）" : title
+      return isSubscribed ? "已订阅" : "订阅"
     }
-    // 加载中文案保持「分季信息」不变，由前导图标传达加载，避免按钮先短后长再短地闪。
-    if isSeasonLoading { return "分季信息" }
-    if hasSeasonLoadError { return "分季信息加载失败" }
-    return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
+    return "分季订阅"
+  }
+
+  struct HeroPlayLabel: Equatable {
+    let title: String
+    var progress: Double? = nil
+    let accessibilityLabel: String
+  }
+
+  struct HeroButtonsAnimationKey: Equatable {
+    let showsPlay: Bool
+    let playLabel: HeroPlayLabel?
+    let showsLibraryApp: Bool
+    let isSubscribed: Bool
+  }
+
+  /// 头部「播放」按钮的文字和进度条；进度第一次读完前为 nil，按钮只有播放图标。
+  static func heroPlayLabel(isReady: Bool, seriesAction: SeriesPlayAction?, movieProgress: Double?) -> HeroPlayLabel? {
+    guard isReady else { return nil }
+    if let seriesAction {
+      return HeroPlayLabel(
+        title: seriesAction.title, progress: seriesAction.progress, accessibilityLabel: seriesAction.accessibilityLabel)
+    }
+    if let movieProgress {
+      return HeroPlayLabel(title: "继续播放", progress: movieProgress, accessibilityLabel: "继续播放")
+    }
+    return HeroPlayLabel(title: "播放", accessibilityLabel: "播放")
   }
 
   private func handleHeaderSubscribe() {
@@ -1227,12 +1225,76 @@ struct MediaDetailView: View {
               .font(.caption).foregroundStyle(.secondary)
           }
           HStack(spacing: 20) {
+            if canSubscribeMedia {
+              let isDirect = detail.canDirectlySubscribe
+              // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
+              // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
+              // 二次加载（重试/换剧集组）时 isSeasonDataLoaded 已为 true，仍要靠 isSeasonLoading 显示转圈；
+              // 详情本身加载失败时分季请求永不发起，不能永久转圈。
+              let seasonWaiting =
+                !isDirect
+                && (isSeasonLoading
+                  || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
+                    && !preloadTask.isDetailFailed))
+              // 文案保持「订阅」「分季订阅」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
+              // 详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），此时不转圈，避免和失败提示同时出现。
+              let showsLoadingIcon =
+                (isDirect ? isEntryLoading : seasonWaiting) && !preloadTask.isDetailFailed
+              // Primary subscribe button — 使用预加载的订阅状态
+              Button(action: {
+                guard allowsRequests, !isEntryLoading else { return }
+                guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
+                if detail.canDirectlySubscribe {
+                  handleHeaderSubscribe()
+                } else if detail.type == "电视剧" {
+                  isContentFocused = true
+                }
+              }) {
+                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
+                  Label {
+                    Text("取消订阅中")
+                  } icon: {
+                    LoadingIcon(systemImage: AppSymbol.subscribed, isLoading: true)
+                  }
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
+                } else {
+                  let label = Self.headerSubscribeButtonTitle(isSubscribed: isSubscribed, detail: detail)
+                  let icon =
+                    isDirect
+                    ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
+                    : (
+                      hasSeasonLoadError
+                        ? AppSymbol.warning
+                        : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
+                    )
+
+                  Label {
+                    Text(label)
+                  } icon: {
+                    LoadingIcon(systemImage: icon, isLoading: showsLoadingIcon)
+                  }
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
+                }
+              }
+              .focused($focusedButton, equals: .subscribe)
+              .transition(.opacity)
+              // 文案固定，加载中、加载失败、没有分季只换前导图标，状态靠无障碍值告诉 VoiceOver。
+              .accessibilityValue(
+                isEntryStillLoading || showsLoadingIcon
+                  ? "加载中"
+                  : (!isDirect && hasSeasonLoadError
+                    ? "分季信息加载失败" : (!isDirect && isSeasonInformationUnavailable ? "暂无分季信息" : ""))
+              )
+              // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
+              // 点击已由 action 内 guard 忽略。
+            }
+
             if let playbackTarget = viewModel.inAppPlaybackTarget {
-              // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）：看到一半是播放图标、已播放进度条和季集号。
-              // 电影看到一半只有播放图标和已播放进度条，不写字。没看过、读不到观看记录时是普通的「播放」。
-              let seriesAction = viewModel.seriesPlayAction
-              let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
-              let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
+              // 进度读完前只有播放图标；读完一次写上：剧有集号时写集号，看到一半时前面加已播放进度条；
+              // 电影看到一半是进度条和「继续播放」；其余是「播放」。
+              let label = heroPlayLabel
               Button(action: {
                 guard allowsRequests, !isEntryLoading else { return }
                 playbackFocusHandoff.play(
@@ -1244,20 +1306,20 @@ struct MediaDetailView: View {
               }) {
                 HStack(spacing: 14) {
                   Image(systemName: AppSymbol.play)
-                  if let progress {
+                  if let progress = label?.progress {
                     PlaybackProgressBar(fraction: progress)
                   }
-                  if let title {
+                  if let title = label?.title {
                     Text(title)
                   }
                 }
                 .foregroundStyle(.primary)
                 .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "继续播放")
+              .accessibilityLabel(label?.accessibilityLabel ?? "播放")
               .focused($focusedButton, equals: .play)
               .transition(.opacity)
-              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading || label == nil ? "加载中" : "")
             }
 
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
@@ -1320,124 +1382,90 @@ struct MediaDetailView: View {
               .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
             }
 
-            if canSubscribeMedia {
-              let isDirect = detail.canDirectlySubscribe
-              // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
-              // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
-              // 二次加载（重试/换剧集组）时 isSeasonDataLoaded 已为 true，仍要靠 isSeasonLoading 显示转圈；
-              // 详情本身加载失败时分季请求永不发起，不能永久转圈。
-              let seasonWaiting =
-                !isDirect
-                && (isSeasonLoading
-                  || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
-                    && !preloadTask.isDetailFailed))
-              // 文案保持「订阅」「分季信息」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
-              // 详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），此时不转圈，避免和失败提示同时出现。
-              let showsLoadingIcon =
-                (isDirect ? isEntryLoading : seasonWaiting) && !preloadTask.isDetailFailed
-              // Primary subscribe button — 使用预加载的订阅状态
-              Button(action: {
+            if let libraryAppURL = viewModel.libraryAppURL {
+              // 已入库：打开媒体服务器 App（与媒体库页「跳转媒体库」同一个深链和图标）。
+              Button {
                 guard allowsRequests, !isEntryLoading else { return }
-                guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
-                if detail.canDirectlySubscribe {
-                  handleHeaderSubscribe()
-                } else if detail.type == "电视剧" {
-                  isContentFocused = true
-                }
-              }) {
-                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
-                  Label {
-                    Text("取消订阅中")
-                  } icon: {
-                    LoadingIcon(systemImage: AppSymbol.subscribed, isLoading: true)
+                openURL(libraryAppURL) { accepted in
+                  if !accepted {
+                    notificationManager.show(message: MediaLibraryAppLink.openFailureMessage, type: .error)
                   }
+                }
+              } label: {
+                Image(systemName: AppSymbol.openInLibrary)
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
-                } else {
-                  let label = Self.headerSubscribeButtonTitle(
-                    isSubscribed: isSubscribed,
-                    detail: detail,
-                    isSeasonInformationUnavailable: isSeasonInformationUnavailable,
-                    hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: seasonWaiting,
-                    isInLibrary: viewModel.isInLibrary
-                  )
-                  let icon =
-                    isDirect
-                    ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
-                    : (
-                      hasSeasonLoadError
-                        ? AppSymbol.warning
-                        : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
-                    )
-
-                  Label {
-                    Text(label)
-                  } icon: {
-                    LoadingIcon(systemImage: icon, isLoading: showsLoadingIcon)
-                  }
-                  .foregroundColor(.primary)
-                  .opacity(isEntryLoading ? 0.35 : 1)
-                }
               }
-              .focused($focusedButton, equals: .subscribe)
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
+              .accessibilityLabel("跳转媒体库")
               .transition(.opacity)
-              // 文案不再写「加载中」，等分季信息的状态要靠无障碍值告诉 VoiceOver。
-              .accessibilityValue(isEntryStillLoading || showsLoadingIcon ? "加载中" : "")
-              // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
-              // 点击已由 action 内 guard 忽略。
             }
 
             if canSearchResources {
-              // Search resources icon button
-              Button(action: {
-                guard allowsRequests, !isEntryLoading else { return }
-                let request = mediaActionHandler.searchResourcesTarget(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .resource)
-                )
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索资源", systemImage: AppSymbol.search)
+              // 搜索资源、搜索字幕收进一个圆形按钮的菜单；选哪种搜索后在二级菜单里选站点再搜，不用来回切换。
+              Menu {
+                Group {
+                  Menu {
+                    Button {
+                      guard allowsRequests, !isEntryLoading else { return }
+                      let request = mediaActionHandler.searchResourcesTarget(
+                        for: viewModel.detail,
+                        sites: viewModel.siteFilter.sitesString(for: .resource)
+                      )
+                      navigateFromSecondPage(to: request)
+                    } label: {
+                      Label("开始搜索", systemImage: AppSymbol.search)
+                    }
+                    // 多选：点站点不收起菜单，勾好再按「开始搜索」。
+                    SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                      .menuActionDismissBehavior(.disabled)
+                  } label: {
+                    Label {
+                      Text("搜索资源")
+                      Text(viewModel.siteFilter.siteButtonLabel)
+                    } icon: {
+                      Image(systemName: AppSymbol.search)
+                    }
+                  }
+                  if canSearchSubtitles {
+                    Menu {
+                      Button {
+                        guard allowsRequests, !isEntryLoading else { return }
+                        guard let request = mediaActionHandler.subtitleSearchRequest(
+                          for: viewModel.detail,
+                          sites: viewModel.siteFilter.sitesString(for: .subtitle)
+                        ) else { return }
+                        navigateFromSecondPage(to: request)
+                      } label: {
+                        Label("开始搜索", systemImage: AppSymbol.search)
+                      }
+                      SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                        .menuActionDismissBehavior(.disabled)
+                    } label: {
+                      Label {
+                        Text("搜索字幕")
+                        Text(viewModel.siteFilter.siteButtonLabel)
+                      } icon: {
+                        Image(systemName: AppSymbol.searchSubtitles)
+                      }
+                    }
+                  }
+                }
+                // 加载期按钮仍可聚焦（与其他头部按钮一致），菜单项不可用。
+                .disabled(!allowsRequests || isEntryLoading)
+              } label: {
+                Image(systemName: AppSymbol.searchMenu)
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
               }
+              .menuStyle(.button)
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
               .focused($focusedButton, equals: .search)
               .transition(.opacity)
+              .accessibilityLabel("搜索")
               .accessibilityValue(isEntryStillLoading ? "加载中" : "")
-            }
-
-            if canSearchSubtitles {
-              Button(action: {
-                guard allowsRequests, !isEntryLoading else { return }
-                guard let request = mediaActionHandler.subtitleSearchRequest(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .subtitle)
-                ) else { return }
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
-                  .foregroundColor(.primary)
-                  .opacity(isEntryLoading ? 0.35 : 1)
-              }
-              .focused($focusedButton, equals: .subtitleSearch)
-              .transition(.opacity)
-              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
-            }
-
-            // Site selection button（加载期不渲出可交互筛选菜单）
-            if allowsRequests && canSearchResources && shouldShowSiteFilter && !isEntryLoading {
-              SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
-                HStack(spacing: 8) {
-                  Image(systemName: AppSymbol.site)
-                  Text(viewModel.siteFilter.siteButtonLabel)
-                }
-                .font(.caption)
-                .foregroundColor(.primary)
-              }
-              .controlSize(.small)
-              .focused($focusedButton, equals: .sites)
-              .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
             // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
@@ -1457,7 +1485,7 @@ struct MediaDetailView: View {
           }
           // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
           .lineLimit(1)
-          .animation(.snappy, value: shouldShowSiteFilter)
+          .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: heroButtonsAnimationKey)
           .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
           .animation(.easeInOut(duration: 0.3), value: preloadTask.fullDetail != nil)
           .disabled(!allowsRequests && presentationStyle == .standard)

@@ -44,11 +44,13 @@ struct EmptyDataView: View {
         Button(action: action) {
           Text(actionTitle)
         }
+        .claimsInitialFocus()
       } else {
         // 即使没有操作，我们也使其可聚焦，以避免焦点跳到导航栏
         Color.clear
           .frame(height: 1)
           .focusable()
+          .claimsInitialFocus()
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

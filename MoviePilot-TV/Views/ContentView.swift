@@ -135,6 +135,12 @@ struct MainContentView: View {
         if allowsRequests { HomeView(isSelected: selectedTab == .home) }
       }
 
+      if viewModel.visibleTabs.contains(.subscriptions) {
+        Tab("订阅", systemImage: AppSymbol.tabSubscriptions, value: ContentViewModel.Tab.subscriptions) {
+          if allowsRequests { SubscriptionsView(isSelected: selectedTab == .subscriptions) }
+        }
+      }
+
       if viewModel.visibleTabs.contains(.recommend) {
         Tab("推荐", systemImage: AppSymbol.tabRecommend, value: ContentViewModel.Tab.recommend) {
           RecommendView(

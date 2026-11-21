@@ -3,69 +3,84 @@ import XCTest
 @testable import MoviePilot_TV
 
 @MainActor
-final class HomeSubscribeFocusIDTests: XCTestCase {
-  func testRefreshDataDoesNotRequestSubscribeForStandardUserWithEmptyPermissions()
+final class SubscriptionsPermissionTests: XCTestCase {
+  func testSubscriptionsPageDoesNotRequestSubscribeForStandardUserWithEmptyPermissions()
     async throws
   {
-    try await withHomePermissionViewModel(permissions: [:]) { viewModel in
-      await viewModel.refreshData()
+    try await withSubscriptionPermissionService(permissions: [:]) { service in
+      let viewModel = SubscriptionsViewModel(apiService: service)
+      await viewModel.loadData()
 
       XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
       XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
-      XCTAssertTrue(viewModel.latestMedia.isEmpty)
-      let paths = await HomePermissionURLProtocol.stub.requestPaths()
+      XCTAssertFalse(viewModel.subscriptionsLoadFailed)
+      let paths = await SubscriptionPermissionURLProtocol.stub.requestPaths()
       XCTAssertFalse(paths.containsSubscribeListPath)
-      XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
     }
   }
 
-  func testRefreshDataRequestsSubscribeWhenPermissionIsGranted()
+  func testSubscriptionsPageRequestsSubscribeWhenPermissionIsGranted()
     async throws
   {
-    try await withHomePermissionViewModel(
+    try await withSubscriptionPermissionService(
       permissions: [UserPermissionKey.subscribe.rawValue: true]
-    ) { viewModel in
-      await viewModel.refreshData()
+    ) { service in
+      let viewModel = SubscriptionsViewModel(apiService: service)
+      await viewModel.loadData()
 
       XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
       XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
-      XCTAssertTrue(viewModel.latestMedia.isEmpty)
-      let paths = await HomePermissionURLProtocol.stub.requestPaths()
+      XCTAssertFalse(viewModel.showsLoadingPlaceholder, "读成功空列表后显示空态，不再转圈")
+      let paths = await SubscriptionPermissionURLProtocol.stub.requestPaths()
       XCTAssertTrue(paths.containsSubscribeListPath)
-      XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
     }
   }
 
-  func testRefreshDataDoesNotRequestSubscribeWhenPermissionIsExplicitlyDenied()
+  func testSubscriptionsPageDoesNotRequestSubscribeWhenPermissionIsExplicitlyDenied()
     async throws
   {
-    try await withHomePermissionViewModel(
+    try await withSubscriptionPermissionService(
       permissions: [UserPermissionKey.subscribe.rawValue: false]
-    ) { viewModel in
-      await viewModel.refreshData()
+    ) { service in
+      let viewModel = SubscriptionsViewModel(apiService: service)
+      await viewModel.loadData()
 
       XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
       XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
-      XCTAssertTrue(viewModel.latestMedia.isEmpty)
-      let paths = await HomePermissionURLProtocol.stub.requestPaths()
+      let paths = await SubscriptionPermissionURLProtocol.stub.requestPaths()
       XCTAssertFalse(paths.containsSubscribeListPath)
-      XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
     }
   }
 
-  private func withHomePermissionViewModel(
-    permissions: [String: Bool],
-    operation: (HomeViewModel) async throws -> Void
-  ) async throws {
-    XCTAssertTrue(APIService.installURLProtocolForTesting(HomePermissionURLProtocol.self))
-    defer { APIService.removeURLProtocolForTesting(HomePermissionURLProtocol.self) }
+  /// 订阅移到了自己的 Tab：媒体库页即使有订阅权限也不再读订阅列表，也不轮询它。
+  func testHomeNoLongerRequestsSubscribeEvenWhenPermissionIsGranted()
+    async throws
+  {
+    try await withSubscriptionPermissionService(
+      permissions: [UserPermissionKey.subscribe.rawValue: true]
+    ) { service in
+      let viewModel = HomeViewModel(apiService: service)
+      await viewModel.refreshData()
+      await viewModel.refreshData(includeContinueWatching: false)
 
-    await HomePermissionURLProtocol.stub.reset()
+      let paths = await SubscriptionPermissionURLProtocol.stub.requestPaths()
+      XCTAssertFalse(paths.containsSubscribeListPath)
+    }
+  }
+
+  private func withSubscriptionPermissionService(
+    permissions: [String: Bool],
+    operation: (APIService) async throws -> Void
+  ) async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionPermissionURLProtocol.self) }
+
+    await SubscriptionPermissionURLProtocol.stub.reset()
     let service = APIService.isolatedTestingInstance()
-    let snapshot = HomePermissionServiceSnapshot.capture(service: service)
+    let snapshot = SubscriptionPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURLForTesting = "https://home-permission-tests.local"
+    service.baseURLForTesting = "https://subscription-permission-tests.local"
     service.tokenForTesting = "token"
     service.currentUserForTesting = Token(
       access_token: "token",
@@ -76,18 +91,18 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
       avatar: nil
     )
 
-    try await operation(HomeViewModel(apiService: service))
+    try await operation(service)
   }
 
   func testSubscribeFocusIDMatchesBetweenRedirectorAndCardBinding() {
     let id: Int? = 123
 
-    XCTAssertEqual(HomeSubscribeFocusID.value(for: id), "123")
-    XCTAssertNotEqual(HomeSubscribeFocusID.value(for: id), String(describing: id))
+    XCTAssertEqual(SubscribeFocusID.value(for: id), "123")
+    XCTAssertNotEqual(SubscribeFocusID.value(for: id), String(describing: id))
   }
 
   func testSubscribeFocusIDIsNilWhenSubscribeIDIsMissing() {
-    XCTAssertNil(HomeSubscribeFocusID.value(for: Optional<Int>.none))
+    XCTAssertNil(SubscribeFocusID.value(for: Optional<Int>.none))
   }
 }
 
@@ -97,7 +112,7 @@ private extension Array where Element == String {
   }
 }
 
-private struct HomePermissionServiceSnapshot {
+private struct SubscriptionPermissionServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
@@ -110,8 +125,8 @@ private struct HomePermissionServiceSnapshot {
   let currentUserDefaults: String?
 
   @MainActor
-  static func capture(service: APIService) -> HomePermissionServiceSnapshot {
-    HomePermissionServiceSnapshot(
+  static func capture(service: APIService) -> SubscriptionPermissionServiceSnapshot {
+    SubscriptionPermissionServiceSnapshot(
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
@@ -161,7 +176,7 @@ private struct HomePermissionServiceSnapshot {
   }
 }
 
-private actor HomePermissionURLProtocolStub {
+private actor SubscriptionPermissionURLProtocolStub {
   private var requests: [URLRequest] = []
 
   func reset() {
@@ -189,12 +204,12 @@ private actor HomePermissionURLProtocolStub {
   }
 }
 
-private final class HomePermissionURLProtocol: URLProtocol {
-  static let stub = HomePermissionURLProtocolStub()
+private final class SubscriptionPermissionURLProtocol: URLProtocol {
+  static let stub = SubscriptionPermissionURLProtocolStub()
   private var loadingTask: Task<Void, Never>?
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host == "home-permission-tests.local"
+    request.url?.host == "subscription-permission-tests.local"
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest {
@@ -202,14 +217,14 @@ private final class HomePermissionURLProtocol: URLProtocol {
   }
 
   override func startLoading() {
-    let context = HomePermissionURLProtocolTaskContext(
+    let context = SubscriptionPermissionURLProtocolTaskContext(
       request: request,
-      clientBox: HomePermissionURLProtocolClientBox(protocolInstance: self, client: client)
+      clientBox: SubscriptionPermissionURLProtocolClientBox(protocolInstance: self, client: client)
     )
-    loadingTask = HomePermissionURLProtocol.makeLoadingTask(for: context)
+    loadingTask = SubscriptionPermissionURLProtocol.makeLoadingTask(for: context)
   }
 
-  private static func makeLoadingTask(for context: HomePermissionURLProtocolTaskContext)
+  private static func makeLoadingTask(for context: SubscriptionPermissionURLProtocolTaskContext)
     -> Task<Void, Never>
   {
     Task {
@@ -230,17 +245,17 @@ private final class HomePermissionURLProtocol: URLProtocol {
   }
 }
 
-private final class HomePermissionURLProtocolTaskContext: @unchecked Sendable {
+private final class SubscriptionPermissionURLProtocolTaskContext: @unchecked Sendable {
   let request: URLRequest
-  let clientBox: HomePermissionURLProtocolClientBox
+  let clientBox: SubscriptionPermissionURLProtocolClientBox
 
-  init(request: URLRequest, clientBox: HomePermissionURLProtocolClientBox) {
+  init(request: URLRequest, clientBox: SubscriptionPermissionURLProtocolClientBox) {
     self.request = request
     self.clientBox = clientBox
   }
 }
 
-private final class HomePermissionURLProtocolClientBox: @unchecked Sendable {
+private final class SubscriptionPermissionURLProtocolClientBox: @unchecked Sendable {
   private let protocolInstance: URLProtocol
   private let client: URLProtocolClient?
 

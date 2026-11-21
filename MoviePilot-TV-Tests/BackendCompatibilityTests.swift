@@ -910,10 +910,10 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       )
 
     case .subscribe:
-      let home = HomeViewModel(apiService: service)
-      let loaded = await home.refreshSubscriptions(forceRefresh: true)
+      let subscriptions = SubscriptionsViewModel(apiService: service)
+      let loaded = await subscriptions.refreshSubscriptions(forceRefresh: true)
       XCTAssertTrue(loaded, "\(account.account.username) subscription surface failed to load.")
-      XCTAssertFalse(home.subscriptionsLoadFailed)
+      XCTAssertFalse(subscriptions.subscriptionsLoadFailed)
 
     case .manage:
       let reorganize = ReorganizeViewModel(fileItem: nil, apiService: service)
@@ -941,7 +941,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
     case .search:
       return [.home, .search, .system]
     case .subscribe:
-      return [.home, .system]
+      return [.home, .subscriptions, .system]
     case .manage:
       return [.home, .status, .system]
     }

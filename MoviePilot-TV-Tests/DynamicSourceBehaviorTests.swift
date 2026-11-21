@@ -201,9 +201,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     // 订阅卡片跳详情必须携带订阅海报：navigationMediaInfo() 本身不含
     // poster_path，漏传会让详情页加载遮罩的海报区域空白。
+    let subscriptionsSource = try source("MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
     XCTAssertTrue(
       containsTokensInOrder(
-        homeSource,
+        subscriptionsSource,
         [
           "private func navigateToDetail(for subscribe: Subscribe)",
           "navigationCoordinator.push(",
@@ -995,6 +996,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
   func testAllRootMediaDestinationsRouteCollectionsDefensively() throws {
     for relativePath in [
       "MoviePilot-TV/Views/Pages/HomeView.swift",
+      "MoviePilot-TV/Views/Pages/SubscriptionsView.swift",
       "MoviePilot-TV/Views/Pages/ExploreView.swift",
       "MoviePilot-TV/Views/Pages/RecommendView.swift",
       "MoviePilot-TV/Views/Pages/SearchView.swift",
