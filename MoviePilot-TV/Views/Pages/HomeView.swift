@@ -9,9 +9,6 @@ struct HomeView: View {
   @ObservedObject private var apiService = APIService.shared
   @Environment(\.scenePhase) private var scenePhase
 
-  // Sheet 状态
-  @State private var selectedSubscribe: Subscribe?
-
   // 导航状态
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
 
@@ -29,9 +26,7 @@ struct HomeView: View {
             EmptyView()
           } else {
             // 部分数据失败：保留旧快照并提示（成功空不算失败）
-            if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed
-              || viewModel.subscriptionsLoadFailed
-            {
+            if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed {
               HStack {
                 Text("部分数据加载失败，当前显示的是旧数据")
                   .font(.body)
@@ -71,41 +66,8 @@ struct HomeView: View {
               )
             }
 
-            // 第3节：电影订阅
-            if !viewModel.movieSubscriptions.isEmpty {
-              SubscribeSectionView(
-                title: "电影订阅",
-                items: viewModel.movieSubscriptions,
-                isFirstRow: viewModel.continueWatching.isEmpty
-                  && viewModel.latestMediaServers.isEmpty,
-                loadsPageImages: true,
-                viewModel: viewModel,
-                onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
-              )
-            }
-
-            // 第4节：电视剧订阅
-            if !viewModel.tvSubscriptions.isEmpty {
-              SubscribeSectionView(
-                title: "电视剧订阅",
-                items: viewModel.tvSubscriptions,
-                isFirstRow: viewModel.continueWatching.isEmpty
-                  && viewModel.latestMediaServers.isEmpty
-                  && viewModel.movieSubscriptions.isEmpty,
-                loadsPageImages: true,
-                viewModel: viewModel,
-                onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
-              )
-            }
-
-            if viewModel.continueWatchingServers.isEmpty && viewModel.latestMediaServers.isEmpty
-              && viewModel.movieSubscriptions.isEmpty && viewModel.tvSubscriptions.isEmpty
-            {
-              if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed
-                || viewModel.subscriptionsLoadFailed
-              {
+            if viewModel.continueWatchingServers.isEmpty && viewModel.latestMediaServers.isEmpty {
+              if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed {
                 VStack(spacing: 12) {
                   Text("加载失败，请重试")
                     .font(.headline)
@@ -147,11 +109,6 @@ struct HomeView: View {
         guard isSelected else { return }
         Task { await viewModel.refreshContinueWatching() }
       }
-      // 编辑订阅 Sheet
-      .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in selectedSubscribe = nil }
-      .sheet(item: $selectedSubscribe) { subscribe in
-        SubscribeSheet(subscribe: subscribe)
-      }
       // 导航目的地
       .navigationDestination(for: ImageNavigationEntry.self) { entry in
         ImageNavigationDestination(entry: entry)
@@ -172,19 +129,6 @@ struct HomeView: View {
 
   // MARK: - 动作
 
-  private func presentEditSheet(for subscribe: Subscribe) {
-    self.selectedSubscribe = subscribe
-  }
-
-  private func navigateToDetail(for subscribe: Subscribe) {
-    // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
-    // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
-    navigationCoordinator.push(
-      subscribe.navigationMediaInfo(),
-      loadingPosterURL: subscribe.imageURLs.poster
-    )
-  }
-
   private func updateStackForeground() {
     navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
@@ -201,12 +145,6 @@ enum HomeRowFocus {
     let remaining = Set(newIDs)
     return oldIDs[(index + 1)...].first(where: remaining.contains)
       ?? oldIDs[..<index].last(where: remaining.contains)
-  }
-}
-
-enum HomeSubscribeFocusID {
-  static func value(for id: Int?) -> String? {
-    id.map(String.init)
   }
 }
 
@@ -239,7 +177,6 @@ private struct MediaSectionView: View {
 
   @Environment(\.openURL) private var openURL
   @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
-  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
@@ -249,10 +186,8 @@ private struct MediaSectionView: View {
   @State private var imageAnchorId: String?
   /// 这一行的实例身份，焦点只交回起播的那一个。
   @State private var focusOwnerID = UUID()
-  /// 正在等待焦点写回的媒体卡；播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
-  @State private var pendingFocusRestore: String?
-  /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
-  @State private var focusRestoreGeneration = 0
+  /// 播放结束后等着补写焦点的媒体卡（见 `playbackFocusReturn`）。
+  @State private var focusRestore = PlaybackFocusRestore<String>()
 
   private var cardImageSize: CGSize {
     content == .continueWatching ? ContinueWatchingCard.stillSize : MediaCard.defaultPosterSize
@@ -338,58 +273,26 @@ private struct MediaSectionView: View {
       }
     }
     .focusLiftRow(cardImageSize: cardImageSize)
-    // 盖播放器之前把焦点交回起播的媒体卡：模态关闭时系统还原的是盖上去那一刻的焦点项。
-    .onChange(of: playbackFocusHandoff.request) { _, _ in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID
-      else { return }
-      focusedItemId = itemID
-    }
-    // 焦点真的落回这张卡了，通知呈现层可以盖播放器。
-    .onChange(of: focusedItemId) { _, newValue in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID, newValue == itemID
-      else { return }
-      playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
-    }
-    // 播放结束：盖上过播放器时由系统还原，准备期取消没出来时主动写回。两者都等转场结束后再写。
-    .onChange(of: playbackEndedGeneration) { _, _ in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID
-      else { return }
-      playbackFocusHandoff.target = nil
-      beginFocusRestore(itemID)
-    }
+    // 起播的卡：盖播放器前交回焦点，准备期取消时补写回来（卡被刷掉就交给系统）。
+    .playbackFocusReturn(
+      $focusRestore, focused: focusedItemId, focus: $focusedItemId,
+      canRestore: { id in items.contains(where: { $0.id == id }) },
+      match: { target in
+        guard case .homeMedia(let owner, let itemID) = target, owner == focusOwnerID else { return nil }
+        return itemID
+      }
+    )
     // 聚焦（或正等着还原焦点）的卡被刷掉了，比如刚看完从「继续观看」里消失：交给它原位置的相邻卡，
     // 不让系统随便挑一个（HIG：聚焦项消失时把焦点移到一步之内的剩余项）。
     // 两个都要换：播放器收起的转场会吞掉立即写入，等着还原的目标也换成相邻卡，转场后由 `PresentationReadyAction` 补写。
     .onChange(of: items.map(\.id)) { oldIDs, newIDs in
-      if let pending = pendingFocusRestore, !newIDs.contains(pending) {
-        pendingFocusRestore = HomeRowFocus.neighbor(of: pending, from: oldIDs, in: newIDs)
+      if let pending = focusRestore.pending, !newIDs.contains(pending) {
+        focusRestore.pending = HomeRowFocus.neighbor(of: pending, from: oldIDs, in: newIDs)
       }
       if let neighbor = HomeRowFocus.neighbor(of: focusedItemId, from: oldIDs, in: newIDs) {
         focusedItemId = neighbor
       }
     }
-    .background(PresentationReadyAction(
-      isEnabled: pendingFocusRestore != nil,
-      requiresNavigationTop: true,
-      contentFocusMatches: pendingFocusRestore.map { focusedItemId == $0 } ?? false,
-      onContentFocus: {
-        pendingFocusRestore = nil
-        focusRestoreGeneration += 1
-      },
-      action: {
-        // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
-        guard let id = pendingFocusRestore else { return }
-        // 轮询期间卡被刷掉：立刻放弃，焦点交给系统默认，不再空转。
-        guard items.contains(where: { $0.id == id }) else {
-          pendingFocusRestore = nil
-          return
-        }
-        focusedItemId = focusedItemId == id ? nil : id
-      }
-    ))
   }
 
   /// 这一行的图片加载窗口：以当前聚焦的卡为中心。剧照卡较宽，一屏只放 4 张。
@@ -506,21 +409,6 @@ private struct MediaSectionView: View {
         info: ContinueWatchingDisplay.mediaInfo(
           title: item.title, type: item.type, subtitle: item.subtitle),
         resolveIdentity: { await viewModel.continueWatchingMediaInfo(for: item, server: server) })
-    }
-  }
-
-  /// 焦点没被系统还原回来时把焦点补写回这张卡。真正的写回由 `PresentationReadyAction` 轮询完成：
-  /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回就放弃。
-  private func beginFocusRestore(_ id: String) {
-    // 卡已经被刷掉就别等了，焦点交给系统默认。
-    guard items.contains(where: { $0.id == id }) else { return }
-    focusRestoreGeneration += 1
-    let generation = focusRestoreGeneration
-    pendingFocusRestore = id
-    Task { @MainActor in
-      try? await Task.sleep(for: .seconds(3))
-      guard focusRestoreGeneration == generation else { return }
-      pendingFocusRestore = nil
     }
   }
 
@@ -642,336 +530,6 @@ private struct MediaServerSearchMenuItems: View {
           Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
         }
       }
-    }
-  }
-}
-
-private struct SubscribeSectionView: View {
-  private var memoryOptimization = MemoryOptimizationSettings()
-  let title: String
-  let items: [Subscribe]
-  var isFirstRow: Bool = false
-  let loadsPageImages: Bool
-  @ObservedObject var viewModel: HomeViewModel
-  let onEdit: (Subscribe) -> Void
-  let onViewDetail: (Subscribe) -> Void
-
-  @FocusState private var focusedItemId: String?
-  @FocusState private var isTopRedirectorFocused: Bool
-  @State private var hasRedirectedFocus: Bool = false
-  @State private var imageAnchorId: String?
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Text(title)
-        .font(.callout)
-        .bold()
-        .foregroundStyle(.secondary)
-        .focusLiftHeaderPart()
-        .padding(.leading, 8)
-
-      if isFirstRow {
-        // 顶部焦点重定向器：确保在首次加载时来自上方的焦点进入第一个项目，然后禁用自身。
-        Color.clear
-          .frame(height: 1)
-          .focusable(!hasRedirectedFocus)
-          .focused($isTopRedirectorFocused)
-          .onChange(of: isTopRedirectorFocused) { _, isFocused in
-            if isFocused {
-              focusedItemId = HomeSubscribeFocusID.value(for: items.first?.id)
-              hasRedirectedFocus = true
-              isTopRedirectorFocused = false
-            }
-          }
-      }
-
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: 40) {
-          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
-            let index = entry.offset
-            let item = entry.element
-            SubscribeItemView(
-              item: item,
-              loadsImage: loadsPageImages
-                && ImageLoadWindow.containsHorizontalItem(
-                  at: index,
-                  itemCount: items.count,
-                  anchorIndex: imageAnchorId.flatMap { id in
-                    items.firstIndex(where: { HomeSubscribeFocusID.value(for: $0.id) == id })
-                  },
-                  cardKind: .media,
-                  usesFocusWindow: memoryOptimization.isEnabled
-                ),
-              viewModel: viewModel,
-              trials: viewModel.episodeTrials,
-              onEdit: { onEdit(item) },
-              onViewDetail: { onViewDetail(item) }
-            )
-            .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
-          }
-        }
-        .padding(.top, 25)
-        .padding(.bottom, 30)
-        .onChange(of: focusedItemId) { _, newId in
-          // Push 或上下文菜单可能暂时清空焦点；保留当前图片窗口锚点。
-          guard let newId else { return }
-          imageAnchorId = newId
-        }
-      }
-      .scrollClipDisabled()
-      .focusSection()
-    }
-    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
-  }
-}
-
-private struct SubscribeItemView: View {
-  let item: Subscribe
-  let loadsImage: Bool
-  @ObservedObject var viewModel: HomeViewModel
-  /// 只跟随本机试看订阅的认领、取消和了结，试看进度刷新时不重算整排订阅卡。
-  let trials: EpisodeTrialService
-  let onEdit: () -> Void
-  let onViewDetail: () -> Void
-  @EnvironmentObject private var notificationManager: NotificationManager
-  @State private var showUnsubscribeConfirm = false
-  @State private var showsEpisodeTrialNotice = false
-  @State private var trialHolds: Set<EpisodeTrialHold>
-
-  init(
-    item: Subscribe, loadsImage: Bool, viewModel: HomeViewModel, trials: EpisodeTrialService,
-    onEdit: @escaping () -> Void, onViewDetail: @escaping () -> Void
-  ) {
-    self.item = item
-    self.loadsImage = loadsImage
-    self.viewModel = viewModel
-    self.trials = trials
-    self.onEdit = onEdit
-    self.onViewDetail = onViewDetail
-    _trialHolds = State(initialValue: EpisodeTrialHold.holds(in: trials.credentials))
-  }
-
-  var body: some View {
-    let trialState = EpisodeTrialHold.state(of: item, in: trialHolds)
-    let isEpisodeTrial = trialState != nil
-    let isCancellingTrial = trialState == .cancelling
-    MediaCard(
-      title: item.name,
-      posterUrl: item.imageURLs.poster,
-      typeText: isEpisodeTrial ? "试看" : formatState(item.state),
-      ratingText: nil,
-      bottomLeftText: isCancellingTrial
-        ? "取消试看中"
-        : isEpisodeTrial
-          ? item.episodeTrialTargetText : formatProgress(total: item.total_episode, lack: item.lack_episode),
-      bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
-      source: nil,
-      loadsImage: loadsImage,
-      action: {
-        if isEpisodeTrial {
-          showsEpisodeTrialNotice = true
-        } else {
-          onEdit()
-        }
-      }
-    )
-    .compositingGroup()
-    .contextMenu {
-      if isEpisodeTrial {
-        Button {
-          onViewDetail()
-        } label: {
-          Label("详情", systemImage: AppSymbol.details)
-        }
-        if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
-          Button(role: .destructive) {
-            showsEpisodeTrialNotice = true
-          } label: {
-            Label(EpisodeTrialHoldNotice.cancelTitle, systemImage: AppSymbol.unsubscribe)
-          }
-        }
-      } else {
-        actionMenu
-      }
-    }
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
-      showUnsubscribeConfirm = false
-      showsEpisodeTrialNotice = false
-    }
-    .onReceive(trials.$credentials.map(EpisodeTrialHold.holds(in:)).removeDuplicates()) { holds in
-      trialHolds = holds
-    }
-    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
-      Button("取消", role: .cancel) {}
-      Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
-        deleteSubscribe()
-      }
-    } message: {
-      Text(SubscriptionCancelConfirmation.message(for: item))
-    }
-    .episodeTrialNotice(
-      isPresented: $showsEpisodeTrialNotice, context: .manage, isCancelling: isCancellingTrial,
-      canCancel: viewModel.canCancelEpisodeTrial
-    ) {
-      cancelEpisodeTrial()
-    }
-  }
-
-  private func cancelEpisodeTrial() {
-    Task {
-      switch await viewModel.cancelEpisodeTrial(subscribe: item) {
-      case .done: break
-      case .pending: notificationManager.show(message: EpisodeTrialHoldNotice.cancelPending, type: .info)
-      case .failed: notificationManager.show(message: EpisodeTrialHoldNotice.cancelFailure, type: .error)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private var actionMenu: some View {
-    // 1. 编辑订阅
-    Button {
-      onEdit()
-    } label: {
-      Label("编辑订阅", systemImage: AppSymbol.editSubscription)
-    }
-
-    // 2. 详情
-    Button {
-      onViewDetail()
-    } label: {
-      Label("详情", systemImage: AppSymbol.details)
-    }
-
-    // 3. 搜索订阅
-    Button {
-      searchSubscribe()
-    } label: {
-      Label("搜索订阅", systemImage: AppSymbol.search)
-    }
-
-    // 4. 启用/暂停
-    Button {
-      toggleSubscribeStatus()
-    } label: {
-      if item.state == "S" {
-        Label("启用订阅", systemImage: AppSymbol.resume)
-      } else {
-        Label("暂停订阅", systemImage: AppSymbol.pause)
-      }
-    }
-
-    // 5. 重置订阅
-    Button {
-      resetSubscribe()
-    } label: {
-      Label("重置订阅", systemImage: AppSymbol.resetSubscription)
-    }
-
-    Divider()
-
-    // 6. 取消订阅
-    Button(role: .destructive) {
-      showUnsubscribeConfirm = true
-    } label: {
-      Label("取消订阅", systemImage: AppSymbol.unsubscribe)
-    }
-  }
-
-  private func searchSubscribe() {
-    Task {
-      do {
-        guard try await viewModel.searchSubscribe(subscribe: item) else {
-          showRequestFailure()
-          return
-        }
-      } catch {
-        showRequestFailure()
-      }
-    }
-  }
-
-  private func toggleSubscribeStatus() {
-    Task {
-      do {
-        let result = try await viewModel.toggleSubscribeStatus(subscribe: item)
-        guard result.success else {
-          showActionFailure(
-            "\(item.state == "S" ? "启用" : "暂停")订阅失败",
-            detail: result.message
-          )
-          return
-        }
-      } catch {
-        showRequestFailure()
-      }
-    }
-  }
-
-  private func resetSubscribe() {
-    Task {
-      do {
-        let result = try await viewModel.resetSubscribe(subscribe: item)
-        guard result.success else {
-          showActionFailure("重置订阅失败", detail: result.message)
-          return
-        }
-      } catch {
-        showRequestFailure()
-      }
-    }
-  }
-
-  private func deleteSubscribe() {
-    Task {
-      do {
-        guard try await viewModel.deleteSubscribe(subscribe: item) else {
-          showUnsubscribeFailure()
-          return
-        }
-      } catch is CancellationError {
-        return
-      } catch {
-        showUnsubscribeFailure()
-      }
-    }
-  }
-
-  private func showUnsubscribeFailure() {
-    notificationManager.show(
-      message: SubscriptionCancelConfirmation.failureMessage,
-      type: .error
-    )
-  }
-
-  private func showActionFailure(_ action: String, detail: String?) {
-    let message = "《\(item.name)》\(action)"
-    notificationManager.show(
-      message: MediaIdentifier.normalizedString(detail).map { "\(message)：\($0)" } ?? "\(message)。",
-      type: .error
-    )
-  }
-
-  private func showRequestFailure() {
-    notificationManager.show(message: "订阅请求失败，请稍后重试。", type: .error)
-  }
-
-  // 辅助格式化函数
-  func formatProgress(total: Int?, lack: Int?) -> String? {
-    guard let total = total, total > 0 else { return nil }
-    if let lack = lack, lack > 0 {
-      return "\(total - lack) / \(total)"
-    }
-    return "已完结"
-  }
-
-  func formatState(_ state: String?) -> String? {
-    switch state {
-    case "N": return "新"
-    case "R": return "阅"
-    case "P": return "待"
-    case "S": return "停"
-    default: return state
     }
   }
 }

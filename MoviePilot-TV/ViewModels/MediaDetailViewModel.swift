@@ -39,7 +39,8 @@ class MediaDetailViewModel: ObservableObject {
   @Published var heroTopStaff: [GroupedStaff] = []
   @Published var uniqueDirectors: [Person] = []
 
-  @Published private(set) var isInLibrary = false
+  /// 已入库、且所在服务器能在 tvOS 打开 App（Emby、Plex）时，「跳转媒体库」按钮打开的 App 深链。
+  @Published private(set) var libraryAppURL: URL?
   /// 管理员且条目在（或无法确认不在）可在应用内播放的服务器上时，应用内播放的目标。
   @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
   /// 电视剧集列表的按集播放和试看，应用内播放可用时才有；这部剧不在媒体库里时也有（每集都可以试看）。
@@ -48,8 +49,11 @@ class MediaDetailViewModel: ObservableObject {
   /// 剧的「继续播放」：按服务器上的观看记录从接着看的那一集开始（见 `PlaybackEpisodeProgress`）。
   /// nil 时详情页显示普通的「播放」（`inAppPlaybackTarget`）。
   @Published private(set) var seriesPlayAction: SeriesPlayAction?
-  /// 电影看到了哪里（0…1）：有值时「播放」按钮只有播放图标和已播放进度条。
+  /// 电影看到了哪里（0…1）：有值时「播放」按钮显示已播放进度条和「继续播放」。
   @Published private(set) var movieProgress: Double?
+  /// 这个播放目标的观看进度第一次读完（读到或读不到都算）。读完前「播放」按钮只有图标：
+  /// 进度、集号读完一次写上，不先写「播放」再改成集号、再补进度条。播完后重读不清它，按钮照常显示上次的。
+  @Published private(set) var isPlayLabelReady = false
   /// 集列表默认显示的季和停在哪一集：看过的剧停在接着看的那一集；没看过时是服务器上最新入库的那一季。
   @Published private(set) var episodeRowHint: EpisodeRowHint?
   /// 「继续播放」用的默认顺序季目录（读到 MoviePilot 的全部季时才有）：集列表行按它显示季，
@@ -228,6 +232,7 @@ class MediaDetailViewModel: ObservableObject {
       inAppPlaybackTarget = nil
       seriesPlayAction = nil
       movieProgress = nil
+      isPlayLabelReady = false
       episodeRowHint = nil
     }
     guard hasAppliedFullDetail else { return }
@@ -565,16 +570,12 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   private func loadMediaServerExists() async {
-    guard detail.identity != nil else { return }
-    let isMovie = detail.type == "电影"
-    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放。
-    let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
+    // 入库状态只用于应用内播放和「跳转媒体库」，两者都只对管理员（能读媒体服务器配置）提供。
+    guard detail.identity != nil, apiService.canRequestSuperUserEndpoints else { return }
     let offersPlayback = InAppPlaybackAvailability.offers(
       mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
       backendVersion: apiService.settings?.BACKEND_VERSION)
-    guard showsLibraryState || offersPlayback else { return }
     let snapshot = apiService.sessionSnapshot()
-    let coordinator = apiService.sessionScope.playbackCoordinator
     let itemRef: MediaServerItemRef?
     do {
       itemRef = try await apiService.fetchMediaServerItemRef(media: detail)
@@ -585,32 +586,78 @@ class MediaDetailViewModel: ObservableObject {
       return
     }
     guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-    if showsLibraryState { isInLibrary = itemRef != nil }
-    guard offersPlayback else { return }
+    // MoviePilot 还没同步到的新条目（首页「最近添加」里刚入库的）入库查询查不到，用首页带来的条目；
+    // 起播前照常按详情页的编号核对（见 `PlaybackCoordinator.findLibraryItem`）。
+    let libraryRef = itemRef ?? libraryItemHint
+    // 跳转按钮在 TMDB 按钮后面，单独出现不挤动播放按钮；各自查到就写上，播放不等 MoviePilot 再查一遍媒体服务器。
+    async let libraryAppURLPublished: Void = publishLibraryAppURL(for: libraryRef, snapshot: snapshot)
+    if offersPlayback { await publishPlaybackTarget(libraryRef, snapshot: snapshot) }
+    await libraryAppURLPublished
+  }
+
+  private func publishLibraryAppURL(for ref: MediaServerItemRef?, snapshot: APIServiceSessionSnapshot) async {
+    let url = await loadLibraryAppURL(for: ref)
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+    if libraryAppURL != url { libraryAppURL = url }
+  }
+
+  private func publishPlaybackTarget(_ libraryRef: MediaServerItemRef?, snapshot: APIServiceSessionSnapshot) async {
+    let target = await locatePlaybackTarget(libraryRef, snapshot: snapshot)
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+    guard case .some(let target) = target else { return }
+    if inAppPlaybackTarget != target {
+      seriesProgressDecided = false
+      isPlayLabelReady = false
+    }
+    inAppPlaybackTarget = target
+    if let target {
+      startWatchProgressLoad(target)
+      observePlaybackEnd(target)
+    }
+  }
+
+  /// 「跳转媒体库」的 App 深链。和媒体库页一样只对管理员（能读媒体服务器配置）提供：服务器类型按入库条目所在服务器的配置定，
+  /// 服务器编号和播放地址和 Web 一样向 `/mediaserver/play` 要。确定不了类型、类型打不开或读不到时不显示按钮。
+  private func loadLibraryAppURL(for ref: MediaServerItemRef?) async -> URL? {
+    guard let ref, apiService.canRequestSuperUserEndpoints else { return nil }
+    do {
+      let servers = try await apiService.fetchCachedMediaServers()
+      guard let serverType = MediaLibraryAppLink.serverType(named: ref.server, in: servers),
+        MediaLibraryAppLink.isSupported(serverType: serverType)
+      else { return nil }
+      return try await apiService.fetchMediaServerPlayLink(itemID: ref.itemID).appURL(serverType: serverType)
+    } catch is CancellationError {
+      return nil
+    } catch {
+      Logger.warning("读取媒体服务器播放地址失败: \(error.localizedDescription)")
+      return nil
+    }
+  }
+
+  /// 应用内播放的目标。外层 nil 表示这次没有结论（读不到服务器配置、没有能播放的服务器、被取消），保留原来的入口；
+  /// `.some(nil)` 表示查过了、不能在应用内播放。
+  private func locatePlaybackTarget(_ libraryRef: MediaServerItemRef?, snapshot: APIServiceSessionSnapshot) async
+    -> PlaybackTarget??
+  {
+    let coordinator = apiService.sessionScope.playbackCoordinator
     do {
       let servers = try await apiService.fetchCachedMediaServers()
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot),
         servers.contains(where: \.supportsInAppPlayback)
-      else { return }
-      // MoviePilot 还没同步到的新条目（首页「最近添加」里刚入库的）入库查询查不到，用首页带来的条目；
-      // 起播前照常按详情页的编号核对（见 `PlaybackCoordinator.findLibraryItem`）。
-      let playbackRef = itemRef ?? libraryItemHint
-      if detail.type == "电视剧" { episodePlayback = EpisodePlaybackSource(libraryItem: playbackRef) }
-      guard let playbackRef else { return }
+      else { return nil }
+      if detail.type == "电视剧" { episodePlayback = EpisodePlaybackSource(libraryItem: libraryRef) }
+      guard let libraryRef else { return nil }
       // 入库条目可能属于不能在应用内播放的服务器，ID 也可能和别的服务器撞号：需要时在可播放的服务器上按外部编号找到它。
       let expected = LibraryItemExpectation(media: detail)
       let target = await coordinator.locateLibraryItem(
-        playbackRef.itemID, expected: expected, in: servers, preferredServer: playbackRef.server)
-      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-      if inAppPlaybackTarget != target { seriesProgressDecided = false }
-      inAppPlaybackTarget = target
-      if let target {
-        startWatchProgressLoad(target)
-        observePlaybackEnd(target)
-      }
+        libraryRef.itemID, expected: expected, in: servers, preferredServer: libraryRef.server)
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return nil }
+      return .some(target)
     } catch is CancellationError {
+      return nil
     } catch {
       Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")
+      return nil
     }
   }
 
@@ -629,6 +676,9 @@ class MediaDetailViewModel: ObservableObject {
       case "电影": await self.loadMovieProgress(target)
       default: break
       }
+      // 和读出的结论在同一轮主线程里写上，按钮只变一次。
+      guard !Task.isCancelled, self.inAppPlaybackTarget == target, !self.isPlayLabelReady else { return }
+      self.isPlayLabelReady = true
     }
   }
 
@@ -814,8 +864,9 @@ class MediaDetailViewModel: ObservableObject {
         SeriesPlayAction(title: "播放", accessibilityLabel: "播放", action: .play(queued(episode, season, resumeFile: nil))),
         latestSeason ?? EpisodeRowHint(season: episode.seasonNumber))
     case .openPanel(let episode):
-      let text = SeriesPlayAction.title(resumes: false, season: episode.seasonNumber, episode: episode.episodeNumber)
-      publish(SeriesPlayAction(title: text, accessibilityLabel: text, action: .openEpisode), hint(episode))
+      let spoken = SeriesPlayAction.title(resumes: false, season: episode.seasonNumber, episode: episode.episodeNumber)
+      let text = SeriesPlayAction.episodeText(season: episode.seasonNumber, episode: episode.episodeNumber) ?? spoken
+      publish(SeriesPlayAction(title: text, accessibilityLabel: spoken, action: .openEpisode), hint(episode))
     case .playServerFile(let file, let resumes, let episode?):
       // 对上了集列表里的这一集，但起播不会试这份（那一集另有确定的文件）：照常播这份，按钮写那一集的集号。
       playServerFile(
@@ -1255,12 +1306,12 @@ class MediaDetailViewModel: ObservableObject {
 }
 
 /// 详情页剧的「继续播放」按钮：标题写明从哪一集开始，按下起播。
-/// 看到一半时按钮是播放图标、已播放进度条和「第 X 季第 Y 集」（与 Apple TV App 一样）。
+/// 有集号时按钮只写「第 X 季第 Y 集」，看到一半时前面加已播放进度条。
 struct SeriesPlayAction: Equatable {
   let title: String
   /// 看到一半时的已播放进度（0…1），画在播放图标后面；从头看的一集、或服务器没给时长时为 nil。
   var progress: Double? = nil
-  /// 读屏用的完整说法（有进度条时标题里省掉了「继续播放」）。
+  /// 读屏用的完整说法（标题里有集号时省掉了「继续播放」「播放」）。
   var accessibilityLabel: String
   let action: Action
 
@@ -1272,15 +1323,15 @@ struct SeriesPlayAction: Equatable {
     case explain(String)
   }
 
-  /// 按钮的样子：`resumeFile` 是接着看到一半的那份时显示播放图标、它的已播放进度条和季集号（读屏念「继续播放 …」），
-  /// 否则是「播放 第 X 季第 Y 集」。
+  /// 按钮的样子：有集号时只写集号「第 X 季第 Y 集」，没有时写「继续播放」「播放」；`resumeFile` 是接着看到一半的那份时
+  /// 前面加它的已播放进度条。读屏念完整的「继续播放 第 X 季第 Y 集」「播放 第 X 季第 Y 集」。
   static func labeled(_ action: Action, resumeFile: ServerMediaItem?, season: Int?, episode: Int?) -> SeriesPlayAction {
     let progress = resumeFile.flatMap {
       PlaybackResumePolicy.progressFraction(positionSeconds: $0.resumePositionSeconds, durationSeconds: $0.runtimeSeconds)
     }
     let spoken = title(resumes: resumeFile != nil, season: season, episode: episode)
     return SeriesPlayAction(
-      title: progress == nil ? spoken : episodeText(season: season, episode: episode) ?? spoken,
+      title: episodeText(season: season, episode: episode) ?? spoken,
       progress: progress, accessibilityLabel: spoken, action: action)
   }
 
@@ -1336,6 +1387,8 @@ private final class SeasonListReads {
     self.budget = budget
     self.read = read
   }
+
+  nonisolated deinit {}
 
   /// 按顺序开始读这几季（已开始过的跳过），到上限为止。
   func start(_ numbers: [Int]) {

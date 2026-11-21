@@ -15,7 +15,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.subscribe])),
-      [.home, .system]
+      [.home, .subscriptions, .system]
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.manage])),
@@ -73,9 +73,13 @@ final class PermissionVisibleEntryTests: XCTestCase {
       source.contains("if canSearchResources {"),
       "详情页 Header 的搜索资源按钮必须在 search 权限门之后。"
     )
+    // 站点选择在搜索菜单的二级菜单里，整个菜单在 search 权限门之后。
     XCTAssertTrue(
-      source.contains("canSearchResources && shouldShowSiteFilter"),
-      "详情页站点筛选按钮必须跟随 search 权限。"
+      containsTokensInOrder(source, [
+        "if canSearchResources {\n              // 搜索资源、搜索字幕收进一个圆形按钮的菜单",
+        "SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)",
+      ]) && source.components(separatedBy: "SearchSiteSelectionMenuItems(").count == 3,
+      "详情页站点筛选必须跟随 search 权限。"
     )
   }
 

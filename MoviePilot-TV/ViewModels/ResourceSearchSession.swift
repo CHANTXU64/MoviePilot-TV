@@ -74,6 +74,7 @@ final class ResourceSearchSession: ObservableObject {
       self.key = key; self.hadSnapshot = hadSnapshot
       transaction = ResourceSearchPage(source: source, page: page)
     }
+    nonisolated deinit {}
   }
   private struct PageFinished: Error {}
   private let runs: SearchRunGate

@@ -2937,6 +2937,15 @@ class APIService: ObservableObject {
     return MediaServerItemRef(itemID: itemID, server: trimmedNonEmpty([result.item?["server"]]))
   }
 
+  /// 媒体服务器上这个条目的播放页面地址和服务器类型，详情页生成「跳转媒体库」深链用。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`playMediaServerItem`，`mediaserver/play/{itemid}`）
+  /// - 备注: 后端只按条目 ID 逐台试，第一台找到的为准（与 Web 一致）；找不到时 `success: false`。
+  func fetchMediaServerPlayLink(itemID: String) async throws -> MediaServerPlayLink {
+    guard let encoded = encodeMediaIDPathSegment(itemID), !encoded.isEmpty else { throw APIError.invalidURL }
+    let data = try await makeRequest(endpoint: "/mediaserver/play/\(encoded)")
+    return try await decodeOrUnwrap(MediaServerPlayLink.self, from: data)
+  }
+
   // MARK: - 资源搜索
 
   // MARK: - Server-Sent Events (SSE) Streaming

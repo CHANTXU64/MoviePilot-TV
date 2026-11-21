@@ -23,7 +23,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
     let deleteRequestCount =
@@ -66,7 +66,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
 
@@ -97,7 +97,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [101])
 
@@ -125,7 +125,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [102])
 
@@ -155,7 +155,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let staleRefresh = Task {
       await viewModel.refreshSubscriptions(forceRefresh: true)
     }
@@ -309,7 +309,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let success = try await viewModel.searchSubscribe(
       subscribe: Subscribe(id: 901, name: "搜索前订阅", type: "电视剧")
     )
@@ -351,7 +351,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let statusResult = try await viewModel.toggleSubscribeStatus(subscribe: subscriptions[0])
     XCTAssertTrue(statusResult.success)
     XCTAssertEqual(notifications.count(), 1)
@@ -702,6 +702,46 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     viewModel.prepareSubscription(seasonNumber: 1)
     XCTAssertNil(viewModel.sheetSubscribe?.episode_group)
     XCTAssertEqual(try viewModel.seasonAvailabilityMedia().episode_group, "")
+  }
+
+  /// 豆瓣等来源的详情不带 season_info：详情页分季行和 Web 订阅弹窗一样向 `/media/seasons` 要季，
+  /// 不再显示「暂无分季信息」挡住订阅；详情自带分季时照旧直接用，不多发请求。
+  func testDetailSeasonsFallBackToSeasonsAPIOnlyWhenDetailHasNoSeasons() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    try await stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "douban-seasons")
+
+    let douban = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(douban_id: "36123456", source: "douban", media_id: "36123456", title: "豆瓣剧集", type: "电视剧"),
+      apiService: service
+    )
+    await douban.loadData(forceRefreshSubscriptions: false)
+
+    XCTAssertFalse(douban.hasSeasonLoadError)
+    XCTAssertEqual(douban.seasonInfos.compactMap(\.season_number), [1])
+    let doubanRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(doubanRequests, 1)
+
+    let tmdb = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_660, source: "themoviedb", media_id: "987660", title: "自带分季", type: "电视剧",
+        season_info: [try makeSeason(number: 1), try makeSeason(number: 2)]),
+      apiService: service
+    )
+    await tmdb.loadData(forceRefreshSubscriptions: false)
+
+    XCTAssertEqual(tmdb.seasonInfos.compactMap(\.season_number), [1, 2])
+    let totalRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(totalRequests, 1, "详情自带分季时不请求季接口")
   }
 
   func testEpisodeGroupsRetryAutomaticallyWithoutBlockingDefaultSeasons() async throws {

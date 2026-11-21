@@ -298,3 +298,108 @@ extension EnvironmentValues {
     set { self[PlaybackEndedGenerationKey.self] = newValue }
   }
 }
+
+/// 起播控件一侧等着补写的焦点（见 `playbackFocusReturn`）。由页面持有，页面可以改写要补写的目标，
+/// 比如那张卡被刷掉时换成相邻的卡。
+struct PlaybackFocusRestore<Focus: Hashable> {
+  /// 播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 等转场结束后补写。
+  var pending: Focus?
+  /// 每次开始补写自增，让上一轮的超时失效。
+  fileprivate var generation = 0
+
+  init() {}
+}
+
+extension View {
+  /**
+   起播控件一侧的焦点交接，详情页「播放」、集列表、首页卡片共用：
+   - 盖播放器之前，呈现层请求时把焦点写回本控件，焦点真的落上去后回执，呈现层再盖播放器
+     （模态关闭时系统还原的是盖上去那一刻的焦点项）。
+   - 播放结束时清掉目标。盖上过播放器的由系统还原；没盖上就结束（准备期取消）时没有可还原的对象，
+     等模态和转场结束后补写，3 秒内没落回就放弃。
+
+   - Parameters:
+     - restore: 页面持有的补写状态。
+     - focused: 页面当前的焦点值（`@FocusState` 的值）。
+     - focus: 写焦点用的绑定。
+     - isEnabled: 额外的补写条件（比如会话验证期间不写）。
+     - canRestore: 开始补写和每次写之前确认目标还在页面上；不在就放弃，焦点交给系统。
+     - match: 交接目标是不是本控件起播的；是就返回本控件的焦点值。
+   */
+  func playbackFocusReturn<Focus: Hashable>(
+    _ restore: Binding<PlaybackFocusRestore<Focus>>,
+    focused: Focus?,
+    focus: FocusState<Focus?>.Binding,
+    isEnabled: Bool = true,
+    canRestore: @escaping (Focus) -> Bool = { _ in true },
+    match: @escaping (PlaybackFocusTarget) -> Focus?
+  ) -> some View {
+    modifier(PlaybackFocusReturnModifier(
+      restore: restore, focused: focused, focus: focus,
+      isEnabled: isEnabled, canRestore: canRestore, match: match))
+  }
+}
+
+private struct PlaybackFocusReturnModifier<Focus: Hashable>: ViewModifier {
+  static var timeout: Duration { .seconds(3) }
+
+  @Environment(\.playbackFocusHandoff) private var handoff
+  @Environment(\.playbackEndedGeneration) private var endedGeneration
+  @Binding var restore: PlaybackFocusRestore<Focus>
+  let focused: Focus?
+  let focus: FocusState<Focus?>.Binding
+  let isEnabled: Bool
+  let canRestore: (Focus) -> Bool
+  let match: (PlaybackFocusTarget) -> Focus?
+
+  /// 当前交接目标属于本控件时的焦点值。
+  private var ownFocus: Focus? { handoff.target.flatMap(match) }
+
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: handoff.request) { _, _ in
+        guard let value = ownFocus else { return }
+        focus.wrappedValue = value
+      }
+      .onChange(of: focused) { _, newValue in
+        guard let value = ownFocus, newValue == value else { return }
+        handoff.acknowledged = handoff.request
+      }
+      .onChange(of: endedGeneration) { _, _ in
+        guard let value = ownFocus else { return }
+        handoff.target = nil
+        guard canRestore(value) else { return }
+        beginRestore(value)
+      }
+      .background(PresentationReadyAction(
+        isEnabled: restore.pending != nil && isEnabled,
+        requiresNavigationTop: true,
+        contentFocusMatches: restore.pending.map { focused == $0 } ?? false,
+        onContentFocus: {
+          restore.pending = nil
+          restore.generation += 1
+        },
+        action: {
+          guard let value = restore.pending else { return }
+          guard canRestore(value) else {
+            restore.pending = nil
+            return
+          }
+          // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
+          focus.wrappedValue = focused == value ? nil : value
+        }
+      ))
+  }
+
+  private func beginRestore(_ value: Focus) {
+    restore.generation += 1
+    let generation = restore.generation
+    restore.pending = value
+    let restore = $restore
+    Task { @MainActor in
+      try? await Task.sleep(for: Self.timeout)
+      guard restore.wrappedValue.generation == generation else { return }
+      restore.wrappedValue.pending = nil
+    }
+  }
+}

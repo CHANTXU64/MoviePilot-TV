@@ -49,6 +49,7 @@ struct PagedResourceResultsView<Header: View>: View {
         Text("已保留 \(search.retainedCount) 条 · 本次新增 \(search.newCount) 条")
           .font(.caption).foregroundColor(.secondary)
         Button(loadingAction.title) { loadingAction.perform() }
+          .claimsInitialFocus()
         Spacer()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -89,8 +90,10 @@ struct PagedResourceResultsView<Header: View>: View {
       if search.canContinue {
         Button(action: continueSearch) { Label(search.continueTitle, systemImage: AppSymbol.search) }
           .disabled(downloadPresented)
+          .claimsInitialFocus()
       } else if search.canRestart {
         Button("重新搜索") { search.restart() }.disabled(downloadPresented)
+          .claimsInitialFocus()
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

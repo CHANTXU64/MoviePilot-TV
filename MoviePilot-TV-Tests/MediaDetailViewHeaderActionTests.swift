@@ -1365,31 +1365,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testMovieHeaderAppendsLibraryStatusToSubscribeTitle() {
-    let detail = MediaInfo(title: "已入库电影", type: "电影")
+  func testMovieHeaderSubscribeTitleOnlyShowsSubscriptionState() {
+    let detail = MediaInfo(title: "电影", type: "电影")
 
-    XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false,
-        isInLibrary: true
-      ),
-      "订阅（已入库）"
-    )
-    XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: true,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false,
-        isInLibrary: true
-      ),
-      "已订阅（已入库）"
-    )
+    XCTAssertEqual(MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail), "订阅")
+    XCTAssertEqual(MediaDetailView.headerSubscribeButtonTitle(isSubscribed: true, detail: detail), "已订阅")
   }
 
   @MainActor
@@ -1501,7 +1481,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testSeasonSubscribeHeaderShowsUnavailableStateWhenLoadedWithoutSeasons() {
+  func testSeasonSubscribeSectionExplainsMissingSeasonsWithFixedHeaderTitle() {
     let detail = MediaInfo(title: "无分季剧集", type: "电视剧")
 
     XCTAssertTrue(
@@ -1513,24 +1493,12 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         hasSeasonLoadError: false
       )
     )
-    XCTAssertFalse(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: false
-      )
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: true,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false
-      ),
-      "暂无分季信息"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
   }
 
@@ -1548,23 +1516,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       )
     )
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: true
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: true,
-        isSeasonLoading: false
-      ),
-      "分季信息加载失败"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
   }
 
@@ -1579,13 +1535,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertTrue(seasonViewModel.hasSeasonLoadError)
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: seasonViewModel.hasSeasonLoadError
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertFalse(
       MediaDetailView.isSeasonInformationUnavailable(
@@ -1603,32 +1553,14 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(title: "有分季剧集", type: "电视剧")
 
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: false,
-        seasonCount: nil,
-        hasSeasonLoadError: false
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 1,
-        hasSeasonLoadError: false
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: true
-      ),
-      "分季信息"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
   }
 
@@ -1673,14 +1605,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(title: "重试分季剧集", type: "电视剧")
 
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: false,
-        isSeasonLoading: true
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertFalse(
       MediaDetailView.isSeasonInformationUnavailable(

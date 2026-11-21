@@ -224,6 +224,46 @@ final class HomeViewModelMediaServerLinkTests: XCTestCase {
     XCTAssertFalse(HomeViewModel.opensMediaServerApp(canOpenMediaLibrary: false, canPlayInApp: true, prefersInApp: false))
   }
 
+  func testDetailPlayLinkBuildsAppDeepLinkForSupportedServers() throws {
+    // `/mediaserver/play` 不给服务器类型：v3.1 起回包没有 server_type，v3.0 有但填的是服务器配置名。类型由调用方从服务器配置给。
+    func link(_ json: String) throws -> MediaServerPlayLink {
+      try JSONDecoder().decode(MediaServerPlayLink.self, from: Data(json.utf8))
+    }
+    let emby = try link(
+      #"{"url":"http://emby.local/web/index.html#!/item?id=e1&context=home&serverId=srv","item_id":"e1","server_id":"srv"}"#)
+    XCTAssertEqual(emby.appURL(serverType: .emby)?.absoluteString, "emby://items?serverId=srv&itemId=e1")
+
+    // Plex 播放页面地址是 #!/server/{机器编号}/details?key=…，key 可能是数字或完整路径。
+    let plexNumeric = try link(
+      #"{"url":"http://plex.local/web/index.html#!/server/abc/details?key=123&X-Plex-Token=t","item_id":"123","server_id":"abc"}"#)
+    let plexPath = try link(
+      #"{"url":"http://plex.local/web/index.html#!/server/abc/details?key=%2Flibrary%2Fmetadata%2F123&X-Plex-Token=t","item_id":"123"}"#)
+    for plex in [plexNumeric, plexPath] {
+      let url = try XCTUnwrap(plex.appURL(serverType: .plex))
+      let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+      XCTAssertEqual(components.scheme, "plex")
+      XCTAssertEqual(components.host, "preplay")
+      XCTAssertEqual(queryItemMap(from: components)["metadataKey"], "/library/metadata/123")
+      XCTAssertEqual(queryItemMap(from: components)["server"], "abc")
+    }
+
+    let jellyfin = try link(#"{"url":"http://jf.local/web/index.html#!/details?id=j1&serverId=srv","item_id":"j1"}"#)
+    XCTAssertNil(jellyfin.appURL(serverType: .jellyfin), "tvOS 上打不开的服务器不显示跳转按钮")
+  }
+
+  func testLibraryServerTypeComesFromTheItemsServerConfig() {
+    let servers = [
+      MediaServerConf(name: "Emby", type: "emby", enabled: FlexibleBool(true)),
+      MediaServerConf(name: "Plex", type: "plex", enabled: FlexibleBool(true)),
+      MediaServerConf(name: "旧 Jellyfin", type: "jellyfin", enabled: FlexibleBool(false)),
+    ]
+    XCTAssertEqual(MediaLibraryAppLink.serverType(named: "Emby", in: servers), .emby)
+    XCTAssertEqual(MediaLibraryAppLink.serverType(named: "Plex", in: servers), .plex)
+    XCTAssertNil(MediaLibraryAppLink.serverType(named: "旧 Jellyfin", in: servers), "停用的服务器不算")
+    XCTAssertNil(MediaLibraryAppLink.serverType(named: nil, in: servers), "没给名称、启用的服务器类型不同时不猜")
+    XCTAssertEqual(MediaLibraryAppLink.serverType(named: nil, in: Array(servers.prefix(1))), .emby, "只有一种类型时确定")
+  }
+
   private func openMediaItemURL(_ item: MediaServerPlayItem) -> URL? {
     var openedURL: URL?
     let action = OpenURLAction { url in

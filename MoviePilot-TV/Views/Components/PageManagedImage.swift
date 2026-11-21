@@ -124,6 +124,8 @@ private final class PageBackdropImageContainer: UIView {
     addSubview(imageView)
   }
 
+  nonisolated deinit {}
+
   @available(*, unavailable)
   required init?(coder: NSCoder) { nil }
 

@@ -720,7 +720,7 @@ final class HomeContinueWatchingRowTests: XCTestCase {
     XCTAssertFalse(
       page.contains(".onChange(of: playbackEndedGeneration)"),
       "播放器刚关时进度还没写回媒体服务器，那时读会拿到旧进度，而这一行不跟轮询")
-    XCTAssertTrue(row.contains(".onChange(of: playbackEndedGeneration)"), "焦点恢复仍用原来的信号")
+    XCTAssertTrue(row.contains(".playbackFocusReturn("), "焦点恢复仍用播放器刚关那个信号（共享的起播焦点交接）")
   }
 
   private static func homeViewSource() throws -> String {

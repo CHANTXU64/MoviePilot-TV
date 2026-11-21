@@ -317,10 +317,12 @@ class SubscribeSeasonViewModel: ObservableObject {
       try await episodeGroupCatalog.loadSeasons(groupID: episodeGroup, apiService: apiService)
     } else {
       let loadedSeasons: [TmdbSeason]
-      if isSeasonManagementContext {
-        loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo)
+      if !isSeasonManagementContext, let detailSeasons = mediaInfo.season_info, !detailSeasons.isEmpty {
+        loadedSeasons = detailSeasons
       } else {
-        loadedSeasons = mediaInfo.season_info ?? []
+        // 分季管理页读最新的季；详情里没有分季时（豆瓣、Bangumi 等来源的详情不带 season_info）
+        // 和 Web 订阅弹窗一样向统一的季接口要，后端按来源识别后给出季号。
+        loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo)
       }
       try validateSeasonLoad(load, snapshot: snapshot)
       standardSeasonInfos = SeasonDisplayOrder.sorted(loadedSeasons)

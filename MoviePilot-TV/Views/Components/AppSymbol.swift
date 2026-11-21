@@ -7,6 +7,8 @@ nonisolated enum AppSymbol {
   // MARK: 底部标签页
 
   static let tabHome = "play.tv"
+  /// 「订阅」页放的是正在追的订阅，与订阅状态里的「订阅中」同一个意思。
+  static let tabSubscriptions = subscriptionActive
   static let tabRecommend = "sparkles.tv"
   static let tabExplore = "safari"
   static let tabStatus = "slider.horizontal.3"
@@ -29,6 +31,8 @@ nonisolated enum AppSymbol {
   // MARK: 操作
 
   static let search = "magnifyingglass"
+  /// 详情页头部的搜索菜单（里面是搜索资源、搜索字幕），和菜单里的「搜索资源」区分开。
+  static let searchMenu = "arrow.up.left.and.down.right.magnifyingglass"
   /// 打开详情（菜单项、按钮）。状态类的「提示信息」用实心的 `info`。
   static let details = "info.circle"
   /// 订阅：订阅后会自动下载、可以观看，用加号表示「加进来」，不用爱心（容易误解成收藏）。

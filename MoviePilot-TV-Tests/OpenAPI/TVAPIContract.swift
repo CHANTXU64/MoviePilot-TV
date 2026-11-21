@@ -595,6 +595,12 @@ enum TVAPIContractCatalog {
         dependedResponse: [TVAPIFields.field("item", .object)],
         coverage: read
       ),
+      TVAPIOperationBuilder.get(
+        "/mediaserver/play/{itemid}",
+        pathParams: [TVAPIParam.path("itemid")],
+        dependedResponse: [TVAPIFields.field("url", .string)],
+        coverage: [.urlProtocol, .unitDecoding]
+      ),
       TVAPIOperationBuilder.mutation(
         "POST",
         "/mediaserver/notexists",

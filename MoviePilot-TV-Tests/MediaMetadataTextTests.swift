@@ -161,6 +161,20 @@ final class MediaMetadataTextTests: XCTestCase {
     XCTAssertEqual(TranslationHelper.translateChapter(for: "Chapter 02"), "章節 2")
   }
 
+  /// 名字全是空白的章节和没有名字的一样按位置命名，不显示成空白；首尾空白去掉，真实章节名保真。
+  func testBlankChapterNamesFallBackToPositionalNames() {
+    let resolution = PlaybackChapters.resolve(
+      server: [
+        ServerChapter(name: "Chapter 01", startSeconds: 0),
+        ServerChapter(name: "   ", startSeconds: 600),
+        ServerChapter(name: nil, startSeconds: 1200),
+        ServerChapter(name: " 片尾 ", startSeconds: 1800),
+      ],
+      embedded: nil, durationSeconds: 3600)
+    guard case .chapters(let chapters) = resolution else { return XCTFail("应使用服务器章节") }
+    XCTAssertEqual(chapters.map(\.name), ["章节 1", "章节 2", "章节 3", "片尾"])
+  }
+
   // MARK: - 外层判据：分类/类型与 release_date/year 同样按显示值归一
 
   func testBlankCategoryFallsBackToType() throws {
