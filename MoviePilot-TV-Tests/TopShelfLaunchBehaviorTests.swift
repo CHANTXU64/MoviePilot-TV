@@ -794,30 +794,24 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertEqual(stack.path.count, 0, "Top Shelf 目标只需再返回一次即到推荐根页")
   }
 
-  func testPreparedTakeoverStillCancelsDetailAfterRecognitionLosesItsSessionLease() async throws {
+  func testPreparedTakeoverStillCancelsDetailAfterSessionLeaseLoss() async throws {
     let service = makeService()
     let explore = ImageNavigationCoordinator(apiService: service)
     let recommend = ImageNavigationCoordinator(apiService: service)
     let routePayload = payload(service: service, tmdbID: nil, doubanID: "42")
     let media = try XCTUnwrap(TopShelfNavigationRouter.media(from: routePayload))
     let detailRequested = expectation(description: "基础详情挂起")
-    let recognitionRequested = expectation(description: "识别挂起")
     TopShelfLaunchURLProtocol.holdDetailResponses()
-    TopShelfLaunchURLProtocol.holdRecognitionResponse { recognitionRequested.fulfill() }
     TopShelfLaunchURLProtocol.observe(currentUser: {}, detail: { detailRequested.fulfill() })
     let entry = explore.push(media)
     let task = try XCTUnwrap(explore.preloadTask(for: entry))
-    await fulfillment(of: [detailRequested, recognitionRequested], timeout: 3)
-    let recognitionFinished = expectation(description: "旧会话识别已取消")
-    let observer = task.$isTmdbRecognitionFinished.filter { $0 }.prefix(1).sink { _ in
-      recognitionFinished.fulfill()
-    }
-    defer { observer.cancel() }
+    await fulfillment(of: [detailRequested], timeout: 3)
+    // 预载不做名称识别；旧后端也不查共享映射，TMDB 预读应已结束。
+    XCTAssertTrue(task.isTmdbRecognitionFinished)
     service.replaceSessionForTesting(
       baseURL: service.baseURL, token: "renewed", currentUser: service.currentUser
     )
-    await fulfillment(of: [recognitionFinished], timeout: 3)
-    // 让识别取消返回编排任务；基础详情此时仍处于 1.5 秒重试窗口。
+    // 基础详情此时仍处于 1.5 秒重试窗口。
     try await Task.sleep(for: .milliseconds(100))
     XCTAssertTrue(service.mediaPreloader.peekTask(for: media) === task)
     XCTAssertNil(task.fullDetail)
@@ -1317,8 +1311,6 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
   nonisolated(unsafe) private static var onCurrentUser: (@Sendable () -> Void)?
   nonisolated(unsafe) private static var onDetail: (@Sendable () -> Void)?
   nonisolated(unsafe) private static var onDetailCancelled: (@Sendable () -> Void)?
-  nonisolated(unsafe) private static var onRecognition: (@Sendable () -> Void)?
-  nonisolated(unsafe) private static var pendingRecognition: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var pendingDetail: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var holdsDetails = false
   nonisolated(unsafe) private static var automaticCurrentUser = false
@@ -1362,8 +1354,6 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     onCurrentUser = nil
     onDetail = nil
     onDetailCancelled = nil
-    onRecognition = nil
-    pendingRecognition = nil
     pendingDetail = nil
     holdsDetails = false
     automaticCurrentUser = false
@@ -1383,12 +1373,6 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     lock.lock()
     defer { lock.unlock() }
     onDetailCancelled = callback
-  }
-
-  static func holdRecognitionResponse(_ callback: @escaping @Sendable () -> Void) {
-    lock.lock()
-    defer { lock.unlock() }
-    onRecognition = callback
   }
 
   static func automaticallyRespondToCurrentUser() {
@@ -1430,12 +1414,6 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
       callback?()
       return
     }
-    if path == "/api/v1/media/search", let callback = Self.onRecognition {
-      Self.pendingRecognition = self
-      Self.lock.unlock()
-      callback()
-      return
-    }
     let isDetail = path.hasPrefix("/api/v1/media/")
     if isDetail { Self.detailCount += 1 }
     if path == "/hero.jpg" { Self.imageCount += 1 }
@@ -1460,7 +1438,6 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
   override func stopLoading() {
     Self.lock.lock()
     if Self.pendingUser === self { Self.pendingUser = nil }
-    if Self.pendingRecognition === self { Self.pendingRecognition = nil }
     let callback = Self.pendingDetail === self ? Self.onDetailCancelled : nil
     if Self.pendingDetail === self { Self.pendingDetail = nil }
     Self.lock.unlock()

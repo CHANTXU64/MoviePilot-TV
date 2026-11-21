@@ -1,9 +1,5 @@
 import Foundation
 
-nonisolated enum MediaMappingMatchError: Error {
-  case busy
-}
-
 /// 非 TMDB 来源到 TMDB 的映射关系（`GET /media/mapping`、`POST /media/mapping/match`）。
 ///
 /// 后端在未命中或未启用共享识别时返回 `data: null`；解码后为 `nil`。

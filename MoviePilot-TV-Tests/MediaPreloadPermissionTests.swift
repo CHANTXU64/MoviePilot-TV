@@ -357,7 +357,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertEqual(task.fullDetail?.douban_id, "db-221a")
   }
 
-  func testFullDetailAddedDoubanIdentityRecognitionPopulatesTmdbId() async throws {
+  func testPreloadDoesNotNameRecognizeEvenWhenTitleIsRecognizable() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
@@ -380,13 +380,17 @@ final class MediaPreloadPermissionTests: XCTestCase {
     task.start()
     defer { task.cancel() }
 
-    // 补识别命中 search（BBB → tmdb 221）时填值，Header 按钮直接可跳。
-    try await waitUntil("full-detail douban recognition fills tmdbId") {
-      task.isDetailReady && task.isTmdbRecognitionFinished && task.tmdbId == 221
+    // 名称识别只在用户按下 TMDB 时做；预载落定后 TMDB 按钮可按，但不静默识别。
+    try await waitUntil("full-detail TMDB preload settles") {
+      task.isDetailReady && task.isTmdbRecognitionFinished
     }
 
-    XCTAssertEqual(task.tmdbId, 221)
+    XCTAssertNil(task.tmdbId)
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
     XCTAssertEqual(task.fullDetail?.douban_id, "db-221b")
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/media/search"))
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
   }
 
   func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {

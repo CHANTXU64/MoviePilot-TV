@@ -2035,18 +2035,21 @@ class APIService: ObservableObject {
     }
   }
 
+  /// 条目能否按需查找：v3.2.9 起，且来源在后端有内置的 TMDB 转换、请求合法。
+  func canRequestMediaMappingMatch(identity: MediaIdentity, type: String, season: Int?) -> Bool {
+    mediaMappingMatchQuery(identity: identity, type: type, season: season) != nil
+  }
+
   /// 共享映射未命中后按需查找 TMDB 关系（`POST /media/mapping/match`）。
   ///
-  /// 只由 v3.2.9 起的调用方在 GET 未命中后调用；返回 `nil` 表示后端完成查找后没有关系。
+  /// 返回 `nil` 表示后端完成查找后没有关系，或条目不能按需查找。
   /// 查找失败不写入缓存，用户下一次动作会重试；同时查找由后端合并，客户端不另做并发控制。
   func fetchMediaMappingMatch(
     identity: MediaIdentity,
     type: String,
     season: Int? = nil
   ) async throws -> MediaMapping? {
-    guard supportsMediaMappingMatch,
-      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season)
-    else {
+    guard let query = mediaMappingMatchQuery(identity: identity, type: type, season: season) else {
       return nil
     }
 
@@ -2067,20 +2070,12 @@ class APIService: ObservableObject {
           season: query.season
         )
       )
-      let data: Data
-      do {
-        data = try await self.makeRequest(
-          endpoint: "/media/mapping/match",
-          method: "POST",
-          body: body,
-          timeoutInterval: Self.mediaMappingMatchTimeout
-        )
-      } catch APIError.serverMessage(let message)
-        where Self.httpStatusCode(fromServerMessage: message) == 429
-      {
-        // 只在 HTTP 层识别并发已满，响应体里的业务错误走正常解码。
-        throw MediaMappingMatchError.busy
-      }
+      let data = try await self.makeRequest(
+        endpoint: "/media/mapping/match",
+        method: "POST",
+        body: body,
+        timeoutInterval: Self.mediaMappingMatchTimeout
+      )
       guard let mapping = try self.decodeOptionalOrUnwrap(MediaMapping.self, from: data) else {
         return .miss
       }
@@ -2092,8 +2087,33 @@ class APIService: ObservableObject {
     }
   }
 
-  /// 后端按需查找的自身预算为 180s；客户端留出响应余量，不提前放弃。
-  private static let mediaMappingMatchTimeout: TimeInterval = 190
+  /// 与 Web 一致等 60s；超时后调用方改用名称识别。后端查找不随请求断开而停，
+  /// 结论保留 10 分钟，下次查找直接复用。
+  private static let mediaMappingMatchTimeout: TimeInterval = 60
+
+  /// 后端 v3.2.9 内置了到 TMDB 转换的来源；其他来源交给插件，通常查不到，直接按名称识别。
+  private static let mediaMappingMatchSources: Set<String> = ["douban", "bangumi", "anilist"]
+  /// 后端只接受纯数字 ID 的来源。
+  private static let numericMediaMappingMatchSources: Set<String> = ["bangumi", "anilist"]
+
+  private func mediaMappingMatchQuery(
+    identity: MediaIdentity,
+    type: String,
+    season: Int?
+  ) -> MediaMappingLookupQuery? {
+    guard supportsMediaMappingMatch,
+      let query = mediaMappingLookupQuery(identity: identity, type: type, season: season),
+      Self.mediaMappingMatchSources.contains(query.source)
+    else {
+      return nil
+    }
+    if Self.numericMediaMappingMatchSources.contains(query.source),
+      !query.mediaId.allSatisfy({ $0.isASCII && $0.isNumber })
+    {
+      return nil
+    }
+    return query
+  }
 
   private struct MediaMappingLookupQuery {
     let source: String
