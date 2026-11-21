@@ -1641,6 +1641,83 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasSuffix("/subscribe") })
   }
 
+  /// v2 收到 v3 形状 `DELETE /subscribe/media/42?media_source=...` 会按原值 `mediaid == "42"` 匹配旧订阅、
+  /// 不按季号过滤，没删到也返回成功；版本未知时两个媒体级入口都必须不发请求。
+  func testUnknownBackendVersionRejectsMediaSubscriptionDelete() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    for backendVersion in [nil, "未知版本"] as [String?] {
+      await CompatibilityEndpointURLProtocol.stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+      defer { snapshot.restore(to: service) }
+
+      service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+      service.tokenForTesting = "compat-token"
+      service.settings = backendVersion.map { GlobalSettings(BACKEND_VERSION: $0) }
+
+      do {
+        _ = try await service.deleteSubscriptionResult(
+          media: MediaInfo(tmdb_id: 42, type: "电视剧"), season: 2)
+        XCTFail("Expected backendVersionUnavailable for \(backendVersion ?? "nil")")
+      } catch APIError.backendVersionUnavailable {
+        // Expected.
+      }
+      do {
+        _ = try await service.deleteSubscriptionResult(mediaId: "tmdb:42", season: 2)
+        XCTFail("Expected backendVersionUnavailable for \(backendVersion ?? "nil")")
+      } catch APIError.backendVersionUnavailable {
+        // Expected.
+      }
+      let methods = await CompatibilityEndpointURLProtocol.stub.requestMethods()
+      XCTAssertFalse(methods.contains("DELETE"), "\(backendVersion ?? "nil")")
+
+      // 按订阅 ID 删除两个版本同形，版本未知时照常执行。
+      let deletedByID = try await service.deleteSubscription(id: 7)
+      XCTAssertTrue(deletedByID)
+      let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+      let allMethods = await CompatibilityEndpointURLProtocol.stub.requestMethods()
+      let deletes = zip(paths, allMethods).filter { $0.1 == "DELETE" }.map(\.0)
+      XCTAssertEqual(deletes, ["/api/v1/subscribe/7"], "\(backendVersion ?? "nil")")
+    }
+  }
+
+  func testMediaSubscriptionDeleteUsesResolvedProtocolShapeWithSeason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    let cases: [(version: String, path: String, query: String)] = [
+      ("v2.15.6", "/api/v1/subscribe/media/tmdb:42", "season=2"),
+      ("v3.2.9", "/api/v1/subscribe/media/42", "media_source=themoviedb&season=2"),
+    ]
+    for testCase in cases {
+      await CompatibilityEndpointURLProtocol.stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+      defer { snapshot.restore(to: service) }
+
+      service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+      service.tokenForTesting = "compat-token"
+      service.settings = GlobalSettings(BACKEND_VERSION: testCase.version)
+
+      let result = try await service.deleteSubscriptionResult(
+        media: MediaInfo(tmdb_id: 42, type: "电视剧"), season: 2)
+      XCTAssertTrue(result.success, testCase.version)
+
+      let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+      let methods = await CompatibilityEndpointURLProtocol.stub.requestMethods()
+      let queries = await CompatibilityEndpointURLProtocol.stub.requestQueries()
+      let deletes = paths.indices.filter { methods[$0] == "DELETE" }
+      XCTAssertEqual(deletes.map { paths[$0] }, [testCase.path], testCase.version)
+      let query = deletes.first.flatMap { queries[$0] }
+      XCTAssertEqual(
+        query?.split(separator: "&").map(String.init).sorted(),
+        testCase.query.split(separator: "&").map(String.init).sorted(),
+        testCase.version)
+    }
+  }
+
   func testBaseSettingsApplyBackendVersionBeforeUserSettingsFinish() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.4.2-blue?style=flat-square" alt="release"></a>
-  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.15.6_--_v3.2.9-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
+  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.9-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
@@ -41,7 +41,7 @@
 ## ⚠️ 兼容性与已知问题
 
 - **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
-- **MoviePilot 版本**: 最低兼容 MoviePilot **v2.15.6**，v3 线已验证到 **v3.2.9**。v2 只登记 v2.15.6 一个版本（v2.15.0–v2.15.5 仍提示版本过低），v3.0.0–v3.0.3 未登记；App 对 v2 自动改用旧式单值媒体键协议；v2 上不启用主屏货架（Top Shelf）。具体见[已验证的兼容版本](docs/backend-version-compatibility.md#已登记版本)。
+- **MoviePilot 版本**: 最低兼容 MoviePilot **v2.15.6**，具体见[已验证的兼容版本](docs/backend-version-compatibility.md#已登记版本)。
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准，通常不会额外兜底修复。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
 - **密码安全**: 请勿将 MoviePilot 密码与其他服务的密码设为相同值。Apple 钥匙串不可用时，本 App 会自动降级为**明文持久化密码**；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。

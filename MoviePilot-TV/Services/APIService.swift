@@ -13,7 +13,7 @@ nonisolated enum APIError: Error {
   case credentialsRejected
   case mfaUnsupported
   case unauthorized
-  /// 后端版本还没读到或解析不了，无法安全选择订阅写回形状。
+  /// 后端版本还没读到或解析不了，无法安全选择订阅写回或按媒体删除的请求形状。
   case backendVersionUnavailable
   case unknown
 }
@@ -439,7 +439,7 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
   /// 后端请求协议形状，随 settings 更新一次。v2 实现见 `Services/BackendProtocol/MoviePilotV2`。
-  /// 初始值按“版本未读到”处理：读请求带 v2 兜底，订阅写回由协议实现拒绝，等设置到达后再保存。
+  /// 初始值按“版本未读到”处理：读请求带 v2 兜底，订阅写回和按媒体删除订阅由协议实现拒绝，等设置到达后再操作。
   private var backendEndpoints: any BackendEndpointBuilding = UnresolvedBackendEndpoints()
 
   /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
@@ -3800,13 +3800,9 @@ class APIService: ObservableObject {
   ) async throws -> (
     success: Bool, message: String?
   ) {
-    let endpoint = try endpointForMediaIdentity(
-      pathPrefix: "/subscribe/media",
-      identity: identity,
-      extraParams: ["season": season.map(String.init)]
-    )
+    let spec = try backendEndpoints.mediaSubscriptionDeleteEndpoint(identity: identity, season: season)
     let data = try await makeRequest(
-      endpoint: endpoint,
+      endpoint: try buildEndpoint(path: spec.path, params: spec.params),
       method: "DELETE"
     )
     let result = try decodeStrictActionResponseSync(from: data)

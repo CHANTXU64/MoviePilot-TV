@@ -1840,6 +1840,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let viewModel = SubscribeSeasonViewModel(
       mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
@@ -2018,6 +2020,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let notifications = SubscribeSeasonNotificationCounter()
     let observer = NotificationCenter.default.addObserver(

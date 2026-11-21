@@ -23,6 +23,12 @@ nonisolated protocol BackendEndpointBuilding: Sendable {
     suffix: String
   ) throws -> BackendEndpointSpec
 
+  /// `DELETE /subscribe/media/{key}` 的 path 与 query。
+  /// 写错形状时后端不会报错：v2 收到 v3 形状会按不带前缀的原值匹配旧订阅、不按季号过滤，
+  /// 删错或什么都没删也返回成功。无法确定形状的实现必须抛 `APIError.backendVersionUnavailable`。
+  func mediaSubscriptionDeleteEndpoint(identity: MediaIdentity, season: Int?) throws
+    -> BackendEndpointSpec
+
   /// `GET /media/seasons` 的查询参数。
   func mediaSeasonsEndpoint(
     identity: MediaIdentity,
@@ -57,6 +63,20 @@ nonisolated protocol BackendEndpointBuilding: Sendable {
   /// 无法确定形状的实现必须抛 `APIError.backendVersionUnavailable`，由调用方提示重试。
   /// 调用方传入的 `draft` 必须是原订阅的完整副本，`original` 只用来计算变化。
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data
+}
+
+nonisolated extension BackendEndpointBuilding {
+  /// 已确定版本的实现与普通媒体身份端点同形。
+  func mediaSubscriptionDeleteEndpoint(identity: MediaIdentity, season: Int?) throws
+    -> BackendEndpointSpec
+  {
+    try mediaIdentityEndpoint(
+      pathPrefix: "/subscribe/media",
+      identity: identity,
+      extraParams: ["season": season.map(String.init)],
+      suffix: ""
+    )
+  }
 }
 
 /// v3 及以上的请求形状，与 2026-09 迁移后的现有实现一致。
@@ -117,7 +137,7 @@ nonisolated struct V3BackendEndpoints: BackendEndpointBuilding {
 
 nonisolated enum BackendEndpoints {
   /// 按后端版本选请求形状。读请求默认按 v3 发；版本解析不了时改用
-  /// `UnresolvedBackendEndpoints`，只拒绝订阅写回，避免猜错协议覆盖数据。
+  /// `UnresolvedBackendEndpoints`，拒绝订阅写回和按媒体删除订阅，避免猜错协议改错数据。
   /// 删除 `Services/BackendProtocol/MoviePilotV2` 后，把函数体固定为 `V3BackendEndpoints()`。
   static func resolve(backendVersion: String?) -> any BackendEndpointBuilding {
     guard let version = MoviePilotVersion(backendVersion) else {
