@@ -6,10 +6,10 @@ nonisolated private func specified(_ value: String?) -> String? { value?.isEmpty
 
 /// 单集试看的入口判断，试看服务和设置页共用。
 nonisolated enum EpisodeTrialAvailability {
-  /// 试看从 MoviePilot v3.2.6 起开放：整季包从这个版本起只下载订阅范围内的集，单集试看才不会整季下载；
-  /// 按集定位也依赖这个版本起季集列表返回的 TMDB 单集 ID。
-  /// 极性属于「新行为版本限制」：低于该版本、读不出或无法解析时不提供；可解析且不低于该版本（含热修复）时提供。
-  static let minimumBackendVersion = "v3.2.6"
+  /// 试看依赖 MoviePilot PR 7505（b8c3465de）在复用季包时追加目标集并记录本次受理。
+  /// 2026-11-21 官方将 v3.2.9 标签由 195747fae 前移至 b186df432。早期构建缺少修复，两者都报告 v3.2.9。
+  /// 版本号无法区分这两种构建，入口仅向可解析的 v3.2.10 及以上版本开放。
+  static let minimumBackendVersion = "v3.2.10"
 
   static func supports(backendVersion: String?) -> Bool {
     BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
@@ -217,8 +217,8 @@ nonisolated enum EpisodeTrialProgress: Equatable, Sendable {
   case submissionUnconfirmed
   /// `progress` 是下载器报的百分比（0–100），`remainingSeconds` 是 TV 按平均速度估的还要多久（见 `EpisodeTrialDownloadETA`）。
   case downloading(progress: Double?, remainingSeconds: Int? = nil)
-  /// 下载器、整理队列和整理记录都明确查不到这个下载：下载器只列出还在下载的任务，通常是已经下完、等 MoviePilot 整理。
-  /// 一直查不到时按 `EpisodeTrialService.missingDownloadLimit` 结束。
+  /// 有这次的下载记录，但下载列表、整理队列和整理记录里都还没有这一集：通常是已经下完、等 MoviePilot 整理
+  /// （v3.2.10 起 MoviePilot 确认下载器选中了这一集才写下载记录）。一直这样时按 `EpisodeTrialService.missingDownloadLimit` 结束。
   case waitingForOrganization
   case organizing
   /// 整理完成，等媒体服务器把这一集入库。
@@ -362,7 +362,7 @@ nonisolated struct EpisodeTrialStoredEnding: Codable, Equatable, Sendable {
 }
 
 /// 证明服务器上某条订阅是本机为试看建的。只在 TV 核对后删掉了它、读到订阅列表里已经没有它，
-/// 或者发现它在别处被改过时消失。下载和入库的跟踪不在这里，只在内存里。
+/// 或者发现它在别处被改过时消失。订阅结束后的下载跟踪由试看服务接手。
 nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
   /// 创建前生成并保存。同一季重试沿用同一个标记，不论哪次请求落了库，订阅上都是它。
   let marker: String
@@ -376,6 +376,9 @@ nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
   var fingerprints: Set<String> = []
   /// 补搜回执给的批次；回执丢了从订阅行的手动搜索状态补。
   var batchID: String?
+  /// 订阅的添加时间（MoviePilot 建订阅时按自己的时钟写入），第一次读到带着本机标记的订阅时记下。
+  /// 订阅 ID 删掉后会被复用，交接下载跟踪时据此排除更早的下载记录。旧版本解码时忽略这个字段。
+  var subscribedAt: String?
   /// 用户要求取消。发出停止请求之前就保存，App 中途退出后接着收尾。
   var cancelRequested = false
   /// 重试也不会变的失败的说明。记下后不再推进，只停掉搜索、核对后删掉订阅，结局显示这段说明。
@@ -506,21 +509,84 @@ nonisolated struct EpisodeTrialBatch: Decodable {
 }
 
 nonisolated struct EpisodeTrialTransferJob: Decodable {
+  struct Media: Decodable {
+    let media_source: String?
+    let media_id: String?
+    let episode_group: String?
+  }
+
   struct Transfer: Decodable {
+    struct Metadata: Decodable {
+      let begin_season: Int?
+      let end_season: Int?
+      let season_episode: String?
+      let episode_list: [Int]?
+
+      var reportedSeason: Int? {
+        guard let match = season_episode?.prefixMatch(of: /S([0-9]+)(?: |$)/) else { return nil }
+        return Int(match.1)
+      }
+    }
+
     let downloader: String?
     let download_hash: String?
+    let meta: Metadata?
+    /// waiting、running、completed、failed。作业里其他任务结束前，结束的任务仍留在队列里。
+    let state: String?
   }
+
+  let media: Media?
+  let season: Int?
   let tasks: [Transfer]?
+
+  /// 队列里这一集对应的下载器；`among` 不为 nil 时只认其中的下载器。
+  /// 整理失败的任务不算：失败已经写进整理记录，不能当成还在整理，也不该挡住重新试看。
+  /// 整理完成的任务仍算：刚整理好、还没入库时，重新试看会再下一遍。
+  func downloader(for target: EpisodeTrialTarget, hash: String, among downloaders: [String]?) -> String? {
+    guard let media, let identity = MediaIdentifier.resolve(source: media.media_source, mediaId: media.media_id),
+      target.identities.contains(identity), trimmedNonEmpty([media.episode_group]) == target.episodeGroup
+    else { return nil }
+
+    return tasks?.lazy.compactMap { task -> String? in
+      guard task.download_hash == hash, task.state != "failed", let downloader = trimmedNonEmpty([task.downloader]),
+        downloaders?.contains(downloader) ?? true,
+        let meta = task.meta, (meta.begin_season ?? meta.reportedSeason ?? season) == target.season,
+        meta.end_season == nil || meta.end_season == target.season,
+        meta.episode_list?.contains(target.episodeNumber) == true
+      else { return nil }
+      return downloader
+    }.first
+  }
 }
 
-/// 下载和整理历史都能提供媒体身份和季集范围。历史未注明下载器，须结合可信的下载回执或实时任务。
+/// 下载和整理历史都能提供媒体身份和季集范围。两个接口都不返回下载器，下载记录只能按确认记录认定。
 nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   struct Note: Decodable, Sendable {
     struct Subscription: Decodable, Sendable {
       let subscription_id: Int?
     }
 
+    struct Selection: Decodable, Sendable {
+      let version: Int
+      let downloaders: [String: [[Int]]]
+
+      /// 确认记录按下载器累积，本次提交的下载器一定在其中；格式版本不认识时为 nil。多个名字时无法确定本次是哪台。
+      var downloaderNames: [String]? {
+        guard version == 3 else { return nil }
+        return downloaders.keys.compactMap { trimmedNonEmpty([$0]) }.sorted()
+      }
+    }
+
     let subscription_download: Subscription?
+    let confirmed_selection: Selection?
+
+    private enum CodingKeys: String, CodingKey { case subscription_download, confirmed_selection }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      subscription_download = try? values.decodeIfPresent(Subscription.self, forKey: .subscription_download)
+      confirmed_selection = try? values.decodeIfPresent(Selection.self, forKey: .confirmed_selection)
+    }
   }
 
   let id: Int
@@ -531,15 +597,15 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
   let episodes: String?
   let episode_group: String?
   let download_hash: String?
-  let downloader: String?
   let status: Bool?
+  let date: String?
   let note: Note?
   /// 整理后的位置（只有整理记录有）：叫媒体服务器入库时按它找媒体库。
   let location: TransferredFileLocation
 
   private enum CodingKeys: String, CodingKey {
-    case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, downloader, status
-    case note, dest, dest_fileitem, category
+    case id, title, media_source, media_id, seasons, episodes, episode_group, download_hash, status
+    case date, note, dest, dest_fileitem, category
   }
 
   init(from decoder: Decoder) throws {
@@ -552,8 +618,8 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
     episodes = try values.decodeIfPresent(String.self, forKey: .episodes)
     episode_group = try values.decodeIfPresent(String.self, forKey: .episode_group)
     download_hash = try values.decodeIfPresent(String.self, forKey: .download_hash)
-    downloader = try? values.decodeIfPresent(String.self, forKey: .downloader)
     status = try? values.decodeIfPresent(Bool.self, forKey: .status)
+    date = try? values.decodeIfPresent(String.self, forKey: .date)
     note = try? values.decodeIfPresent(Note.self, forKey: .note)
     let fileItem = (try? values.decodeIfPresent(MoviePilotFileItem.self, forKey: .dest_fileitem)) ?? nil
     let dest = (try? values.decodeIfPresent(String.self, forKey: .dest)) ?? nil

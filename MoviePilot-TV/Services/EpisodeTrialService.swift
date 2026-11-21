@@ -4,7 +4,8 @@ import Foundation
 /// 单集试看：在 MoviePilot 上建一条只针对这一集的临时订阅，暂停后写入试看规则并补搜，搜索结束就删掉它。
 ///
 /// 服务器上留着的订阅由持久保存的凭据负责收尾，只管本机建的；别的设备留下的带标记订阅按普通订阅处理。
-/// 订阅删掉后对下载、整理和入库的跟踪只在内存里，App 退出就丢，页面再打开时按服务器现状重新推导。
+/// 订阅删掉后，本机试看的下载回执和查不到下载的起始时间按账号保存，App 重启后打开这一集接着跟踪；
+/// 只有页面打开或后台接着跟踪时才轮询。别的入口提交的下载不保存，页面再打开时按服务器现状重新推导。
 /// 试看结束留下的结局按账号保存，App 重启后仍显示，直到用户再次发起或这一集入库。
 @MainActor
 final class EpisodeTrialService: ObservableObject {
@@ -21,11 +22,10 @@ final class EpisodeTrialService: ObservableObject {
   static let unconfirmedQuery = EpisodeTrialProgress.unavailable("暂时无法确认试看进度")
   static let released = EpisodeTrialProgress.concluded(.modifiedElsewhere)
   static let removedElsewhere = EpisodeTrialProgress.concluded(.removedElsewhere)
-  static let untrackable = EpisodeTrialProgress.concluded(.lostTrack("提交过下载，但找不到下载记录，无法继续跟踪"))
+  static let untrackable = EpisodeTrialProgress.concluded(.lostTrack("没有查到这一集的下载，可以重新试看"))
   static let batchLost = EpisodeTrialProgress.concluded(.lostTrack("MoviePilot 找不到这次试看搜索的记录，可以重新试看"))
-  static let downloadGone = EpisodeTrialProgress.concluded(
-    .lostTrack("下载器、整理队列和整理记录里都找不到这次试看的下载，可以重新试看"))
-  /// MoviePilot 每 5 分钟整理一次下载器里下完的任务；下载器、整理队列和整理记录连续这么久都明确查不到，
+  static let downloadGone = EpisodeTrialProgress.concluded(.lostTrack("一直没有等到这一集开始整理，可以重新试看"))
+  /// MoviePilot 每 5 分钟整理一次下载器里下完的任务；下载列表、整理队列和整理记录连续这么久都明确查不到，
   /// 就当下载任务已经不在了（比如在下载器里删掉了）。留半小时，整理积压或下载器晚标记下完时不至于过早放弃。
   nonisolated static let missingDownloadLimit: TimeInterval = 30 * 60
   /// 叫媒体服务器按位置刷新以后，这么久还没入库就叫每台刷新整个库（可能刷错了地方，比如新的一集整理到了另一个目录）。
@@ -33,10 +33,10 @@ final class EpisodeTrialService: ObservableObject {
   nonisolated static let libraryScanFallbackDelay: TimeInterval = 2 * 60
   /// 有本机试看订阅需要推进或收尾时，按这个间隔对账。
   nonisolated static let driveInterval = Duration.seconds(20)
-  /// 页面显示着这一集时跟得紧：下载中只查下载器，和 MoviePilot Web「正在下载」页一样 3 秒一次；其他步骤 10 秒一次。
+  /// 有单集下载百分比时每 3 秒刷新，其他进行中的状态每 10 秒刷新。
   nonisolated static let downloadPollInterval = Duration.seconds(3)
   nonisolated static let activePollInterval = Duration.seconds(10)
-  /// 没有页面在看时等整理、等入库，等正式订阅，或状态说不清时放慢。
+  /// 后台等待资源包、确认本集进度、等待入库、等待正式订阅或查询不确定时放慢。
   nonisolated static let slowPollInterval = Duration.seconds(60)
   /// 下载历史按时间倒序，最多往后翻这么多页。只用于尽力而为的查找。
   private static let historyPageLimit = 5
@@ -79,20 +79,46 @@ final class EpisodeTrialService: ObservableObject {
   /// 在途的催办请求（见 `nudge`），拆除时取消。
   private var nudges: [UUID: Task<Void, Never>] = [:]
 
-  /// 订阅删掉以后接着看这一集的下载。只在本次运行内存在。
-  private struct Observation {
+  nonisolated private struct DownloadReceipt: Codable {
+    let hash: String
+    let title: String?
+    let date: String?
+    /// 认定的下载器：确认记录只列了一台，或接上已有下载时按实时任务认定。下载和整理历史接口都不返回下载器。
+    var downloader: String?
+    /// 下载记录里确认记录列出的下载器，本次提交的下载器一定在其中；没有确认记录时为 nil。
+    /// 列了多台时说明这个 hash 在多台下载器上受理过，认不出本次是哪台。
+    let confirmedDownloaders: [String]?
+
+    init?(_ record: EpisodeTrialHistoryRecord) {
+      guard let hash = record.download_hash else { return nil }
+      self.hash = hash
+      title = record.title
+      date = record.date
+      let confirmed = record.note?.confirmed_selection?.downloaderNames
+      confirmedDownloaders = confirmed?.isEmpty == false ? confirmed : nil
+      downloader = confirmedDownloaders?.count == 1 ? confirmedDownloaders?.first : nil
+    }
+
+    /// 本次的任务可能在哪些下载器上；nil 表示不知道，每台都可能。
+    var possibleDownloaders: [String]? { downloader.map { [$0] } ?? confirmedDownloaders }
+
+    func mayBeOn(_ name: String) -> Bool { possibleDownloaders?.contains(name) ?? true }
+  }
+
+  /// 本机试看在删订阅后保留下载回执，打开该集时可以恢复跟踪。
+  nonisolated private struct Observation: Codable {
     let target: EpisodeTrialTarget
     /// 本机试看订阅的 ID；为空表示看的是别的入口已经在下的这一集。
     let subscriptionID: Int?
-    /// 本机发起的试看（本机的试看订阅提交的下载，或用户按「试看」时接上的已有下载）：下完催 MoviePilot 整理、
+    /// 本机发起的试看（本机的试看订阅提交的下载，或用户按「试看」时接上的已有下载）：可提前催 MoviePilot 整理、
     /// 整理好叫媒体服务器入库。只是打开面板时接上的别处下载只显示进度，不替用户叫这些。
     var isOwnTrial: Bool
     /// 找不到下载记录时显示的说明。
-    let missingRecord: EpisodeTrialProgress
-    var hash: String?
-    var downloader: String?
-    var historyTitle: String?
-    /// 从什么时候起下载器、整理队列和整理记录都明确查不到这个下载。
+    let missingEnding: EpisodeTrialEnding?
+    /// 本机试看订阅的添加时间（MoviePilot 的时钟）。订阅 ID 会被复用，只认这之后写的下载记录。
+    var notBefore: String? = nil
+    var receipt: DownloadReceipt?
+    /// 从什么时候起下载列表、整理队列和整理记录都明确查不到这一集。
     var missingSince: Date?
     /// 已经叫过 MoviePilot 马上整理：每次观察叫一次。
     var organizationRequested = false
@@ -101,6 +127,10 @@ final class EpisodeTrialService: ObservableObject {
     /// 什么时候叫媒体服务器按位置刷新的，以及叫没叫过刷新整个库：每次观察各叫一次。
     var libraryScanRequestedAt: Date?
     var wholeLibraryScanRequested = false
+
+    private enum CodingKeys: String, CodingKey {
+      case target, subscriptionID, isOwnTrial, missingEnding, notBefore, receipt, missingSince
+    }
   }
 
   /// 试看服务自己判定的失败，说明直接显示在进度上。`isPermanent` 的失败重试也不会变，记下后只做收尾。
@@ -163,6 +193,16 @@ final class EpisodeTrialService: ObservableObject {
       let saved = try? JSONDecoder().decode([EpisodeTrialCredential].self, from: data)
     {
       credentials = saved
+    }
+    // 下载回执单独存，凭据的格式不变：装回旧版本时凭据照样读得出，进行中的试看订阅还有人收尾。
+    if let storageKey, let data = defaults.data(forKey: storageKey + ".downloads") {
+      do {
+        let saved = try JSONDecoder().decode([Observation].self, from: data)
+        observations = Dictionary(saved.map { ($0.target.episodeKey, $0) }, uniquingKeysWith: { _, last in last })
+        followedDownloads = Set(observations.keys)
+      } catch {
+        Logger.warning("[试看] 保存的下载跟踪读不出来，打开这一集时按服务器现状重新推导：\(error.localizedDescription)")
+      }
     }
     if let storageKey, let data = defaults.data(forKey: storageKey + ".rule"),
       let saved = try? JSONDecoder().decode(EpisodeTrialRule.self, from: data)
@@ -303,6 +343,7 @@ final class EpisodeTrialService: ObservableObject {
     func clearStoredStateForTesting() {
       guard let storageKey else { return }
       defaults.removeObject(forKey: storageKey + ".credentials")
+      defaults.removeObject(forKey: storageKey + ".downloads")
       defaults.removeObject(forKey: storageKey + ".rule")
       defaults.removeObject(forKey: storageKey + ".endings")
     }
@@ -366,15 +407,16 @@ final class EpisodeTrialService: ObservableObject {
     isTracked(key) ? pollDelay(for: key, isVisible: false) : nil
   }
 
-  /// 下一次刷新前等多久；nil 表示没有要跟的事。后台跟踪只为入库后发通知，等整理、等入库时放慢。
+  /// 下一次刷新前等多久；nil 表示没有要跟的事。后台等待资源包、确认进度或等待入库时放慢。
   private func pollDelay(for key: String, isVisible: Bool) -> Duration? {
     let current = progress[key]
     guard isTracked(key) else {
       return current == .waitingForSubscription || current == .subscriptionPaused ? Self.slowPollInterval : nil
     }
     switch current {
+    case .downloading(nil, _), .waitingForOrganization, .waitingForLibrary:
+      return isVisible ? Self.activePollInterval : Self.slowPollInterval
     case .downloading: return isVisible ? Self.downloadPollInterval : Self.activePollInterval
-    case .waitingForOrganization, .waitingForLibrary: return isVisible ? Self.activePollInterval : Self.slowPollInterval
     case .submissionUnconfirmed: return Self.slowPollInterval
     default: return Self.activePollInterval
     }
@@ -422,15 +464,7 @@ final class EpisodeTrialService: ObservableObject {
     return result
   }
 
-  /// 发起和刷新只对支持的版本和管理员会话开放。
-  private func availableAPI() -> APIService? {
-    guard let api = managingAPI(),
-      EpisodeTrialAvailability.supports(backendVersion: api.settings?.BACKEND_VERSION)
-    else { return nil }
-    return api
-  }
-
-  /// 收尾已有的试看订阅（推进、取消、删除）只要求管理员：凭据只在支持的版本上建得出来，收尾不该因为版本读不出就停下。
+  /// 核对、取消和清理已有试看只要求管理员，发出新的补搜另查版本。
   private func managingAPI() -> APIService? {
     guard !isTornDown, !Task.isCancelled, let api, storageKey != nil, api.canRequestSuperUserEndpoints else {
       return nil
@@ -440,7 +474,10 @@ final class EpisodeTrialService: ObservableObject {
 
   private func run(_ request: EpisodeTrialRequest, mayCreate: Bool) async -> EpisodeTrialProgress {
     guard !isTornDown, !Task.isCancelled else { return Self.interrupted }
-    guard let api = availableAPI() else {
+    guard let api = managingAPI(),
+      EpisodeTrialAvailability.supports(backendVersion: api.settings?.BACKEND_VERSION)
+        || (!mayCreate && observations[request.key] != nil)
+    else {
       return .unavailable(EpisodeTrialAvailability.requirementMessage)
     }
     let operation = Operation(api: api, session: api.sessionSnapshot())
@@ -478,7 +515,7 @@ final class EpisodeTrialService: ObservableObject {
 
   /// 这一集的试看结束了，记下结局，用户再次发起前一直显示。「可以试看」不算结局。
   private func conclude(_ key: String, _ outcome: EpisodeTrialProgress) -> EpisodeTrialProgress {
-    observations[key] = nil
+    clearObservation(key)
     if let ending = EpisodeTrialEnding(outcome) {
       var updated = endings.filter { $0.key != key }
       updated.append(EpisodeTrialStoredEnding(key: key, ending: ending, endedAt: now()))
@@ -542,17 +579,19 @@ final class EpisodeTrialService: ObservableObject {
     // 只按季号集号对上也算入库：这一步只看媒体服务器上有没有这一集的文件（试看订阅在搜索结束时已经删掉），
     // 可能不是这一集，由单集面板说明。
     if let ready = Self.ready(library) {
-      observations[key] = nil
+      clearObservation(key)
       clearEnding(key)
       return ready
     }
-    if observations[key] != nil {
+    if let observation = observations[key] {
       // 用户按了「试看」，接上的别处下载也算本机发起的了。
       if mayCreate { observations[key]?.isOwnTrial = true }
       let observed = try await observe(key, request: request, operation: operation)
-      if mayCreate, observed == .submissionUnconfirmed || observed == .waitingForOrganization {
+      if mayCreate, observed == .waitingForOrganization
+        || (observed == .submissionUnconfirmed && observation.subscriptionID == nil)
+      {
         // 用户重新发起：下载器、整理队列和整理记录都查不到的旧下载不再挡着，按服务器现状重新推导。
-        observations[key] = nil
+        try setObservation(nil, for: key)
       } else if observations[key] != nil || !mayCreate {
         return observed
       }
@@ -614,30 +653,32 @@ final class EpisodeTrialService: ObservableObject {
   private func existingDownload(
     of request: EpisodeTrialRequest, isOwnTrial: Bool, operation: Operation
   ) async throws -> EpisodeTrialProgress? {
-    let records = try await downloadHistory(operation: operation).filter {
-      $0.download_hash != nil && $0.matches(request)
-    }
-    guard !records.isEmpty else { return nil }
+    let receipts = try await downloadHistory(operation: operation).filter { $0.matches(request) }.compactMap(DownloadReceipt.init)
+    guard !receipts.isEmpty else { return nil }
     let queue = try await operation.api.fetchEpisodeTrialTransferQueue()
     try operation.check()
-    for record in records {
-      guard let hash = record.download_hash else { continue }
-      if let downloader = transferDownloaders(in: queue, hash: hash).first {
-        observe(record, downloader: downloader, request: request, isOwnTrial: isOwnTrial)
+    for receipt in receipts {
+      if let downloader = queuedDownloader(
+        in: queue, target: request.target, receipt: receipt)
+      {
+        observe(receipt, downloader: downloader, request: request, isOwnTrial: isOwnTrial)
         return .organizing
       }
     }
-    guard let active = try await findActiveDownload(in: records, operation: operation) else { return nil }
-    observe(active.record, downloader: active.downloader, request: request, isOwnTrial: isOwnTrial)
+    let downloads = try await lookupDownloads(in: receipts, target: request.target, operation: operation)
+    if let failure = downloads.failure { throw failure }
+    guard let active = downloads.episode else { return nil }
+    observe(active.receipt, downloader: active.downloader, request: request, isOwnTrial: isOwnTrial)
     return downloadProgress(request.key, progress: active.progress)
   }
 
   private func observe(
-    _ record: EpisodeTrialHistoryRecord, downloader: String, request: EpisodeTrialRequest, isOwnTrial: Bool
+    _ receipt: DownloadReceipt, downloader: String, request: EpisodeTrialRequest, isOwnTrial: Bool
   ) {
+    var receipt = receipt
+    receipt.downloader = downloader
     observations[request.key] = Observation(
-      target: request.target, subscriptionID: nil, isOwnTrial: isOwnTrial, missingRecord: .notStarted,
-      hash: record.download_hash, downloader: downloader, historyTitle: trimmedNonEmpty([record.title]))
+      target: request.target, subscriptionID: nil, isOwnTrial: isOwnTrial, missingEnding: nil, receipt: receipt)
   }
 
   private func create(
@@ -730,17 +771,16 @@ final class EpisodeTrialService: ObservableObject {
       guard let id = credential.subscriptionID else { return .unconfirmed }
       current = subscriptions.first { $0.id == id }
     }
-    guard let id = credential.subscriptionID else { return .unconfirmed }
-
     guard let row = current, row.filter == credential.marker, row.username == credential.owner else {
-      try remove(credential)
       // 这个 ID 上是别的订阅：创建回执给的是同季已有的订阅（后端按季去重），或标记在别处被改掉了。放手不碰。
       if let existing = current {
+        try remove(credential)
         return .ended(existing.state == "S" ? .subscriptionPaused : .waitingForSubscription)
       }
       // 订阅已不在了：补搜提交了下载，MoviePilot 就会把这条普通订阅标成完成并删掉；否则是在别处被删掉。
       // 写过规则就可能补搜过，按下载记录接着看；补搜批次说提交过下载、却找不到记录时按无法跟踪结束。
       guard !credential.fingerprints.isEmpty || credential.batchID != nil else {
+        try remove(credential)
         return .ended(conclude(credential.target.episodeKey, Self.removedElsewhere))
       }
       var submitted = false
@@ -749,8 +789,12 @@ final class EpisodeTrialService: ObservableObject {
         submitted = (batch?.submittedCount ?? 0) > 0
         try operation.check()
       }
-      startObservation(credential, missingRecord: submitted ? Self.untrackable : Self.removedElsewhere)
+      try remove(credential, following: submitted ? Self.untrackable : Self.removedElsewhere)
       return .ended(submitted ? .downloading(progress: nil) : .submissionUnconfirmed)
+    }
+    if credential.subscribedAt == nil, let date = trimmedNonEmpty([row.date]) {
+      credential.subscribedAt = date
+      try store(credential)
     }
     guard EpisodeTrialTemporarySubscription.isUntouched(row, by: credential) else {
       try remove(credential)
@@ -759,6 +803,24 @@ final class EpisodeTrialService: ObservableObject {
     if credential.cancelRequested || credential.failure != nil {
       return try await cancel(credential, row: row, operation: operation)
     }
+    if credential.batchID == nil, let batchID = Self.manualBatch(of: row) {
+      credential.batchID = batchID
+      try store(credential)
+    }
+    if credential.batchID == nil {
+      return try await submitSearch(credential, row: row, operation: operation)
+    }
+    return try await checkSearch(credential, operation: operation)
+  }
+
+  private func submitSearch(
+    _ start: EpisodeTrialCredential, row: Subscribe, operation: Operation
+  ) async throws -> Driven {
+    guard let id = start.subscriptionID else { return .unconfirmed }
+    guard EpisodeTrialAvailability.supports(backendVersion: operation.api.settings?.BACKEND_VERSION) else {
+      return .inProgress(.unavailable(EpisodeTrialAvailability.requirementMessage))
+    }
+    var credential = start
     if row.include == EpisodeTrialTemporarySubscription.blockedInclude {
       do {
         try await prepare(&credential, row: row, operation: operation)
@@ -772,27 +834,27 @@ final class EpisodeTrialService: ObservableObject {
       }
     }
 
-    if credential.batchID == nil, let batchID = Self.manualBatch(of: row) {
+    guard EpisodeTrialAvailability.supports(backendVersion: operation.api.settings?.BACKEND_VERSION) else {
+      return .inProgress(.unavailable(EpisodeTrialAvailability.requirementMessage))
+    }
+    // 回执丢了时列表上也看不到手动搜索，就再发一次；MoviePilot 对同一条订阅的搜索会排队，不会并行。
+    let receipt =
+      await attempt("试看补搜") { try await operation.api.searchEpisodeTrialSubscription(id: id) } ?? .unconfirmed
+    try operation.check()
+    switch receipt {
+    case .scheduled(let batchID):
       credential.batchID = batchID
       try store(credential)
+      return try await checkSearch(credential, operation: operation)
+    case .rejected:
+      return try await finish(
+        credential, batch: nil, outcome: .concluded(.searchIncomplete("MoviePilot 拒绝试看补搜")), operation: operation)
+    case .unconfirmed:
+      return .inProgress(.searching)
     }
-    if credential.batchID == nil {
-      // 回执丢了时列表上也看不到手动搜索，就再发一次；MoviePilot 对同一条订阅的搜索会排队，不会并行。
-      let receipt =
-        await attempt("试看补搜") { try await operation.api.searchEpisodeTrialSubscription(id: id) } ?? .unconfirmed
-      try operation.check()
-      switch receipt {
-      case .scheduled(let batchID):
-        credential.batchID = batchID
-        try store(credential)
-      case .rejected:
-        return try await finish(
-          credential, batch: nil, outcome: .concluded(.searchIncomplete("MoviePilot 拒绝试看补搜")),
-          operation: operation)
-      case .unconfirmed:
-        return .inProgress(.searching)
-      }
-    }
+  }
+
+  private func checkSearch(_ credential: EpisodeTrialCredential, operation: Operation) async throws -> Driven {
     guard let batchID = credential.batchID else { return .inProgress(.searching) }
     guard let batch = try await searchBatch(batchID, operation: operation) else {
       // MoviePilot 已经没有这次搜索的记录，等不到它结束：删掉订阅，按下载记录看有没有提交过下载。
@@ -920,16 +982,12 @@ final class EpisodeTrialService: ObservableObject {
       throw Failure(message: "试看订阅暂时没删掉，稍后会再试", isPermanent: false)
     }
     try operation.check()
-    try remove(credential)
+    let submitted = (batch?.submittedCount ?? 0) > 0
+    let missingRecord = submitted ? Self.untrackable : (batchLost ? outcome ?? Self.batchLost : nil)
+    try remove(credential, following: missingRecord)
     NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-    if let batch, batch.submittedCount > 0 {
-      startObservation(credential, missingRecord: Self.untrackable)
-      return .ended(.downloading(progress: nil))
-    }
-    if batchLost {
-      startObservation(credential, missingRecord: outcome ?? Self.batchLost)
-      return .ended(.submissionUnconfirmed)
-    }
+    if submitted { return .ended(.downloading(progress: nil)) }
+    if batchLost { return .ended(.submissionUnconfirmed) }
     return .ended(conclude(key, outcome ?? Self.outcome(of: batch)))
   }
 
@@ -957,7 +1015,6 @@ final class EpisodeTrialService: ObservableObject {
 
   /// 一季只留一条凭据。没确认的凭据按条数淘汰最早的。
   private func store(_ credential: EpisodeTrialCredential) throws {
-    guard !isTornDown, let storageKey else { throw CancellationError() }
     var updated = credentials.filter {
       $0.marker != credential.marker && $0.target.seasonKey != credential.target.seasonKey
     }
@@ -967,18 +1024,33 @@ final class EpisodeTrialService: ObservableObject {
       let dropped = Set(unconfirmed.prefix(unconfirmed.count - Self.unconfirmedLimit).map(\.marker))
       updated.removeAll { dropped.contains($0.marker) }
     }
-    try persist(updated, storageKey: storageKey)
+    try persist(updated)
   }
 
-  private func remove(_ credential: EpisodeTrialCredential) throws {
+  private func remove(_ credential: EpisodeTrialCredential, following missingRecord: EpisodeTrialProgress? = nil) throws {
+    let remaining = credentials.filter { $0.marker != credential.marker }
+    var next = observations
+    if let missingRecord {
+      next[credential.target.episodeKey] = Observation(
+        target: credential.target, subscriptionID: credential.subscriptionID, isOwnTrial: true,
+        missingEnding: EpisodeTrialEnding(missingRecord), notBefore: credential.subscribedAt)
+    }
+    try persist(remaining, observations: missingRecord == nil ? nil : next)
+  }
+
+  /// 保存凭据；给了 `next` 时同时保存本机试看的下载回执（删除本机凭据时据此交接下载跟踪）。
+  /// 先写下载回执再写凭据：两次写入之间中断时最多两边都在，凭据下次对账会再交接一次，不会丢掉跟踪。
+  private func persist(_ updated: [EpisodeTrialCredential], observations next: [String: Observation]? = nil) throws {
     guard !isTornDown, let storageKey else { throw CancellationError() }
-    try persist(credentials.filter { $0.marker != credential.marker }, storageKey: storageKey)
-  }
-
-  /// 凭据一有已确认的订阅（新建、认领或回执给了 ID），后台对账就接手推进和收尾。
-  private func persist(_ updated: [EpisodeTrialCredential], storageKey: String) throws {
-    defaults.set(try JSONEncoder().encode(updated), forKey: storageKey + ".credentials")
-    credentials = updated
+    let encoder = JSONEncoder()
+    let downloads = try next.map { try encoder.encode(Array($0.values.filter { $0.subscriptionID != nil })) }
+    let saved = try encoder.encode(updated)
+    if let next, let downloads {
+      defaults.set(downloads, forKey: storageKey + ".downloads")
+      observations = next
+    }
+    defaults.set(saved, forKey: storageKey + ".credentials")
+    if credentials != updated { credentials = updated }
     scheduleDrive()
   }
 
@@ -1003,96 +1075,107 @@ final class EpisodeTrialService: ObservableObject {
 
   // MARK: - 订阅删掉以后看下载
 
-  private func startObservation(_ credential: EpisodeTrialCredential, missingRecord: EpisodeTrialProgress) {
-    observations[credential.target.episodeKey] = Observation(
-      target: credential.target, subscriptionID: credential.subscriptionID, isOwnTrial: true,
-      missingRecord: missingRecord)
+  private func setObservation(_ observation: Observation?, for key: String) throws {
+    if observation?.subscriptionID != nil || observations[key]?.subscriptionID != nil {
+      var next = observations
+      next[key] = observation
+      try persist(credentials, observations: next)
+    } else {
+      observations[key] = observation
+    }
   }
 
-  /// 按下载记录找到这次试看提交的下载，再看下载器和整理。找不到下载记录就结束观察；下载、整理队列和整理记录
-  /// 都明确查不到时（下载器只列出还在下载的任务，下完到开始整理之间会这样）显示等待整理，照常留着，放慢再看；
-  /// 有一处没查成时说不清，显示没确认。
-  ///
-  /// 本机发起的试看（见 `Observation.isOwnTrial`）看到下完了，叫 MoviePilot 马上整理；看到整理好了，叫媒体服务器马上入库，
-  /// 过一阵还没入库再叫它刷新整个库（要有 `request` 才知道是哪部剧，后台对账没有时等下次刷新再叫）。
-  /// 每件事每次观察只叫一次，失败只记日志，照常等它们自己来。
+  private func clearObservation(_ key: String) {
+    do { try setObservation(nil, for: key) }
+    catch { Logger.warning("[试看] 未能清除下载跟踪：\(error.localizedDescription)") }
+  }
+
+  private func setMissingSince(_ since: Date?, for key: String) throws {
+    guard var observation = observations[key], observation.missingSince != since else { return }
+    observation.missingSince = since
+    try setObservation(observation, for: key)
+  }
+
+  /// 用本次下载记录关联任务，再按下载列表、整理记录和整理队列推导这一集到了哪一步。
+  /// 下载列表、整理队列和整理记录都查不到时按等待整理显示，本机发起的试看催一次整理；有一处没查成时显示没确认。
+  /// 这一集整理成功后按路径催入库，仍未入库时回退到全库刷新。
   private func observe(
     _ key: String, request: EpisodeTrialRequest?, operation: Operation
   ) async throws -> EpisodeTrialProgress {
     guard var observation = observations[key] else { return .notStarted }
-    if observation.hash == nil {
-      let record = try await downloadHistory(operation: operation).first {
-        $0.download_hash != nil && $0.matches(observation.target)
-          && (observation.subscriptionID == nil || $0.subscriptionID == observation.subscriptionID)
+    let receipt: DownloadReceipt
+    if let saved = observation.receipt {
+      receipt = saved
+    } else {
+      let notBefore = observation.notBefore
+      let record = try await downloadHistory(operation: operation).first { record in
+        record.download_hash != nil && record.matches(observation.target)
+          && (observation.subscriptionID == nil || record.subscriptionID == observation.subscriptionID)
+          // 同一时钟、同一格式（年-月-日 时:分:秒），按文字比较即可；同秒写入允许命中。
+          && notBefore.map { since in record.date.map { $0 >= since } == true } ?? true
       }
-      guard let record else { return conclude(key, observation.missingRecord) }
-      observation.hash = record.download_hash
-      observation.downloader = record.downloader
-      observation.historyTitle = trimmedNonEmpty([record.title])
-      observations[key] = observation
-    }
-    guard let hash = observation.hash else { return conclude(key, observation.missingRecord) }
-
-    // 下载器只列出还没下完的任务，下完才会整理：还在里面就是还在下载，不用再查整理记录和整理队列。
-    // 下载中页面 3 秒刷新一次，每次只发这一个请求。下载器没查成时先看整理那边，也没有才算这次没查成。
-    var downloaderFailure: Error?
-    if let downloader = observation.downloader {
-      do {
-        let tasks = try await operation.api.fetchDownloading(clientName: downloader)
-        try operation.check()
-        if let task = tasks.first(where: { $0.hash == hash }) {
-          observations[key]?.missingSince = nil
-          return downloadProgress(key, progress: task.progress.flatMap { $0.isFinite ? $0 : nil })
-        }
-      } catch {
-        if error is CancellationError { throw error }
-        try operation.check()
-        downloaderFailure = error
+      guard let record, let accepted = DownloadReceipt(record) else {
+        return conclude(key, observation.missingEnding?.progress ?? .notStarted)
       }
+      receipt = accepted
+      observation.receipt = receipt
+      try setObservation(observation, for: key)
+    }
+    let isLocalReceipt = observation.subscriptionID != nil
+
+    let downloads: DownloadLookup
+    do {
+      downloads = try await lookupDownloads(
+        in: [receipt], target: observation.target, downloaders: receipt.possibleDownloaders, operation: operation)
+    } catch {
+      if error is CancellationError { throw error }
+      try operation.check()
+      downloads = DownloadLookup(failure: error)
+    }
+    // 认不出本次是哪台下载器（没有确认记录，或列了多台）时不按在下的任务推断：
+    // 其中一台可能已经下完，在下的那台只选中了别的集；下载器断开时还会把空列表当成没有任务。
+    let owner = receipt.downloader
+    if let episode = downloads.episode, !isLocalReceipt || owner != nil {
+      try setMissingSince(nil, for: key)
+      return downloadProgress(key, progress: episode.progress)
     }
 
-    let transfer = try await transferRecord(hash: hash, observation: observation, operation: operation)
-    if let record = transfer.record, let transferred = record.status {
-      guard transferred else { return conclude(key, .concluded(.organizationFailed)) }
-      observations[key]?.missingSince = nil
+    let transfer = try await transferRecord(receipt: receipt, target: observation.target, operation: operation)
+    if let record = transfer.record, record.status == true {
+      try setMissingSince(nil, for: key)
       if let request { requestLibraryScan(key: key, context: request.playbackContext, file: record.location) }
       return .waitingForLibrary
     }
-    // 三处都成功查过、都没有，才算明确查不到；有一处没查成就不计时。
-    var confirmedMissing = transfer.isComplete
-    if let queue = await attempt("读取整理队列", { try await operation.api.fetchEpisodeTrialTransferQueue() }) {
-      try operation.check()
-      if !transferDownloaders(in: queue, hash: hash).isEmpty {
-        observations[key]?.missingSince = nil
-        return .organizing
-      }
-    } else {
-      confirmedMissing = false
-    }
+
+    let queue = await attempt("读取整理队列") { try await operation.api.fetchEpisodeTrialTransferQueue() }
     try operation.check()
-    if let downloaderFailure { throw downloaderFailure }
-    if observation.downloader == nil {
-      if let records = await attempt("读取下载记录", { try await self.downloadHistory(operation: operation) }) {
-        try operation.check()
-        if let active = try await findActiveDownload(
-          in: records.filter { $0.download_hash == hash }, operation: operation)
-        {
-          observations[key]?.downloader = active.downloader
-          observations[key]?.missingSince = nil
-          return downloadProgress(key, progress: active.progress)
-        }
-      } else {
-        confirmedMissing = false
-      }
+    if let queue, queuedDownloader(in: queue, target: observation.target, receipt: receipt) != nil {
+      try setMissingSince(nil, for: key)
+      return .organizing
     }
-    try operation.check()
-    guard confirmedMissing else { return .submissionUnconfirmed }
-    let since = observation.missingSince ?? now()
-    observations[key]?.missingSince = since
-    guard now().timeIntervalSince(since) < Self.missingDownloadLimit else {
+    if isLocalReceipt, downloads.hasActiveTask {
+      try setMissingSince(nil, for: key)
+      // 认不出是哪台下载器时，在下的同 hash 任务可能只选中了别的集。
+      // 认得出时，这一集先下完也要等整个任务下完才整理，整包百分比不用于这一集。
+      return owner == nil ? .submissionUnconfirmed : .downloading(progress: nil)
+    }
+    if transfer.record?.status == false { return conclude(key, .concluded(.organizationFailed)) }
+    if let failure = downloads.failure {
+      try setMissingSince(nil, for: key)
+      throw failure
+    }
+
+    guard transfer.isComplete, queue != nil else {
+      try setMissingSince(nil, for: key)
+      return .submissionUnconfirmed
+    }
+    let checkedAt = now()
+    let since = observation.missingSince ?? checkedAt
+    guard checkedAt.timeIntervalSince(since) < Self.missingDownloadLimit else {
       return conclude(key, Self.downloadGone)
     }
-    requestOrganization(key: key)
+    try setMissingSince(since, for: key)
+    if !downloads.hasActiveTask { requestOrganization(key: key) }
     return .waitingForOrganization
   }
 
@@ -1108,7 +1191,7 @@ final class EpisodeTrialService: ObservableObject {
     return .downloading(progress: progress, remainingSeconds: eta.remainingSeconds(progress: progress, now: now))
   }
 
-  /// 下载器里看不到这次下载了，多半是下完了：叫 MoviePilot 马上整理，不等它每 5 分钟一次的定时整理。
+  /// 下载不在实时列表时可尝试提前执行定时整理，下载可能已在两次查询之间完成。
   /// 会顺带整理下载器里其他下完还没整理的任务（本来 5 分钟内也会整理）。
   private func requestOrganization(key: String) {
     guard let observation = observations[key], observation.isOwnTrial, !observation.organizationRequested else { return }
@@ -1168,10 +1251,10 @@ final class EpisodeTrialService: ObservableObject {
   /// 整理历史只能按标题模糊查询。先用 MoviePilot 下载时识别的标题，再用页面标题，都查不到时看最新一页，
   /// 按下载 hash 认定是哪一条。查不到不代表没整理；`isComplete` 表示这几次查询都成功了。
   private func transferRecord(
-    hash: String, observation: Observation, operation: Operation
+    receipt: DownloadReceipt, target: EpisodeTrialTarget, operation: Operation
   ) async throws -> (record: EpisodeTrialHistoryRecord?, isComplete: Bool) {
     var titles: [String?] = []
-    for title in [observation.historyTitle, observation.target.title] {
+    for title in [receipt.title, target.title] {
       if let title = trimmedNonEmpty([title]), !titles.contains(title) { titles.append(title) }
     }
     titles.append(nil)
@@ -1182,7 +1265,12 @@ final class EpisodeTrialService: ObservableObject {
       }
       try operation.check()
       if history == nil { isComplete = false }
-      if let record = history?.first(where: { $0.download_hash == hash && $0.matches(observation.target) }) {
+      if let record = history?.first(where: { record in
+        guard record.download_hash == receipt.hash, record.matches(target) else { return false }
+        // 下载和整理历史使用同一台 MoviePilot 的日期；同秒完成允许命中。
+        guard let submittedAt = receipt.date else { return true }
+        return record.date.map { $0 >= submittedAt } ?? false
+      }) {
         return (record, true)
       }
     }
@@ -1190,54 +1278,80 @@ final class EpisodeTrialService: ObservableObject {
   }
 
   private struct ActiveDownload {
-    let record: EpisodeTrialHistoryRecord
+    let receipt: DownloadReceipt
     let downloader: String
     let progress: Double?
   }
 
-  /// 只查询可能持有这些记录的下载器。个别下载器连不上时，只要其他下载器已找到任务就继续；
-  /// 都没找到时不能断定没有在下载，抛错交给调用方按“暂时无法确认”处理。
-  private func findActiveDownload(
-    in history: [EpisodeTrialHistoryRecord], operation: Operation
-  ) async throws -> ActiveDownload? {
-    guard !history.isEmpty else { return nil }
-    let clients = try await operation.api.fetchDownloadClients()
-    try operation.check()
-    var unreachable = false
-    for client in clients where client.enabled?.value != false {
-      let records = history.filter { $0.downloader == nil || $0.downloader == client.name }
-      guard !records.isEmpty else { continue }
-      let downloads: [DownloadingInfo]
+  private struct DownloadLookup {
+    var episode: ActiveDownload?
+    /// 有下载器在下同一 hash（不一定选中了这一集）。
+    var hasActiveTask = false
+    var failure: Error?
+  }
+
+  /// 只查询可能持有回执的下载器（`downloaders` 为 nil 时查每台启用的下载器）。
+  /// 单集下载可直接展示；其他同 hash 任务仍须按回执判断。
+  private func lookupDownloads(
+    in receipts: [DownloadReceipt], target: EpisodeTrialTarget, downloaders known: [String]? = nil,
+    operation: Operation
+  ) async throws -> DownloadLookup {
+    let downloaders: [String]
+    if let known {
+      downloaders = known
+    } else {
+      let clients = try await operation.api.fetchDownloadClients()
+      try operation.check()
+      downloaders = clients.filter { $0.enabled?.value != false }.map(\.name)
+    }
+
+    var result = DownloadLookup()
+    for name in downloaders {
+      let candidates = receipts.filter { $0.mayBeOn(name) }
+      guard !candidates.isEmpty else { continue }
+      let tasks: [DownloadingInfo]
       do {
-        downloads = try await operation.api.fetchDownloading(clientName: client.name)
+        tasks = try await operation.api.fetchDownloading(clientName: name)
       } catch {
+        if error is CancellationError { throw error }
         try operation.check()
-        unreachable = true
+        result.failure = known?.count == 1 ? error : Failure(
+          message: "有下载器暂时无法连接，无法确认这一集是否正在下载", isPermanent: false)
         continue
       }
       try operation.check()
-      for record in records {
-        if let download = downloads.first(where: { $0.hash == record.download_hash }) {
-          let progress = download.progress.flatMap { $0.isFinite ? $0 : nil }
-          return ActiveDownload(record: record, downloader: client.name, progress: progress)
+      for receipt in candidates {
+        guard let task = tasks.first(where: { $0.hash == receipt.hash }) else { continue }
+        result.hasActiveTask = true
+        if isSingleEpisodeDownload(task, target: target) {
+          let progress = task.progress.flatMap { $0.isFinite ? $0 : nil }
+          // 找到了就不再管其他下载器的失败：这一集确实在下。
+          return DownloadLookup(
+            episode: ActiveDownload(receipt: receipt, downloader: name, progress: progress), hasActiveTask: true)
         }
       }
     }
-    if unreachable {
-      throw Failure(message: "有下载器暂时无法连接，无法确认这一集是否正在下载", isPermanent: false)
-    }
-    return nil
+    return result
   }
 
-  private func transferDownloaders(in queue: [EpisodeTrialTransferJob], hash: String) -> Set<String> {
-    Set(queue.flatMap { $0.tasks ?? [] }.filter { $0.download_hash == hash }.compactMap(\.downloader))
+  /// 实时列表的季集文字来自种子名称。单集资源可结合历史确认，季包标题无法证明实际选中了哪些集。
+  private func isSingleEpisodeDownload(_ task: DownloadingInfo, target: EpisodeTrialTarget) -> Bool {
+    guard let match = task.season_episode?.wholeMatch(of: /S([0-9]+) ?E([0-9]+)/) else { return false }
+    return Int(match.1) == target.season && Int(match.2) == target.episodeNumber
+  }
+
+  private func queuedDownloader(
+    in queue: [EpisodeTrialTransferJob], target: EpisodeTrialTarget, receipt: DownloadReceipt
+  ) -> String? {
+    queue.lazy.compactMap {
+      $0.downloader(for: target, hash: receipt.hash, among: receipt.possibleDownloaders)
+    }.first
   }
 
   /// 媒体库里这一集可能刚有或刚没的时候才重读媒体服务器；搜索、下载中这一集进不了媒体库，按缓存查就够了。
   private static func libraryMayChange(_ progress: EpisodeTrialProgress?) -> Bool {
     switch progress {
-    case nil, .notStarted, .waitingForOrganization, .organizing, .concluded(.organizationFailed), .waitingForLibrary,
-      .ready, .submissionUnconfirmed:
+    case nil, .notStarted, .waitingForOrganization, .organizing, .concluded(.organizationFailed), .waitingForLibrary, .ready:
       true
     default: false
     }

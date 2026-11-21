@@ -1006,7 +1006,7 @@ enum TVAPIContractCatalog {
 
   private static var transferOperations: [TVAPIOperation] {
     [
-      // 单集试看按下载历史和整理队列跟踪这一集；运行时从 v3.2.6 起才调用，登记方式同试看的搜索批次。
+      // 发起单集试看要求 v3.2.10。下载历史和整理队列用于跟踪目标集，登记方式同搜索批次。
       TVAPIOperationBuilder.get(
         "/history/download",
         query: [
@@ -1016,7 +1016,7 @@ enum TVAPIContractCatalog {
         coverage: mutationUnit
       ),
       TVAPIOperationBuilder.get("/transfer/queue", coverage: mutationUnit),
-      // 本机发起的试看下完后叫 MoviePilot 马上整理（`jobid=transfer`，同 Web 服务页的「执行」）；运行时从 v3.2.6 起才调用。
+      // 发起试看要求 v3.2.10。本机试看可催 MoviePilot 整理（`jobid=transfer`，同 Web 服务页的「执行」）。
       TVAPIOperationBuilder.get(
         "/system/runscheduler",
         query: [TVAPIParam.query("jobid", alwaysSent: true)],
@@ -1189,7 +1189,7 @@ enum TVAPIContractCatalog {
         pathParams: [TVAPIParam.path("subscribe_id", type: .integer)],
         coverage: sideEffect
       ),
-      // 单集试看跟踪搜索批次。发起受 EpisodeTrialAvailability（>= v3.2.6）限制，但收尾（推进、取消、删除已有
+      // 单集试看跟踪搜索批次。发起受 EpisodeTrialAvailability（>= v3.2.10）限制，但收尾（推进、取消、删除已有
       // 试看）走 managingAPI()，只要求管理员、不查版本：版本读不出或后端降级时照样调用。所以两个批次端点都对
       // 所有版本登记，按试看门禁登记会漏掉收尾路径。
       TVAPIOperationBuilder.get(
