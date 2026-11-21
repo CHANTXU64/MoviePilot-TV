@@ -384,6 +384,75 @@ final class HomeContinueWatchingRowTests: XCTestCase {
       "多读了别的接口：\(added.map(\.path))")
   }
 
+  /// 退出播放后重读：服务器把刚播的那条排到第一位，页面还在显示时不照搬，卡留在原位、只换进度。
+  /// 照搬会让聚焦的卡从第 3 位跳到第 1 位、悬在屏幕外。
+  func testRefreshWhileShownKeepsTheShownOrder() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("a", 10), ("b", 20), ("c", 30)]))
+    await viewModel.loadData()
+    XCTAssertEqual(viewModel.continueWatching.map(\.item_id?.value), ["a", "b", "c"])
+
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("c", 70), ("a", 10), ("b", 20)]))
+    await viewModel.refreshContinueWatching()
+
+    XCTAssertEqual(viewModel.continueWatching.map(\.item_id?.value), ["a", "b", "c"], "页面显示期间不挪动已显示的卡")
+    XCTAssertEqual(viewModel.continueWatching.last?.percent, 70, "进度要换成新的")
+  }
+
+  /// 页面显示期间：看完的那条移除，新出现的接在末尾，其余不动。
+  func testRefreshWhileShownDropsFinishedAndAppendsNewItems() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("a", 10), ("b", 20), ("c", 30)]))
+    await viewModel.loadData()
+
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("d", 5), ("c", 30), ("a", 10)]))
+    await viewModel.refreshContinueWatching()
+
+    XCTAssertEqual(viewModel.continueWatching.map(\.item_id?.value), ["a", "c", "d"])
+  }
+
+  /// 再次进入页面（和手动重试一样走 `refreshData`）时按服务器顺序排：刚播的那条到第一位。
+  func testReenteringThePageAppliesTheServerOrder() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("a", 10), ("b", 20), ("c", 30)]))
+    await viewModel.loadData()
+    HomeContinueWatchingURLProtocol.stub.setPlayingBody(
+      server: "emby", Self.itemsBody([("c", 70), ("a", 10), ("b", 20)]))
+    await viewModel.refreshContinueWatching()
+    XCTAssertEqual(viewModel.continueWatching.map(\.item_id?.value), ["a", "b", "c"])
+
+    await viewModel.loadData()
+
+    XCTAssertEqual(viewModel.continueWatching.map(\.item_id?.value), ["c", "a", "b"])
+  }
+
+  /// 聚焦的卡被刷掉时交给原位置后面那张，后面没有就交给前面那张；卡还在或没有焦点时不换。
+  func testFocusMovesToTheNeighborOfARemovedCard() {
+    XCTAssertEqual(HomeRowFocus.neighbor(of: "b", from: ["a", "b", "c"], in: ["a", "c"]), "c")
+    XCTAssertEqual(HomeRowFocus.neighbor(of: "c", from: ["a", "b", "c"], in: ["a", "b"]), "b")
+    XCTAssertEqual(
+      HomeRowFocus.neighbor(of: "b", from: ["a", "b", "c", "d"], in: ["a", "d"]), "d", "跳过同时被刷掉的卡")
+    XCTAssertEqual(HomeRowFocus.neighbor(of: "c", from: ["a", "b", "c"], in: ["a", "b", "d"]), "b", "新接在末尾的不算相邻")
+    XCTAssertNil(HomeRowFocus.neighbor(of: "a", from: ["a"], in: []))
+    XCTAssertNil(HomeRowFocus.neighbor(of: "b", from: ["a", "b"], in: ["b", "a"]), "卡还在，不换焦点")
+    XCTAssertNil(HomeRowFocus.neighbor(of: nil, from: ["a", "b"], in: ["b"]), "焦点不在这一行，不抢焦点")
+  }
+
+  private static func itemsBody(_ items: [(id: String, percent: Int)]) -> String {
+    let entries = items.map {
+      #"{"id":"\#($0.id)","item_id":"\#($0.id)","title":"剧 \#($0.id)","type":"电视剧","subtitle":"S1:1 - 集名","percent":\#($0.percent),"server_type":"emby"}"#
+    }
+    return "[" + entries.joined(separator: ",") + "]"
+  }
+
   /// 服务器读不到条目身份时退回按标题、年份识别（电影的四位数字副标题仍是年份）。
   func testDetailIdentityFallsBackToTitleWhenServerUnreadable() async throws {
     let service = makeService()

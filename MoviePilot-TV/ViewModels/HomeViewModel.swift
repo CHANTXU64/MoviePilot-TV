@@ -135,16 +135,16 @@ class HomeViewModel: ObservableObject {
         await self.loadLatestMedia(followsServerChangesInContinueWatching: !includeContinueWatching)
       }
       if includeContinueWatching {
-        group.addTask { await self.loadContinueWatching() }
+        group.addTask { await self.loadContinueWatching(keepsShownOrder: false) }
       }
       group.addTask { await self.refreshSubscriptions(forceRefresh: true) }
     }
   }
 
   /// 只重读「继续观看」：播放的停止上报和进度写回发完后调用（见 `PlaybackCoordinator.watchStateUpdates`）。
-  /// 不碰「最近添加」和订阅，它们由轮询负责。
+  /// 不碰「最近添加」和订阅，它们由轮询负责。这时页面还在显示，条目保持已显示的顺序（见 `keepingShownOrder`）。
   func refreshContinueWatching() async {
-    await loadContinueWatching()
+    await loadContinueWatching(keepsShownOrder: true)
   }
 
   /// 「最近添加」：现拉媒体服务器配置（写回会话缓存，详情页和播放沿用同一份），
@@ -196,13 +196,15 @@ class HomeViewModel: ObservableObject {
     if followsServerChangesInContinueWatching, hasReadContinueWatching,
       continueWatchingServers != merged.servers
     {
-      await loadContinueWatching()
+      await loadContinueWatching(keepsShownOrder: true)
     }
   }
 
   /// 「继续观看」：自己读配置和条目、自己发布，不等「最近添加」。快照、失败标记和选择规则与它相同（共用 `mergedRow`）。
   /// 整次读取经 `continueWatchingReads` 的取代链：并发的几个入口都拿最新那次的结果，旧的不会覆盖新的。
-  private func loadContinueWatching() async {
+  /// `keepsShownOrder`：页面还在显示时的重读（退出播放、回到前台、服务器配置变了）为 true，按已显示的顺序合并；
+  /// 进入页面和手动重试为 false，按服务器的顺序（最近播放的在前）。
+  private func loadContinueWatching(keepsShownOrder: Bool) async {
     guard apiService.canRequestSuperUserEndpoints else {
       clearContinueWatching()
       return
@@ -232,14 +234,32 @@ class HomeViewModel: ObservableObject {
     guard apiService.isSessionUnchanged(from: session) else { return }
     if !read.items.anyCancelled { continueWatchingLoadFailed = read.items.anyFailed }
 
+    var items = read.items
+    if keepsShownOrder {
+      for (server, fresh) in items.byServer {
+        items.byServer[server] = Self.keepingShownOrder(fresh, shown: continueWatchingByServer[server] ?? [])
+      }
+    }
     let merged = Self.mergedRow(
-      read.items, enabledServers: read.enabledServers, previous: continueWatchingByServer,
+      items, enabledServers: read.enabledServers, previous: continueWatchingByServer,
       selected: selectedContinueWatchingServer)
     continueWatchingByServer = merged.byServer
     if continueWatchingServers != merged.servers { continueWatchingServers = merged.servers }
     hasReadContinueWatching = true
     selectedContinueWatchingServer = merged.selected
     applyContinueWatchingSelection()
+  }
+
+  /// 页面显示期间不挪动已显示的卡：服务器按最后播放时间排序，刚播的那条会排到第一位，照搬会让聚焦的卡
+  /// 从第 5 位跳到第 1 位、悬在屏幕外（焦点没变，横向行不会跟着滚）。HIG：不要在用户没操作时改变焦点。
+  /// 还在的条目留在原位、换成新数据（进度）；没了的移除；新出现的接在末尾。下次进入页面再按服务器顺序排。
+  nonisolated static func keepingShownOrder(
+    _ fresh: [MediaServerPlayItem], shown: [MediaServerPlayItem]
+  ) -> [MediaServerPlayItem] {
+    let freshByID = Dictionary(fresh.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let kept = shown.compactMap { freshByID[$0.id] }
+    let keptIDs = Set(kept.map(\.id))
+    return kept + fresh.filter { !keptIDs.contains($0.id) }
   }
 
   /// 「继续观看」的一次完整读取：服务器列表和条目属于同一次读取，不能分开管理——

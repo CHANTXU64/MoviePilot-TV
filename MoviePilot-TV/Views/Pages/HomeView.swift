@@ -189,6 +189,20 @@ struct HomeView: View {
   }
 }
 
+/// 媒体库页横向行里，聚焦的卡被刷掉时焦点交给谁。
+enum HomeRowFocus {
+  /// `removed` 不在新列表里时，按旧列表找它后面第一张还在的卡，后面没有就找前面最近的一张。
+  /// `removed` 为 nil 或还在新列表里时返回 nil（不用换）。
+  static func neighbor(of removed: String?, from oldIDs: [String], in newIDs: [String]) -> String? {
+    guard let removed, !newIDs.contains(removed), let index = oldIDs.firstIndex(of: removed) else {
+      return nil
+    }
+    let remaining = Set(newIDs)
+    return oldIDs[(index + 1)...].first(where: remaining.contains)
+      ?? oldIDs[..<index].last(where: remaining.contains)
+  }
+}
+
 enum HomeSubscribeFocusID {
   static func value(for id: Int?) -> String? {
     id.map(String.init)
@@ -356,6 +370,17 @@ private struct MediaSectionView: View {
       else { return }
       playbackFocusHandoff.target = nil
       beginFocusRestore(itemID)
+    }
+    // 聚焦（或正等着还原焦点）的卡被刷掉了，比如刚看完从「继续观看」里消失：交给它原位置的相邻卡，
+    // 不让系统随便挑一个（HIG：聚焦项消失时把焦点移到一步之内的剩余项）。
+    // 两个都要换：播放器收起的转场会吞掉立即写入，等着还原的目标也换成相邻卡，转场后由 `PresentationReadyAction` 补写。
+    .onChange(of: items.map(\.id)) { oldIDs, newIDs in
+      if let pending = pendingFocusRestore, !newIDs.contains(pending) {
+        pendingFocusRestore = HomeRowFocus.neighbor(of: pending, from: oldIDs, in: newIDs)
+      }
+      if let neighbor = HomeRowFocus.neighbor(of: focusedItemId, from: oldIDs, in: newIDs) {
+        focusedItemId = neighbor
+      }
     }
     .background(PresentationReadyAction(
       isEnabled: pendingFocusRestore != nil,
