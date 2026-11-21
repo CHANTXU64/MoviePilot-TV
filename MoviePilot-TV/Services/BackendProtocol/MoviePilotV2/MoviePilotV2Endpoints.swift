@@ -76,6 +76,7 @@ nonisolated struct MoviePilotV2Endpoints: BackendEndpointBuilding {
 
   /// v2 的详情接口在媒体键识别失败后靠 `title`/`year` 走名称识别，Web 详情也一直带这两个参数。
   var includesDetailTitleFallback: Bool { true }
+  var isResolved: Bool { true }
 
   /// v2 的 PUT /subscribe/ 会整条替换，必须提交完整快照。
   func subscriptionUpdateBody(original: Subscribe, draft: Subscribe) throws -> Data {

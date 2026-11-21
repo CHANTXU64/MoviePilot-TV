@@ -174,6 +174,8 @@ extension SystemSessionBehaviorTests {
       currentUser: user
     )
     service.setStoredCredentialsForTesting(username: "account-a", password: "password")
+    // 正常已加载设置的会话；未解析版本的保存路径由兼容测试单独覆盖。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     do {
       _ = try await service.saveSubscription(

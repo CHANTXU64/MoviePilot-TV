@@ -669,6 +669,9 @@ class SubscribeSheetViewModel: ObservableObject {
         errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
       }
       return true
+    } catch APIError.backendVersionUnavailable {
+      errorMessage = "正在读取后端版本，请稍后重试。"
+      return false
     } catch is CancellationError {
       return false
     } catch {

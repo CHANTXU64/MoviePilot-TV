@@ -1576,7 +1576,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(body["keyword"] as? String, "新关键词")
   }
 
-  func testUnknownBackendVersionSubscriptionUpdateSendsFullSnapshot() async throws {
+  func testUnknownBackendVersionRejectsSubscriptionUpdate() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
@@ -1587,28 +1587,27 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
     service.tokenForTesting = "compat-token"
-    // 版本号损坏时无法确认后端是 v2 还是 v3；写回必须按全量快照，避免误删 v2 配置。
+    // 版本号损坏时无法确认后端是 v2 还是 v3；全量替换和稀疏变更都可能改坏数据，必须拒绝。
     service.settings = GlobalSettings(BACKEND_VERSION: "未知版本")
 
     let original = try JSONDecoder().decode(
       Subscribe.self,
       from:
-        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv","media_category":"日番","media_category_id":"cat-1"}"#
+        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv"}"#
         .data(using: .utf8)!)
     var draft = original
     draft.keyword = "新关键词"
-    _ = try await service.saveSubscription(original: original, draft: draft)
-
-    let captured = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
-    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
-    XCTAssertEqual(body["sites"] as? [Int], [1, 2])
-    XCTAssertEqual(body["save_path"] as? String, "/media/tv")
-    // v3.2.9 收到只有路径的载荷会把稳定分类 ID 清空；版本读不出时必须把 ID 一起带上。
-    XCTAssertEqual(body["media_category"] as? String, "日番")
-    XCTAssertEqual(body["media_category_id"] as? String, "cat-1")
+    do {
+      _ = try await service.saveSubscription(original: original, draft: draft)
+      XCTFail("Expected backendVersionUnavailable")
+    } catch APIError.backendVersionUnavailable {
+      // Expected.
+    }
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasSuffix("/subscribe") })
   }
 
-  func testColdStartWithoutLoadedSettingsStillSendsFullSnapshot() async throws {
+  func testColdStartWithoutLoadedSettingsRejectsSubscriptionUpdate() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
@@ -1619,7 +1618,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
     service.tokenForTesting = "compat-token"
-    // 模拟 /system/global 失败或超时：会话已恢复、主界面已开放，但版本一直读不到。
+    // 模拟 /system/global 失败或超时：版本读不到，不能猜协议写回旧草稿。
     service.settings = nil
 
     let original = try JSONDecoder().decode(
@@ -1628,14 +1627,60 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
         .data(using: .utf8)!)
     var draft = original
     draft.keyword = "新关键词"
-    _ = try await service.saveSubscription(original: original, draft: draft)
+    do {
+      _ = try await service.saveSubscription(original: original, draft: draft)
+      XCTFail("Expected backendVersionUnavailable")
+    } catch APIError.backendVersionUnavailable {
+      // Expected.
+    }
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasSuffix("/subscribe") })
+  }
 
-    let captured = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
-    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
-    // v2 的 PUT 是整条替换；缺 name 会被写成 NULL，缺站点/路径会被默认值覆盖。
-    XCTAssertEqual(body["name"] as? String, "冷启动")
+  func testBaseSettingsApplyBackendVersionBeforeUserSettingsFinish() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
+    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(
+      #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.15.6","FRONTEND_VERSION":"v2.15.6"}}"#
+        .data(using: .utf8)!)
+    let userGate = CompatibilityEndpointAsyncGate()
+    await CompatibilityEndpointURLProtocol.stub.setUserSettingsGate(userGate)
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+
+    let fetch = Task { try await service.fetchSettings() }
+    await userGate.waitForWaiter()
+    // /system/global/user 还没返回，settings 尚未发布；但基础响应里的版本已经生效。
+    XCTAssertNil(service.settings)
+    let original = try JSONDecoder().decode(
+      Subscribe.self,
+      from: #"{"id":42,"name":"基础设置","type":"电视剧","sites":[3],"save_path":"/media/base"}"#
+        .data(using: .utf8)!)
+    _ = try await service.saveSubscription(original: original, draft: original)
+    let capturedBody = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
+    let bodyData = try XCTUnwrap(capturedBody)
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
     XCTAssertEqual(body["sites"] as? [Int], [3])
-    XCTAssertEqual(body["save_path"] as? String, "/media/show")
+    XCTAssertEqual(body["save_path"] as? String, "/media/base")
+
+    let success = try await service.searchSubscription(id: 41)
+    XCTAssertTrue(success)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let methods = await CompatibilityEndpointURLProtocol.stub.requestMethods()
+    let index = try XCTUnwrap(paths.lastIndex(of: "/api/v1/subscribe/search/41"))
+    XCTAssertEqual(methods[index], "GET")
+
+    await userGate.open()
+    let settings = try await fetch.value
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.15.6")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.6")
   }
 
   func testLegacyDetailRequestAddsTitleAndYearFallback() async throws {
@@ -1825,6 +1870,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var publicSettingsGate: CompatibilityEndpointAsyncGate?
   private var manualTransferResponses: [Data] = []
   private var userSettingsFailureStatusCode: Int?
+  private var userSettingsGate: CompatibilityEndpointAsyncGate?
   private var manualTransferOmitsSuccess = false
   private var subscriptionActionsFail: Bool?
   private var subscriptionLookupResponse: Data?
@@ -1843,6 +1889,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     publicSettingsGate = nil
     manualTransferResponses.removeAll()
     userSettingsFailureStatusCode = nil
+    userSettingsGate = nil
     manualTransferOmitsSuccess = false
     subscriptionActionsFail = nil
     subscriptionLookupResponse = nil
@@ -1877,6 +1924,10 @@ private actor CompatibilityEndpointURLProtocolStub {
 
   func setUserSettingsFailure(statusCode: Int?) {
     userSettingsFailureStatusCode = statusCode
+  }
+
+  func setUserSettingsGate(_ gate: CompatibilityEndpointAsyncGate?) {
+    userSettingsGate = gate
   }
 
   func setPublicSettingsResponse(_ response: Data?, waitFor gate: CompatibilityEndpointAsyncGate? = nil) {
@@ -1985,6 +2036,7 @@ private actor CompatibilityEndpointURLProtocolStub {
         ?? #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15"}}"#
           .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
+      if let userSettingsGate { await userSettingsGate.wait() }
       if let userSettingsFailureStatusCode {
         statusCode = userSettingsFailureStatusCode
         data = #"{"success":false,"message":"not found"}"#.data(using: .utf8)!

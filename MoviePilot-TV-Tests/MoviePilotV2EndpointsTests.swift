@@ -110,6 +110,7 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     )
     var draft = original
     draft.keyword = "新关键词"
+    XCTAssertTrue(MoviePilotV2Endpoints().isResolved)
     let data = try MoviePilotV2Endpoints().subscriptionUpdateBody(
       original: original, draft: draft)
     let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -133,7 +134,7 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertNil(body["media_category_id"])
   }
 
-  func testUnresolvedVersionReadsLikeV3ButWritesFullSnapshot() throws {
+  func testUnresolvedVersionReadsLikeV3ButRejectsSubscriptionWrite() throws {
     let endpoints = BackendEndpoints.resolve(backendVersion: "v3.0.0-beta")
     let identity = MediaIdentity(source: "themoviedb", mediaId: "12345")
     let spec = try endpoints.mediaIdentityEndpoint(
@@ -143,43 +144,16 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertEqual(endpoints.subscriptionMaintenanceMethod, "POST")
     XCTAssertTrue(endpoints.supportsMediaSourceCatalog)
     XCTAssertFalse(endpoints.includesDetailTitleFallback)
+    XCTAssertFalse(endpoints.isResolved)
 
     let original = try makeSubscribe(
-      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2], "media_category": "日番", "media_category_id": "cat-1"}"#
-    )
-    var draft = original
-    draft.keyword = "新关键词"
-    let data = try endpoints.subscriptionUpdateBody(original: original, draft: draft)
-    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(body["sites"] as? [Int], [1, 2])
-    XCTAssertEqual(body["keyword"] as? String, "新关键词")
-    // 版本读不出时后端可能是 v3.2.9：只带路径而不带稳定 ID 会把 media_category_id 清空。
-    XCTAssertEqual(body["media_category"] as? String, "日番")
-    XCTAssertEqual(body["media_category_id"] as? String, "cat-1")
-  }
-
-  func testUnresolvedFullSnapshotOmitsAbsentClassificationID() throws {
-    let endpoints = BackendEndpoints.resolve(backendVersion: nil)
-    let original = try makeSubscribe(
-      #"{"id": 8, "name": "示例", "type": "电影", "media_category": "电影"}"#)
-    let data = try endpoints.subscriptionUpdateBody(original: original, draft: original)
-    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    // 没有稳定 ID 时不能补一个 null：v3 会把路径一起清掉。
-    XCTAssertNil(body["media_category_id"])
-    XCTAssertEqual(body["media_category"] as? String, "电影")
-  }
-
-  func testUnresolvedChangedCategoryPathOmitsStaleID() throws {
-    let endpoints = BackendEndpoints.resolve(backendVersion: nil)
-    let original = try makeSubscribe(
-      #"{"id": 9, "name": "示例", "type": "电视剧", "media_category": "日番", "media_category_id": "cat-1"}"#
-    )
-    var draft = original
-    draft.media_category = "新分类"
-    let data = try endpoints.subscriptionUpdateBody(original: original, draft: draft)
-    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    // v3 以 ID 优先解析并回写对应路径；路径改了还发旧 ID 会把新路径改回去。
-    XCTAssertEqual(body["media_category"] as? String, "新分类")
-    XCTAssertNil(body["media_category_id"])
+      #"{"id": 7, "name": "示例", "type": "电视剧", "sites": [1, 2]}"#)
+    XCTAssertThrowsError(
+      try endpoints.subscriptionUpdateBody(original: original, draft: original)
+    ) { error in
+      guard case APIError.backendVersionUnavailable = error else {
+        return XCTFail("Expected backendVersionUnavailable, got \(error)")
+      }
+    }
   }
 }

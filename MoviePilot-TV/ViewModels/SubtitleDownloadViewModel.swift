@@ -225,7 +225,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     case .serverMessage, .authenticationChallenge, .unauthorized, .credentialsRejected,
       .decodingError, .mfaUnsupported:
       return true
-    case .gatewayStatus, .networkError, .invalidURL, .unknown, .none:
+    case .gatewayStatus, .networkError, .invalidURL, .backendVersionUnavailable, .unknown, .none:
       return false
     }
   }

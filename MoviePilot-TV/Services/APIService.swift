@@ -13,6 +13,8 @@ nonisolated enum APIError: Error {
   case credentialsRejected
   case mfaUnsupported
   case unauthorized
+  /// 后端版本还没读到或解析不了，无法安全选择订阅写回形状。
+  case backendVersionUnavailable
   case unknown
 }
 
@@ -35,6 +37,8 @@ extension APIError: LocalizedError {
       return "当前账号已开启 MFA，TV 端暂不支持"
     case .unauthorized:
       return "登录已失效"
+    case .backendVersionUnavailable:
+      return "正在读取后端版本，请稍后重试"
     case .unknown:
       return "未知错误"
     }
@@ -435,7 +439,7 @@ class APIService: ObservableObject {
   /// 图片 slot key 每次配置都会读门禁结果，随 settings 算一次，不在那里重复解析版本字符串。
   private var mediaServerThumbnailSupported = false
   /// 后端请求协议形状，随 settings 更新一次。v2 实现见 `Services/BackendProtocol/MoviePilotV2`。
-  /// 初始值按“版本未读到”处理：设置请求失败时保存订阅仍走完整快照，不会用 v3 稀疏体覆盖 v2。
+  /// 初始值按“版本未读到”处理：读请求沿用 v3，订阅写回会被拒绝，等设置到达后再保存。
   private var backendEndpoints: any BackendEndpointBuilding = UnresolvedBackendEndpoints()
 
   /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
@@ -1926,6 +1930,10 @@ class APIService: ObservableObject {
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
       var response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
+      // 版本号只影响协议选择：先按基础设置解析，避免 /system/global/user 较慢时
+      // 保存仍走未知形状、后续搜索又用错 HTTP 方法。用户设置合并后再发布 settings。
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+      backendEndpoints = BackendEndpoints.resolve(backendVersion: response.BACKEND_VERSION)
       if token != nil {
         do {
           guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
@@ -3609,9 +3617,13 @@ class APIService: ObservableObject {
 
   /// 更新订阅编辑草稿（PUT /subscribe/）；新增订阅使用 addSubscription。
   /// v3 只提交变化字段，v2 必须提交完整快照，差异由 `backendEndpoints.subscriptionUpdateBody` 承担。
+  /// 版本未解析时拒绝写入：猜错形状会把旧草稿整条写回或清空 v2 配置。
   func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
+    guard backendEndpoints.isResolved else {
+      throw APIError.backendVersionUnavailable
+    }
     let body = try backendEndpoints.subscriptionUpdateBody(original: original, draft: draft)
     let endpoint = "/subscribe/"
     let data = try await makeRequest(

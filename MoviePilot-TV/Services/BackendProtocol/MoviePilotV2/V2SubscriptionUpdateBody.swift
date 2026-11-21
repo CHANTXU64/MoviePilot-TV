@@ -6,19 +6,14 @@ import Foundation
 /// 因此 v2 必须提交完整快照，而不是 `SubscriptionWriteDTO` 的稀疏变更；编辑里没动过的
 /// 站点、保存路径、过滤组等才不会被清空。这里只列 v2 认识且允许公共写入的字段。
 ///
-/// `includesStableClassificationID` 只给 `UnresolvedBackendEndpoints` 用：版本读不出时后端
-/// 可能是 v3，v3.2.9 收到只有 `media_category` 路径的载荷会把 `media_category_id` 清空，
-/// 因此路径没变时补发已有的稳定 ID。路径变了必须传 false：v3 以 ID 优先解析并回写
-/// 对应路径，继续发旧 ID 会把用户的新路径改回去。v2 不认识这个键（pydantic 默认忽略
-/// 未知字段），不会受影响。
+/// v2 不认识 v3 的 `media_category_id`（pydantic 默认忽略未知字段），这里不发送；
+/// 版本未知的写入也不会走到这个编码器，`UnresolvedBackendEndpoints` 会直接拒绝。
 nonisolated struct V2SubscriptionUpdateBody: Encodable {
   private typealias CodingKeys = Subscribe.CodingKeys
   let draft: Subscribe
-  let includesStableClassificationID: Bool
 
-  init(draft: Subscribe, includesStableClassificationID: Bool = false) {
+  init(draft: Subscribe) {
     self.draft = draft
-    self.includesStableClassificationID = includesStableClassificationID
   }
 
   func encode(to encoder: Encoder) throws {
@@ -57,9 +52,6 @@ nonisolated struct V2SubscriptionUpdateBody: Encodable {
     try container.encode(draft.search_imdbid, forKey: .search_imdbid)
     try container.encode(draft.custom_words, forKey: .custom_words)
     try container.encode(draft.media_category, forKey: .media_category)
-    if includesStableClassificationID, let categoryID = draft.media_category_id, !categoryID.isEmpty {
-      try container.encode(categoryID, forKey: .media_category_id)
-    }
     try container.encode(draft.filter_groups, forKey: .filter_groups)
     try container.encode(draft.episode_group, forKey: .episode_group)
   }

@@ -2438,6 +2438,38 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.errorMessage, "暂时无法保存订阅，请稍后重试。")
   }
 
+  func testSaveWithoutResolvedBackendVersionPromptsRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+    // 设置请求失败/超时：版本未解析时不能猜 v2 全量替换或 v3 稀疏变更。
+    service.settings = nil
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 785, name: "版本未知", type: "电影", tmdbid: 123464),
+      isNewSubscription: false,
+      apiService: service
+    )
+
+    let didSave = await viewModel.save()
+
+    XCTAssertFalse(didSave)
+    XCTAssertFalse(viewModel.isSaved)
+    XCTAssertEqual(viewModel.errorMessage, "正在读取后端版本，请稍后重试。")
+    let putCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe")
+    XCTAssertEqual(putCount, 0)
+  }
+
   func testSaveBusinessFailurePublishesBackendMessage() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
@@ -2882,6 +2914,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       user_name: "subscribe-sheet",
       avatar: nil
     )
+    // 正常加载完设置的会话；未解析版本的用例会在需要时显式清空。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
   }
 
   /// 能发起试看的管理员：有用户 ID，试看服务才有本机存储。
