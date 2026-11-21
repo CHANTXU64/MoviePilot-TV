@@ -127,7 +127,7 @@ private struct TopShelfPresentationKey: EnvironmentKey {
 }
 
 /// 订阅编辑、复用订阅这类"关闭即取消用户正在进行工作"的贵弹窗呈现登记。
-/// Top Shelf 交接据此决定不强制关闭、等用户自然关完再跳转，避免打断订阅或 Fork。
+/// 这类弹窗开着时收到的 Top Shelf 入口直接放弃，不强制关闭弹窗，避免打断订阅或 Fork。
 /// 用弱引用绑定弹窗实例生命周期：令牌由弹窗视图 @State 持有，视图因会话失效/权限变化/
 /// 树拆除被销毁时令牌释放、弱引用置空，即使 isPresented 注销回调未触发也不会残留登记
 /// 卡死 Top Shelf；读取时清理已释放令牌。不依赖窗口扫描，后台未激活时也准确。
@@ -136,6 +136,7 @@ enum CostlyModalPresentation {
   private final class WeakOwner {
     weak var value: AnyObject?
     init(_ value: AnyObject) { self.value = value }
+    nonisolated deinit {}
   }
   private static var owners: [WeakOwner] = []
   static var isPresenting: Bool {
@@ -154,7 +155,10 @@ enum CostlyModalPresentation {
 }
 
 /// 每个贵弹窗视图持有的身份令牌；视图销毁即释放，登记随之失效。
-final class CostlyModalToken {}
+/// 析构必须 nonisolated：默认主线程隔离的析构在 tvOS 18.4–26.2 运行时上于主线程同步释放时会崩溃。
+final class CostlyModalToken {
+  nonisolated deinit {}
+}
 
 extension PresentationReadyAction {
   /// 同步查询可见窗口是否有模态正在呈现（含关闭转场中）。递归扫描控制器树，嵌套弹窗也能命中。

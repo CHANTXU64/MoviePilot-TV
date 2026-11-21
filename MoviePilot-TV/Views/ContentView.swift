@@ -56,7 +56,10 @@ struct ContentView: View {
       }
     }
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
-    .onChange(of: scenePhase) { _, _ in updateTopShelfPriority() }
+    .onChange(of: scenePhase, initial: true) { _, phase in
+      viewModel.scenePhaseDidChange(phase)
+      updateTopShelfPriority()
+    }
     .background(PresentationReadyAction(
       isEnabled: scenePhase == .active && (
         topShelfNavigationRouter.pendingRoute != nil
@@ -173,13 +176,7 @@ struct MainContentView: View {
       }
     }
     .onChange(of: selectedTab) { _, tab in
-      if let route = initialTopShelfRoute, tab != route.targetTab {
-        // 交接尚未完成时 TabView 可能自行回写 selection，不能当成用户切走，
-        // 否则会清掉正在打开的详情路由。交接完成或超时后会校正一次 Tab。
-        if !viewModel.isOpeningTopShelf {
-          viewModel.endTopShelfPresentation()
-        }
-      }
+      viewModel.topShelfTabSelectionDidChange(to: tab)
       checkTask?.cancel()
       checkTask = Task {
         try? await Task.sleep(for: .seconds(5))

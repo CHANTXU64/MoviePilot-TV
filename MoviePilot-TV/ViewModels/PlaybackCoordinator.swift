@@ -1062,6 +1062,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     private var transferRecordsClaimed = false
     private(set) var transferRecordsRefreshed = false
 
+    nonisolated deinit {}
+
     /// 这一轮第一次要整理记录时为 true（由它强制重读），之后为 false。
     func claimsTransferRecordRefresh() -> Bool {
       defer { transferRecordsClaimed = true }
@@ -2936,6 +2938,8 @@ final class MoviePilotReads {
     self.context = context
     self.forced = forced
   }
+
+  nonisolated deinit {}
 
   /// 一份集列表（`key.episodeGroup` 为 nil 是默认顺序）。
   func seasonList(_ key: EpisodeListKey) async throws -> [TmdbEpisode] {

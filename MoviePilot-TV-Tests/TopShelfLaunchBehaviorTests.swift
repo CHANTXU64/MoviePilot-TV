@@ -927,6 +927,30 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     _ = task
   }
 
+  /// 贵弹窗开着时放弃新到的入口，只撤销这个入口自己的交接：上一次已经打开的 Top Shelf 详情
+  /// 就在弹窗下面（`topShelfRoute` 还指着它），不能被一起重置。
+  func testCostlyModalDropsPendingRouteWithoutResettingPreviouslyOpenedDetail() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    let router = TopShelfNavigationRouter(store: nil)
+    let opened = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    XCTAssertEqual(model.acceptTopShelfRoute(opened), .preview)
+    model.finishTopShelfOpening(id: opened.id)
+    XCTAssertEqual(model.recommendNavigation.topEntryID, opened.id)
+
+    let token = CostlyModalToken()
+    CostlyModalPresentation.register(token)
+    defer { CostlyModalPresentation.unregister(token) }
+    XCTAssertTrue(router.handle(try TopShelfDeepLink.url(for: payload(service: service, tmdbID: 43))))
+    XCTAssertNotNil(router.pendingRoute)
+    model.reconcileTopShelfRoute(router: router)
+
+    XCTAssertNil(router.pendingRoute, "贵弹窗开着时放弃新入口")
+    XCTAssertEqual(model.topShelfRoute?.id, opened.id, "上一次入口的状态不受影响")
+    XCTAssertEqual(model.recommendNavigation.topEntryID, opened.id, "弹窗下面的详情页不能被重置")
+    XCTAssertEqual(model.recommendNavigation.path.count, 1)
+  }
+
   func testOpeningWatchdogWaitsForStartupInsteadOfSelectingHiddenTab() async throws {
     let service = APIService.isolatedTestingInstance()
     let user = Token(
@@ -937,6 +961,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     XCTAssertTrue(model.isPreparingStartupSession)
     XCTAssertFalse(model.visibleTabs.contains(.recommend))
+    model.scenePhaseDidChange(.active)
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     model.prepareTopShelfRoute(route)
     XCTAssertTrue(model.isOpeningTopShelf)
@@ -944,7 +969,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertEqual(model.selectedTab, .home)
     XCTAssertNil(model.recommendNavigation.topEntryID)
     // 看门狗超时窗口过去后，未入栈的等待路由不得被提前解除，也不得选中尚不可见的 Tab。
-    try await Task.sleep(for: .seconds(1.7))
+    try await Task.sleep(for: ContentViewModel.topShelfOpeningTimeout + .milliseconds(200))
     XCTAssertTrue(model.isOpeningTopShelf, "未入栈的等待路由不能被看门狗提前解除")
     XCTAssertEqual(model.selectedTab, .home, "不得选中尚不可见的推荐 Tab")
     XCTAssertNil(model.recommendNavigation.topEntryID)
@@ -952,16 +977,78 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertFalse(model.isOpeningTopShelf)
   }
 
+  /// 交接期间 TabView 回前台时把选择回写成上次的 Tab：入口已入栈就立刻校正回去（目标栈不在前台时详情
+  /// 出现不了、焦点只能停在 Tab 栏）；还在等启动准备时不切；交接完成后再切走才算用户离开入口。
+  func testTabWriteBackDuringOpeningIsCorrectedImmediately() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+    XCTAssertTrue(model.isOpeningTopShelf)
+
+    model.selectedTab = .home
+    model.topShelfTabSelectionDidChange(to: .home)
+    XCTAssertEqual(model.selectedTab, .recommend, "交接期间的回写立刻校正回入口所属 Tab")
+    XCTAssertEqual(model.topShelfRoute?.id, route.id, "回写不能当成用户离开入口")
+    XCTAssertEqual(model.recommendNavigation.topEntryID, route.id)
+
+    model.finishTopShelfOpening(id: route.id)
+    model.selectedTab = .home
+    model.topShelfTabSelectionDidChange(to: .home)
+    XCTAssertEqual(model.selectedTab, .home, "交接完成后切走是用户的选择")
+    XCTAssertNil(model.topShelfRoute)
+  }
+
+  func testTabChangeWhileRouteWaitsForStartupIsLeftAlone() throws {
+    let service = APIService.isolatedTestingInstance()
+    let user = Token(
+      access_token: "launch-token", token_type: "bearer", super_user: FlexibleBool(false),
+      permissions: ["discovery": false], user_id: 901, user_name: "launch-user", avatar: nil)
+    service.replaceSessionForTesting(
+      baseURL: "https://top-shelf-launch.local", token: user.access_token, currentUser: user)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    XCTAssertTrue(model.isPreparingStartupSession)
+    // 启动准备期间目标 Tab 还不可见：入口等待，不入栈。
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    model.prepareTopShelfRoute(route)
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .wait)
+    model.selectedTab = .system
+    model.topShelfTabSelectionDidChange(to: .system)
+    XCTAssertEqual(model.selectedTab, .system, "未入栈时不切 Tab（目标不可见时也不退回首页）")
+    XCTAssertTrue(model.isOpeningTopShelf, "也不放弃等待中的入口")
+    model.cancelTopShelfOpening()
+  }
+
+  /// 深链在后台就入栈，目标页要等回到前台才能呈现、取得焦点：硬超时只在场景激活期间计时。
+  /// 后台停留超过超时也不能结束交接（那时焦点还停在 Tab 栏，按 Menu 会退出 App）；回到前台后重新计满。
+  func testOpeningWatchdogOnlyCountsWhileSceneIsActive() async throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    model.scenePhaseDidChange(.background)
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+    try await Task.sleep(for: ContentViewModel.topShelfOpeningTimeout + .milliseconds(200))
+    XCTAssertTrue(model.isOpeningTopShelf, "后台停留超过超时也不能结束交接")
+    model.scenePhaseDidChange(.active)
+    let partial = ContentViewModel.topShelfOpeningTimeout * 0.6
+    try await Task.sleep(for: partial)
+    XCTAssertTrue(model.isOpeningTopShelf, "回前台后重新计满超时")
+    try await Task.sleep(for: partial)
+    XCTAssertFalse(model.isOpeningTopShelf, "回前台后仍按超时兜底")
+    model.endTopShelfPresentation(id: route.id)
+  }
+
   func testOpeningWatchdogFinishesUnpresentedDetailAndCorrectsTab() async throws {
     let service = makeService()
     let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    model.scenePhaseDidChange(.active)
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
     XCTAssertEqual(model.selectedTab, .recommend)
     XCTAssertTrue(model.isOpeningTopShelf)
     // 模拟 TabView 在交接期把 selection 回写成首页，且详情始终不触发 appear。
     model.selectedTab = .home
-    try await Task.sleep(for: .seconds(1.7))
+    try await Task.sleep(for: ContentViewModel.topShelfOpeningTimeout + .milliseconds(200))
     XCTAssertFalse(model.isOpeningTopShelf, "首次建栈不触发 appear 时看门狗必须兜底完成")
     XCTAssertEqual(model.selectedTab, .recommend, "兜底完成后校正回入口所属 Tab")
     XCTAssertEqual(model.topShelfRoute?.id, route.id)

@@ -792,11 +792,11 @@ nonisolated enum PlaybackChapters {
     }
     guard result.count > 1 else { return nil }
     return result.enumerated().map { index, chapter in
-      guard let chapterName = chapter.name else {
+      // 没有名字或名字全是空白的按位置命名；服务器/文件自带的默认英文名（Chapter 01）本地化；真实章节名保真。
+      let localized = chapter.name.map(TranslationHelper.translateChapter(for:)) ?? ""
+      guard let chapterName = chapter.name, !localized.isEmpty else {
         return ServerChapter(name: name(at: index), startSeconds: chapter.startSeconds, imageURL: chapter.imageURL)
       }
-      // 服务器/文件自带的默认英文名（Chapter 01）本地化；真实章节名保真。
-      let localized = TranslationHelper.translateChapter(for: chapterName)
       return localized == chapterName
         ? chapter
         : ServerChapter(name: localized, startSeconds: chapter.startSeconds, imageURL: chapter.imageURL)

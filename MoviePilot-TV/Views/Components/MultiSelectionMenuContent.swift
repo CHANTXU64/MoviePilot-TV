@@ -188,6 +188,8 @@ private struct MenuFocusReturnObserver: UIViewRepresentable {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    nonisolated deinit {}
+
     override func didMoveToWindow() {
       super.didMoveToWindow()
       let center = NotificationCenter.default
