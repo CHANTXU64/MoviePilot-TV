@@ -2877,6 +2877,18 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
+  /// 获取媒体服务器「继续观看」（后端叫正在播放）条目
+  /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerPlaying.vue（`mediaserver/playing`）
+  /// - 应用场景: 媒体库页「继续观看」行。条目是电影或单集，带 `percent` 已播放百分比；
+  ///   剧集的 `title` 是剧名、`subtitle` 是「S2:5 - 集名」（Plex 为「S2:E5 - 集名」），不是年份。
+  /// - 备注: 接口与字段自 v3.0.4 起未变，各台已启用服务器分别读取，由调用方按行选择服务器。
+  func fetchMediaServerPlaying(server: String, count: Int) async throws -> [MediaServerPlayItem] {
+    let endpoint = try buildEndpoint(
+      path: "/mediaserver/playing", params: ["server": server, "count": String(count)])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
+  }
+
   /// 查询媒体是否已入库，返回媒体服务器中的条目（MoviePilot 媒体库同步表），未入库为 nil。
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)、
   ///   MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
