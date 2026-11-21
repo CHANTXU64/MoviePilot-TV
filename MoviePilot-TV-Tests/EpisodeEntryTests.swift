@@ -164,7 +164,7 @@ final class EpisodeEntryTests: XCTestCase {
     let waiting = entry(.notOnServer, trial: trial(.waitingForOrganization, subscriptionID: 81))
     XCTAssertEqual(
       waiting.cardStatus, .trialInProgress(EpisodeEntry.TrialIndicator(label: "等待整理", fraction: nil, stage: .organize)))
-    XCTAssertEqual(waiting.panel.detail, "已经下完，等 MoviePilot 整理，整理完还要入库才能播放")
+    XCTAssertEqual(waiting.panel.detail, "等 MoviePilot 整理，整理完还要入库才能播放")
 
     let organizing = entry(.notOnServer, trial: trial(.organizing))
     XCTAssertEqual(organizing.panel.detail, "MoviePilot 正在整理，整理完还要入库才能播放")

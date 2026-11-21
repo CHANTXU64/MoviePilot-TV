@@ -362,7 +362,7 @@ nonisolated struct EpisodeTrialStoredEnding: Codable, Equatable, Sendable {
 }
 
 /// 证明服务器上某条订阅是本机为试看建的。只在 TV 核对后删掉了它、读到订阅列表里已经没有它，
-/// 或者发现它在别处被改过时消失。下载和入库的跟踪不在这里，只在内存里。
+/// 或者发现它在别处被改过时消失。订阅结束后的下载跟踪由试看服务接手。
 nonisolated struct EpisodeTrialCredential: Codable, Equatable, Sendable {
   /// 创建前生成并保存。同一季重试沿用同一个标记，不论哪次请求落了库，订阅上都是它。
   let marker: String
@@ -558,7 +558,27 @@ nonisolated struct EpisodeTrialHistoryRecord: Decodable, Sendable {
       let subscription_id: Int?
     }
 
+    struct Selection: Decodable, Sendable {
+      let version: Int
+      let downloaders: [String: [[Int]]]
+
+      /// 确认记录按下载器累积，本次提交的下载器一定在其中；格式版本不认识时为 nil。多个名字时无法确定本次是哪台。
+      var downloaderNames: [String]? {
+        guard version == 3 else { return nil }
+        return downloaders.keys.compactMap { trimmedNonEmpty([$0]) }.sorted()
+      }
+    }
+
     let subscription_download: Subscription?
+    let confirmed_selection: Selection?
+
+    private enum CodingKeys: String, CodingKey { case subscription_download, confirmed_selection }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      subscription_download = try? values.decodeIfPresent(Subscription.self, forKey: .subscription_download)
+      confirmed_selection = try? values.decodeIfPresent(Selection.self, forKey: .confirmed_selection)
+    }
   }
 
   let id: Int
