@@ -249,7 +249,7 @@ struct SubscribeSeasonContentView: View {
         }
       }
     } status: {
-      // 独立的季订阅页是整页：加载转圈改由外层 firstLoadOverlay 居中；详情页里的分季区块仍原位转圈。
+      // 独立的季订阅页是整页：加载转圈改由外层 pageLoadingOverlay 居中；详情页里的分季区块仍原位转圈。
       if !viewModel.showsLoadingState {
         status
       }
@@ -258,7 +258,7 @@ struct SubscribeSeasonContentView: View {
       seasonCard(season, onFocus: onFocus)
         .focused($focusedSeasonId, equals: season.season_number)
     }
-    .firstLoadOverlay(viewModel.showsLoadingState)
+    .pageLoadingOverlay(viewModel.showsLoadingState)
   }
 
   private func seasonPagePicker(_ seasons: [TmdbSeason], page: Range<Int>) -> some View {

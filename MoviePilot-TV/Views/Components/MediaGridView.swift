@@ -267,7 +267,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
         header
 
         if isLoading {
-          // 整页首次加载的转圈由 ScrollView 外层的 firstLoadOverlay 居中显示。
+          // 整页加载的转圈由 ScrollView 外层的 pageLoadingOverlay 居中显示。
           EmptyView()
         } else if items.isEmpty {
           HStack {
@@ -364,7 +364,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
         }
       }
     }
-    .firstLoadOverlay(isLoading)
+    .pageLoadingOverlay(isLoading)
     .focusSection()
     .onScrollGeometryChange(
       for: CGFloat.self,

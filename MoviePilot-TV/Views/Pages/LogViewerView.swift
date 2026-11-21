@@ -61,7 +61,7 @@ struct LogViewerView: View {
         }
 
         if viewModel.showsLoadingState {
-          // 整页加载的转圈由 ScrollView 外层的 firstLoadOverlay 居中显示。
+          // 整页加载的转圈由 ScrollView 外层的 pageLoadingOverlay 居中显示。
           EmptyView()
         } else if viewModel.showsEmptyState {
           Text("没有符合条件的日志")
@@ -89,7 +89,7 @@ struct LogViewerView: View {
       .padding(.top, 8)
       .padding(.bottom, 80)
     }
-    .firstLoadOverlay(viewModel.showsLoadingState)
+    .pageLoadingOverlay(viewModel.showsLoadingState)
     .scrollClipDisabled()
     .task {
       await viewModel.reloadRecords()
