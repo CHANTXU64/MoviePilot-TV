@@ -202,8 +202,8 @@ class MediaPreloadTask: ObservableObject {
   @Published var isTmdbRecognitionFinished = false
   /// 打开详情后才做的 TMDB 识别（按需查找，没找到再按名称识别）还没结束。
   @Published private(set) var isOpenedDetailTMDBPending = false
-  /// 本轮名称识别已确认没有匹配；等待中的 TMDB 按钮直接提示，不再识别一次。
-  @Published private(set) var isTMDBUnrecognized = false
+  /// 名称识别已确认没有匹配时用的片名、年份和类型。
+  @Published private var unrecognizedQuery: RecognitionQuery?
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
@@ -628,13 +628,18 @@ class MediaPreloadTask: ObservableObject {
 
   /// 电影订阅补查只接受同一来源条目的同类型目标（共享映射、按需查找或名称识别）。
   func mappedMovieTarget(for media: MediaInfo) -> MediaInfo? {
+    mappedMovieResolution(for: media)?.target
+  }
+
+  /// 同 `mappedMovieTarget`，另带目标是否只靠名称识别得出。
+  func mappedMovieResolution(for media: MediaInfo) -> TMDBTargetResolution? {
     guard let apiService, media.canDirectlySubscribe,
       MediaIdentifier.validNumericIdentifier(media.tmdb_id) == nil,
       let type = media.type, apiService.normalizeMediaType(type) == "movie",
       let resolution = tmdbResolution,
       resolution.origin == media.identity, resolution.target.type == "电影"
     else { return nil }
-    return resolution.target
+    return resolution
   }
 
   func refreshDirectSubscription(for detail: MediaInfo, forceRefresh: Bool = false) async -> Bool {
@@ -740,8 +745,8 @@ class MediaPreloadTask: ObservableObject {
   /// 写入名称识别结论：找到时同时记下带原来源身份的目标，没找到时记下已确认无匹配。
   private func applyRecognition(_ result: Int?, for media: MediaInfo, apiService: APIService) {
     guard let tmdbId = MediaIdentifier.validNumericIdentifier(result) else {
-      let title = media.title?.trimmingCharacters(in: .whitespaces) ?? ""
-      isTMDBUnrecognized = !title.isEmpty
+      let query = RecognitionQuery(media)
+      unrecognizedQuery = query.title.isEmpty ? nil : query
       return
     }
     self.tmdbId = tmdbId
@@ -792,6 +797,12 @@ class MediaPreloadTask: ObservableObject {
     }
   }
 
+  /// 已确认按 `media` 当前的片名、年份和类型识别不到。卡片用简称没识别到时，
+  /// 完整详情的正式片名还要再识别一次。
+  func isTMDBUnrecognized(for media: MediaInfo) -> Bool {
+    unrecognizedQuery != nil && unrecognizedQuery == RecognitionQuery(media)
+  }
+
   /// 等预载和打开详情后的 TMDB 识别结束；调用方随后读取 `tmdbTarget` / `tmdbId`。
   func waitForTMDBIdentification() async {
     // 不给 Combine 传闭包：闭包会继承主线程隔离，而 Combine 在别的线程调用它。
@@ -799,6 +810,19 @@ class MediaPreloadTask: ObservableObject {
     for await (finished, pending) in states where finished && !pending {
       return
     }
+  }
+}
+
+/// 名称识别实际使用的参数，用来判断“没有匹配”的结论是否适用于另一份详情。
+private struct RecognitionQuery: Equatable {
+  let title: String
+  let year: String?
+  let type: String?
+
+  init(_ media: MediaInfo) {
+    title = media.title?.trimmingCharacters(in: .whitespaces) ?? ""
+    year = media.year
+    type = media.type
   }
 }
 

@@ -1094,14 +1094,16 @@ class MediaDetailViewModel: ObservableObject {
   func prepareHeaderUnsubscribeConfirmation() async throws -> UnsubscribeConfirmation? {
     let snapshot = apiService.sessionSnapshot()
     let detail = self.detail
-    if let target = preloadTask?.mappedMovieTarget(for: detail) {
+    if let resolution = preloadTask?.mappedMovieResolution(for: detail) {
       // 媒体级 DELETE 不区分电影与剧集，确认时冻结实际订阅记录。
-      let id = try await apiService.fetchExactMovieSubscriptionID(for: detail, mappedTo: target)
+      let subscription = try await apiService.fetchExactMovieSubscription(
+        for: detail, mappedTo: resolution.target)
       try apiService.validateSessionSnapshot(snapshot)
-      guard let id else { return nil }
+      guard let subscription else { return nil }
       return UnsubscribeConfirmation(
-        message: SubscriptionCancelConfirmation.headerMessage(for: detail),
-        subscriptionID: id,
+        message: try SubscriptionCancelConfirmation.headerMessage(
+          for: detail, cancelling: subscription, isNameRecognized: resolution.isNameRecognized),
+        subscriptionID: subscription.id,
         snapshot: snapshot
       )
     }

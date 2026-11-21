@@ -9,6 +9,35 @@ enum SubscriptionCancelConfirmation {
     message(title: media.cleanedTitle ?? media.title ?? "")
   }
 
+  /// 按片名找到、又分辨不出是不是同一部的订阅：不在这里取消。
+  struct UnverifiedRecord: Error {}
+  static let unverifiedRecordMessage = "这条订阅是按片名找到的，无法确认是同一部，请到订阅列表里取消。"
+
+  /// 电影按 TMDB 目标冻结的订阅。目标只靠片名猜出、记录又不是按原来源找到的，
+  /// 写出实际要取消的那条，请用户确认是同一部。片名相同、又缺年份时用户分辨不出，抛出 `UnverifiedRecord`。
+  static func headerMessage(
+    for media: MediaInfo,
+    cancelling subscription: ExactMovieSubscription,
+    isNameRecognized: Bool
+  ) throws -> String {
+    let base = headerMessage(for: media)
+    guard isNameRecognized, !subscription.matchesOrigin else { return base }
+    let title = trimmed(subscription.name)
+    let year = trimmed(subscription.year)
+    let sameTitle = [media.title, media.cleanedTitle].contains {
+      trimmed($0).caseInsensitiveCompare(title) == .orderedSame
+    }
+    guard !title.isEmpty, !(sameTitle && (year.isEmpty || trimmed(media.year).isEmpty)) else {
+      throw UnverifiedRecord()
+    }
+    let yearText = year.isEmpty ? "" : "（\(year)）"
+    return "\(base)\n\n将取消的订阅是《\(title)》\(yearText)，是按片名找到的，请确认是同一部。"
+  }
+
+  private static func trimmed(_ value: String?) -> String {
+    value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
   static func message(for subscribe: Subscribe) -> String {
     let groupText = subscribe.type == "电视剧"
       ? episodeGroupDisplayName(subscribe.episode_group, episodeGroups: [])

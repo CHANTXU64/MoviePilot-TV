@@ -1158,6 +1158,10 @@ struct MediaDetailView: View {
               }
             } catch is CancellationError {
               return
+            } catch is SubscriptionCancelConfirmation.UnverifiedRecord {
+              guard navigationCoordinator.isCurrent(source) else { return }
+              notificationManager.show(
+                message: SubscriptionCancelConfirmation.unverifiedRecordMessage, type: .info)
             } catch {
               guard navigationCoordinator.isCurrent(source) else { return }
               notificationManager.show(
@@ -1343,8 +1347,10 @@ struct MediaDetailView: View {
                   let target: MediaInfo?
                   if let preloadedTarget = preloadTask.tmdbTarget {
                     target = preloadedTarget
-                  } else if waitsForIdentification, preloadTask.isTMDBUnrecognized {
-                    // 刚等完的这轮识别已确认没有匹配，直接提示。
+                  } else if waitsForIdentification,
+                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
+                  {
+                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
                     mediaActionHandler.showTMDBNotFoundAlert = true
                     target = nil
                   } else {

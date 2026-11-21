@@ -1,10 +1,12 @@
 import SwiftUI
 import Combine
 
-/// 共享映射或按需查找得到的 TMDB 目标，连同请求时的原来源身份。
+/// 共享映射、按需查找或名称识别得到的 TMDB 目标，连同请求时的原来源身份。
 struct TMDBTargetResolution {
   let origin: MediaIdentity
   let target: MediaInfo
+  /// 只靠片名、年份猜出，后端没有确认过这层关系。
+  var isNameRecognized = false
 }
 
 @MainActor
@@ -161,6 +163,12 @@ class MediaActionHandler: ObservableObject {
       return nil
     }
 
+    // 条目本身没有 TMDB 编号时，编号来自识别：目标带上类型和选季提示，与预载结果一致。
+    if validItemTmdbId == nil,
+      let recognized = Self.recognizedTMDBTarget(for: item, tmdbId: tmdbId, apiService: apiService)
+    {
+      return recognized.target
+    }
     return Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
   }
 
@@ -219,7 +227,7 @@ class MediaActionHandler: ObservableObject {
       for: item, tmdbId: tmdbId, type: isTV ? "电视剧" : "电影",
       season: .some(isTV ? item.season : nil))
     target.tmdbSeasonHint = isTV ? item.season : nil
-    return TMDBTargetResolution(origin: request.identity, target: target)
+    return TMDBTargetResolution(origin: request.identity, target: target, isNameRecognized: true)
   }
 
   /// 共享映射的完整 TMDB 目标；返回 nil 表示没有可用关系。

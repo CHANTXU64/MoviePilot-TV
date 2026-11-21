@@ -2805,6 +2805,9 @@ final class MediaMappingTests: XCTestCase {
     viewModel.preloadTask = task
     await stub.setDetailLoadResponse(
       Data(#"{"id":903,"type":"电视剧","tmdbid":456,"season":2}"#.utf8), path: lookupPath)
+    await stub.setDetailLoadResponse(
+      Data(#"[{"id":903,"name":"同号剧集","type":"电视剧","tmdbid":456,"season":2}]"#.utf8),
+      path: "/api/v1/subscribe")
     let didRefresh = await viewModel.refreshSubscriptionStatus()
     XCTAssertTrue(didRefresh)
     XCTAssertFalse(viewModel.isSubscribed)
@@ -3154,9 +3157,40 @@ final class MediaMappingTests: XCTestCase {
     defer { task.cancel() }
     await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
 
-    XCTAssertTrue(task.isTMDBUnrecognized)
+    XCTAssertTrue(task.isTMDBUnrecognized(for: item))
+    // 完整详情换了正式片名时，卡片的结论不适用，按钮还要再识别一次。
+    let fullDetail = MediaInfo(douban_id: "123", source: "douban", title: "未知电影 导演剪辑版", type: "电影")
+    XCTAssertFalse(task.isTMDBUnrecognized(for: fullDetail))
+    let otherYear = MediaInfo(douban_id: "123", source: "douban", title: "未知电影", type: "电影", year: "2020")
+    XCTAssertFalse(task.isTMDBUnrecognized(for: otherYear))
     XCTAssertNil(task.tmdbId)
     XCTAssertNil(task.tmdbTarget)
+  }
+
+  func testLiveRecognitionJumpKeepsSeasonCardHint() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.8")
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", season: 2)
+    let handler = MediaActionHandler(apiService: service)
+
+    // 预载还没结果时长按「TMDB详情页」：实时识别的目标与预载结果一样带选季提示。
+    let liveTarget = await handler.getTMDBJumpTarget(for: item)
+    let live = try XCTUnwrap(liveTarget)
+    XCTAssertEqual(live.tmdb_id, 209867)
+    XCTAssertEqual(live.season, 2)
+    XCTAssertEqual(live.tmdbSeasonHint, 2)
+    let wholeSeries = MediaInfo(tmdb_id: 209867, type: "电视剧")
+    XCTAssertEqual(MediaDetailEpisodeSeasons.navigationSeason(for: wholeSeries, routeMedia: live), 2)
+
+    // 传入预载识别出的编号时同样带上。
+    let preloaded = await handler.getTMDBJumpTarget(for: item, targetTmdbId: 209867)
+    XCTAssertEqual(preloaded?.tmdbSeasonHint, 2)
   }
 
   func testRecognizedMovieOnlyCountsAndCancelsExactMovieRecord() async throws {
@@ -3175,6 +3209,9 @@ final class MediaMappingTests: XCTestCase {
       data: Data(
         #"[{"source":"themoviedb","tmdb_id":209867,"title":"来源电影","type":"电影","year":"2024"}]"#.utf8))
     // 同一个数字 ID 下只有剧集订阅：不能算作这部电影已订阅，也不能被这部电影的取消删掉。
+    await stub.setDetailLoadResponse(
+      Data(#"[{"id":903,"name":"同号剧集","type":"电视剧","tmdbid":209867,"season":1}]"#.utf8),
+      path: "/api/v1/subscribe")
     let lookupPath = "/api/v1/subscribe/media/209867"
     await stub.setDetailLoadResponse(
       Data(#"{"id":903,"type":"电视剧","tmdbid":209867,"season":1}"#.utf8), path: lookupPath)
@@ -3194,13 +3231,18 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertNil(tvOnlyConfirmation)
 
     await stub.setDetailLoadResponse(
-      Data(#"{"id":902,"type":"电影","tmdbid":209867}"#.utf8), path: lookupPath)
+      Data(#"{"id":902,"name":"同名电影","year":"2023","type":"电影","tmdbid":209867}"#.utf8),
+      path: lookupPath)
     let didRefresh = await viewModel.refreshSubscriptionStatus()
     XCTAssertTrue(didRefresh)
     XCTAssertEqual(task.isSubscribed, true)
     let resolvedConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
     let confirmation = try XCTUnwrap(resolvedConfirmation)
     XCTAssertEqual(confirmation.subscriptionID, 902)
+    // 按片名猜出的编号找到的记录：确认里写出实际要取消的那条。
+    XCTAssertEqual(
+      confirmation.message,
+      "是否取消《来源电影》订阅？\n\n将取消的订阅是《同名电影》（2023），是按片名找到的，请确认是同一部。")
     await stub.setDetailLoadResponse(Data(#"{"success":true}"#.utf8), path: "/api/v1/subscribe/902")
     let didCancel = await viewModel.cancelSubscription(confirmation: confirmation)
     XCTAssertTrue(didCancel)
@@ -3210,6 +3252,106 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertEqual(zip(paths, methods).filter { $0.1 == "DELETE" }.map { $0.0 }, [
       "/api/v1/subscribe/902"
     ])
+  }
+
+  func testOldBackendFindsMovieRecordBehindSameNumberTVRecord() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.6")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"123","title":"来源电影","type":"电影","year":"2024"}"#.utf8),
+      path: "/api/v1/media/123")
+    await stub.setManualMediaResponse(
+      title: "来源电影",
+      data: Data(
+        #"[{"source":"themoviedb","tmdb_id":209867,"title":"来源电影","type":"电影","year":"2024"}]"#.utf8))
+    // v3.2.6 的查询不按类型过滤，同号的剧集订阅排在前面；带同一 TMDB 编号的另一豆瓣条目也排在主身份记录前面。
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":903,"type":"电视剧","tmdbid":209867,"season":1}"#.utf8),
+      path: "/api/v1/subscribe/media/209867")
+    await stub.setDetailLoadResponse(
+      Data(#"""
+        [{"id":903,"name":"同号剧集","type":"电视剧","tmdbid":209867,"season":1},
+         {"id":904,"name":"其他电影","type":"电影","tmdbid":1},
+         {"id":906,"name":"来源电影","type":"电影","tmdbid":209867,"media_source":"douban","media_id":"999"},
+         {"id":902,"name":"来源电影","year":"2024","type":"电影","tmdbid":209867}]
+        """#.utf8),
+      path: "/api/v1/subscribe")
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+
+    await waitUntil(timeout: 3) { task.isSubscribed != nil }
+    XCTAssertEqual(task.tmdbTarget?.type, "电影")
+    XCTAssertEqual(task.isSubscribed, true)
+
+    let viewModel = MediaDetailViewModel(detail: try XCTUnwrap(task.fullDetail), apiService: service)
+    viewModel.preloadTask = task
+    let resolvedConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+    let confirmation = try XCTUnwrap(resolvedConfirmation)
+    XCTAssertEqual(confirmation.subscriptionID, 902)
+
+    // 同名记录缺年份：分辨不出是不是同一部，不在这里取消。
+    await stub.setDetailLoadResponse(
+      Data(#"[{"id":902,"name":"来源电影","type":"电影","tmdbid":209867}]"#.utf8),
+      path: "/api/v1/subscribe")
+    do {
+      _ = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+      XCTFail("同名又缺年份的记录不应给出取消确认")
+    } catch {
+      XCTAssertTrue(error is SubscriptionCancelConfirmation.UnverifiedRecord, "\(error)")
+    }
+
+    // 按豆瓣身份直接找到的记录不需要提醒。
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":905,"name":"来源电影","type":"电影","media_source":"douban","media_id":"123"}"#.utf8),
+      path: "/api/v1/subscribe/media/123")
+    let originConfirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+    let origin = try XCTUnwrap(originConfirmation)
+    XCTAssertEqual(origin.subscriptionID, 905)
+    XCTAssertEqual(origin.message, "是否取消《来源电影》订阅？")
+  }
+
+  func testNameMatchedMovieCancelNeedsDistinguishableRecord() throws {
+    let page = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影", year: "2024")
+    func record(_ name: String?, _ year: String?, origin: Bool = false) -> ExactMovieSubscription {
+      ExactMovieSubscription(id: 1, name: name, year: year, matchesOrigin: origin)
+    }
+    func message(
+      _ media: MediaInfo, _ subscription: ExactMovieSubscription, nameRecognized: Bool = true
+    ) throws -> String {
+      try SubscriptionCancelConfirmation.headerMessage(
+        for: media, cancelling: subscription, isNameRecognized: nameRecognized)
+    }
+    let base = "是否取消《来源电影》订阅？"
+
+    // 按原来源找到，或映射、Match 确认过的：照常确认。
+    XCTAssertEqual(try message(page, record("来源电影", nil, origin: true)), base)
+    XCTAssertEqual(try message(page, record(nil, nil), nameRecognized: false), base)
+    // 片名不同或两边年份都在：写出实际记录让用户确认。
+    XCTAssertEqual(
+      try message(page, record("同名电影", nil)),
+      "\(base)\n\n将取消的订阅是《同名电影》，是按片名找到的，请确认是同一部。")
+    XCTAssertEqual(
+      try message(page, record("来源电影", "2023")),
+      "\(base)\n\n将取消的订阅是《来源电影》（2023），是按片名找到的，请确认是同一部。")
+    // 片名相同又缺年份，或记录没有片名：分辨不出，不在这里取消。
+    let noYearPage = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    for (media, subscription) in [
+      (page, record("来源电影", nil)),
+      (page, record(" 来源电影 ", "")),
+      (noYearPage, record("来源电影", "2024")),
+      (page, record(nil, "2024")),
+    ] {
+      XCTAssertThrowsError(try message(media, subscription)) {
+        XCTAssertTrue($0 is SubscriptionCancelConfirmation.UnverifiedRecord)
+      }
+    }
   }
 
   private func waitUntil(
