@@ -358,7 +358,7 @@ private struct EpisodeBrowser: View {
 
   private enum RowContent {
     case episodes([MoviePilotEpisode])
-    case status(EpisodeShelfStatusCard.Status, retry: (() -> Void)?)
+    case status(ShelfStatusCard.Status, retry: (() -> Void)?)
   }
 
   private var rowContent: RowContent {
@@ -369,7 +369,7 @@ private struct EpisodeBrowser: View {
       case .loaded:
         return .status(.empty("暂无分季信息"), retry: retrySeasonList)
       case .loading, nil:
-        return .status(.loading("正在加载分季信息"), retry: nil)
+        return .status(.loading("正在加载分季信息…"), retry: nil)
       }
     }
     let retry = { group.episodeRetries[seasonNumber, default: 0] += 1 }
@@ -382,7 +382,7 @@ private struct EpisodeBrowser: View {
     case .failed:
       return .status(.failed("剧集加载失败"), retry: retry)
     case .loading, nil:
-      return .status(.loading("正在加载剧集"), retry: nil)
+      return .status(.loading("正在加载剧集…"), retry: nil)
     }
   }
 
@@ -757,7 +757,7 @@ private struct EpisodeBrowser: View {
   }
 
   private func statusRow(
-    _ status: EpisodeShelfStatusCard.Status, retry: (() -> Void)?, stillSize: CGSize
+    _ status: ShelfStatusCard.Status, retry: (() -> Void)?, stillSize: CGSize
   ) -> some View {
     EpisodeShelfStatusRow(
       status: status,
@@ -1462,7 +1462,7 @@ struct EpisodeCardText: View, Animatable {
 /// 行里还没有单集可显示时：剧照大小、可聚焦的状态卡，能重试时按钮在它右侧。
 /// 加载中、失败、为空是同一张卡，状态变化时焦点留在原地。下面按卡片文字预留同样高度，内容到了行高不跳。
 private struct EpisodeShelfStatusRow: View {
-  let status: EpisodeShelfStatusCard.Status
+  let status: ShelfStatusCard.Status
   var statusFocus: FocusState<EpisodeRowFocus?>.Binding
   let stillSize: CGSize
   let onRetry: (() -> Void)?
@@ -1470,8 +1470,9 @@ private struct EpisodeShelfStatusRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EpisodeCardLayout.textGap) {
       HStack(spacing: EpisodeCardLayout.spacing) {
-        EpisodeShelfStatusCard(
-          status: status, stillSize: stillSize, isFocused: statusFocus.wrappedValue == .status
+        ShelfStatusCard(
+          status: status, size: stillSize,
+          focusStyle: .focusable(isFocused: statusFocus.wrappedValue == .status)
         )
           .focused(statusFocus, equals: .status)
         if let onRetry {
@@ -1483,50 +1484,6 @@ private struct EpisodeShelfStatusRow: View {
         .hidden()
         .accessibilityHidden(true)
     }
-  }
-}
-
-struct EpisodeShelfStatusCard: View {
-  enum Status: Equatable {
-    case loading(String)
-    case failed(String)
-    case empty(String)
-
-    var text: String {
-      switch self {
-      case .loading(let text), .failed(let text), .empty(let text): return text
-      }
-    }
-  }
-
-  let status: Status
-  var stillSize = EpisodeCardLayout.stillSize
-  let isFocused: Bool
-
-  var body: some View {
-    VStack(spacing: 14) {
-      switch status {
-      case .loading:
-        ProgressView()
-      case .failed:
-        Image(systemName: AppSymbol.warning)
-          .font(.title3)
-          .foregroundStyle(.secondary)
-      case .empty:
-        Image(systemName: AppSymbol.noResults)
-          .font(.title3)
-          .foregroundStyle(.secondary)
-      }
-      Text(status.text)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-    .frame(width: stillSize.width, height: stillSize.height)
-    .textCardFocusAppearance(isFocused: isFocused)
-    .focusable()
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(status.text)
-    .accessibilityAddTraits(.isStaticText)
   }
 }
 

@@ -267,11 +267,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
         header
 
         if isLoading {
-          HStack {
-            Spacer()
-            ProgressView()
-            Spacer()
-          }
+          // 整页加载的转圈由 ScrollView 外层的 pageLoadingOverlay 居中显示。
+          EmptyView()
         } else if items.isEmpty {
           HStack {
             Spacer()
@@ -362,16 +359,12 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
           // 加载更多指示器
           if isLoadingMore && retainedItemCount == items.count {
-            HStack {
-              Spacer()
-              ProgressView()
-                .padding()
-              Spacer()
-            }
+            ListLoadingFooter()
           }
         }
       }
     }
+    .pageLoadingOverlay(isLoading)
     .focusSection()
     .onScrollGeometryChange(
       for: CGFloat.self,

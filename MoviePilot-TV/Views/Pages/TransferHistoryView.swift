@@ -68,7 +68,7 @@ struct TransferHistoryView: View {
       if !keepsRowsMounted {
         EmptyView()
       } else if viewModel.isFirstLoading {
-        ProgressView().frame(maxWidth: .infinity, alignment: .center).padding()
+        FirstLoadIndicator(minHeight: nil).padding()
       } else if viewModel.items.isEmpty {
         EmptyDataView(title: "没有数据")
       } else {
@@ -104,7 +104,7 @@ struct TransferHistoryView: View {
             .focused($focusedHistoryId, equals: item.id)
           }
           if viewModel.isLoadingMore {
-            ProgressView().padding()
+            ListLoadingFooter()
           }
         }
         .padding(.top, 25)
@@ -142,23 +142,6 @@ struct TransferHistoryView: View {
         viewModel.errorMessage = nil
       }
     }
-    .overlay(
-      Group {
-        if viewModel.isMutatingHistory {
-          VStack(spacing: 20) {
-            ProgressView(
-              viewModel.isValidatingMutation
-                ? "正在确认整理记录..."
-                : (viewModel.isDeleting ? "正在删除整理记录..." : viewModel.aiRedoProgressText)
-            )
-          }
-          .padding()
-          .background(.ultraThinMaterial)
-          .cornerRadius(12)
-        }
-      },
-      alignment: .center
-    )
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       itemForInfoSheet = nil
       viewModel.mutationRetryMessage = nil

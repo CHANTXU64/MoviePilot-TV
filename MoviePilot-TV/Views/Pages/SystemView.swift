@@ -451,7 +451,7 @@ struct SystemView: View {
             .focused($focusedItem, equals: .softFilter)
 
             if viewModel.isLoadingRules {
-              row("规则状态", value: "正在加载")
+              row("规则状态", value: "正在加载…")
                 .foregroundStyle(.secondary)
             } else if viewModel.rulesLoadFailed {
               Button {
@@ -528,7 +528,7 @@ struct SystemView: View {
         } label: {
           row(
             "刷新登录凭据",
-            value: viewModel.isRefreshing ? "刷新中" : nil,
+            value: viewModel.isRefreshing ? "正在刷新…" : nil,
             showsProgress: viewModel.isRefreshing
           )
         }
@@ -869,7 +869,7 @@ struct SystemView: View {
       .focused($focusedItem, equals: allFocus)
 
       if viewModel.isLoadingSites {
-        row("站点状态", value: "正在加载")
+        row("站点状态", value: "正在加载…")
           .foregroundStyle(.secondary)
       } else if let siteLoadError = viewModel.siteLoadError {
         Button {
@@ -1005,7 +1005,7 @@ struct SystemView: View {
   }
 
   private var versionRequirementValue: String {
-    if viewModel.isCheckingBackendVersion { return "正在检查" }
+    if viewModel.isCheckingBackendVersion { return "正在检查…" }
     if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
     return "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)"
   }
@@ -1051,7 +1051,7 @@ struct SystemView: View {
 
       HStack(spacing: 8) {
         if showsProgress {
-          ProgressView()
+          LoadingIcon(systemImage: AppSymbol.loading, isLoading: true)
         }
 
         if let value {

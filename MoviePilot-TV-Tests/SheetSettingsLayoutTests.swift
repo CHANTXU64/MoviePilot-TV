@@ -28,6 +28,15 @@ final class SheetSettingsLayoutTests: XCTestCase {
     }
   }
 
+  /// 图标位转圈只叠在图标上、不参与布局：加载前后槽位尺寸完全一致，不会撑高按钮或行。
+  func testLoadingIconKeepsIconSlotSize() {
+    for systemImage in [AppSymbol.subscribe, AppSymbol.link, AppSymbol.account] {
+      let idle = fittingSize(LoadingIcon(systemImage: systemImage, isLoading: false))
+      let loading = fittingSize(LoadingIcon(systemImage: systemImage, isLoading: true))
+      XCTAssertEqual(loading, idle, "systemImage: \(systemImage)")
+    }
+  }
+
   /// 整行输入框：项名和内容在框里放得下才显示项名，放不下（长识别词）只显示内容；没填内容不显示。
   func testInlineTitleOnlyShowsWhenTitleAndTextFit() {
     let font = UIFont.preferredFont(forTextStyle: .body)

@@ -1176,6 +1176,28 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(requests, 2)
   }
 
+  func testStandaloneSeasonPageShowsLoadingBeforeTheFirstLoadStarts() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setUnfilteredSeasonsResponse("[]")
+    try await stub.setDefaultSubscriptions([])
+    let media = MediaInfo(tmdb_id: 987_663, title: "分季首帧", type: "电视剧")
+
+    let viewModel = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(viewModel.showsLoadingState, "加载任务还没跑时不能先显示「未查询到季集信息」")
+
+    await viewModel.loadSeasonManagementData()
+    XCTAssertTrue(viewModel.seasonInfos.isEmpty)
+    XCTAssertFalse(viewModel.showsLoadingState, "确实查不到季信息时才显示空状态")
+  }
+
   func testSeasonManagementDoesNotRetryEmptyButRecoversOnReentry() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }

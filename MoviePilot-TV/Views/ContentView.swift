@@ -18,7 +18,7 @@ struct ContentView: View {
         MainContentView(viewModel: viewModel)
           .id(viewModel.sessionUIIdentity)
       } else if viewModel.isPreparingStartupSession {
-        ProgressView("正在准备会话...")
+        ProgressView("正在准备会话…")
       } else {
         LoginView()
       }

@@ -25,8 +25,8 @@ struct HomeView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 30) {
           if viewModel.showsLoadingPlaceholder {
-            ProgressView()
-              .frame(maxWidth: .infinity, minHeight: 200)
+            // 整页加载的转圈由 ScrollView 外层的 pageLoadingOverlay 居中显示。
+            EmptyView()
           } else {
             // 部分数据失败：保留旧快照并提示（成功空不算失败）
             if viewModel.latestLoadFailed || viewModel.continueWatchingLoadFailed
@@ -125,6 +125,7 @@ struct HomeView: View {
           }
         }
       }
+      .pageLoadingOverlay(viewModel.showsLoadingPlaceholder)
       .task(id: isSelected) {
         // 成为当前 Tab 时加载：首屏完整加载，再次进入重刷一次（「继续观看」不跟轮询，见 `loadData`）。
         // 切走时任务取消，轮询不再在后台空转。

@@ -101,60 +101,6 @@ struct DoubanDiscussionCardContent: View {
   }
 }
 
-/// 区块里没有可展示条目时的状态卡：加载中、加载失败（可重试）、暂无内容。
-///
-/// 三种状态是同一个可聚焦按钮，状态切换时视图身份不变，焦点留在原地。卡片本身不响应
-/// 选择键，失败时由行里紧跟其后的「重试」按钮重新加载。尺寸与普通卡片一致，避免行高跳动。
-struct DoubanDiscussionStatusCard: View {
-  enum Status: Equatable {
-    case loading
-    case failed
-    case empty
-  }
-
-  let kind: DoubanDiscussionEntry.Kind
-  let status: Status
-
-  var body: some View {
-    Button {
-    } label: {
-      VStack(spacing: 14) {
-        switch status {
-        case .loading:
-          ProgressView()
-          Text("正在加载\(kind.title)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        case .failed:
-          Image(systemName: AppSymbol.warning)
-            .font(.title3)
-            .foregroundStyle(.secondary)
-          Text(kind.failureText)
-            .font(.caption.bold())
-        case .empty:
-          Image(systemName: AppSymbol.noComments)
-            .font(.title3)
-            .foregroundStyle(.secondary)
-          Text(kind.emptyText)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
-      .frame(width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight)
-    }
-    .buttonStyle(TextCardButtonStyle())
-    .accessibilityLabel(accessibilityText)
-  }
-
-  private var accessibilityText: String {
-    switch status {
-    case .loading: return "正在加载\(kind.title)"
-    case .failed: return kind.failureText
-    case .empty: return kind.emptyText
-    }
-  }
-}
-
 /// 五星评分。星色用豆瓣评分的橙色，空星用半透明白，不画任何数字。
 struct DoubanRatingStars: View {
   let fills: [DoubanDiscussionEntry.StarFill]

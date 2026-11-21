@@ -78,7 +78,7 @@ final class StatusDashboardSnapshotTests: XCTestCase {
 
     let service = makeService()
     let viewModel = StatusViewModel(apiService: service)
-    XCTAssertEqual(viewModel.unavailableValueText, "获取中…")
+    XCTAssertEqual(viewModel.unavailableValueText, "正在获取…")
 
     await viewModel.refreshAllData()
 
@@ -106,7 +106,7 @@ final class StatusDashboardSnapshotTests: XCTestCase {
       StatusDashboardURLProtocol.stub.requestPaths().contains("/api/v1/dashboard/downloader")
     }
 
-    XCTAssertEqual(viewModel.unavailableValueText, "获取中…")
+    XCTAssertEqual(viewModel.unavailableValueText, "正在获取…")
     XCTAssertNil(viewModel.statistic)
     XCTAssertNil(viewModel.storage)
     XCTAssertNil(viewModel.downloader)

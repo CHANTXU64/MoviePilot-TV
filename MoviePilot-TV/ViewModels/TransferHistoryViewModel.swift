@@ -41,6 +41,12 @@ class TransferHistoryViewModel: ObservableObject {
     isDeleting || isAiRedoing || isValidatingMutation
   }
 
+  /// 删除、AI 整理进行中时加载框里的说明。
+  var mutationProgressText: String {
+    if isValidatingMutation { return "正在确认整理记录…" }
+    return isDeleting ? "正在删除整理记录…" : aiRedoProgressText
+  }
+
   // MARK: - Private State
 
   private var paginator: Paginator<TransferHistory>!
@@ -709,7 +715,7 @@ class TransferHistoryViewModel: ObservableObject {
     }
 
     isAiRedoing = true
-    aiRedoProgressText = "正在确认整理记录..."
+    aiRedoProgressText = "正在确认整理记录…"
     let validation = await validateMutationTargets(
       pendingItems,
       sourceSession: sourceSession
@@ -722,7 +728,7 @@ class TransferHistoryViewModel: ObservableObject {
     for id in pendingIds {
       aiRedoingIds.insert(id)
     }
-    aiRedoProgressText = "正在启动 AI 整理..."
+    aiRedoProgressText = "正在启动 AI 整理…"
 
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in
