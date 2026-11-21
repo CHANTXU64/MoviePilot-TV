@@ -24,7 +24,7 @@ struct HomeView: View {
     NavigationStack(path: $navigationCoordinator.path) {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 30) {
-          if viewModel.isLoading {
+          if viewModel.showsLoadingPlaceholder {
             ProgressView()
               .frame(maxWidth: .infinity, minHeight: 200)
           } else {
@@ -43,7 +43,7 @@ struct HomeView: View {
               .padding(.horizontal)
             }
 
-            // 第1节：继续观看。空态时不做首行焦点重定向，交给下面第一个有内容的行。
+            // 第1节：继续观看。这一行没有条目时不接标签栏下来的焦点，交给下面的行（条件见各行的 isFirstRow）。
             if !viewModel.continueWatchingServers.isEmpty {
               MediaSectionView(
                 content: .continueWatching,
@@ -65,7 +65,7 @@ struct HomeView: View {
                 items: viewModel.latestMedia,
                 servers: viewModel.latestMediaServers,
                 selectedServer: $viewModel.selectedLatestMediaServer,
-                isFirstRow: viewModel.continueWatchingServers.isEmpty,
+                isFirstRow: viewModel.continueWatching.isEmpty,
                 loadsPageImages: true,
                 viewModel: viewModel
               )
@@ -76,7 +76,7 @@ struct HomeView: View {
               SubscribeSectionView(
                 title: "电影订阅",
                 items: viewModel.movieSubscriptions,
-                isFirstRow: viewModel.continueWatchingServers.isEmpty
+                isFirstRow: viewModel.continueWatching.isEmpty
                   && viewModel.latestMediaServers.isEmpty,
                 loadsPageImages: true,
                 viewModel: viewModel,
@@ -90,7 +90,7 @@ struct HomeView: View {
               SubscribeSectionView(
                 title: "电视剧订阅",
                 items: viewModel.tvSubscriptions,
-                isFirstRow: viewModel.continueWatchingServers.isEmpty
+                isFirstRow: viewModel.continueWatching.isEmpty
                   && viewModel.latestMediaServers.isEmpty
                   && viewModel.movieSubscriptions.isEmpty,
                 loadsPageImages: true,

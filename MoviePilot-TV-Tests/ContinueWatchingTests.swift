@@ -543,6 +543,73 @@ final class HomeContinueWatchingRowTests: XCTestCase {
     XCTAssertEqual(viewModel.continueWatchingServers, ["emby"], "两行必须共用同一次配置读取的结果")
   }
 
+  /// 页面一直开着、在 Web 端停用了当前选中的服务器：轮询发现启用的服务器变了，「继续观看」要跟着整行重读，
+  /// 不能留着已停用服务器的卡片（按下去协调器读到新配置，找不到这台服务器）。配置没再变时轮询仍不读这一行。
+  func testPollingFollowsServerConfigChangesInContinueWatching() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.loadData()
+    viewModel.selectedContinueWatchingServer = "jellyfin"
+    XCTAssertEqual(viewModel.continueWatchingServers, ["emby", "jellyfin"])
+
+    HomeContinueWatchingURLProtocol.stub.setServersBody(
+      HomeContinueWatchingURLProtocol.serversBody(jellyfinEnabled: false))
+    await viewModel.refreshData(includeContinueWatching: false)
+
+    XCTAssertEqual(viewModel.latestMediaServers, ["emby"])
+    XCTAssertEqual(viewModel.continueWatchingServers, ["emby"], "两行的可选服务器必须一致")
+    XCTAssertEqual(viewModel.selectedContinueWatchingServer, "emby")
+    XCTAssertEqual(viewModel.continueWatching.map(\.title), ["某剧"])
+
+    let playingReads = requestCount(path: "/api/v1/mediaserver/playing")
+    await viewModel.refreshData(includeContinueWatching: false)
+    XCTAssertEqual(
+      requestCount(path: "/api/v1/mediaserver/playing"), playingReads, "配置没变时轮询不读继续观看")
+  }
+
+  /// 首屏：某台服务器的「继续观看」很慢时，「最近添加」已经能显示就不整页转圈，继续观看读到后再出现。
+  func testSlowContinueWatchingDoesNotHoldTheFirstScreen() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    XCTAssertTrue(viewModel.showsLoadingPlaceholder, "还什么都没有时整页转圈")
+    HomeContinueWatchingURLProtocol.stub.setLatestResult(server: "emby", .success)
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateFirstPlaying(server: "emby", gate)
+
+    let load = Task { await viewModel.loadData() }
+    try await waitUntil { !viewModel.latestMediaServers.isEmpty }
+    XCTAssertTrue(viewModel.isLoading, "继续观看还在读，首轮没跑完")
+    XCTAssertFalse(viewModel.showsLoadingPlaceholder, "已有能显示的行，不等继续观看")
+    XCTAssertTrue(viewModel.continueWatching.isEmpty)
+
+    gate.signal()
+    await load.value
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.continueWatching.isEmpty)
+  }
+
+  /// 再次进入页面是后台刷新：即使上一轮什么内容都没有（空态），也不回到整页转圈，空态保留到新结果到达。
+  func testReenteringThePageRefreshesWithoutTheLoadingPlaceholder() async throws {
+    let service = makeService()
+    let viewModel = HomeViewModel(apiService: service)
+    HomeContinueWatchingURLProtocol.stub.setServersBody(#"{"value":[]}"#)
+    await viewModel.loadData()
+    XCTAssertFalse(viewModel.showsLoadingPlaceholder)
+    XCTAssertTrue(viewModel.latestMediaServers.isEmpty && viewModel.continueWatchingServers.isEmpty)
+
+    // 让再次进入的那一轮停在读配置那一步。
+    service.sessionScope.mediaServerConfigCache.invalidateAll()
+    let gate = DispatchSemaphore(value: 0)
+    HomeContinueWatchingURLProtocol.stub.gateNextConfigRead(gate)
+    let configReadsBefore = Self.configReads()
+    let reentry = Task { await viewModel.loadData() }
+    try await waitUntil { Self.configReads() > configReadsBefore }
+    XCTAssertFalse(viewModel.isLoading, "再次进入不回到首轮加载状态")
+    XCTAssertFalse(viewModel.showsLoadingPlaceholder, "再次进入不整页转圈")
+    gate.signal()
+    await reentry.value
+  }
+
   private static func resumeBody(percent: Int) -> String {
     #"[{"id":"e1","item_id":"e1","title":"某剧","type":"电视剧","subtitle":"S2:5 - 集名","percent":\#(percent),"server_type":"emby"}]"#
   }
@@ -570,7 +637,7 @@ final class HomeContinueWatchingRowTests: XCTestCase {
   }
 
   /// 刷新信号的接线（源码守卫，不代表真机验收）：数据刷新等进度写回完成，焦点恢复仍用播放器刚关那个信号。
-  func testContinueWatchingRefreshWaitsForProgressWriteBack() throws {
+  func testContinueWatchingRefreshWaitsForProgressWriteBackInSource() throws {
     let source = try Self.homeViewSource()
     let rowStart = try XCTUnwrap(source.range(of: "private struct MediaSectionView"))
     let page = String(source[..<rowStart.lowerBound])

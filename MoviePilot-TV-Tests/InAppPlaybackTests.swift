@@ -6929,6 +6929,46 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(info.tmdb_id, 100)
   }
 
+  /// 只有豆瓣编号的电影也按编号认：查 MoviePilot 详情（和单集查整剧同一跳），不退回按标题识别。
+  func testResumeItemIdentityLooksUpADoubanOnlyMovie() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["\(Self.lan)|m1": #"{"Id":"m1","Type":"Movie","Name":"某片","ProviderIds":{"Douban":"3541415"}}"#]
+      $0.mediaDetails = [
+        "/api/v1/media/3541415":
+          #"{"tmdb_id":777,"douban_id":"3541415","source":"douban","type":"电影","title":"MP 片名"}"#
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let resolved = await coordinator.resumeItemIdentity(serverName: "emby", itemID: "m1")
+    let info = try XCTUnwrap(resolved, "有豆瓣编号就不该退回按标题")
+    XCTAssertEqual(info.tmdb_id, 777)
+    XCTAssertEqual(info.title, "MP 片名")
+  }
+
+  /// 服务器上的单集和 TMDB 集列表都没有单集编号（只能按集号对上）时，队列里的当前集必须是对上的那一集。
+  /// 按编号在列表里再找一遍会 `nil == nil` 命中排在前面的第 1 集，播完就从第 1 集往下接、跳回第 2 集。
+  func testServerEpisodeWithoutTmdbEpisodeIDsQueuesTheMatchedEpisode() async throws {
+    configureResumableEpisode()
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e1"] =
+        #"{"Id":"e1","Type":"Episode","Name":"Emby 集名","SeriesId":"s1","SeriesName":"Emby 剧名","ParentIndexNumber":1,"IndexNumber":2,"PremiereDate":"2024-01-08T00:00:00.0000000Z","ProviderIds":{}}"#
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] =
+        #"[{"episode_number":1,"name":"第一集","air_date":"2024-01-01"},{"episode_number":2,"name":"MP 集名","air_date":"2024-01-08"}]"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverEpisode(serverName: "emby", itemID: "e1"))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e1")
+    let queued = try XCTUnwrap(session.episode)
+    XCTAssertEqual(queued.episode.episodeNumber, 2, "当前集要是按集号对上的第 2 集，不是排在前面的第 1 集")
+    XCTAssertEqual(queued.episode.name, "MP 集名")
+    coordinator.endCurrentSession()
+  }
+
   /// 条目记 2 小时、所选片源 3 小时：播放界面显示的片长、跳转上限读的片长和写回的看完判定都按 3 小时。
   /// 跳转本身要等播放器就绪才发，测试里播放器打不开测试地址，只能断言跳转上限读的那个值（`MediaSession.item.runtime`）。
   func testExtendedCutUsesSourceRuntimeForDisplaySeekAndWriteBack() async throws {

@@ -36,12 +36,18 @@ enum PlaybackMetadataLookup {
   /// 只认编号，这一季的列表里没有它（比如服务器按剧集组分季）就不认，不再按集号凑；没有编号时才按集号，
   /// 两边都有播出日期又对不上（服务器按别的顺序编号）时也不认，免得显示别的集的简介。
   nonisolated static func episode(matching item: ServerMediaItem, in list: [TmdbEpisode]) -> TmdbEpisode? {
-    if let id = item.tmdbEpisodeID { return list.first { $0.id == id } }
-    guard let number = item.episodeNumber, let hit = list.first(where: { $0.episodeNumber == number }) else {
+    episodeIndex(matching: item, in: list).map { list[$0] }
+  }
+
+  /// 同 `episode(matching:in:)`，给出它在列表里的位置。列表里的集可能没有 TMDB 编号，
+  /// 要在列表里再找到这一集时用位置，不能按编号再找一遍（几集都没有编号时会找到排在前面的另一集）。
+  nonisolated static func episodeIndex(matching item: ServerMediaItem, in list: [TmdbEpisode]) -> Int? {
+    if let id = item.tmdbEpisodeID { return list.firstIndex { $0.id == id } }
+    guard let number = item.episodeNumber, let index = list.firstIndex(where: { $0.episodeNumber == number }) else {
       return nil
     }
-    if case .differs = AirDateCheck.compare(server: item.premiereDate, moviePilot: hit.airDate) { return nil }
-    return hit
+    if case .differs = AirDateCheck.compare(server: item.premiereDate, moviePilot: list[index].airDate) { return nil }
+    return index
   }
 
   /// 按外部编号查 MoviePilot 详情时用的身份：TMDB 优先，其次豆瓣。服务器条目没有这两种编号时为 nil。
@@ -85,16 +91,16 @@ enum PlaybackMetadataLookup {
     return await detail(of: series, type: "电视剧", known: media, api: api)
   }
 
-  /// 这一集的季号、这一季的 TMDB 集列表（默认顺序），以及这一集对应到列表里的哪一集。
+  /// 这一集的季号、这一季的 TMDB 集列表（默认顺序），以及这一集在列表里的位置。
   /// 身份规则见 `episode(matching:in:)`；季号缺失、列表读不到或对应不上时 nil。
   static func episodeInSeason(
     for item: ServerMediaItem, detail: MediaInfo, api: APIService
-  ) async -> (season: Int, list: [TmdbEpisode], episode: TmdbEpisode)? {
+  ) async -> (season: Int, list: [TmdbEpisode], index: Int)? {
     guard let tmdbID = MediaIdentifier.validNumericIdentifier(detail.tmdb_id), let season = item.seasonNumber,
       let list = try? await api.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil),
-      let episode = episode(matching: item, in: list)
+      let index = episodeIndex(matching: item, in: list)
     else { return nil }
-    return (season, list, episode)
+    return (season, list, index)
   }
 
   private static func episodeMetadata(
@@ -104,11 +110,17 @@ enum PlaybackMetadataLookup {
     var metadata = PlaybackMetadata(
       seriesName: detail.title, posterURL: api.getPosterImageUrl(posterPath: detail.poster_path))
     guard let found = await episodeInSeason(for: item, detail: detail, api: api) else { return metadata }
-    let still = api.getSeasonPosterURL(posterPath: found.episode.stillPath, mediaPosterPath: nil)
-    metadata = MoviePilotEpisode(found.episode, season: found.season, index: 0)
+    let episode = found.list[found.index]
+    let still = api.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil)
+    metadata = MoviePilotEpisode(episode, season: found.season, index: 0)
       .playbackMetadata(seriesName: metadata.seriesName, stillURL: still)
       .filling(metadata)
     return metadata
+  }
+
+  /// 服务器条目自己（电影、整剧）的 MoviePilot 详情：按条目的外部编号查（TMDB 优先，其次豆瓣）。认不出时 nil。
+  static func mediaDetail(of item: ServerMediaItem, type: String, api: APIService) async -> MediaInfo? {
+    await detail(of: item, type: type, known: nil, api: api)
   }
 
   /// MoviePilot 详情：详情页给的类型对得上就用它；否则按服务器条目的外部编号查。查到的详情没有标题时当作认不出。

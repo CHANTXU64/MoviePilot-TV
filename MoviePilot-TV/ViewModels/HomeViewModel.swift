@@ -41,8 +41,16 @@ class HomeViewModel: ObservableObject {
   @Published var continueWatchingLoadFailed = false
   /// 订阅加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
   @Published var subscriptionsLoadFailed = false
-  /// 加载状态
-  @Published var isLoading = true
+  /// 这个页面的首轮加载还没跑完。只在页面第一次加载时为 true：再次进入页面时在后台刷新，
+  /// 保留已显示的内容（包括空态和失败提示），不再整页转圈。
+  @Published private(set) var isLoading = true
+
+  /// 整页转圈：首轮加载还没跑完，而且还没有任何一行可以显示。哪一行先读到就先显示，
+  /// 不等其余的板块（比如某台服务器的「继续观看」很慢）。
+  var showsLoadingPlaceholder: Bool {
+    isLoading && continueWatchingServers.isEmpty && latestMediaServers.isEmpty
+      && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
+  }
   /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
   @Published private(set) var inAppPlayableServers: Set<String> = []
   /// 能在应用内播放的服务器上，「最近添加」各条目按下做什么（有没有 TMDB 编号），键见 `itemKey`。每次读列表时一起重读。
@@ -65,6 +73,8 @@ class HomeViewModel: ObservableObject {
   static let continueWatchingCount = 20
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
   private var continueWatchingByServer: [String: [MediaServerPlayItem]] = [:]
+  /// 「继续观看」已发布过一次读取结果，`continueWatchingServers` 就是那次读到的启用服务器。
+  private var hasReadContinueWatching = false
   /// 「继续观看」的整次读取（服务器列表 + 条目）走「最新者胜出」：页面激活、手动重试、进度写回通知三个入口
   /// 可能同时在读，慢的旧请求不得覆盖快的新请求——这一行不跟轮询，覆盖错了旧进度会一直显示。
   /// 复用 `CoalescingCache` 的强刷取代链，不手写代际计数器。ttl 0：不留缓存，每次都现读。
@@ -106,18 +116,11 @@ class HomeViewModel: ObservableObject {
   }
 
   /// 页面每次成为当前 Tab 时调用（见 `HomeView` 的 `.task(id: isSelected)`）：三个板块各自刷新、各自发布。
-  /// 不设「已加载过」门闩——每次进入都要刷新，门闩只会让快速切 Tab 时新旧任务交错、绕过结束 Loading 的那一步。
+  /// 每次进入都刷新，不设「已加载过」门闩。`isLoading` 只从 true 变成 false：首轮被切走打断时留给下一次进入的
+  /// 那一轮关；之后再进入是后台刷新，不回到整页转圈。
   func loadData() async {
-    // 仅在还没有任何数据时显示全屏 Loading
-    if latestMedia.isEmpty && continueWatching.isEmpty
-      && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
-    {
-      isLoading = true
-    }
-
     await refreshData()
 
-    // 被取消（切走页面）就不动 Loading，交给下一次进入的那一轮跑完再关。
     guard !Task.isCancelled else { return }
     isLoading = false
   }
@@ -128,7 +131,9 @@ class HomeViewModel: ObservableObject {
   /// Web 也只在页面激活时读。「继续观看」另由页面激活、手动重试和进度写回完成后触发。
   func refreshData(includeContinueWatching: Bool = true) async {
     await withTaskGroup(of: Void.self) { group in
-      group.addTask { await self.loadLatestMedia() }
+      group.addTask {
+        await self.loadLatestMedia(followsServerChangesInContinueWatching: !includeContinueWatching)
+      }
       if includeContinueWatching {
         group.addTask { await self.loadContinueWatching() }
       }
@@ -144,7 +149,8 @@ class HomeViewModel: ObservableObject {
 
   /// 「最近添加」：现拉媒体服务器配置（写回会话缓存，详情页和播放沿用同一份），
   /// 再按启用服务器读列表。自己发布快照、失败标记和可选服务器，不等另一行。
-  private func loadLatestMedia() async {
+  /// `followsServerChangesInContinueWatching`：这一轮不读「继续观看」（轮询）时为 true，启用的服务器变了就让它跟着重读。
+  private func loadLatestMedia(followsServerChangesInContinueWatching: Bool) async {
     guard apiService.canRequestSuperUserEndpoints else {
       clearLatestMedia()
       if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
@@ -183,6 +189,15 @@ class HomeViewModel: ObservableObject {
     if latestMediaServers != merged.servers { latestMediaServers = merged.servers }
     selectedLatestMediaServer = merged.selected
     applyLatestMediaSelection()
+
+    // 「继续观看」不跟轮询，但它的服务器列表要跟着配置变：这次读到的启用服务器和它上次读到的不一样
+    // （在 Web 端停用或启用了服务器），就整行重读一次，服务器列表和条目仍出自同一次读取。
+    // 它还没读完过一次时不管，首轮由页面激活那次负责；同一轮也在读它时不重复触发。
+    if followsServerChangesInContinueWatching, hasReadContinueWatching,
+      continueWatchingServers != merged.servers
+    {
+      await loadContinueWatching()
+    }
   }
 
   /// 「继续观看」：自己读配置和条目、自己发布，不等「最近添加」。快照、失败标记和选择规则与它相同（共用 `mergedRow`）。
@@ -222,6 +237,7 @@ class HomeViewModel: ObservableObject {
       selected: selectedContinueWatchingServer)
     continueWatchingByServer = merged.byServer
     if continueWatchingServers != merged.servers { continueWatchingServers = merged.servers }
+    hasReadContinueWatching = true
     selectedContinueWatchingServer = merged.selected
     applyContinueWatchingSelection()
   }
@@ -328,6 +344,7 @@ class HomeViewModel: ObservableObject {
   private func clearContinueWatching() {
     continueWatchingByServer = [:]
     continueWatchingServers = []
+    hasReadContinueWatching = false
     continueWatchingLoadFailed = false
     if selectedContinueWatchingServer != "" { selectedContinueWatchingServer = "" }
     if !continueWatching.isEmpty { continueWatching = [] }

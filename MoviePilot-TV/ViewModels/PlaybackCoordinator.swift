@@ -713,7 +713,8 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   }
 
   /// 首页「继续观看」的详情与搜索入口用：按用户点的条目认出是哪部片，给出带 TMDB 编号的媒体信息。
-  /// 电影用条目自己的外部编号；单集用 `SeriesId` 对应整剧的（单集编号不是剧的编号），复用播放界面信息那条链。
+  /// 电影用条目自己的外部编号（有 TMDB 编号直接用，只有豆瓣编号时查 MoviePilot 详情）；单集用 `SeriesId` 对应整剧的
+  /// （单集编号不是剧的编号），复用播放界面信息那条链。
   /// 不要求应用内播放可用——这条路正是应用内播放不可用、服务器又不支持深链时才走的，所以不能用 `libraryItemLinks`。
   /// 读不到、认不出或超时返回 nil，调用方退回按标题识别。
   func resumeItemIdentity(serverName: String, itemID: String) async -> MediaInfo? {
@@ -734,10 +735,13 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
             for: item, media: nil, on: connection, api: apiService)
         case .movie, .series:
           let type = item.kind == .movie ? "电影" : "电视剧"
-          guard
-            let tmdbID = PlaybackMetadataLookup.lookupMedia(externalIDs: item.externalIDs, type: type)?.tmdb_id
+          guard let query = PlaybackMetadataLookup.lookupMedia(externalIDs: item.externalIDs, type: type)
           else { return nil }
-          return MediaInfo(tmdb_id: tmdbID, source: "themoviedb", title: item.name, type: type)
+          if let tmdbID = query.tmdb_id {
+            return MediaInfo(tmdb_id: tmdbID, source: "themoviedb", title: item.name, type: type)
+          }
+          // 只有豆瓣编号：查 MoviePilot 详情（同单集查整剧那一跳），和单集的身份规则一致。
+          return await PlaybackMetadataLookup.mediaDetail(of: item, type: type, api: apiService)
         case .other:
           return nil
         }
@@ -2149,9 +2153,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
           media: detail, episodeGroup: nil, seasons: seasons,
           libraryItem: MediaServerItemRef(itemID: seriesID, server: serverName))
         else { return nil }
+        // 按位置取，不按 TMDB 编号再找：几集都没有编号时会取到排在前面的另一集，播完就从那一集往下接。
         let episodes = MoviePilotEpisode.list(found.list, season: found.season)
-        guard let episode = episodes.first(where: { $0.tmdbEpisodeID == found.episode.id }) else { return nil }
-        var queued = QueuedEpisode(context: context, episode: episode, seasonEpisodes: episodes)
+        var queued = QueuedEpisode(context: context, episode: episodes[found.index], seasonEpisodes: episodes)
         // 起播的就是这份文件（续播点在它上面）；调用方按它核对是不是同一条，再挂上下文。
         queued.preferredFile = ServerFileRef(server: serverName, itemID: item.id)
         return (queued, detail)
