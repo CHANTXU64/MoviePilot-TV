@@ -990,7 +990,7 @@ class MediaDetailViewModel: ObservableObject {
       state: "N",
       last_update: nil,
       tmdbid: MediaIdentifier.validNumericIdentifier(detail.tmdb_id)
-        ?? preloadTask?.mappedMovieTarget(for: detail)?.tmdb_id ?? preloadTask?.tmdbId,
+        ?? preloadTask?.mappedMovieTarget(for: detail)?.tmdb_id ?? recognizedSeriesTmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
       anilistid: detail.anilist_id,
@@ -1241,10 +1241,16 @@ class MediaDetailViewModel: ObservableObject {
 
   private func subscriptionLookupCandidates() -> [MediaInfo] {
     var candidates = [detail]
-    if detail.tmdb_id == nil, let tmdbId = preloadTask?.tmdbId {
+    if detail.tmdb_id == nil, let tmdbId = recognizedSeriesTmdbId {
       candidates.append(MediaInfo(tmdb_id: tmdbId, type: detail.type))
     }
     return candidates
+  }
+
+  /// 名称识别猜出的编号。电影等直接订阅的条目不用：可能猜中同名同年的另一部，
+  /// 订阅状态也不按它补查，新建和取消随之不用；剧集沿用，取消前会列出受影响的分季。
+  private var recognizedSeriesTmdbId: Int? {
+    detail.canDirectlySubscribe ? nil : preloadTask?.tmdbId
   }
 }
 

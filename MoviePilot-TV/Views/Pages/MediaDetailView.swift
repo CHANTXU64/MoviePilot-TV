@@ -211,7 +211,8 @@ struct MediaDetailView: View {
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
-  @State private var isTMDBJumpInFlight = false
+  /// TMDB 按钮按下后的识别与跳转；离开页面时取消。
+  @State private var tmdbJumpTask: Task<Void, Never>?
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var didReleaseAfterPop = false
@@ -676,6 +677,7 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      tmdbJumpTask?.cancel()
       handleRouteRemovalIfNeeded()
     }
     .onAppear {
@@ -1150,7 +1152,7 @@ struct MediaDetailView: View {
                 showUnsubscribeConfirm = true
               } else {
                 notificationManager.show(
-                  message: "无法定位可安全取消的订阅，请刷新后重试。",
+                  message: "无法确认是哪条订阅，请到订阅列表里取消。",
                   type: .error
                 )
               }
@@ -1326,22 +1328,34 @@ struct MediaDetailView: View {
                 ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
                 ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
               let isButtonLoading =
-                targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
+                targetTmdbId == nil
+                && (!preloadTask.isTmdbRecognitionFinished || preloadTask.isOpenedDetailTMDBPending)
 
               Button(action: {
-                // 预识别期间沿用原有禁用门禁；其余重复 Select 只在动作入口被忽略。
-                guard allowsRequests, !isEntryLoading, !isButtonLoading, !isTMDBJumpInFlight else { return }
-                isTMDBJumpInFlight = true
+                guard allowsRequests, !isEntryLoading, tmdbJumpTask == nil else { return }
                 let navigationSource = navigationCoordinator.sourceToken()
-                Task {
-                  defer { isTMDBJumpInFlight = false }
+                let waitsForIdentification = isButtonLoading
+                tmdbJumpTask = Task {
+                  defer { tmdbJumpTask = nil }
+                  // 识别还没结束时等它的结果，不另起一次；按钮一直在转圈。
+                  if waitsForIdentification { await preloadTask.waitForTMDBIdentification() }
+                  guard !Task.isCancelled else { return }
                   let target: MediaInfo?
-                  if let preloadedTarget {
+                  if let preloadedTarget = preloadTask.tmdbTarget {
                     target = preloadedTarget
+                  } else if waitsForIdentification,
+                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
+                  {
+                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
+                    mediaActionHandler.showTMDBNotFoundAlert = true
+                    target = nil
                   } else {
+                    // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
                     target = await mediaActionHandler.getTMDBJumpTarget(
                       for: viewModel.detail,
-                      targetTmdbId: targetTmdbId
+                      targetTmdbId: MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                        ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id),
+                      useSharedMapping: !waitsForIdentification
                     )
                   }
                   if let target {
@@ -1366,9 +1380,8 @@ struct MediaDetailView: View {
                 .foregroundColor(.primary)
                 .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .disabled(isButtonLoading)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryLoading || isButtonLoading ? "加载中" : "")
             }
 
             if canSubscribeMedia {

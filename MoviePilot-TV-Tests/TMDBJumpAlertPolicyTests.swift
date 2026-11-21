@@ -85,7 +85,7 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
   }
 }
 
-/// F-183：TMDB 详情入口保留预识别门禁，并在动作层同步防重入。
+/// TMDB 详情入口在动作层防重入；识别期间按钮可按，按下后等识别结果，离开页面时取消。
 final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
 
   private func source(_ relativePath: String) throws -> String {
@@ -95,16 +95,14 @@ final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
     return try String(contentsOf: repositoryRoot.appendingPathComponent(relativePath))
   }
 
-  func testDetailJumpKeepsPreloadDisableAndGuardsReentrancy() throws {
+  func testDetailJumpGuardsReentrancyAndCancelsOnDisappearInSource() throws {
     let detailView = try source("MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(detailView.contains("@State private var isTMDBJumpInFlight = false"))
-    XCTAssertTrue(
-      detailView.contains("!isButtonLoading, !isTMDBJumpInFlight else { return }")
-    )
-    XCTAssertTrue(detailView.contains("isTMDBJumpInFlight = true"))
-    XCTAssertTrue(detailView.contains("defer { isTMDBJumpInFlight = false }"))
-    XCTAssertTrue(detailView.contains(".disabled(isButtonLoading)"))
-    XCTAssertFalse(detailView.contains(".disabled(isTMDBJumpInFlight)"))
+    XCTAssertTrue(detailView.contains("@State private var tmdbJumpTask: Task<Void, Never>?"))
+    XCTAssertTrue(detailView.contains("!isEntryLoading, tmdbJumpTask == nil else { return }"))
+    XCTAssertTrue(detailView.contains("defer { tmdbJumpTask = nil }"))
+    XCTAssertTrue(detailView.contains("tmdbJumpTask?.cancel()"))
+    XCTAssertTrue(detailView.contains("await preloadTask.waitForTMDBIdentification()"))
+    XCTAssertFalse(detailView.contains(".disabled(isButtonLoading)"))
   }
 }

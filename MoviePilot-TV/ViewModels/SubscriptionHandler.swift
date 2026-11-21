@@ -84,7 +84,7 @@ class SubscriptionHandler: ObservableObject {
 
           if latestSubscribed {
             guard
-              let target = try await deletionTargetLookup(for: item, snapshot: snapshot)
+              let target = try await deletionTargetLookup(for: item)
             else {
               guard apiService.isSessionUnchanged(from: snapshot) else { return }
               // 元数据状态查询能跨来源确认“已订阅”，但 DELETE 仍要求精确来源身份。
@@ -92,7 +92,7 @@ class SubscriptionHandler: ObservableObject {
               mediaPreloader.peekTask(for: item)?.isSubscribed = true
               showUnsubscribeFailure(
                 for: item,
-                message: "无法定位可安全取消的订阅，请刷新后重试。"
+                message: "无法确认是哪条订阅，请到订阅列表里取消。"
               )
               return
             }
@@ -317,24 +317,10 @@ class SubscriptionHandler: ObservableObject {
       return true
     }
     try apiService.validateSessionSnapshot(snapshot)
-    let preloadTask = mediaPreloader.peekTask(for: item)
-    if let target = preloadTask?.mappedMovieTarget(for: statusMedia) {
-      return try await apiService.fetchSubscriptionLookup(
-        media: target, requireExactMovieIdentity: true
-      ) != nil
-    }
-    guard item.tmdb_id == nil, let tmdbId = preloadTask?.tmdbId else { return false }
+    guard let target = mediaPreloader.peekTask(for: item)?.mappedMovieTarget(for: statusMedia)
+    else { return false }
     return try await apiService.fetchSubscriptionLookup(
-      media: MediaInfo(
-        tmdb_id: tmdbId,
-        source: "themoviedb",
-        media_id: String(tmdbId),
-        title: statusMedia.title,
-        type: statusMedia.type,
-        year: statusMedia.year,
-        season: item.season
-      ),
-      season: item.season
+      media: target, requireExactMovieIdentity: true
     ) != nil
   }
 
@@ -360,40 +346,16 @@ class SubscriptionHandler: ObservableObject {
   }
 
   /// 只回答能否取得可安全执行 DELETE 的精确来源目标，不承担订阅状态判断。
-  private func deletionTargetLookup(
-    for item: MediaInfo,
-    snapshot: APIServiceSessionSnapshot
-  ) async throws
-    -> UnsubscribeTarget?
-  {
+  /// 名称识别猜出的编号不参与：按它做媒体级 DELETE 可能删掉同名的另一部或同号的剧集。
+  private func deletionTargetLookup(for item: MediaInfo) async throws -> UnsubscribeTarget? {
     if let target = mediaPreloader.peekTask(for: item)?
       .mappedMovieTarget(for: subscriptionStatusMedia(for: item))
     {
       let id = try await apiService.fetchExactMovieSubscriptionID(for: item, mappedTo: target)
       return id.map(UnsubscribeTarget.subscription)
     }
-    if let subscription = try await apiService.fetchSubscriptionLookup(
-      media: item,
-      season: item.season,
-      includeVideoMetadataFallback: false
-    ) {
-      return .media(subscription.mediaId)
-    }
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    guard item.tmdb_id == nil,
-      let tmdbId = mediaPreloader.peekTask(for: item)?.tmdbId
-    else {
-      return nil
-    }
     return try await apiService.fetchSubscriptionLookup(
-      media: MediaInfo(
-        tmdb_id: tmdbId,
-        source: "themoviedb",
-        media_id: String(tmdbId),
-        title: item.title,
-        type: item.type,
-        season: item.season
-      ),
+      media: item,
       season: item.season,
       includeVideoMetadataFallback: false
     ).map { .media($0.mediaId) }

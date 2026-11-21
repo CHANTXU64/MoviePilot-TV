@@ -1895,6 +1895,11 @@ private actor CompatibilityEndpointURLProtocolStub {
   }
 }
 
+@MainActor
+private final class CompatibilityEndpointReleaseFlag {
+  var isReleased = false
+}
+
 private struct CompatibilityEndpointStubResponse: Sendable {
   let statusCode: Int
   let data: Data
@@ -2447,7 +2452,7 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
   }
 
-  func testActionHandlerMatchMissUsesExistingNotFoundAlertWithoutNameRecognition() async throws {
+  func testActionHandlerMatchMissFallsBackToNameRecognition() async throws {
     installStub()
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
     await CompatibilityEndpointURLProtocol.stub.reset()
@@ -2457,58 +2462,112 @@ final class MediaMappingTests: XCTestCase {
     await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
       Data(#"{"success":true,"data":null}"#.utf8)
     )
+    // 豆瓣第 2 季不在 TMDB 默认剧集组时，后端查找返回 null，名称识别仍能找到整剧。
     await CompatibilityEndpointURLProtocol.stub.setMediaMappingMatchResponse(
       Data(#"{"success":true,"data":null}"#.utf8)
     )
     let item = MediaInfo(
-      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", year: "2024")
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", year: "2024", season: 2)
     let handler = MediaActionHandler(apiService: service)
 
     let target = await handler.getTMDBJumpTarget(for: item)
 
-    XCTAssertNil(target)
-    XCTAssertTrue(handler.showTMDBNotFoundAlert)
-    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertEqual(
-      paths,
-      ["/api/v1/media/mapping", "/api/v1/media/mapping/match"]
-    )
-    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
-    XCTAssertFalse(paths.contains("/api/v1/media/search"))
-  }
-
-  func testActionHandlerMatchFailureStaysSilentAndDoesNotNameRecognize() async throws {
-    installStub()
-    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
-    await CompatibilityEndpointURLProtocol.stub.reset()
-
-    let service = APIService.isolatedTestingInstance()
-    try configure(service, backendVersion: "v3.2.9")
-    await CompatibilityEndpointURLProtocol.stub.setMediaMappingResponse(
-      Data(#"{"success":true,"data":null}"#.utf8)
-    )
-    await CompatibilityEndpointURLProtocol.stub.setMediaMappingMatchResponse(
-      Data(#"{"success":false,"message":"match failed"}"#.utf8),
-      statusCode: 502
-    )
-    let item = MediaInfo(
-      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", year: "2024")
-    let handler = MediaActionHandler(apiService: service)
-
-    let target = await handler.getTMDBJumpTarget(for: item)
-
-    XCTAssertNil(target)
+    XCTAssertEqual(target?.tmdb_id, 209867)
+    XCTAssertEqual(target?.season, 2)
     XCTAssertFalse(handler.showTMDBNotFoundAlert)
-    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertEqual(
-      paths,
-      ["/api/v1/media/mapping", "/api/v1/media/mapping/match"]
-    )
-    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
     XCTAssertFalse(handler.isRecognizingTmdb)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths, [
+      "/api/v1/media/mapping", "/api/v1/media/mapping/match",
+      "/api/v1/media/search", "/api/v1/media/recognize",
+    ])
   }
 
-  func testMatchHTTP429UsesLegacyRecognitionForJumpAndOpenedDetail() async throws {
+  func testActionHandlerMatchFailureFallsBackToNameRecognition() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", year: "2024")
+    let failures: [(Data, Int)] = [
+      (Data(#"{"detail":"查找 TMDB 链接失败，请稍后重试"}"#.utf8), 502),
+      (Data(#"{"detail":"同时查找的条目过多，请稍后重试"}"#.utf8), 429),
+      (Data(#"{"detail":"TMDB 链接查找服务暂不可用"}"#.utf8), 503),
+      (Data(#"{"success":false,"message":"match failed"}"#.utf8), 200),
+    ]
+
+    for (body, statusCode) in failures {
+      await stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      try configure(service, backendVersion: "v3.2.9")
+      await stub.setMediaMappingMatchResponse(body, statusCode: statusCode)
+      let handler = MediaActionHandler(apiService: service)
+
+      let target = await handler.getTMDBJumpTarget(for: item)
+
+      XCTAssertEqual(target?.tmdb_id, 209867, "HTTP \(statusCode)")
+      XCTAssertFalse(handler.showTMDBNotFoundAlert, "HTTP \(statusCode)")
+      XCTAssertFalse(handler.isRecognizingTmdb, "HTTP \(statusCode)")
+      let paths = await stub.requestPaths()
+      XCTAssertEqual(paths, [
+        "/api/v1/media/mapping", "/api/v1/media/mapping/match",
+        "/api/v1/media/search", "/api/v1/media/recognize",
+      ], "HTTP \(statusCode)")
+    }
+  }
+
+  func testActionHandlerMatchEchoMismatchFallsBackToNameRecognition() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    await CompatibilityEndpointURLProtocol.stub.setMediaMappingMatchResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"999","type":"tv","tmdb_id":456,"tmdb_type":"tv"}}"#
+          .utf8))
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+
+    let target = await MediaActionHandler(apiService: service).getTMDBJumpTarget(for: item)
+
+    XCTAssertEqual(target?.tmdb_id, 209867)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/media/recognize"))
+  }
+
+  func testOnlyBuiltInConversionSourcesRunMatch() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    let cases: [(MediaInfo, Bool)] = [
+      (MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧"), true),
+      (MediaInfo(bangumi_id: 404804, source: "bangumi", title: "测试剧", type: "电视剧"), true),
+      (MediaInfo(mediaid_prefix: "anilist", media_id: "154587", title: "测试剧", type: "电视剧"), true),
+      (MediaInfo(mediaid_prefix: "bangumi", media_id: "abc", title: "测试剧", type: "电视剧"), false),
+      (MediaInfo(mediaid_prefix: "myplugin", media_id: "x-1", title: "测试剧", type: "电视剧"), false),
+      (MediaInfo(mediaid_prefix: "imdb", media_id: "tt0111161", title: "测试剧", type: "电视剧"), false),
+    ]
+
+    for (item, expectsMatch) in cases {
+      await stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      try configure(service, backendVersion: "v3.2.9")
+      let label = item.identity?.mediaKey ?? "nil"
+      XCTAssertEqual(MediaActionHandler.canMatchTMDB(for: item, apiService: service), expectsMatch, label)
+
+      let handler = MediaActionHandler(apiService: service)
+      let target = await handler.getTMDBJumpTarget(for: item)
+
+      XCTAssertEqual(target?.tmdb_id, 209867, label)
+      XCTAssertFalse(handler.showTMDBNotFoundAlert, label)
+      let paths = await stub.requestPaths()
+      XCTAssertEqual(paths.contains("/api/v1/media/mapping/match"), expectsMatch, label)
+      XCTAssertTrue(paths.contains("/api/v1/media/recognize"), label)
+    }
+  }
+
+  func testMatchHTTP429UsesNameRecognitionForJumpAndOpenedDetail() async throws {
     installStub()
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
     let stub = CompatibilityEndpointURLProtocol.stub
@@ -2533,26 +2592,15 @@ final class MediaMappingTests: XCTestCase {
     ])
 
     let preloadTask = MediaPreloadTask(partialMedia: item, apiService: service)
-    await preloadTask.matchTMDBForOpenedDetail(item)
-    XCTAssertEqual(preloadTask.tmdbTarget?.tmdb_id, target?.tmdb_id)
+    preloadTask.start()
+    defer { preloadTask.cancel() }
+    await waitUntil(timeout: 3) { preloadTask.isTmdbRecognitionFinished }
+    XCTAssertTrue(preloadTask.isOpenedDetailTMDBPending)
     XCTAssertNil(preloadTask.tmdbId)
-  }
-
-  func testMatchBusinessErrorMentioning429DoesNotUseLegacyRecognition() async throws {
-    installStub()
-    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
-    let stub = CompatibilityEndpointURLProtocol.stub
-    await stub.reset()
-
-    let service = APIService.isolatedTestingInstance()
-    try configure(service, backendVersion: "v3.2.9")
-    await stub.setMediaMappingMatchResponse(
-      Data(#"{"success":false,"message":"429: 业务错误"}"#.utf8))
-    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
-    let target = await MediaActionHandler(apiService: service).getTMDBJumpTarget(for: item)
-    XCTAssertNil(target)
-    let paths = await stub.requestPaths()
-    XCTAssertEqual(paths, ["/api/v1/media/mapping", "/api/v1/media/mapping/match"])
+    await preloadTask.matchTMDBForOpenedDetail(item)
+    XCTAssertFalse(preloadTask.isOpenedDetailTMDBPending)
+    XCTAssertEqual(preloadTask.tmdbTarget?.tmdb_id, target?.tmdb_id)
+    XCTAssertEqual(preloadTask.tmdbId, target?.tmdb_id)
   }
 
   func testActionHandlerMatchFailureIsNotCachedAndRepostsOnRetry() async throws {
@@ -2576,14 +2624,14 @@ final class MediaMappingTests: XCTestCase {
     let first = await handler.getTMDBJumpTarget(for: item)
     let second = await handler.getTMDBJumpTarget(for: item)
 
-    XCTAssertNil(first)
-    XCTAssertNil(second)
+    XCTAssertEqual(first?.tmdb_id, 209867)
+    XCTAssertEqual(second?.tmdb_id, 209867)
     XCTAssertFalse(handler.showTMDBNotFoundAlert)
     XCTAssertFalse(handler.isRecognizingTmdb)
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping" }.count, 1)
     XCTAssertEqual(paths.filter { $0 == "/api/v1/media/mapping/match" }.count, 2)
-    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/media/recognize" }.count, 2)
   }
 
   func testPreloadUsesSharedMappingBeforeNameRecognition() async throws {
@@ -2757,6 +2805,9 @@ final class MediaMappingTests: XCTestCase {
     viewModel.preloadTask = task
     await stub.setDetailLoadResponse(
       Data(#"{"id":903,"type":"电视剧","tmdbid":456,"season":2}"#.utf8), path: lookupPath)
+    await stub.setDetailLoadResponse(
+      Data(#"[{"id":903,"name":"同号剧集","type":"电视剧","tmdbid":456,"season":2}]"#.utf8),
+      path: "/api/v1/subscribe")
     let didRefresh = await viewModel.refreshSubscriptionStatus()
     XCTAssertTrue(didRefresh)
     XCTAssertFalse(viewModel.isSubscribed)
@@ -2888,6 +2939,7 @@ final class MediaMappingTests: XCTestCase {
 
     await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished && task.fullDetail != nil }
     XCTAssertTrue(task.isTmdbRecognitionFinished)
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
     XCTAssertNil(task.tmdbTarget)
     let warmedPaths = await stub.requestPaths()
     XCTAssertEqual(warmedPaths.filter { $0.hasPrefix("/api/v1/media/mapping") }, [
@@ -2909,8 +2961,10 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertEqual(task.seasonViewModel?.hasSeasonLoadError, false)
     XCTAssertNil(task.tmdbTarget)
 
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
     await matchGate.open()
     await match.value
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
     XCTAssertNil(task.tmdbId)
     XCTAssertEqual(task.tmdbTarget?.tmdb_id, 456)
     XCTAssertEqual(task.tmdbTarget?.type, "电视剧")
@@ -2927,6 +2981,310 @@ final class MediaMappingTests: XCTestCase {
     let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
     XCTAssertEqual(json["season"] as? Int, 2)
     XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  func testOpenedDetailMatchMissNameRecognizesAndReleasesWaitingJump() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.9")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"123","title":"来源电影","type":"电影","year":"2024"}"#.utf8),
+      path: "/api/v1/media/123")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(
+      Data(#"{"success":true,"data":null}"#.utf8), waitFor: matchGate)
+    await stub.setManualMediaResponse(
+      title: "来源电影",
+      data: Data(
+        #"[{"source":"themoviedb","tmdb_id":209867,"title":"来源电影","type":"电影","year":"2024"}]"#.utf8))
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":905,"type":"电影","tmdbid":209867}"#.utf8),
+      path: "/api/v1/subscribe/media/209867")
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished && task.isSubscribed != nil }
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
+    XCTAssertEqual(task.isSubscribed, false)
+    XCTAssertNil(task.tmdbId)
+    let preloadPaths = await stub.requestPaths()
+    XCTAssertFalse(preloadPaths.contains("/api/v1/media/recognize"))
+
+    let jump = CompatibilityEndpointReleaseFlag()
+    let waitingJump = Task {
+      await task.waitForTMDBIdentification()
+      jump.isReleased = true
+    }
+    let detail = try XCTUnwrap(task.fullDetail)
+    let match = Task { await task.matchTMDBForOpenedDetail(detail) }
+    await waitUntil(timeout: 3) { await stub.requestPaths().contains("/api/v1/media/mapping/match") }
+    XCTAssertFalse(jump.isReleased)
+
+    await matchGate.open()
+    await match.value
+    await waitingJump.value
+
+    XCTAssertTrue(jump.isReleased)
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
+    XCTAssertEqual(task.tmdbTarget?.tmdb_id, 209867)
+    XCTAssertEqual(task.tmdbTarget?.type, "电影")
+    XCTAssertEqual(task.tmdbId, 209867)
+    // 名称识别结果只用于跳转，不按猜出的编号补查订阅。
+    XCTAssertEqual(task.isSubscribed, false)
+    let paths = await stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/subscribe/media/209867"))
+  }
+
+  /// 分季卡片用简称、完整详情给出正式片名：名称识别用正式片名，只从卡片沿用季号。
+  func testOpenedDetailRecognitionUsesFullDetailTitleAndKeepsCardSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.9")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"123","title":"作品 A：特别篇","type":"电视剧","year":"2024"}"#.utf8),
+      path: "/api/v1/media/123")
+    await stub.setMediaMappingMatchResponse(Data(#"{"success":true,"data":null}"#.utf8))
+    await stub.setManualMediaResponse(
+      title: "作品 A",
+      data: Data(#"[{"source":"themoviedb","tmdb_id":111,"title":"作品 A","type":"电视剧","year":"2019"}]"#.utf8))
+    await stub.setManualMediaResponse(
+      title: "作品 A：特别篇",
+      data: Data(
+        #"[{"source":"themoviedb","tmdb_id":222,"title":"作品 A：特别篇","type":"电视剧","year":"2024"}]"#.utf8))
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "作品 A", type: "电视剧", season: 2)
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished && task.fullDetail != nil }
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
+    let detail = try XCTUnwrap(task.fullDetail)
+    XCTAssertNil(detail.season)
+    await task.matchTMDBForOpenedDetail(detail)
+
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
+    XCTAssertEqual(task.tmdbTarget?.tmdb_id, 222)
+    XCTAssertEqual(task.tmdbTarget?.tmdbSeasonHint, 2)
+    // 卡片用卡片季号查映射，识别不再用卡片简称。
+    let matchBody = await stub.requestBody(suffix: "/media/mapping/match")
+    let body = try XCTUnwrap(matchBody)
+    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    XCTAssertEqual(json["season"] as? Int, 2)
+  }
+
+  func testCancelledOpenedDetailMatchStaysPendingAndRerunsWhenShownAgain() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","tmdb_id":456,"tmdb_type":"tv"}}"#
+          .utf8),
+      waitFor: matchGate)
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let task = MediaPreloadTask(partialMedia: item, apiService: service)
+    task.start()
+    defer { task.cancel() }
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
+
+    let firstMatch = Task { await task.matchTMDBForOpenedDetail(item) }
+    await waitUntil(timeout: 3) { await stub.requestPaths().contains("/api/v1/media/mapping/match") }
+    firstMatch.cancel()
+    await firstMatch.value
+    XCTAssertTrue(task.isOpenedDetailTMDBPending)
+    XCTAssertNil(task.tmdbTarget)
+    XCTAssertNil(task.tmdbId)
+
+    await matchGate.open()
+    await task.matchTMDBForOpenedDetail(item)
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
+    XCTAssertEqual(task.tmdbTarget?.tmdb_id, 456)
+    let paths = await stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  func testPluginSourcePreloadNeverNameRecognizesButJumpDoes() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    // 主来源是插件、但带着豆瓣 ID 的条目会显示 TMDB 按钮。
+    let item = MediaInfo(
+      douban_id: "123", mediaid_prefix: "myplugin", media_id: "x-1", title: "测试剧", type: "电视剧")
+    XCTAssertTrue(item.canJumpToTMDB)
+
+    for version in ["v3.2.8", "v3.2.9"] {
+      await stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      try configure(service, backendVersion: version)
+      let task = MediaPreloadTask(partialMedia: item, apiService: service)
+      task.start()
+      await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
+      await task.matchTMDBForOpenedDetail(item)
+
+      XCTAssertTrue(task.isTmdbRecognitionFinished, version)
+      XCTAssertFalse(task.isOpenedDetailTMDBPending, version)
+      XCTAssertNil(task.tmdbId, version)
+      XCTAssertNil(task.tmdbTarget, version)
+      let preloadPaths = await stub.requestPaths()
+      XCTAssertFalse(preloadPaths.contains("/api/v1/media/search"), version)
+      XCTAssertFalse(preloadPaths.contains("/api/v1/media/recognize"), version)
+      XCTAssertFalse(preloadPaths.contains("/api/v1/media/mapping/match"), version)
+      task.cancel()
+
+      // 用户按下 TMDB 时才按名称识别。
+      let target = await MediaActionHandler(apiService: service).getTMDBJumpTarget(for: item)
+      XCTAssertEqual(target?.tmdb_id, 209867, version)
+      let jumpPaths = await stub.requestPaths()
+      XCTAssertTrue(jumpPaths.contains("/api/v1/media/recognize"), version)
+      XCTAssertFalse(jumpPaths.contains("/api/v1/media/mapping/match"), version)
+    }
+  }
+
+  func testOldBackendPreloadStillNameRecognizesBuiltInSourceAndKeepsCardSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.8")
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", season: 2)
+    let task = MediaPreloadTask(partialMedia: item, apiService: service)
+    task.start()
+    defer { task.cancel() }
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
+
+    XCTAssertFalse(task.isOpenedDetailTMDBPending)
+    XCTAssertEqual(task.tmdbId, 209867)
+    let target = try XCTUnwrap(task.tmdbTarget)
+    XCTAssertEqual(target.tmdb_id, 209867)
+    XCTAssertEqual(target.type, "电视剧")
+    XCTAssertEqual(target.tmdbSeasonHint, 2)
+    // 目标页只有整剧详情时仍按分季卡片的季号选季；没有这一季时由选季逻辑回到默认季。
+    let wholeSeries = MediaInfo(tmdb_id: 209867, type: "电视剧")
+    XCTAssertEqual(MediaDetailEpisodeSeasons.navigationSeason(for: wholeSeries, routeMedia: target), 2)
+    XCTAssertEqual(MediaDetailEpisodeSeasons.current(selected: 2, preferred: nil, available: [1]), 1)
+    let paths = await stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/media/mapping/match"))
+  }
+
+  func testOldBackendUnmatchedRecognitionIsRecordedForWaitingJump() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.8")
+    // 识别桩只给出剧集，电影类型不匹配，识别确认没有结果。
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "未知电影", type: "电影")
+    let task = MediaPreloadTask(partialMedia: item, apiService: service)
+    task.start()
+    defer { task.cancel() }
+    await waitUntil(timeout: 3) { task.isTmdbRecognitionFinished }
+
+    XCTAssertTrue(task.isTMDBUnrecognized(for: item))
+    // 完整详情换了正式片名时，卡片的结论不适用，按钮还要再识别一次。
+    let fullDetail = MediaInfo(douban_id: "123", source: "douban", title: "未知电影 导演剪辑版", type: "电影")
+    XCTAssertFalse(task.isTMDBUnrecognized(for: fullDetail))
+    let otherYear = MediaInfo(douban_id: "123", source: "douban", title: "未知电影", type: "电影", year: "2020")
+    XCTAssertFalse(task.isTMDBUnrecognized(for: otherYear))
+    XCTAssertNil(task.tmdbId)
+    XCTAssertNil(task.tmdbTarget)
+  }
+
+  func testLiveRecognitionJumpKeepsSeasonCardHint() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.8")
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", title: "测试剧", type: "电视剧", season: 2)
+    let handler = MediaActionHandler(apiService: service)
+
+    // 预载还没结果时长按「TMDB详情页」：实时识别的目标与预载结果一样带选季提示。
+    let liveTarget = await handler.getTMDBJumpTarget(for: item)
+    let live = try XCTUnwrap(liveTarget)
+    XCTAssertEqual(live.tmdb_id, 209867)
+    XCTAssertEqual(live.season, 2)
+    XCTAssertEqual(live.tmdbSeasonHint, 2)
+    let wholeSeries = MediaInfo(tmdb_id: 209867, type: "电视剧")
+    XCTAssertEqual(MediaDetailEpisodeSeasons.navigationSeason(for: wholeSeries, routeMedia: live), 2)
+
+    // 传入预载识别出的编号时同样带上。
+    let preloaded = await handler.getTMDBJumpTarget(for: item, targetTmdbId: 209867)
+    XCTAssertEqual(preloaded?.tmdbSeasonHint, 2)
+  }
+
+  /// 名称识别可能猜中同名同年的另一部：猜出的编号只用于 TMDB 跳转，
+  /// 不决定原影片的订阅状态，也不进入新建或取消订阅。
+  func testRecognizedMovieIDStaysOutOfSubscriptionChain() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.8")
+    await stub.setDetailLoadResponse(
+      Data(#"{"source":"douban","douban_id":"27601044","title":"小美人鱼","type":"电影","year":"2023"}"#.utf8),
+      path: "/api/v1/media/27601044")
+    await stub.setManualMediaResponse(
+      title: "小美人鱼",
+      data: Data(
+        #"[{"source":"themoviedb","tmdb_id":1136767,"title":"小美人鱼","type":"电影","year":"2023"}]"#.utf8))
+    // 猜中的另一部已有订阅，原影片自己没有。
+    await stub.setDetailLoadResponse(
+      Data(#"{"id":902,"name":"小美人鱼","year":"2023","type":"电影","tmdbid":1136767}"#.utf8),
+      path: "/api/v1/subscribe/media/1136767")
+    let item = MediaInfo(douban_id: "27601044", source: "douban", title: "小美人鱼", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: item, owner: UUID()))
+
+    await waitUntil(timeout: 3) { task.isSubscribed != nil }
+    XCTAssertEqual(task.tmdbTarget?.tmdb_id, 1136767)
+    XCTAssertEqual(task.isSubscribed, false)
+
+    let viewModel = MediaDetailViewModel(detail: try XCTUnwrap(task.fullDetail), apiService: service)
+    viewModel.preloadTask = task
+    XCTAssertNil(viewModel.buildSubscribeRequest().tmdbid)
+    let didRefresh = await viewModel.refreshSubscriptionStatus()
+    XCTAssertTrue(didRefresh)
+    XCTAssertEqual(task.isSubscribed, false)
+
+    let menu = SubscriptionHandler(apiService: service)
+    menu.handleSubscribe(item, expectedSubscribed: false)
+    await waitUntil(timeout: 3) { menu.sheetSubscribe != nil || !menu.notificationMessage.isEmpty }
+    XCTAssertEqual(menu.notificationMessage, "")
+    XCTAssertNil(menu.sheetSubscribe?.tmdbid)
+    XCTAssertEqual(menu.sheetSubscribe?.doubanid, "27601044")
+    XCTAssertEqual(task.isSubscribed, false)
+
+    let paths = await stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/subscribe/media/1136767"))
+    let methods = await stub.requestMethods()
+    XCTAssertFalse(methods.contains("DELETE"))
   }
 
   private func waitUntil(
