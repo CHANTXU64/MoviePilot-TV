@@ -168,4 +168,18 @@ final class MoviePilotV2EndpointsTests: XCTestCase {
     XCTAssertNil(body["media_category_id"])
     XCTAssertEqual(body["media_category"] as? String, "电影")
   }
+
+  func testUnresolvedChangedCategoryPathOmitsStaleID() throws {
+    let endpoints = BackendEndpoints.resolve(backendVersion: nil)
+    let original = try makeSubscribe(
+      #"{"id": 9, "name": "示例", "type": "电视剧", "media_category": "日番", "media_category_id": "cat-1"}"#
+    )
+    var draft = original
+    draft.media_category = "新分类"
+    let data = try endpoints.subscriptionUpdateBody(original: original, draft: draft)
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    // v3 以 ID 优先解析并回写对应路径；路径改了还发旧 ID 会把新路径改回去。
+    XCTAssertEqual(body["media_category"] as? String, "新分类")
+    XCTAssertNil(body["media_category_id"])
+  }
 }

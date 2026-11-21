@@ -995,6 +995,33 @@ final class TopShelfManagerTests: XCTestCase {
     XCTAssertEqual(manager.status, .unavailable)
   }
 
+  func testSessionSwitchIgnoresPreviousBackendSettings() async throws {
+    let fixture = try ManagerFixture()
+    defer { fixture.cleanup() }
+    let service = makeService(userID: 863)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+    let manager = TopShelfManager(
+      apiService: service, store: fixture.store, defaults: fixture.defaults,
+      fetchSources: { [] },
+      fetchRecommendations: { _ in [] },
+      fetchDetail: { $0 },
+      fetchImage: { _ in TopShelfImageResource(data: TopShelfTestArtwork.data, fileExtension: "gif")
+      },
+      notifyChange: {}
+    )
+
+    manager.start(refreshImmediately: false)
+    XCTAssertFalse(manager.isAvailableForCurrentBackend)
+
+    // 切服时 session 先发布、settings 随后才清空；旧会话的 v2 版本不能继续
+    // 把新会话的货架判成不可用，等新设置到达后再收紧。
+    let nextUser = token(userID: 863, token: "token-next")
+    service.replaceSessionForTesting(
+      baseURL: "https://manager-863-next.local", token: nextUser.access_token,
+      currentUser: nextUser)
+    XCTAssertTrue(manager.isAvailableForCurrentBackend)
+  }
+
   private func makeService(userID: Int) -> APIService {
     let service = APIService.isolatedTestingInstance()
     let user = token(userID: userID, token: "token-\(userID)")

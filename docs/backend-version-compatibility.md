@@ -268,16 +268,16 @@ MoviePilot v3.0.0 把媒体身份从单值键 `source:id`（`/media/tmdb:123` �
 - **下载与整理**：`/download/`、`/download/subtitle`（v2 已接受 `media_source`/`media_id`）、`/history/transfer`、`/history/download` 的响应字段是 v3 的子集，TV 全部按可选字段解码。
 - **插件来源的下载/字幕**：v2 的 `/download/add`、`/download/subtitle` 用 `Literal` 限定四个内置来源，插件来源或 `imdb`/`tvdb` 来源会被 422 拒绝；配套 Web 在 v2 上同样受限，TV 不额外兜底。
 - **不进入 v2 的入口**：豆瓣短评/影评、共享媒体映射、应用内播放、单集试看、手动资源分页、reflink 整理都按已知起始版本门禁隐藏；v2 上取消订阅走媒体级 `DELETE`，不会误用 v3 的分页和映射能力。
-- **主屏货架（Top Shelf）**：货架详情依赖成对媒体身份，v2 上不启用；设置页隐藏「主屏显示内容」，已保存的选择保留，换回 v3 后恢复。
+- **主屏货架（Top Shelf）**：货架详情依赖成对媒体身份，v2 上不启用；设置页隐藏「主屏显示内容」，已保存的选择保留，换回 v3 后恢复。切服时 session 先于 settings 发布，货架只在设置确实属于当前账号时才用它判断版本，旧账号的设置不参与。
 - **降级项**：`/media/source` 目录在 v2 不存在，TV 直接跳过请求，来源选择器保留内置来源；`/mediaserver/exists` 只能按 TMDB ID 或标题判断，v2 用 `success` 表示命中，TV 把未入库当正常结果，不再报错；响应没有 `server` 字段，多服务器配置下无法确认条目归属；插件来源的媒体身份在 v2 没有成对参数，详情靠标题/年份名称识别兜底，仍识别不到才返回空详情，订阅查询退回标题匹配。
-- **版本读取失败**：`BACKEND_VERSION` 缺失或无法解析时，读请求仍按 v3 发；订阅写回改用完整快照，避免被误判成 v3 后按稀疏字段覆盖 v2 已有配置（v3 只写提交字段，等值写入没有副作用）。`APIService` 的初始协议也按“版本未读到”处理，`/system/global` 失败或超时后编辑订阅仍提交完整快照，不会因为设置未加载而退回 v3 稀疏体。全量快照会补发已有的 `media_category_id`：v3.2.9 收到只有 `media_category` 路径的载荷会把稳定分类 ID 清空；v2 不认识这个键，会忽略。若这个稳定 ID 已失效（分类被删除或禁用），v3 会拒绝保存并返回原因，不会再静默清空。
-- **验证边界**：契约部分为源码对照，没有可用的 v2.15.6 真实后端。已在 tvOS 27.2 Simulator 上完成单版本 Debug 构建；`SystemVersionInfoTests` 10 个、`MoviePilotV2EndpointsTests` 10 个、`TopShelfManagerTests` 29 个、`APIServiceCompatibilityEndpointTests` 47 个，共 96 个用例 0 失败（后两个套件同时覆盖 v3 回归与 v2 门禁）；`SubscriptionWriteDTOTests`、`SubscribeModelCompatibilityTests`、`BackendCompatibilityTests` 共 24 个用例 0 失败。完整套件、三版本矩阵和真实后端兼容测试未跑。
+- **版本读取失败**：`BACKEND_VERSION` 缺失或无法解析时，读请求仍按 v3 发；订阅写回改用完整快照，避免被误判成 v3 后按稀疏字段覆盖 v2 已有配置（v3 只写提交字段，等值写入没有副作用）。`APIService` 的初始协议也按“版本未读到”处理，`/system/global` 失败或超时后编辑订阅仍提交完整快照，不会因为设置未加载而退回 v3 稀疏体。全量快照在分类路径未变时会补发已有的 `media_category_id`：v3.2.9 收到只有 `media_category` 路径的载荷会把稳定分类 ID 清空；v2 不认识这个键，会忽略。路径改动时只发新路径、省略旧 ID，否则 v3 以 ID 优先解析会把用户输入的新路径改回旧分类。若这个稳定 ID 已失效（分类被删除或禁用），v3 会拒绝保存并返回原因，不会再静默清空。
+- **验证边界**：契约部分为源码对照，没有可用的 v2.15.6 真实后端。已在 tvOS 27.2 Simulator 上完成单版本 Debug 构建；`SystemVersionInfoTests` 10 个、`MoviePilotV2EndpointsTests` 11 个、`TopShelfManagerTests` 30 个、`APIServiceCompatibilityEndpointTests` 47 个，共 98 个用例 0 失败（后两个套件同时覆盖 v3 回归与 v2 门禁）；`SubscriptionWriteDTOTests`、`SubscribeModelCompatibilityTests`、`BackendCompatibilityTests` 共 24 个用例 0 失败。完整套件、三版本矩阵和真实后端兼容测试未跑。
 
 ### 删除 v2 支持
 
 1. 删除目录 `MoviePilot-TV/Services/BackendProtocol/MoviePilotV2/`（含 `UnresolvedBackendEndpoints` 和全量快照写回）。
 2. 把 `BackendEndpoints.resolve` 的函数体改成 `return V3BackendEndpoints()`，并删掉未知版本的 `UnresolvedBackendEndpoints` 分支；把 `APIService.backendEndpoints` 的初始值改成 `V3BackendEndpoints()`。
-3. 删除 `TopShelfManager` 的 `isAvailableForCurrentBackend`、`updateBackendAvailability(backendVersion:)` 和相关 guard（含设置回调传入新版本的那处），把 `SystemView` 恢复成 `if canConfigureRecommendations { topShelfSettings }`。
+3. 删除 `TopShelfManager` 的 `isAvailableForCurrentBackend`、`settingsProfileKey`、`updateBackendAvailability(backendVersion:)` 和相关 guard（含设置回调传入新版本的那处），把 `SystemView` 恢复成 `if canConfigureRecommendations { topShelfSettings }`。
 4. 删除登记表的 `v2.15.6` 行、README「MoviePilot 版本」段落里的 v2 说明和徽标中的 `v2.15.6 --` 前缀、本文件「不按版本复制接口」下方的 v2 例外条款与本节的表格/小节，`.agents/prompts/release.md` 和 `docs/subscription-compatibility-checklist.md` 里的 v2 下限，以及 `SystemVersionInfoTests`/`MoviePilotV2EndpointsTests` 里的 v2 断言。
 
 `APIService` 只调用协议能力位（`supportsMediaSourceCatalog`、`mediaServerExistsHitIsSuccessFlag`、`includesDetailTitleFallback`），删掉 v2 实现后自动走 v3 的默认值，不需要逐处清理。

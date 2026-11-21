@@ -8,7 +8,9 @@ import Foundation
 ///
 /// `includesStableClassificationID` 只给 `UnresolvedBackendEndpoints` 用：版本读不出时后端
 /// 可能是 v3，v3.2.9 收到只有 `media_category` 路径的载荷会把 `media_category_id` 清空，
-/// 因此补发已有的稳定 ID。v2 不认识这个键（pydantic 默认忽略未知字段），不会受影响。
+/// 因此路径没变时补发已有的稳定 ID。路径变了必须传 false：v3 以 ID 优先解析并回写
+/// 对应路径，继续发旧 ID 会把用户的新路径改回去。v2 不认识这个键（pydantic 默认忽略
+/// 未知字段），不会受影响。
 nonisolated struct V2SubscriptionUpdateBody: Encodable {
   private typealias CodingKeys = Subscribe.CodingKeys
   let draft: Subscribe

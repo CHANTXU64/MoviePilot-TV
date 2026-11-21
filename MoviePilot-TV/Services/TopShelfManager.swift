@@ -63,6 +63,8 @@ final class TopShelfManager: ObservableObject {
   private var isSynchronizationDeferred = false
   private var refreshPending = false
   private var sourceSessionID: String?
+  /// 当前 `apiService.settings` 属于哪个账号；切服后旧设置不能拿来判断新账号的后端版本。
+  private var settingsProfileKey: String?
 
   init(
     apiService: APIService = .shared,
@@ -145,6 +147,9 @@ final class TopShelfManager: ObservableObject {
   func start(refreshImmediately: Bool = true) {
     guard !started else { return }
     started = true
+    if apiService.settings != nil {
+      settingsProfileKey = apiService.session.profileKey
+    }
 
     apiService.$session
       .dropFirst()
@@ -423,7 +428,11 @@ final class TopShelfManager: ObservableObject {
     _ state: APIServiceSessionState,
     scheduleRefresh shouldRefresh: Bool
   ) {
-    updateBackendAvailability(backendVersion: apiService.settings?.BACKEND_VERSION)
+    // 切服时 session 先发布、settings 随后才置 nil；这里读到的 settings 可能还属于旧账号，
+    // 只有它确实属于当前账号时才用来判断后端版本。权限变化不换 profileKey，仍可复用。
+    let backendVersion =
+      settingsProfileKey == state.profileKey ? apiService.settings?.BACKEND_VERSION : nil
+    updateBackendAvailability(backendVersion: backendVersion)
     refreshTask?.cancel()
     refreshTask = nil
     if sourceSessionID != state.imageNamespace {
@@ -509,6 +518,7 @@ final class TopShelfManager: ObservableObject {
 
   private func handleSettingsChange(_ settings: GlobalSettings?) {
     guard let settings else { return }
+    settingsProfileKey = apiService.session.profileKey
     updateBackendAvailability(backendVersion: settings.BACKEND_VERSION)
     guard isAvailableForCurrentBackend else {
       _ = stronglyInvalidate(for: apiService.session)
