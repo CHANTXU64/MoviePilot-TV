@@ -194,7 +194,7 @@ class MediaPreloadTask: ObservableObject {
   fileprivate var isNavigationOwned: @MainActor () -> Bool = { false }
 
   // 可选预加载数据（持久存在，加载完直接显示）
-  /// 打开详情后按需查找没有结果时，名称识别得到的 ID；订阅链用它在原来源查询未命中时补查。
+  /// 名称识别得到的 ID，订阅链仍用它在原来源查询未命中时补查。
   @Published var tmdbId: Int?
   /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
   var tmdbTarget: MediaInfo? { tmdbResolution?.target }
@@ -202,6 +202,8 @@ class MediaPreloadTask: ObservableObject {
   @Published var isTmdbRecognitionFinished = false
   /// 打开详情后才做的 TMDB 识别（按需查找，没找到再按名称识别）还没结束。
   @Published private(set) var isOpenedDetailTMDBPending = false
+  /// 本轮名称识别已确认没有匹配；等待中的 TMDB 按钮直接提示，不再识别一次。
+  @Published private(set) var isTMDBUnrecognized = false
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
@@ -270,7 +272,7 @@ class MediaPreloadTask: ObservableObject {
     detailTask = detailLoad
     internalTasks.append(
       Task {
-        // 只预读共享映射，不做名称识别。打开详情后的按需查找独立运行。
+        // 预读跳转映射，或对内置来源执行名称识别。打开详情后的按需查找独立运行。
         async let tmdbRecognition: Void = {
           if MediaIdentifier.validNumericIdentifier(self.partialMedia.tmdb_id) == nil,
             self.partialMedia.canJumpToTMDB
@@ -624,7 +626,7 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ④ 订阅状态
 
-  /// 电影订阅补查只接受同一来源条目的同类型共享映射。
+  /// 电影订阅补查只接受同一来源条目的同类型目标（共享映射、按需查找或名称识别）。
   func mappedMovieTarget(for media: MediaInfo) -> MediaInfo? {
     guard let apiService, media.canDirectlySubscribe,
       MediaIdentifier.validNumericIdentifier(media.tmdb_id) == nil,
@@ -653,7 +655,9 @@ class MediaPreloadTask: ObservableObject {
           media: target, forceRefresh: forceRefresh, requireExactMovieIdentity: true
         )
       }
-      if !subscribed, MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
+      // 识别出编号却生成不了带来源身份的目标时（如条目缺类型），沿用按编号补查。
+      if !subscribed, tmdbResolution == nil,
+        MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
         let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
       {
         let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
@@ -708,15 +712,48 @@ class MediaPreloadTask: ObservableObject {
       Logger.error("[MediaPreloadTask] TMDB 共享映射查询失败: \(error)")
     }
 
-    // 预载不做名称识别。能按需查找的条目等打开详情后再查找，没有结果时才按名称识别；
-    // 焦点预载不占后端的查找名额。其他条目在用户按下 TMDB 时识别。
+    // 能按需查找的条目等打开详情后再查找，没有结果时才按名称识别；焦点预载不占后端的查找名额。
     if MediaActionHandler.canMatchTMDB(for: media, apiService: apiService) {
       isOpenedDetailTMDBPending = true
+      return
+    }
+    // 插件等其他来源不静默识别，用户按下 TMDB 时再识别。
+    guard MediaActionHandler.hasBuiltInTMDBConversion(for: media) else { return }
+
+    // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
+    // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
+    let result: Int?
+    do {
+      result = try await apiService.recognizeTmdbId(
+        title: media.title ?? "",
+        year: media.year,
+        type: media.type
+      )
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      return
+    }
+    applyRecognition(result, for: media, apiService: apiService)
+  }
+
+  /// 写入名称识别结论：找到时同时记下带原来源身份的目标，没找到时记下已确认无匹配。
+  private func applyRecognition(_ result: Int?, for media: MediaInfo, apiService: APIService) {
+    guard let tmdbId = MediaIdentifier.validNumericIdentifier(result) else {
+      let title = media.title?.trimmingCharacters(in: .whitespaces) ?? ""
+      isTMDBUnrecognized = !title.isEmpty
+      return
+    }
+    self.tmdbId = tmdbId
+    if let target = MediaActionHandler.recognizedTMDBTarget(
+      for: media, tmdbId: tmdbId, apiService: apiService)
+    {
+      tmdbResolution = target
     }
   }
 
   /// 由已打开的详情页启动，分季和订阅的首次加载不等待这个长请求。
-  /// 按需查找没有结果（含失败）时按名称识别，结果写入 `tmdbId`。
+  /// 按需查找没有结果（含失败）时按名称识别，结论与预载识别写法相同。
   /// 被取消时保留待办，详情页再次显示时重新开始。
   func matchTMDBForOpenedDetail(_ detail: MediaInfo) async {
     guard let apiService, isOpenedDetailTMDBPending else { return }
@@ -741,9 +778,7 @@ class MediaPreloadTask: ObservableObject {
         let result = try await apiService.recognizeTmdbId(
           title: lookupMedia.title ?? "", year: lookupMedia.year, type: lookupMedia.type)
         try apiService.validateSessionSnapshot(snapshot)
-        if let tmdbId = MediaIdentifier.validNumericIdentifier(result) {
-          self.tmdbId = tmdbId
-        }
+        applyRecognition(result, for: lookupMedia, apiService: apiService)
       }
     } catch {
       if error is CancellationError || Task.isCancelled { return }
@@ -752,8 +787,7 @@ class MediaPreloadTask: ObservableObject {
     }
     isOpenedDetailTMDBPending = false
 
-    let canUseIdentification = mappedMovieTarget(for: detail) != nil || tmdbId != nil
-    if isSubscribed != true, detail.canDirectlySubscribe, canUseIdentification {
+    if isSubscribed != true, mappedMovieTarget(for: detail) != nil {
       _ = await refreshDirectSubscription(for: detail)
     }
   }

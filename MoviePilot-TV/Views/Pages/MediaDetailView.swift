@@ -1343,6 +1343,10 @@ struct MediaDetailView: View {
                   let target: MediaInfo?
                   if let preloadedTarget = preloadTask.tmdbTarget {
                     target = preloadedTarget
+                  } else if waitsForIdentification, preloadTask.isTMDBUnrecognized {
+                    // 刚等完的这轮识别已确认没有匹配，直接提示。
+                    mediaActionHandler.showTMDBNotFoundAlert = true
+                    target = nil
                   } else {
                     // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
                     target = await mediaActionHandler.getTMDBJumpTarget(

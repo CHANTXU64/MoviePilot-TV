@@ -200,6 +200,28 @@ class MediaActionHandler: ObservableObject {
       identity: request.identity, type: request.rawType, season: item.season)
   }
 
+  /// 来源在后端有内置的 TMDB 转换（豆瓣、Bangumi、AniList）；预载只对这些来源做名称识别。
+  static func hasBuiltInTMDBConversion(for item: MediaInfo) -> Bool {
+    guard let source = MediaIdentifier.normalizeSource(item.identity?.source) else { return false }
+    return APIService.tmdbConvertibleSources.contains(source)
+  }
+
+  /// 预载名称识别的结果，与映射结果一样记下原来源身份：电影订阅按精确记录查询和取消，
+  /// 分季卡片的季号作为目标页选季提示（目标页没有这一季时按默认季显示）。
+  static func recognizedTMDBTarget(
+    for item: MediaInfo,
+    tmdbId: Int,
+    apiService: APIService
+  ) -> TMDBTargetResolution? {
+    guard let request = mappingRequest(for: item, apiService: apiService) else { return nil }
+    let isTV = request.mediaType == "tv"
+    var target = tmdbJumpTarget(
+      for: item, tmdbId: tmdbId, type: isTV ? "电视剧" : "电影",
+      season: .some(isTV ? item.season : nil))
+    target.tmdbSeasonHint = isTV ? item.season : nil
+    return TMDBTargetResolution(origin: request.identity, target: target)
+  }
+
   /// 共享映射的完整 TMDB 目标；返回 nil 表示没有可用关系。
   static func sharedTMDBTarget(
     for item: MediaInfo,

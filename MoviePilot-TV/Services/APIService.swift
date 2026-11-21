@@ -2091,8 +2091,9 @@ class APIService: ObservableObject {
   /// 结论保留 10 分钟，下次查找直接复用。
   private static let mediaMappingMatchTimeout: TimeInterval = 60
 
-  /// 后端 v3.2.9 内置了到 TMDB 转换的来源；其他来源交给插件，通常查不到，直接按名称识别。
-  private static let mediaMappingMatchSources: Set<String> = ["douban", "bangumi", "anilist"]
+  /// 后端内置了到 TMDB 转换的来源（v3.2.9 `_PROJECTION_RULES`）。按需查找只发给它们；
+  /// 预载的名称识别也只对它们做，插件等其他来源只在用户按下 TMDB 时识别。
+  static let tmdbConvertibleSources: Set<String> = ["douban", "bangumi", "anilist"]
   /// 后端只接受纯数字 ID 的来源。
   private static let numericMediaMappingMatchSources: Set<String> = ["bangumi", "anilist"]
 
@@ -2103,7 +2104,7 @@ class APIService: ObservableObject {
   ) -> MediaMappingLookupQuery? {
     guard supportsMediaMappingMatch,
       let query = mediaMappingLookupQuery(identity: identity, type: type, season: season),
-      Self.mediaMappingMatchSources.contains(query.source)
+      Self.tmdbConvertibleSources.contains(query.source)
     else {
       return nil
     }
