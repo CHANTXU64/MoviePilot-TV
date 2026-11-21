@@ -403,7 +403,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("requestPreferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
     XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
-    XCTAssertTrue(source.contains("case play, subscribe, search, subtitleSearch, sites, otherInfo"))
+    XCTAssertTrue(source.contains("case play, subscribe, search, otherInfo"))
     // 播放按钮只在可应用内播放时出现，焦点目标随之存在。
     XCTAssertTrue(source.contains("if let playbackTarget = viewModel.inAppPlaybackTarget"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))

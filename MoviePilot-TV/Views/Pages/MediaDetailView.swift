@@ -248,10 +248,9 @@ struct MediaDetailView: View {
   /// 第二页当前含焦点的行，取值与 `firstVisibleRow` 相同。
   @FocusState private var focusedContentRow: String?
   enum ButtonField {
-    case play, subscribe, search, subtitleSearch, sites, otherInfo
+    case play, subscribe, search, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
-  @State private var lastFocusedButton: ButtonField?
   @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
   /// 播放结束后等着把焦点补写回「播放」（见 `playbackFocusReturn`）。
   @State private var playButtonRestore = PlaybackFocusRestore<ButtonField>()
@@ -354,20 +353,6 @@ struct MediaDetailView: View {
       cardKind: cardKind,
       usesFocusWindow: memoryOptimization.isEnabled
     )
-  }
-
-  private var shouldShowSiteFilter: Bool {
-    guard canSearchResources else { return false }
-    if focusedButton == .search || focusedButton == .subtitleSearch || focusedButton == .sites {
-      return true
-    }
-    if focusedButton == nil
-      && (lastFocusedButton == .search || lastFocusedButton == .subtitleSearch
-        || lastFocusedButton == .sites)
-    {
-      return true
-    }
-    return false
   }
 
   /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
@@ -863,11 +848,6 @@ struct MediaDetailView: View {
         entry: entry,
         avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
       )
-    }
-    .onChange(of: focusedButton) { _, newValue in
-      if let newValue = newValue {
-        lastFocusedButton = newValue
-      }
     }
     // 头部「播放」起播：盖播放器前交回焦点，准备期取消时补写回来（详情页已不在栈顶就不写）。
     .playbackFocusReturn(
@@ -1423,55 +1403,69 @@ struct MediaDetailView: View {
             }
 
             if canSearchResources {
-              // Search resources icon button
-              Button(action: {
-                guard allowsRequests, !isEntryLoading else { return }
-                let request = mediaActionHandler.searchResourcesTarget(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .resource)
-                )
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索资源", systemImage: AppSymbol.search)
+              // 搜索资源、搜索字幕收进一个圆形按钮的菜单；选哪种搜索后在二级菜单里选站点再搜，不用来回切换。
+              Menu {
+                Group {
+                  Menu {
+                    Button {
+                      guard allowsRequests, !isEntryLoading else { return }
+                      let request = mediaActionHandler.searchResourcesTarget(
+                        for: viewModel.detail,
+                        sites: viewModel.siteFilter.sitesString(for: .resource)
+                      )
+                      navigateFromSecondPage(to: request)
+                    } label: {
+                      Label("开始搜索", systemImage: AppSymbol.search)
+                    }
+                    // 多选：点站点不收起菜单，勾好再按「开始搜索」。
+                    SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                      .menuActionDismissBehavior(.disabled)
+                  } label: {
+                    Label {
+                      Text("搜索资源")
+                      Text(viewModel.siteFilter.siteButtonLabel)
+                    } icon: {
+                      Image(systemName: AppSymbol.search)
+                    }
+                  }
+                  if canSearchSubtitles {
+                    Menu {
+                      Button {
+                        guard allowsRequests, !isEntryLoading else { return }
+                        guard let request = mediaActionHandler.subtitleSearchRequest(
+                          for: viewModel.detail,
+                          sites: viewModel.siteFilter.sitesString(for: .subtitle)
+                        ) else { return }
+                        navigateFromSecondPage(to: request)
+                      } label: {
+                        Label("开始搜索", systemImage: AppSymbol.search)
+                      }
+                      SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                        .menuActionDismissBehavior(.disabled)
+                    } label: {
+                      Label {
+                        Text("搜索字幕")
+                        Text(viewModel.siteFilter.siteButtonLabel)
+                      } icon: {
+                        Image(systemName: AppSymbol.searchSubtitles)
+                      }
+                    }
+                  }
+                }
+                // 加载期按钮仍可聚焦（与其他头部按钮一致），菜单项不可用。
+                .disabled(!allowsRequests || isEntryLoading)
+              } label: {
+                Image(systemName: AppSymbol.searchMenu)
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
               }
+              .menuStyle(.button)
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
               .focused($focusedButton, equals: .search)
               .transition(.opacity)
+              .accessibilityLabel("搜索")
               .accessibilityValue(isEntryStillLoading ? "加载中" : "")
-            }
-
-            if canSearchSubtitles {
-              Button(action: {
-                guard allowsRequests, !isEntryLoading else { return }
-                guard let request = mediaActionHandler.subtitleSearchRequest(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .subtitle)
-                ) else { return }
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
-                  .foregroundColor(.primary)
-                  .opacity(isEntryLoading ? 0.35 : 1)
-              }
-              .focused($focusedButton, equals: .subtitleSearch)
-              .transition(.opacity)
-              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
-            }
-
-            // Site selection button（加载期不渲出可交互筛选菜单）
-            if allowsRequests && canSearchResources && shouldShowSiteFilter && !isEntryLoading {
-              SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
-                HStack(spacing: 8) {
-                  Image(systemName: AppSymbol.site)
-                  Text(viewModel.siteFilter.siteButtonLabel)
-                }
-                .font(.caption)
-                .foregroundColor(.primary)
-              }
-              .controlSize(.small)
-              .focused($focusedButton, equals: .sites)
-              .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
             // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
@@ -1491,7 +1485,6 @@ struct MediaDetailView: View {
           }
           // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
           .lineLimit(1)
-          .animation(.snappy, value: shouldShowSiteFilter)
           .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: heroButtonsAnimationKey)
           .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
           .animation(.easeInOut(duration: 0.3), value: preloadTask.fullDetail != nil)

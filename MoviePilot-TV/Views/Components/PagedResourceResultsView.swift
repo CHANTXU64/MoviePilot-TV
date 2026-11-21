@@ -8,6 +8,7 @@ struct PagedResourceResultsView<Header: View>: View {
   @ViewBuilder var header: () -> Header
   @State private var disabledFilterOptions: [String: Set<String>] = [:]
   @State private var downloadPresented = false
+  @Environment(\.claimsInitialLoadingFocus) private var claimsInitialLoadingFocus
 
   var body: some View {
     Group {
@@ -49,6 +50,7 @@ struct PagedResourceResultsView<Header: View>: View {
         Text("已保留 \(search.retainedCount) 条 · 本次新增 \(search.newCount) 条")
           .font(.caption).foregroundColor(.secondary)
         Button(loadingAction.title) { loadingAction.perform() }
+          .claimsInitialFocus(claimsInitialLoadingFocus)
         Spacer()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)

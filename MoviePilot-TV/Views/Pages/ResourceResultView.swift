@@ -46,6 +46,7 @@ struct ResourceResultView: View {
             viewModel.cancelSearch()
             dismiss()
           }
+          .claimsInitialFocus()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -66,6 +67,8 @@ struct ResourceResultView: View {
     .background {
       SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
+    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：加载期的「取消」认领首个焦点。
+    .environment(\.claimsInitialLoadingFocus, true)
     .task {
       await viewModel.search()
     }
