@@ -530,6 +530,61 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testFirstLoadShowsLoadingThenPersistentFailureUntilTheFirstTaskListArrives() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    XCTAssertEqual(viewModel.firstLoadState, .loading, "还没请求时不能先显示「暂无下载任务」")
+
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.firstLoadState, .failed, "第一次结果前请求失败：显示失败文字，轮询继续重试")
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent", statusCode: 500)
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.firstLoadState, .failed, "重试仍失败时失败文字一直保留，不会退回转圈")
+
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent")
+    await viewModel.loadDownloads()
+    XCTAssertNil(viewModel.firstLoadState)
+    XCTAssertTrue(viewModel.downloads.isEmpty, "真拿到空列表后才显示「暂无下载任务」")
+  }
+
+  func testFirstLoadStateIsNilWithoutDownloadersOrWhenDownloaderListFails() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON("[]")
+    let noDownloaders = DownloadTaskViewModel(apiService: service)
+    await noDownloaders.initialLoad()
+    XCTAssertNil(noDownloaders.firstLoadState, "没有下载器时不会再请求任务列表，不能一直转圈")
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON("[]", statusCode: 500)
+    let clientsFailed = DownloadTaskViewModel(apiService: service)
+    await clientsFailed.initialLoad()
+    XCTAssertTrue(clientsFailed.clientsLoadFailed)
+    XCTAssertNil(clientsFailed.firstLoadState, "下载器列表失败沿用原有的失败文字")
+  }
+
   func testPollingFailuresNotifyOncePerSixConsecutiveFailuresAndResetOnSuccess() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }

@@ -50,6 +50,14 @@ struct DownloadTaskView: View {
               .foregroundColor(.secondary)
               .padding()
               .frame(maxWidth: .infinity, alignment: .center)
+          } else if viewModel.firstLoadState == .loading {
+            FirstLoadIndicator(minHeight: nil)
+              .padding()
+          } else if viewModel.firstLoadState == .failed {
+            Text("下载任务加载失败，正在自动重试")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
           } else {
             Text("暂无下载任务")
               .foregroundColor(.secondary)

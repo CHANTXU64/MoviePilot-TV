@@ -444,7 +444,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(source.contains("@EnvironmentObject private var notificationManager: NotificationManager"))
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
-    XCTAssertTrue(source.contains("LoadingIcon(systemImage: AppSymbol.account, isLoading: true)"))
+    XCTAssertTrue(
+      source.contains("LoadingIcon(systemImage: AppSymbol.account, isLoading: viewModel.isLoading)"))
     XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
     XCTAssertTrue(source.contains("guard !viewModel.isLoading else { return }"))
     XCTAssertFalse(

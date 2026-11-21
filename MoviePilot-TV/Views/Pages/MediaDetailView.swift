@@ -205,6 +205,8 @@ struct MediaDetailView: View {
   /// 入口渐进渲染：true 时标题已 move-in、按钮胶囊在但文案透明且不可按、可变槽位就地占位；
   /// 就绪后仅文案/可变内容淡入，标题与按钮形状位置不变。
   let isEntryLoading: Bool
+  /// 无障碍值用：详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），但画面已显示失败，不能再读「加载中」。
+  private var isEntryStillLoading: Bool { isEntryLoading && !preloadTask.isDetailFailed }
   let entryStatusMessage: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var entryTitleOffset: CGFloat = 28
@@ -1318,7 +1320,7 @@ struct MediaDetailView: View {
               .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "继续播放")
               .focused($focusedButton, equals: .play)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
 
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
@@ -1378,10 +1380,24 @@ struct MediaDetailView: View {
                 .opacity(isEntryLoading ? 0.35 : 1)
               }
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading || isButtonLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
             }
 
             if canSubscribeMedia {
+              let isDirect = detail.canDirectlySubscribe
+              // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
+              // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
+              // 二次加载（重试/换剧集组）时 isSeasonDataLoaded 已为 true，仍要靠 isSeasonLoading 显示转圈；
+              // 详情本身加载失败时分季请求永不发起，不能永久转圈。
+              let seasonWaiting =
+                !isDirect
+                && (isSeasonLoading
+                  || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
+                    && !preloadTask.isDetailFailed))
+              // 文案保持「订阅」「分季信息」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
+              // 详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），此时不转圈，避免和失败提示同时出现。
+              let showsLoadingIcon =
+                (isDirect ? isEntryLoading : seasonWaiting) && !preloadTask.isDetailFailed
               // Primary subscribe button — 使用预加载的订阅状态
               Button(action: {
                 guard allowsRequests, !isEntryLoading else { return }
@@ -1401,16 +1417,6 @@ struct MediaDetailView: View {
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
                 } else {
-                  let isDirect = detail.canDirectlySubscribe
-                  // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
-                  // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
-                  // 二次加载（重试/换剧集组）时 isSeasonDataLoaded 已为 true，仍要靠 isSeasonLoading 显示转圈；
-                  // 详情本身加载失败时分季请求永不发起，不能永久转圈。
-                  let seasonWaiting =
-                    !isDirect
-                    && (isSeasonLoading
-                      || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
-                        && !preloadTask.isDetailFailed))
                   let label = Self.headerSubscribeButtonTitle(
                     isSubscribed: isSubscribed,
                     detail: detail,
@@ -1427,8 +1433,6 @@ struct MediaDetailView: View {
                         ? AppSymbol.warning
                         : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
                     )
-                  // 文案保持「订阅」「分季信息」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
-                  let showsLoadingIcon = isDirect ? isEntryLoading : seasonWaiting
 
                   Label {
                     Text(label)
@@ -1441,7 +1445,8 @@ struct MediaDetailView: View {
               }
               .focused($focusedButton, equals: .subscribe)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              // 文案不再写「加载中」，等分季信息的状态要靠无障碍值告诉 VoiceOver。
+              .accessibilityValue(isEntryStillLoading || showsLoadingIcon ? "加载中" : "")
               // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
               // 点击已由 action 内 guard 忽略。
             }
@@ -1462,7 +1467,7 @@ struct MediaDetailView: View {
               }
               .focused($focusedButton, equals: .search)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
 
             if canSearchSubtitles {
@@ -1480,7 +1485,7 @@ struct MediaDetailView: View {
               }
               .focused($focusedButton, equals: .subtitleSearch)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
 
             // Site selection button（加载期不渲出可交互筛选菜单）
@@ -1510,7 +1515,7 @@ struct MediaDetailView: View {
               }
               .focused($focusedButton, equals: .otherInfo)
               .transition(.opacity)
-              .accessibilityValue(isEntryLoading ? "加载中" : "")
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
           }
           // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
@@ -1537,7 +1542,7 @@ struct MediaDetailView: View {
             .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
             if reduceMotion && !preloadTask.isDetailFailed {
               // Reduce Motion 不扫高光：用静态文字传达加载，避免静止占位被读作卡死。
-              Text("加载中…")
+              Text("正在加载…")
                 .font(.caption)
                 .foregroundColor(.secondary)
             }

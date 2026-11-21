@@ -12,6 +12,7 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var downloads: [DownloadingInfo] = []
   @Published private(set) var loadedClient: String = ""
   @Published private(set) var clientsLoadFailed = false
+  @Published private(set) var downloadsLoadFailed = false
   @Published var errorMessage: String?
 
   var canOperateDownloads: Bool {
@@ -30,6 +31,22 @@ class DownloadTaskViewModel: ObservableObject {
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
+  }
+
+  /// 还没拿到过任务列表时，空列表区域显示什么。拿到过一次后为 nil，按实际列表显示。
+  /// 下载器列表失败、没有下载器或无权限时也为 nil，沿用各自原有的文字。
+  enum FirstLoadState: Equatable {
+    /// 首次进入、还在等第一次结果：转圈，不能先说「暂无下载任务」。
+    case loading
+    /// 第一次结果之前任务列表请求失败：轮询继续自动重试，同时一直显示失败文字。
+    case failed
+  }
+
+  var firstLoadState: FirstLoadState? {
+    guard apiService.canAccess(.manage), !clientsLoadFailed else { return nil }
+    if hasLoadedClients && selectedClient.isEmpty { return nil }
+    guard loadedClient.isEmpty else { return nil }
+    return downloadsLoadFailed ? .failed : .loading
   }
 
   /// 主 Tab 生命周期门禁。generation 让“切走后又快速切回”的旧独立 Task 也无法写回。
@@ -152,6 +169,7 @@ class DownloadTaskViewModel: ObservableObject {
       if loadedClient != clientName {
         loadedClient = clientName
       }
+      downloadsLoadFailed = false
       consecutiveDownloadsFailures = 0
     } catch is CancellationError {
       return
@@ -160,6 +178,7 @@ class DownloadTaskViewModel: ObservableObject {
         currentPresentationGeneration == presentationGeneration,
         !Task.isCancelled
       else { return }
+      downloadsLoadFailed = true
       consecutiveDownloadsFailures += 1
       reportPollingFailureIfNeeded(
         &consecutiveDownloadsFailures,
@@ -173,6 +192,7 @@ class DownloadTaskViewModel: ObservableObject {
     downloadLoadGeneration += 1
     hasLoadedClients = false
     clientsLoadFailed = false
+    downloadsLoadFailed = false
     clients = []
     selectedClient = ""
     downloads = []

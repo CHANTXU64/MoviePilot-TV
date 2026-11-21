@@ -188,6 +188,9 @@ struct SearchView: View {
                   viewModel.cancelResourceSearch()
                 }
               }
+              // 与分页搜索一致：搜索类型按钮不在中线，单独成焦点区，往下按才能落到居中的「取消」。
+              .frame(maxWidth: .infinity)
+              .focusSection()
             } else {
               ProgressView()
             }

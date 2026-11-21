@@ -35,7 +35,7 @@ struct EpisodeTrialRuleSheet: View {
         isSaveFocused = true
       }
       SheetActionButton(
-        title: "保存", systemImage: AppSymbol.save, loadingTitle: "保存中", isLoading: viewModel.isLoading,
+        title: "保存", systemImage: AppSymbol.save, loadingTitle: "加载中", isLoading: viewModel.isLoading,
         focus: $isSaveFocused
       ) {
         if viewModel.save() { dismiss() }

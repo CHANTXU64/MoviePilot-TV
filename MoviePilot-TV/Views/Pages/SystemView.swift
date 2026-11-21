@@ -528,7 +528,7 @@ struct SystemView: View {
         } label: {
           row(
             "刷新登录凭据",
-            value: viewModel.isRefreshing ? "刷新中" : nil,
+            value: viewModel.isRefreshing ? "正在刷新…" : nil,
             showsProgress: viewModel.isRefreshing
           )
         }

@@ -41,6 +41,12 @@ class TransferHistoryViewModel: ObservableObject {
     isDeleting || isAiRedoing || isValidatingMutation
   }
 
+  /// 删除、AI 整理进行中时加载框里的说明。
+  var mutationProgressText: String {
+    if isValidatingMutation { return "正在确认整理记录…" }
+    return isDeleting ? "正在删除整理记录…" : aiRedoProgressText
+  }
+
   // MARK: - Private State
 
   private var paginator: Paginator<TransferHistory>!

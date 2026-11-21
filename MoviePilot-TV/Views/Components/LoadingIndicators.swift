@@ -121,3 +121,37 @@ struct ShelfStatusCard: View {
     return false
   }
 }
+
+/// 竖向列表/网格底部的「加载更多」：整行居中的系统转圈。
+struct ListLoadingFooter: View {
+  var body: some View {
+    ProgressView()
+      .frame(maxWidth: .infinity)
+      .padding()
+  }
+}
+
+/// 操作进行中、暂时不能做别的时盖在页面上的加载框：压暗背景，材质卡片里是系统尺寸转圈和说明。
+/// 卡片定宽、文字可换行，后端推送的较长进度说明也放得下。
+struct BlockingProgressOverlay: View {
+  let text: String
+
+  var body: some View {
+    ZStack {
+      Color.black.opacity(0.4)
+        .ignoresSafeArea()
+      VStack(spacing: 28) {
+        ProgressView()
+        Text(text)
+          .font(.headline)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(40)
+      .frame(width: 560)
+      .frame(minHeight: 230)
+      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+      .accessibilityElement(children: .combine)
+    }
+  }
+}

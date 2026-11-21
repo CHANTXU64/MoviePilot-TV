@@ -358,12 +358,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
           // 加载更多指示器
           if isLoadingMore && retainedItemCount == items.count {
-            HStack {
-              Spacer()
-              ProgressView()
-                .padding()
-              Spacer()
-            }
+            ListLoadingFooter()
           }
         }
       }
