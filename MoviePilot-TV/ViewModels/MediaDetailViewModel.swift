@@ -990,7 +990,7 @@ class MediaDetailViewModel: ObservableObject {
       state: "N",
       last_update: nil,
       tmdbid: MediaIdentifier.validNumericIdentifier(detail.tmdb_id)
-        ?? preloadTask?.mappedMovieTarget(for: detail)?.tmdb_id ?? preloadTask?.tmdbId,
+        ?? preloadTask?.mappedMovieTarget(for: detail)?.tmdb_id ?? recognizedSeriesTmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
       anilistid: detail.anilist_id,
@@ -1094,16 +1094,14 @@ class MediaDetailViewModel: ObservableObject {
   func prepareHeaderUnsubscribeConfirmation() async throws -> UnsubscribeConfirmation? {
     let snapshot = apiService.sessionSnapshot()
     let detail = self.detail
-    if let resolution = preloadTask?.mappedMovieResolution(for: detail) {
+    if let target = preloadTask?.mappedMovieTarget(for: detail) {
       // 媒体级 DELETE 不区分电影与剧集，确认时冻结实际订阅记录。
-      let subscription = try await apiService.fetchExactMovieSubscription(
-        for: detail, mappedTo: resolution.target)
+      let id = try await apiService.fetchExactMovieSubscriptionID(for: detail, mappedTo: target)
       try apiService.validateSessionSnapshot(snapshot)
-      guard let subscription else { return nil }
+      guard let id else { return nil }
       return UnsubscribeConfirmation(
-        message: try SubscriptionCancelConfirmation.headerMessage(
-          for: detail, cancelling: subscription, isNameRecognized: resolution.isNameRecognized),
-        subscriptionID: subscription.id,
+        message: SubscriptionCancelConfirmation.headerMessage(for: detail),
+        subscriptionID: id,
         snapshot: snapshot
       )
     }
@@ -1243,10 +1241,16 @@ class MediaDetailViewModel: ObservableObject {
 
   private func subscriptionLookupCandidates() -> [MediaInfo] {
     var candidates = [detail]
-    if detail.tmdb_id == nil, let tmdbId = preloadTask?.tmdbId {
+    if detail.tmdb_id == nil, let tmdbId = recognizedSeriesTmdbId {
       candidates.append(MediaInfo(tmdb_id: tmdbId, type: detail.type))
     }
     return candidates
+  }
+
+  /// 名称识别猜出的编号。电影等直接订阅的条目不用：可能猜中同名同年的另一部，
+  /// 订阅状态也不按它补查，新建和取消随之不用；剧集沿用，取消前会列出受影响的分季。
+  private var recognizedSeriesTmdbId: Int? {
+    detail.canDirectlySubscribe ? nil : preloadTask?.tmdbId
   }
 }
 

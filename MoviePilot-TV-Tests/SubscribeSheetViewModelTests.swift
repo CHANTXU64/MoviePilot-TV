@@ -184,7 +184,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(handler.sheetSubscribe?.id, 998_902)
   }
 
-  func testSubscriptionHandlerDeletesResolvedFallbackSubscription() async throws {
+  /// 名称识别出的编号可能是同名的另一部：不据此显示已订阅，也不按它做媒体级删除。
+  func testSubscriptionHandlerIgnoresNameRecognizedTmdbIdForStatusAndDeletion() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
@@ -219,37 +220,29 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     let preloadTask = preloader.preload(for: media)
     preloadTask.tmdbId = 998_903
-    try await waitUntil("preloaded fallback subscription state is ready") {
-      preloadTask.isSubscribed == true
+    try await waitUntil("preloaded subscription state is ready") {
+      preloadTask.isSubscribed != nil
     }
+    XCTAssertEqual(preloadTask.isSubscribed, false)
 
     let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
-    handler.handleSubscribe(media, expectedSubscribed: true)
-    try await waitUntil("unsubscribe confirmation appears") {
-      handler.unsubscribeConfirmationMessage != nil
+    handler.handleSubscribe(media, expectedSubscribed: false)
+    try await waitUntil("subscribe editor appears") {
+      handler.sheetSubscribe != nil
     }
+    XCTAssertNil(handler.sheetSubscribe?.tmdbid)
+    XCTAssertNil(handler.unsubscribeConfirmationMessage)
 
-    let deleteCountBeforeConfirmation = await SubscribeSheetURLProtocol.stub.requestCount(
+    let tmdbLookupCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET",
+      path: "/api/v1/subscribe/media/998903"
+    )
+    let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
       path: "/api/v1/subscribe/media/998903"
     )
-    XCTAssertEqual(deleteCountBeforeConfirmation, 0)
-
-    handler.confirmUnsubscribe()
-    try await waitUntil("subscription state updates after deletion") {
-      preloadTask.isSubscribed == false
-    }
-
-    let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "DELETE",
-      path: "/api/v1/subscribe/media/998903"
-    )
-    let doubanDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "DELETE",
-      path: "/api/v1/subscribe/media/fallback-douban"
-    )
-    XCTAssertEqual(tmdbDeleteCount, 1)
-    XCTAssertEqual(doubanDeleteCount, 0)
+    XCTAssertEqual(tmdbLookupCount, 0)
+    XCTAssertEqual(deleteCount, 0)
   }
 
   func testSubscriptionHandlerKeepsSubscribedStateWhenExactDeleteTargetIsUnavailable()
@@ -314,7 +307,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     try await waitUntil("missing exact delete target is reported") {
       handler.notificationType == .error
         && handler.notificationMessage
-          == "《跨来源订阅》取消订阅失败：无法定位可安全取消的订阅，请刷新后重试。"
+          == "《跨来源订阅》取消订阅失败：无法确认是哪条订阅，请到订阅列表里取消。"
     }
 
     XCTAssertEqual(preloadTask.isSubscribed, true)

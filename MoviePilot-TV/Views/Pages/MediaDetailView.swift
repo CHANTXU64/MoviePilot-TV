@@ -1152,16 +1152,12 @@ struct MediaDetailView: View {
                 showUnsubscribeConfirm = true
               } else {
                 notificationManager.show(
-                  message: "无法定位可安全取消的订阅，请刷新后重试。",
+                  message: "无法确认是哪条订阅，请到订阅列表里取消。",
                   type: .error
                 )
               }
             } catch is CancellationError {
               return
-            } catch is SubscriptionCancelConfirmation.UnverifiedRecord {
-              guard navigationCoordinator.isCurrent(source) else { return }
-              notificationManager.show(
-                message: SubscriptionCancelConfirmation.unverifiedRecordMessage, type: .info)
             } catch {
               guard navigationCoordinator.isCurrent(source) else { return }
               notificationManager.show(

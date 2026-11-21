@@ -422,7 +422,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
       title: "详情页取消订阅",
-      type: "电影",
+      type: "电视剧",
       year: "2026"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
@@ -463,7 +463,47 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       },
       "详情页 TMDB fallback 取消定位也必须保持精确身份查询"
     )
-    XCTAssertEqual(preloadTask.isSubscribed, false)
+  }
+
+  /// 电影名称识别出的编号可能是同名同年的另一部：详情页取消不按它查找，也不按它删除。
+  @MainActor
+  func testMovieCancelIgnoresNameRecognizedTmdbId() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-douban",
+      title: "详情页取消订阅",
+      type: "电影",
+      year: "2026"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+    XCTAssertNil(viewModel.buildSubscribeRequest().tmdbid)
+
+    await viewModel.cancelSubscription()
+
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+    let fallbackLookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 998_877
+    )
+    XCTAssertEqual(deletedSubscriptionIDs, [])
+    XCTAssertTrue(deletedMediaRequests.isEmpty)
+    XCTAssertEqual(fallbackLookupCount, 0)
   }
 
   @MainActor
@@ -650,7 +690,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-minimal-alias-douban",
       title: "原始 ID 最小响应",
-      type: "电影"
+      type: "电视剧"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
@@ -666,7 +706,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
-    XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
   /// 清单要求 lookup 只用于确认：删除目标必须是本次查询使用的媒体身份。
@@ -778,7 +817,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       bangumi_id: 12_345,
       title: "Bangumi 详情页取消订阅",
-      type: "电影"
+      type: "电视剧"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
@@ -794,7 +833,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
-    XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
   @MainActor
@@ -852,7 +890,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-stale-douban",
       title: "详情页远端取消",
-      type: "电影",
+      type: "电视剧",
       season: 1
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
@@ -869,7 +907,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertTrue(deletedMediaRequests.isEmpty)
-    XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
   @MainActor
@@ -892,14 +929,9 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_655, id: nil)
 
     let preloadTask = MediaPreloadTask(
-      partialMedia: MediaInfo(
-        douban_id: "detail-header-remote-complete-douban",
-        title: "详情页远端完成",
-        type: "电影"
-      ),
+      partialMedia: MediaInfo(tmdb_id: 776_655, title: "详情页远端完成", type: "电影"),
       apiService: service
     )
-    preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
 
     await preloadTask.refreshSubscriptionStatus()
@@ -954,13 +986,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: nil)
 
-    let fullDetail = MediaInfo(
-      douban_id: "detail-ready-remote-complete-douban",
-      title: "详情页后完成",
-      type: "电影"
-    )
+    let fullDetail = MediaInfo(tmdb_id: 776_656, title: "详情页后完成", type: "电影")
     let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
-    preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
     preloadTask.isDetailReady = true
     preloadTask.isSubscribed = true

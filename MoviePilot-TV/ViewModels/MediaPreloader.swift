@@ -194,7 +194,7 @@ class MediaPreloadTask: ObservableObject {
   fileprivate var isNavigationOwned: @MainActor () -> Bool = { false }
 
   // 可选预加载数据（持久存在，加载完直接显示）
-  /// 名称识别得到的 ID，订阅链仍用它在原来源查询未命中时补查。
+  /// 名称识别得到的 ID，用于 TMDB 跳转。只凭片名猜出，电影等直接订阅的条目不按它补查订阅状态。
   @Published var tmdbId: Int?
   /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
   var tmdbTarget: MediaInfo? { tmdbResolution?.target }
@@ -626,20 +626,16 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ④ 订阅状态
 
-  /// 电影订阅补查只接受同一来源条目的同类型目标（共享映射、按需查找或名称识别）。
+  /// 电影订阅补查只接受同一来源条目、后端确认过的同类型目标（共享映射或按需查找）。
+  /// 名称识别可能猜中同名同年的另一部，原影片的订阅状态、新建与取消都不能按它走。
   func mappedMovieTarget(for media: MediaInfo) -> MediaInfo? {
-    mappedMovieResolution(for: media)?.target
-  }
-
-  /// 同 `mappedMovieTarget`，另带目标是否只靠名称识别得出。
-  func mappedMovieResolution(for media: MediaInfo) -> TMDBTargetResolution? {
     guard let apiService, media.canDirectlySubscribe,
       MediaIdentifier.validNumericIdentifier(media.tmdb_id) == nil,
       let type = media.type, apiService.normalizeMediaType(type) == "movie",
-      let resolution = tmdbResolution,
+      let resolution = tmdbResolution, !resolution.isNameRecognized,
       resolution.origin == media.identity, resolution.target.type == "电影"
     else { return nil }
-    return resolution
+    return resolution.target
   }
 
   func refreshDirectSubscription(for detail: MediaInfo, forceRefresh: Bool = false) async -> Bool {
@@ -658,16 +654,6 @@ class MediaPreloadTask: ObservableObject {
       if !subscribed, let target = mappedMovieTarget(for: detail) {
         subscribed = try await apiService.checkSubscription(
           media: target, forceRefresh: forceRefresh, requireExactMovieIdentity: true
-        )
-      }
-      // 识别出编号却生成不了带来源身份的目标时（如条目缺类型），沿用按编号补查。
-      if !subscribed, tmdbResolution == nil,
-        MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil,
-        let tmdbId = MediaIdentifier.validNumericIdentifier(self.tmdbId)
-      {
-        let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-        subscribed = try await apiService.checkSubscription(
-          media: tmdbMedia, forceRefresh: forceRefresh
         )
       }
       try apiService.validateSessionSnapshot(snapshot)
@@ -743,7 +729,9 @@ class MediaPreloadTask: ObservableObject {
   }
 
   /// 写入名称识别结论：找到时同时记下带原来源身份的目标，没找到时记下已确认无匹配。
-  private func applyRecognition(_ result: Int?, for media: MediaInfo, apiService: APIService) {
+  private func applyRecognition(
+    _ result: Int?, for media: MediaInfo, season: Int?? = nil, apiService: APIService
+  ) {
     guard let tmdbId = MediaIdentifier.validNumericIdentifier(result) else {
       let query = RecognitionQuery(media)
       unrecognizedQuery = query.title.isEmpty ? nil : query
@@ -751,7 +739,7 @@ class MediaPreloadTask: ObservableObject {
     }
     self.tmdbId = tmdbId
     if let target = MediaActionHandler.recognizedTMDBTarget(
-      for: media, tmdbId: tmdbId, apiService: apiService)
+      for: media, tmdbId: tmdbId, season: season, apiService: apiService)
     {
       tmdbResolution = target
     }
@@ -767,23 +755,25 @@ class MediaPreloadTask: ObservableObject {
       return
     }
 
-    // 完整详情可能只返回整剧。来源与类型一致时保留卡片预读过的明确季号。
-    let lookupMedia =
+    // 完整详情可能只返回整剧。来源与类型一致时保留卡片预读过的明确季号，映射按卡片的季查；
+    // 名称识别仍用完整详情的片名和年份，卡片简称可能识别到另一部作品。
+    let keepsCardSeason =
       detail.season == nil && partialMedia.season != nil
       && detail.identity == partialMedia.identity && detail.type == partialMedia.type
-      ? partialMedia : detail
+    let mappingMedia = keepsCardSeason ? partialMedia : detail
     let snapshot = apiService.sessionSnapshot()
     do {
       if let target = try await MediaActionHandler.mappedTMDBTarget(
-        for: lookupMedia, apiService: apiService)
+        for: mappingMedia, apiService: apiService)
       {
         try apiService.validateSessionSnapshot(snapshot)
         tmdbResolution = target
       } else {
         let result = try await apiService.recognizeTmdbId(
-          title: lookupMedia.title ?? "", year: lookupMedia.year, type: lookupMedia.type)
+          title: detail.title ?? "", year: detail.year, type: detail.type)
         try apiService.validateSessionSnapshot(snapshot)
-        applyRecognition(result, for: lookupMedia, apiService: apiService)
+        applyRecognition(
+          result, for: detail, season: .some(mappingMedia.season), apiService: apiService)
       }
     } catch {
       if error is CancellationError || Task.isCancelled { return }

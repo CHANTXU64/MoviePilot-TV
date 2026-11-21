@@ -216,17 +216,19 @@ class MediaActionHandler: ObservableObject {
 
   /// 预载名称识别的结果，与映射结果一样记下原来源身份：电影订阅按精确记录查询和取消，
   /// 分季卡片的季号作为目标页选季提示（目标页没有这一季时按默认季显示）。
+  /// `season` 缺省时用条目自己的季号。
   static func recognizedTMDBTarget(
     for item: MediaInfo,
     tmdbId: Int,
+    season: Int?? = nil,
     apiService: APIService
   ) -> TMDBTargetResolution? {
     guard let request = mappingRequest(for: item, apiService: apiService) else { return nil }
     let isTV = request.mediaType == "tv"
+    let seasonHint = isTV ? (season ?? item.season) : nil
     var target = tmdbJumpTarget(
-      for: item, tmdbId: tmdbId, type: isTV ? "电视剧" : "电影",
-      season: .some(isTV ? item.season : nil))
-    target.tmdbSeasonHint = isTV ? item.season : nil
+      for: item, tmdbId: tmdbId, type: isTV ? "电视剧" : "电影", season: .some(seasonHint))
+    target.tmdbSeasonHint = seasonHint
     return TMDBTargetResolution(origin: request.identity, target: target, isNameRecognized: true)
   }
 

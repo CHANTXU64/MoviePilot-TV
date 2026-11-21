@@ -90,17 +90,6 @@ nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
   let id: Int
   let mediaId: String
   let isResolvedMediaId: Bool
-  /// 订阅记录自己的片名和年份，取消确认里说明实际删除的是哪条。
-  var name: String? = nil
-  var year: String? = nil
-}
-
-/// 冻结下来的电影订阅记录，以及它是否按原来源身份直接找到。
-struct ExactMovieSubscription: Equatable {
-  let id: Int
-  let name: String?
-  let year: String?
-  let matchesOrigin: Bool
 }
 
 struct APIServiceSessionSnapshot: Equatable {
@@ -3905,8 +3894,6 @@ class APIService: ObservableObject {
       let media_source: String?
       let media_id: String?
       let mediaid: String?
-      let name: String?
-      let year: String?
 
       /// 响应是否给出了可确认的订阅归属：canonical 成对身份，或任一可用的专用 ID。
       /// 只回答“有没有”，不再把响应身份当作删除目标。
@@ -3947,76 +3934,37 @@ class APIService: ObservableObject {
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
     if requireExactMovieIdentity {
-      guard id > 0 else { return nil }
       let recordedIdentity = MediaIdentifier.resolve(
         source: resp.media_source, mediaId: resp.media_id, tmdbId: resp.tmdbid,
         doubanId: resp.doubanid, bangumiId: resp.bangumiid, anilistId: resp.anilistid,
         legacyMediaId: resp.mediaid
       )
-      let isExact = Self.isExactMovieRecord(
-        type: resp.type, season: resp.season, recordedIdentity: recordedIdentity,
-        tmdbid: resp.tmdbid, identity: identity, requestedSeason: season)
-      if !isExact {
-        // v3.2.7 起查询按类型过滤；更早的版本只返回同号的第一条，可能是剧集，电影排在后面。
-        guard resp.type != "电影" else { return nil }
-        return try await exactMovieRecordFromList(identity: identity, season: season)
-      }
+      // 上游也能按共同的 TMDB 身份命中另一来源的订阅。
+      let matchesTMDB = identity.source == "themoviedb"
+        && recordedIdentity?.source != "themoviedb"
+        && MediaIdentifier.validNumericIdentifier(resp.tmdbid).map(String.init) == identity.mediaId
+      guard id > 0, resp.type == "电影", resp.season == season,
+        recordedIdentity == identity || matchesTMDB
+      else { return nil }
     }
     return SubscriptionLookupResult(
       id: id,
       mediaId: identity.mediaKey,
-      isResolvedMediaId: resp.hasResolvedIdentity,
-      name: resp.name,
-      year: resp.year
+      isResolvedMediaId: resp.hasResolvedIdentity
     )
   }
 
-  /// 订阅记录是否正是这个身份的电影订阅。上游也能按共同的 TMDB 编号命中另一来源的订阅。
-  private static func isExactMovieRecord(
-    type: String?, season: Int?, recordedIdentity: MediaIdentity?, tmdbid: Int?,
-    identity: MediaIdentity, requestedSeason: Int?
-  ) -> Bool {
-    let matchesTMDB = identity.source == "themoviedb"
-      && recordedIdentity?.source != "themoviedb"
-      && MediaIdentifier.validNumericIdentifier(tmdbid).map(String.init) == identity.mediaId
-    return type == "电影" && season == requestedSeason
-      && (recordedIdentity == identity || matchesTMDB)
-  }
-
-  /// 从当前用户可见的订阅列表里找这个身份的电影订阅。
-  private func exactMovieRecordFromList(
-    identity: MediaIdentity, season: Int?
-  ) async throws -> SubscriptionLookupResult? {
-    let candidates = try await fetchSubscriptions(forceRefresh: true).filter {
-      ($0.id ?? 0) > 0
-        && Self.isExactMovieRecord(
-          type: $0.type, season: $0.season, recordedIdentity: $0.identity,
-          tmdbid: $0.tmdbid, identity: identity, requestedSeason: season)
-    }
-    // 主身份就是这个身份的记录优先，其次才是带同一 TMDB 编号的其他来源记录。
-    guard
-      let record = candidates.first(where: { $0.identity == identity }) ?? candidates.first,
-      let id = record.id
-    else { return nil }
-    return SubscriptionLookupResult(
-      id: id, mediaId: identity.mediaKey, isResolvedMediaId: true,
-      name: record.name, year: record.year)
-  }
-
-  /// 为带 TMDB 目标的电影冻结精确订阅记录，优先原始来源。
-  func fetchExactMovieSubscription(for media: MediaInfo, mappedTo target: MediaInfo) async throws
-    -> ExactMovieSubscription?
+  /// 为带共享映射的电影冻结精确订阅记录，优先原始来源。
+  func fetchExactMovieSubscriptionID(for media: MediaInfo, mappedTo target: MediaInfo) async throws
+    -> Int?
   {
     let snapshot = sessionSnapshot()
-    for (candidate, isOrigin) in [(media, true), (target, false)] {
+    for candidate in [media, target] {
       let result = try await fetchSubscriptionLookup(
         media: candidate, requireExactMovieIdentity: true
       )
       try validateSessionSnapshot(snapshot)
-      if let result {
-        return ExactMovieSubscription(
-          id: result.id, name: result.name, year: result.year, matchesOrigin: isOrigin)
-      }
+      if let result { return result.id }
     }
     return nil
   }
