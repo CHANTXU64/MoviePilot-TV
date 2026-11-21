@@ -1545,6 +1545,107 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       }
     )
   }
+
+  func testLegacyBackendSubscriptionUpdateSendsFullSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+
+    let original = try JSONDecoder().decode(
+      Subscribe.self,
+      from:
+        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv"}"#
+        .data(using: .utf8)!)
+    var draft = original
+    draft.keyword = "新关键词"
+    _ = try await service.saveSubscription(original: original, draft: draft)
+
+    let captured = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
+    // v2 的 PUT 是整条替换，只改关键词也必须带上站点和保存路径，否则会被默认值覆盖。
+    XCTAssertEqual(body["sites"] as? [Int], [1, 2])
+    XCTAssertEqual(body["save_path"] as? String, "/media/tv")
+    XCTAssertEqual(body["keyword"] as? String, "新关键词")
+  }
+
+  func testUnknownBackendVersionSubscriptionUpdateSendsFullSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    // 版本号损坏时无法确认后端是 v2 还是 v3；写回必须按全量快照，避免误删 v2 配置。
+    service.settings = GlobalSettings(BACKEND_VERSION: "未知版本")
+
+    let original = try JSONDecoder().decode(
+      Subscribe.self,
+      from:
+        #"{"id":7,"name":"示例","type":"电视剧","sites":[1,2],"save_path":"/media/tv"}"#
+        .data(using: .utf8)!)
+    var draft = original
+    draft.keyword = "新关键词"
+    _ = try await service.saveSubscription(original: original, draft: draft)
+
+    let captured = await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe")
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured)) as? [String: Any])
+    XCTAssertEqual(body["sites"] as? [Int], [1, 2])
+    XCTAssertEqual(body["save_path"] as? String, "/media/tv")
+  }
+
+  func testLegacyBackendSkipsMediaSourceCatalogRequest() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+
+    let sources = try await service.fetchMediaSources()
+    XCTAssertTrue(sources.isEmpty)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/media/source"))
+  }
+
+  func testLegacyBackendTreatsMediaServerExistsMissAsAbsent() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "compat-token"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":false,"message":"media not exists","data":{}}"#.data(using: .utf8)!)
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: #"{"tmdb_id":42,"title":"电影","year":"2026","type":"电影"}"#.data(using: .utf8)!)
+
+    let exists = try await service.fetchMediaServerItemRef(media: media)
+    XCTAssertNil(exists)
+  }
 }
 
 @MainActor
@@ -1625,6 +1726,7 @@ private struct CompatibilityEndpointServiceSnapshot {
     }
     restoreDefaults(value: defaultsValue, forKey: account)
   }
+
 }
 
 private actor CompatibilityEndpointURLProtocolStub {

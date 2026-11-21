@@ -33,6 +33,8 @@ final class TopShelfManager: ObservableObject {
   @Published private(set) var selection: TopShelfSelection?
   @Published private(set) var status: TopShelfSyncStatus
   @Published private(set) var shelves = RecommendViewModel.allShelves
+  /// v2 后端没有成对媒体身份，货架详情取不到，不开放主屏货架；设置页据此隐藏入口。
+  @Published private(set) var isAvailableForCurrentBackend = true
 
   var savedExploration: ExploreConfiguration? {
     if let exploration = selection?.exploration { return exploration }
@@ -241,6 +243,12 @@ final class TopShelfManager: ObservableObject {
       status = .unavailable
       return
     }
+    updateBackendAvailability()
+    guard isAvailableForCurrentBackend else {
+      _ = stronglyInvalidate(for: apiService.session)
+      status = .unavailable
+      return
+    }
     guard let selection else {
       status = .disabled
       return
@@ -415,6 +423,7 @@ final class TopShelfManager: ObservableObject {
     _ state: APIServiceSessionState,
     scheduleRefresh shouldRefresh: Bool
   ) {
+    updateBackendAvailability()
     refreshTask?.cancel()
     refreshTask = nil
     if sourceSessionID != state.imageNamespace {
@@ -428,7 +437,7 @@ final class TopShelfManager: ObservableObject {
   }
 
   private func publishedScopeMatches(_ state: APIServiceSessionState) -> Bool {
-    guard let store, let selection,
+    guard isAvailableForCurrentBackend, let store, let selection,
       state.token != nil,
       isSelectionPermitted(in: state),
       let published = try? store.loadState()
@@ -451,11 +460,13 @@ final class TopShelfManager: ObservableObject {
     if let previous = (try? store.loadState())?.refreshConfiguration,
       previous.sessionID != state.imageNamespace || state.token == nil
         || !isSelectionPermitted(in: state) || selection == nil
+        || !isAvailableForCurrentBackend
     {
       TopShelfCredentials.delete(previous.sessionID)
     }
     let canDisplay =
-      state.token != nil
+      isAvailableForCurrentBackend
+      && state.token != nil
       && isSelectionPermitted(in: state)
       && selection != nil
     let emptyState = TopShelfSharedState(
@@ -498,6 +509,12 @@ final class TopShelfManager: ObservableObject {
 
   private func handleSettingsChange(_ settings: GlobalSettings?) {
     guard let settings else { return }
+    updateBackendAvailability()
+    guard isAvailableForCurrentBackend else {
+      _ = stronglyInvalidate(for: apiService.session)
+      status = .unavailable
+      return
+    }
     guard let selection else {
       if case .failed = status { _ = stronglyInvalidate(for: apiService.session) }
       return
@@ -511,6 +528,15 @@ final class TopShelfManager: ObservableObject {
     if state?.refreshConfiguration != configuration || (refreshTask == nil && !preparedMatches) {
       scheduleRefresh()
     }
+  }
+
+  /// v2 后端没有成对媒体身份，货架详情取不到，不开放主屏货架。
+  /// 删除 v2 支持时连同 `isAvailableForCurrentBackend` 和这几个 guard 一并删掉。
+  private func updateBackendAvailability() {
+    let available = !MoviePilotV2Support.isLegacy(
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+    guard available != isAvailableForCurrentBackend else { return }
+    isAvailableForCurrentBackend = available
   }
 
   private func refreshConfiguration(
@@ -584,8 +610,8 @@ final class TopShelfManager: ObservableObject {
   private func updateRefreshConfiguration(for state: APIServiceSessionState) {
     guard let store else { return }
     let previous = (try? store.loadState())?.refreshConfiguration
-    guard let token = state.token, isSelectionPermitted(in: state),
-      selection != nil, let settings = apiService.settings
+    guard isAvailableForCurrentBackend, let token = state.token,
+      isSelectionPermitted(in: state), selection != nil, let settings = apiService.settings
     else {
       if let previous { TopShelfCredentials.delete(previous.sessionID) }
       try? store.setRefreshConfiguration(nil)

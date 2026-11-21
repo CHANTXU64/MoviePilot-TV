@@ -328,7 +328,7 @@ struct SystemView: View {
 
   private var rootPage: some View {
     VStack(spacing: 38) {
-      if canConfigureRecommendations {
+      if canConfigureRecommendations && topShelfManager.isAvailableForCurrentBackend {
         topShelfSettings
       }
 

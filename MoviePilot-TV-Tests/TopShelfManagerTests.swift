@@ -937,6 +937,32 @@ final class TopShelfManagerTests: XCTestCase {
       try fixture.store.loadState()?.snapshot?.refreshConfiguration?.useImageCache, true)
   }
 
+  func testLegacyBackendDisablesTopShelfAndSkipsRefresh() async throws {
+    let fixture = try ManagerFixture()
+    defer { fixture.cleanup() }
+    let service = makeService(userID: 860)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v2.15.6")
+    let manager = TopShelfManager(
+      apiService: service, store: fixture.store, defaults: fixture.defaults,
+      fetchSources: { [] },
+      fetchRecommendations: { _ in
+        XCTFail("v2 后端不应请求主屏推荐")
+        return []
+      },
+      fetchDetail: { $0 },
+      fetchImage: { _ in TopShelfImageResource(data: TopShelfTestArtwork.data, fileExtension: "gif")
+      },
+      notifyChange: {}
+    )
+
+    manager.start(refreshImmediately: false)
+    XCTAssertFalse(manager.isAvailableForCurrentBackend)
+    await manager.refreshNow()
+
+    XCTAssertEqual(manager.status, .unavailable)
+    XCTAssertNil(try fixture.store.loadState()?.snapshot)
+  }
+
   private func makeService(userID: Int) -> APIService {
     let service = APIService.isolatedTestingInstance()
     let user = token(userID: userID, token: "token-\(userID)")
