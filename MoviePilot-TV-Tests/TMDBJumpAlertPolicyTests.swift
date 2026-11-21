@@ -62,8 +62,9 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
     let homeView = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
 
     XCTAssertTrue(
-      homeView.contains("for: info, notifyWhenUnrecognized: false)"),
-      "Home「搜索资源」识别失败会自愈为标题搜索，必须显式不弹提示"
+      homeView.contains(
+        "for: info, notifyWhenUnrecognized: false, useSharedMapping: false)"),
+      "Home「搜索资源」识别失败会自愈为标题搜索，必须显式不弹提示，且不为辅助映射多等查询"
     )
     // 首页卡片按下即打开详情页，长按菜单不再有「TMDB详情页」，也就不再有默认弹提示的调用。
     XCTAssertFalse(homeView.contains("Label(\"TMDB详情页\""))
@@ -84,7 +85,7 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
   }
 }
 
-/// F-183：TMDB 详情入口保留预识别门禁，并在动作层同步防重入。
+/// TMDB 详情入口在动作层防重入；识别期间按钮可按，按下后等识别结果，离开页面时取消。
 final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
 
   private func source(_ relativePath: String) throws -> String {
@@ -94,16 +95,14 @@ final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
     return try String(contentsOf: repositoryRoot.appendingPathComponent(relativePath))
   }
 
-  func testDetailJumpKeepsPreloadDisableAndGuardsReentrancy() throws {
+  func testDetailJumpGuardsReentrancyAndCancelsOnDisappearInSource() throws {
     let detailView = try source("MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(detailView.contains("@State private var isTMDBJumpInFlight = false"))
-    XCTAssertTrue(
-      detailView.contains("guard !isButtonLoading, !isTMDBJumpInFlight else { return }")
-    )
-    XCTAssertTrue(detailView.contains("isTMDBJumpInFlight = true"))
-    XCTAssertTrue(detailView.contains("defer { isTMDBJumpInFlight = false }"))
-    XCTAssertTrue(detailView.contains(".disabled(isButtonLoading)"))
-    XCTAssertFalse(detailView.contains(".disabled(isTMDBJumpInFlight)"))
+    XCTAssertTrue(detailView.contains("@State private var tmdbJumpTask: Task<Void, Never>?"))
+    XCTAssertTrue(detailView.contains("!isEntryLoading, tmdbJumpTask == nil else { return }"))
+    XCTAssertTrue(detailView.contains("defer { tmdbJumpTask = nil }"))
+    XCTAssertTrue(detailView.contains("tmdbJumpTask?.cancel()"))
+    XCTAssertTrue(detailView.contains("await preloadTask.waitForTMDBIdentification()"))
+    XCTAssertFalse(detailView.contains(".disabled(isButtonLoading)"))
   }
 }

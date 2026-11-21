@@ -588,16 +588,6 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertNotEqual(task.imageRetrieveGeneration, generation)
   }
 
-  func testLoadingPosterProcessorIsDistinctFromCardPoster() {
-    let loading = MediaDetailLoadingPoster.processor
-    let card = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
-
-    XCTAssertEqual(MediaDetailLoadingPoster.size, CGSize(width: 460, height: 690))
-    XCTAssertTrue(loading.identifier.contains("DownsamplingImageProcessor"))
-    XCTAssertFalse(loading.identifier.contains("ResizingImageProcessor"))
-    XCTAssertNotEqual(loading.identifier, card.identifier)
-  }
-
   func testPersonCardProcessorUsesDownsamplingOnly() {
     let processor = PersonCard.imageProcessor()
 
@@ -682,59 +672,6 @@ final class MPImageWarmerTests: XCTestCase {
 
     XCTAssertNotNil(preloader.peekTask(for: navigationMedia))
     XCTAssertNotNil(preloader.peekTask(for: candidateMedia))
-  }
-
-  func testLoadingPosterReleaseKeepsDiskAndCardProcessor() async throws {
-    let preloadService = APIService.testingInstance()
-    defer { withExtendedLifetime(preloadService) {} }
-    let preloader = preloadService.mediaPreloader
-    defer { preloader.clearAll() }
-    let cache = ImageCache(name: "loading-poster-pop-\(UUID().uuidString)")
-    defer {
-      cache.clearMemoryCache()
-      cache.clearDiskCache()
-    }
-
-    let loadingURL = try XCTUnwrap(URL(string: "https://example.com/loading-overlay.jpg"))
-    let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
-      UIColor.cyan.setFill()
-      context.cgContext.fill(CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
-    }
-    let loadingProcessor = MediaDetailLoadingPoster.processor
-    let cardProcessor = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
-
-    for processor in [loadingProcessor, cardProcessor] {
-      try await cache.store(
-        image,
-        forKey: loadingURL.cacheKey,
-        processorIdentifier: processor.identifier
-      )
-      XCTAssertEqual(
-        cache.imageCachedType(
-          forKey: loadingURL.cacheKey,
-          processorIdentifier: processor.identifier
-        ),
-        .memory
-      )
-    }
-
-    preloader.removeLoadingPosterFromMemory(url: loadingURL, imageCache: cache)
-
-    XCTAssertEqual(
-      cache.imageCachedType(
-        forKey: loadingURL.cacheKey,
-        processorIdentifier: loadingProcessor.identifier
-      ),
-      .disk
-    )
-    XCTAssertEqual(
-      cache.imageCachedType(
-        forKey: loadingURL.cacheKey,
-        processorIdentifier: cardProcessor.identifier
-      ),
-      .memory,
-      "同一张海报的卡片尺寸应保留，只清加载遮罩那一档"
-    )
   }
 
   func testAuxiliaryPreloadDoesNotReplaceFocusCandidateAndReleasesOnPop() {

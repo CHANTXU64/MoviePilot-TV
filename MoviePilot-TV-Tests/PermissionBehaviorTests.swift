@@ -74,7 +74,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
       "详情页 Header 的搜索资源按钮必须在 search 权限门之后。"
     )
     XCTAssertTrue(
-      source.contains("if canSearchResources && shouldShowSiteFilter"),
+      source.contains("canSearchResources && shouldShowSiteFilter"),
       "详情页站点筛选按钮必须跟随 search 权限。"
     )
   }

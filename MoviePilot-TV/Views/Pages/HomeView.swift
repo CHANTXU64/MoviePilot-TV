@@ -177,7 +177,7 @@ struct HomeView: View {
 
   private func navigateToDetail(for subscribe: Subscribe) {
     // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
-    // 必须显式携带订阅海报，否则详情页加载遮罩的海报区域会显示空白。
+    // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
     navigationCoordinator.push(
       subscribe.navigationMediaInfo(),
       loadingPosterURL: subscribe.imageURLs.poster
@@ -214,6 +214,10 @@ enum HomeSubscribeFocusID {
 /// 媒体库页的一行媒体服务器条目。两行共用行头、服务器选择器、图片加载窗口和起播焦点交接，
 /// 只有卡片样子和按下去做什么不同。
 private struct MediaSectionView: View {
+  /// 卡片海报向服务端请求的缩略宽度，与卡片降采样后实际保留的像素一致。
+  private static let cardPosterPixelWidth = MediaCard.posterThumbnailMaxWidth(
+    for: MediaCard.defaultPosterSize)
+
   /// 这一行是「最近添加」还是「继续观看」。
   enum Content {
     /// 海报卡；按下打开详情页，或按设置跳到媒体服务器 App。
@@ -242,8 +246,6 @@ private struct MediaSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
-  @State private var posterWarmDelayTask: Task<Void, Never>?
-  @State private var posterWarmDownloadTask: DownloadTask?
   /// 这一行的实例身份，焦点只交回起播的那一个。
   @State private var focusOwnerID = UUID()
   /// 正在等待焦点写回的媒体卡；播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
@@ -325,23 +327,9 @@ private struct MediaSectionView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedItemId) { _, newId in
-            // Push 或上下文菜单可能暂时清空焦点；保留已经开始的下载，
-            // 让详情加载遮罩继续等待同一个 Kingfisher 缓存请求。
+            // Push 或上下文菜单可能暂时清空焦点；保留当前图片窗口锚点。
             guard let newId else { return }
             imageAnchorId = newId
-            // 聚焦停留后预热详情加载遮罩海报：媒体服务器图经后端代理转发较慢，
-            // push 时才开始下载会赶不上转场，聚焦时提前下载磁盘即可命中。
-            posterWarmDelayTask?.cancel()
-            posterWarmDownloadTask?.cancel()
-            posterWarmDownloadTask = nil
-            guard let item = items.first(where: { $0.id == newId }) else { return }
-            posterWarmDelayTask = Task { @MainActor in
-              try? await Task.sleep(for: .milliseconds(300))
-              guard !Task.isCancelled else { return }
-              posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
-                item.imageURLs.image
-              )
-            }
           }
         }
         .scrollClipDisabled()
@@ -424,7 +412,7 @@ private struct MediaSectionView: View {
     let playsDirectly = !opensApp && viewModel.playsDirectly(item, server: selectedServer)
     MediaCard(
       title: item.title,
-      posterUrl: item.imageURLs.image,
+      posterUrl: item.imageURLs(cardPosterPixelWidth: Self.cardPosterPixelWidth).image,
       posterFallbackUrl: viewModel.posterFallbackURL(for: item, server: selectedServer),
       typeText: item.type,
       ratingText: nil,
@@ -478,7 +466,7 @@ private struct MediaSectionView: View {
     let action = viewModel.continueWatchingAction(for: item, server: server)
     ContinueWatchingCard(
       title: item.title,
-      stillURL: item.imageURLs.image,
+      stillURL: item.imageURLs().image,
       icon: action.badgeIcon,
       episodeText: ContinueWatchingDisplay.episodeText(type: item.type, subtitle: item.subtitle),
       progress: ContinueWatchingDisplay.progress(percent: item.percent),
@@ -545,7 +533,8 @@ private struct MediaSectionView: View {
   /// 期间页面变了（已经进了别的页）就不再推入、不再起播。
   private func openDetail(_ item: MediaServerPlayItem, server: String) {
     let navigationSource = navigationCoordinator.sourceToken()
-    let loadingPosterURL = item.imageURLs.image
+    // 详情冷加载拿它当全屏背景兜底，不能降成卡片尺寸。
+    let loadingPosterURL = item.imageURLs().image
     Task {
       let destination: HomeViewModel.CardDestination?
       if content == .continueWatching {
@@ -614,7 +603,7 @@ private struct MediaServerSearchMenuItems: View {
           // 识别不出来会退回按标题搜索，动作照样完成，所以这里不弹「未识别到此媒体的TMDB信息」：
           // 否则弹窗与跳转同时发生。
           if let target = await mediaActionHandler.getTMDBJumpTarget(
-            for: info, notifyWhenUnrecognized: false)
+            for: info, notifyWhenUnrecognized: false, useSharedMapping: false)
           {
             if let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
               for: target)
@@ -670,8 +659,6 @@ private struct SubscribeSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
-  @State private var posterWarmDelayTask: Task<Void, Never>?
-  @State private var posterWarmDownloadTask: DownloadTask?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -725,27 +712,9 @@ private struct SubscribeSectionView: View {
         .padding(.top, 25)
         .padding(.bottom, 30)
         .onChange(of: focusedItemId) { _, newId in
-          // Push 或上下文菜单可能暂时清空焦点；保留已经开始的下载，
-          // 让详情加载遮罩继续等待同一个 Kingfisher 缓存请求。
+          // Push 或上下文菜单可能暂时清空焦点；保留当前图片窗口锚点。
           guard let newId else { return }
           imageAnchorId = newId
-          // 聚焦停留后预热详情加载遮罩海报（与“最近添加”一致），
-          // 订阅卡片从菜单进详情时转场海报磁盘已命中。
-          posterWarmDelayTask?.cancel()
-          posterWarmDownloadTask?.cancel()
-          posterWarmDownloadTask = nil
-          guard
-            let item = items.first(where: {
-              HomeSubscribeFocusID.value(for: $0.id) == newId
-            })
-          else { return }
-          posterWarmDelayTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
-              item.imageURLs.poster
-            )
-          }
         }
       }
       .scrollClipDisabled()

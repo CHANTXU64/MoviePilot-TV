@@ -1,5 +1,11 @@
 import Foundation
 
+/// 缓存里同时表示命中和未命中；不能直接用 `MediaMapping?`，否则未命中会被当成缓存缺失。
+nonisolated enum MediaMappingCacheEntry: Equatable, Sendable {
+  case mapping(MediaMapping)
+  case miss
+}
+
 /// 一次会话（服务器 + 账号 + 权限指纹）内共享的协作对象。
 ///
 /// 由 `APIService` 按 `uiIdentity` 持有：同账号刷新沿用同一个作用域，换账号或登出时整体拆除并重建。
@@ -38,6 +44,9 @@ final class SessionScope {
     ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
   /// TMDB 条目的海报路径（没有海报的记为 nil），首页海报读不出来时替用。
   let tmdbPosterPathCache = CoalescingCache<String, String?>(ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
+  /// 非 TMDB 来源到 TMDB 的共享映射；命中与未命中都短暂记住，避免每次打开详情都走后端查询。
+  let mediaMappingCache = CoalescingCache<String, MediaMappingCacheEntry>(
+    ttl: 600, capacity: 1024, renewsTTLOnAccess: false)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
@@ -78,6 +87,7 @@ final class SessionScope {
     tmdbAccessCache.invalidateAll()
     libraryRecognitionCache.invalidateAll()
     tmdbPosterPathCache.invalidateAll()
+    mediaMappingCache.invalidateAll()
   }
 
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。
