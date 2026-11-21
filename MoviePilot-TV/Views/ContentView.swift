@@ -24,7 +24,7 @@ struct ContentView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Color(white: 0.1).ignoresSafeArea())
+    .background(AppBackground())
     .environment(\.topShelfPresentation, TopShelfOpeningContext(
       routeID: viewModel.topShelfRoute?.id,
       blocksInteraction: viewModel.isOpeningTopShelf,

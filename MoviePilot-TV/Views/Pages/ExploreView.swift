@@ -14,7 +14,7 @@ struct ExploreView: View {
         if allowsRequests {
           ExploreRootContent(isSelected: isSelected)
         } else {
-          Color(white: 0.1).ignoresSafeArea()
+          AppBackground()
         }
       }
       .navigationDestination(for: ImageNavigationEntry.self) { entry in

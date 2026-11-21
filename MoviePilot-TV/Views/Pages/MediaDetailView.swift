@@ -474,6 +474,15 @@ struct MediaDetailView: View {
       backgroundColor
         .ignoresSafeArea()
 
+      // 第二页露出底色时（内存优化淡掉背景图，或模糊图未就绪）用全 App 统一的背景。
+      // 首屏仍是纯色底，和底部渐隐衔接。
+      AppBackground()
+        .opacity(showContentPage ? 1 : 0)
+        .animation(
+          .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+          value: showContentPage
+        )
+
       if (cachedContent != nil || presentationStyle == .direct),
         let localBackground = cachedContent?.backgroundURL ?? loadingPosterURL,
         localBackground.isFileURL
