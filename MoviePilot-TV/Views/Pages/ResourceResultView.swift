@@ -67,8 +67,8 @@ struct ResourceResultView: View {
     .background {
       SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
-    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：加载期的「取消」认领首个焦点。
-    .environment(\.claimsInitialLoadingFocus, true)
+    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：由当前显示的「取消」「重新搜索」等认领首个焦点。
+    .providesInitialFocusClaim()
     .task {
       await viewModel.search()
     }

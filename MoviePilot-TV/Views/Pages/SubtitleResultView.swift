@@ -7,7 +7,6 @@ struct SubtitleResultsBody<Header: View>: View {
   private let header: Header
   private let onCancel: (() -> Void)?
   @State private var downloadTarget: SubtitleDownloadViewModel?
-  @Environment(\.claimsInitialLoadingFocus) private var claimsInitialLoadingFocus
 
   init(
     search: SubtitleSearchSession,
@@ -95,7 +94,7 @@ struct SubtitleResultsBody<Header: View>: View {
           .foregroundColor(.secondary)
         if let loadingAction {
           Button(loadingAction.title, action: loadingAction.perform)
-            .claimsInitialFocus(claimsInitialLoadingFocus)
+            .claimsInitialFocus()
         }
         Spacer()
       }
@@ -124,6 +123,7 @@ struct SubtitleResultsBody<Header: View>: View {
           if search.canRestart {
             Button("重新搜索") { search.restart() }
               .disabled(downloadTarget != nil)
+              .claimsInitialFocus()
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -265,8 +265,8 @@ struct SubtitleResultView: View {
     .background {
       SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
-    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：加载期的「取消」认领首个焦点。
-    .environment(\.claimsInitialLoadingFocus, true)
+    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：由当前显示的「取消」「重新搜索」等认领首个焦点。
+    .providesInitialFocusClaim()
     .task { search.start() }
   }
 }
