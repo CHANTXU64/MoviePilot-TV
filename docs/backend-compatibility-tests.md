@@ -108,7 +108,7 @@ OpenAPI 清单按 `/system/global` 返回的后端版本选择搜索参数；v3.
 
 `MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS` 与额外用户名按顺序对应；本地确实共用密码时可以留空，测试会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。如果某个密码本身包含逗号，在同一行中把该逗号写成 `\,`，例如 `first-password,pa\,ssword` 会解析为两个密码 `first-password` 和 `pa,ssword`。模板文件中应填写自己的测试账号用户名和密码，不要复用示例值。
 
-四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除。该套件除了校验 token 和 Tab，还会分别通过发现分页、搜索站点、首页订阅读取和整理配置的生产 ViewModel 验证唯一权限确实可用：
+四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除。该套件除了校验 token 和 Tab，还会分别通过发现分页、搜索站点、订阅页读取和整理配置的生产 ViewModel 验证唯一权限确实可用：
 
 ```sh
 MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=test_discovery=discovery,test_search=search,test_subscribe=subscribe,test_manage=manage

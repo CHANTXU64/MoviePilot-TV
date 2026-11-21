@@ -462,7 +462,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testHomeMediaHeaderPickerRowIsFocusSection() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
     let start = try XCTUnwrap(source.range(of: "private struct MediaSectionView"))
-    let end = try XCTUnwrap(source.range(of: "private struct SubscribeSectionView", range: start.upperBound..<source.endIndex))
+    let end = try XCTUnwrap(source.range(of: "private struct MediaServerSearchMenuItems", range: start.upperBound..<source.endIndex))
     let mediaSection = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
@@ -476,13 +476,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   @MainActor
   func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
-    let homeSource = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let subscriptionsSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let failureMessage = SubscriptionCancelConfirmation.failureMessage
 
     XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
-    XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
-    XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+    XCTAssertTrue(subscriptionsSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
+    XCTAssertTrue(subscriptionsSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
     XCTAssertTrue(
       detailSource.contains("guard await viewModel.cancelSubscription(confirmation: confirmation) else")
     )

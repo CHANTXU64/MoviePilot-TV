@@ -7,6 +7,8 @@ nonisolated enum AppSymbol {
   // MARK: 底部标签页
 
   static let tabHome = "play.tv"
+  /// 「订阅」页放的是正在追的订阅，与订阅状态里的「订阅中」同一个意思。
+  static let tabSubscriptions = subscriptionActive
   static let tabRecommend = "sparkles.tv"
   static let tabExplore = "safari"
   static let tabStatus = "slider.horizontal.3"

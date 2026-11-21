@@ -16,6 +16,7 @@ class ContentViewModel: ObservableObject {
     case search = 3
     case status = 4
     case system = 5
+    case subscriptions = 6
   }
 
   @Published var isLoggedIn = false
@@ -346,6 +347,10 @@ class ContentViewModel: ObservableObject {
     var tabs: [Tab] = [.home]
     let canAccess: (UserPermissionKey) -> Bool = { permission in
       token?.canAccess(permission) ?? false
+    }
+
+    if canAccess(.subscribe) {
+      tabs.append(.subscriptions)
     }
 
     if canAccess(.discovery) {

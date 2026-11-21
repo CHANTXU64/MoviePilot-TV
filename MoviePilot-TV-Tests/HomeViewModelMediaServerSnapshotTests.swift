@@ -175,17 +175,17 @@ final class HomeViewModelMediaServerSnapshotTests: XCTestCase {
 
   func testSubscriptionsFailureSetsAndClearsLoadFailedFlag() async throws {
     let service = makeService()
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
 
-    await viewModel.refreshData()
+    await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertFalse(viewModel.subscriptionsLoadFailed)
 
     HomeMediaServerSnapshotURLProtocol.stub.setSubscribeResult(.httpStatus500)
-    await viewModel.refreshData()
+    await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertTrue(viewModel.subscriptionsLoadFailed)
 
     HomeMediaServerSnapshotURLProtocol.stub.setSubscribeResult(.success)
-    await viewModel.refreshData()
+    await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertFalse(viewModel.subscriptionsLoadFailed)
   }
 }

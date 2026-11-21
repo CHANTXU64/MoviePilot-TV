@@ -15,7 +15,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.subscribe])),
-      [.home, .system]
+      [.home, .subscriptions, .system]
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.manage])),

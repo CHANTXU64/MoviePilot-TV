@@ -23,7 +23,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
     let deleteRequestCount =
@@ -66,7 +66,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
 
@@ -97,7 +97,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [101])
 
@@ -125,7 +125,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [102])
 
@@ -155,7 +155,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let staleRefresh = Task {
       await viewModel.refreshSubscriptions(forceRefresh: true)
     }
@@ -309,7 +309,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let success = try await viewModel.searchSubscribe(
       subscribe: Subscribe(id: 901, name: "搜索前订阅", type: "电视剧")
     )
@@ -351,7 +351,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let statusResult = try await viewModel.toggleSubscribeStatus(subscribe: subscriptions[0])
     XCTAssertTrue(statusResult.success)
     XCTAssertEqual(notifications.count(), 1)
