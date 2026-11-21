@@ -42,9 +42,14 @@ struct ExploreView: View {
 
 private struct ExploreRootContent: View {
   let isSelected: Bool
-  @StateObject private var viewModel = ExploreViewModel()
+  @StateObject private var viewModel: ExploreViewModel
   @State private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+
+  init(isSelected: Bool) {
+    self.isSelected = isSelected
+    _viewModel = StateObject(wrappedValue: ExploreViewModel.makeBrowseViewModel())
+  }
 
   var body: some View {
       Group {
@@ -71,6 +76,16 @@ private struct ExploreRootContent: View {
               subscriptionHandler.forkSheetRequest = share
             }
           )
+        } else if viewModel.availableSources.isEmpty {
+          VStack(spacing: 24) {
+            Text("没有已启用的探索数据源")
+              .font(.headline)
+              .foregroundStyle(.secondary)
+            Text("前往 设置 → 探索页 → 内容与顺序 开启")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           // 在 Paginator 初始化完成前显示加载指示器
           ProgressView()
@@ -82,22 +97,25 @@ private struct ExploreRootContent: View {
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
+    .onAppear { viewModel.reloadLocalConfig() }
     .task(id: isSelected) {
       guard isSelected else { return }
+      // 刷新来源并由 VM 在成功取得权威来源后消费默认（失败/取消保留 pending）。
       await viewModel.refreshSources()
     }
   }
 
   private var headerView: some View {
     VStack(alignment: .leading, spacing: 20) {
-      // 第一行：数据源选择器
+      // 第一行：数据源选择器（手动切换经 selectSource 重置筛选；
+      // 程序化恢复/解析默认不走 onChange，避免重置已恢复的配置）
       SourcePickerView(
-        selectedSource: $viewModel.selectedSource,
+        selectedSource: Binding(
+          get: { viewModel.selectedSource },
+          set: { viewModel.selectSource($0) }
+        ),
         sources: viewModel.availableSources
       )
-      .onChange(of: viewModel.selectedSource) { previousSource, _ in
-        viewModel.onSourceChanged(from: previousSource)
-      }
 
       // 第二行：筛选器（根据数据源动态显示）
       FilterPickersView(viewModel: viewModel)
