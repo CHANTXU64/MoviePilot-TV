@@ -742,6 +742,25 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 
   @MainActor
+  func testHeroPlayLabelWaitsForProgressAndUnifiesCopy() {
+    let target = PlaybackTarget.serverItem(serverName: "emby", itemID: "e5")
+    let series = SeriesPlayAction(title: "第 2 季第 5 集", progress: 0.25, accessibilityLabel: "继续播放 第 2 季第 5 集", action: .play(target))
+    XCTAssertNil(
+      MediaDetailView.heroPlayLabel(isReady: false, seriesAction: series, movieProgress: nil),
+      "进度第一次读完前只有图标，不先写「播放」再改")
+    XCTAssertEqual(
+      MediaDetailView.heroPlayLabel(isReady: true, seriesAction: series, movieProgress: nil),
+      .init(title: "第 2 季第 5 集", progress: 0.25, accessibilityLabel: "继续播放 第 2 季第 5 集"))
+    XCTAssertEqual(
+      MediaDetailView.heroPlayLabel(isReady: true, seriesAction: nil, movieProgress: 0.4),
+      .init(title: "继续播放", progress: 0.4, accessibilityLabel: "继续播放"),
+      "电影看到一半：进度条和「继续播放」")
+    XCTAssertEqual(
+      MediaDetailView.heroPlayLabel(isReady: true, seriesAction: nil, movieProgress: nil),
+      .init(title: "播放", accessibilityLabel: "播放"))
+  }
+
+  @MainActor
   func testContinueDecisionPlaysUnlessThereIsEvidenceOfAnotherEpisode() {
     func match(airDate: AirDateCheck, conflict: Bool = false, offset: Bool = false) -> UncertainEpisodeMatch {
       var match = UncertainEpisodeMatch(season: 1, episode: 2, episodeGroup: nil, airDate: airDate)
@@ -5470,6 +5489,33 @@ extension PlaybackCoordinatorTests {
     viewModel.cancelForPop()
   }
 
+  func testDetailPageShowsLibraryAppJumpWithoutHoldingPlayback() async throws {
+    // 已入库：播放按钮不等「跳转媒体库」的播放地址查询，跳转按钮查到后单独出现；关掉应用内播放时跳转按钮照样有。
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    let playGate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServerPlay =
+        #"{"success":true,"data":{"url":"http://emby.local/web/index.html#!/item?id=s1&context=home&serverId=srv","item_id":"s1","server_id":"srv","server_type":"emby"}}"#
+      $0.mediaServerPlayGate = playGate
+    }
+    let service = makeService()
+    let viewModel = makeSeriesDetailViewModel(service)
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertNil(viewModel.libraryAppURL, "播放地址还没回来")
+    playGate.signal()
+    try await waitUntil { viewModel.libraryAppURL != nil }
+    XCTAssertEqual(viewModel.libraryAppURL?.absoluteString, "emby://items?serverId=srv&itemId=s1")
+    viewModel.cancelForPop()
+    PlaybackURLProtocol.stub.configure { $0.mediaServerPlayGate = nil }
+
+    PlaybackPreferences.setInAppPlaybackEnabled(false)
+    let withoutPlayback = makeSeriesDetailViewModel(service)
+    try await waitUntil { withoutPlayback.libraryAppURL != nil }
+    XCTAssertNil(withoutPlayback.inAppPlaybackTarget)
+    withoutPlayback.cancelForPop()
+  }
+
   /// 详情页读真实的本机开关：测试期间设为开，结束后还原。
   private func enableInAppPlaybackPreferenceForTest() {
     let key = PlaybackPreferences.inAppPlaybackKey
@@ -6091,6 +6137,7 @@ extension PlaybackCoordinatorTests {
     }
     try await waitUntil { viewModel.seriesPlayAction != nil }
     XCTAssertEqual(viewModel.seriesPlayAction?.title, "播放", "没看过：从第 1 集按集播放")
+    XCTAssertTrue(viewModel.isPlayLabelReady)
 
     let gate = DispatchSemaphore(value: 0)
     PlaybackURLProtocol.stub.configure {
@@ -6105,6 +6152,7 @@ extension PlaybackCoordinatorTests {
     coordinator.refreshWatchStateAfterReturningToForeground()
     try await waitUntil { PlaybackURLProtocol.stub.requests().count > reads }
     XCTAssertEqual(viewModel.seriesPlayAction?.title, "播放", "重读还没完，按钮还是上一次的")
+    XCTAssertTrue(viewModel.isPlayLabelReady, "重读期间按钮照常显示上次的文字，不退回只有图标")
     viewModel.playFromHeader(try XCTUnwrap(viewModel.inAppPlaybackTarget))
     XCTAssertTrue(coordinator.isResolving, "等这次读完")
 
@@ -6113,6 +6161,30 @@ extension PlaybackCoordinatorTests {
     XCTAssertEqual(viewModel.episodePanelRequest?.hint, EpisodeRowHint(season: 1, tmdbEpisodeID: 12, episodeNumber: 2))
     try await waitUntil { !coordinator.isBusy }
     XCTAssertNil(coordinator.session, "不播编号对不上的那份")
+    viewModel.cancelForPop()
+  }
+
+  func testHeaderPlayLabelWaitsForTheFirstWatchProgressRead() async throws {
+    // 找到播放目标时观看进度还没读完：按钮先只有图标，读完一次写上集号和进度条，中间不先写「播放」。
+    let gate = DispatchSemaphore(value: 0)
+    let (viewModel, _) = try makeContinueWatchingDetailViewModel(
+      Self.watchedEpisode("e1", episode: 1, tmdb: 11),
+      Self.watchedEpisode("e2", episode: 2, tmdb: 12)
+    ) {
+      $0.episodesGates[Self.lan] = gate
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.watchedEpisode("e1", episode: 1, tmdb: 11, played: true),
+        Self.watchedEpisode("e2", episode: 2, tmdb: 12, position: 1800))
+    }
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertFalse(viewModel.isPlayLabelReady)
+    XCTAssertNil(
+      MediaDetailView.heroPlayLabel(
+        isReady: viewModel.isPlayLabelReady, seriesAction: viewModel.seriesPlayAction, movieProgress: viewModel.movieProgress))
+
+    for _ in 0..<20 { gate.signal() }
+    try await waitUntil { viewModel.isPlayLabelReady }
+    XCTAssertNotNil(viewModel.seriesPlayAction, "写上文字时结论已经定下，不会再从「播放」改成集号")
     viewModel.cancelForPop()
   }
 
@@ -7382,6 +7454,10 @@ private final class PlaybackStub: @unchecked Sendable {
     var mediaDetailGate: DispatchSemaphore?
     /// MoviePilot `/mediaserver/exists` 的回包
     var mediaServerExists = #"{"success":true,"data":{"item":{}}}"#
+    /// MoviePilot `/mediaserver/play/{itemid}` 的回包；nil 时 404。
+    var mediaServerPlay: String?
+    /// 卡住 `/mediaserver/play/{itemid}` 的回复
+    var mediaServerPlayGate: DispatchSemaphore?
     /// host → Emby `Library/SelectableMediaFolders` 的回包（没有时是空数组）
     var mediaFolders: [String: String] = [:]
     /// host → Emby 媒体库列表（顶层数组）。默认由 `Library/VirtualFolders/Query` 包在 `Items` 里回；没有时 404：媒体库配置读不到。
@@ -7487,6 +7563,8 @@ private final class PlaybackURLProtocol: URLProtocol {
         respond(200, seasons, after: scenario.mediaSeasonsGate)
       } else if url.path == "/api/v1/mediaserver/exists" {
         respond(200, scenario.mediaServerExists)
+      } else if url.path.hasPrefix("/api/v1/mediaserver/play/"), let play = scenario.mediaServerPlay {
+        respond(200, play, after: scenario.mediaServerPlayGate)
       } else if let detail = scenario.mediaDetails[url.path] {
         respond(200, detail, after: scenario.mediaDetailGate)
       } else {

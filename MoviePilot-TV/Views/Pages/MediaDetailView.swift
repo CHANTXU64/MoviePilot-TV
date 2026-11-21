@@ -208,6 +208,7 @@ struct MediaDetailView: View {
   private var isEntryStillLoading: Bool { isEntryLoading && !preloadTask.isDetailFailed }
   let entryStatusMessage: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.openURL) private var openURL
   @State private var entryTitleOffset: CGFloat = 28
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
@@ -369,9 +370,9 @@ struct MediaDetailView: View {
     return false
   }
 
-  /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
+  /// 第二页第一个能聚焦的行。没有分季时分季订阅行也有「重新查询」可聚焦。
   private var firstVisibleRow: String {
-    if shouldShowSeasonSubscriptionSection && !isSeasonInformationUnavailable {
+    if shouldShowSeasonSubscriptionSection {
       return "season"
     }
     if episodeTMDBID != nil {
@@ -426,6 +427,24 @@ struct MediaDetailView: View {
   /// 从 ViewModel 读取的订阅状态（ViewModel 代理到 preloadTask）
   private var isSubscribed: Bool {
     viewModel.isSubscribed
+  }
+
+  private var heroPlayLabel: HeroPlayLabel? {
+    Self.heroPlayLabel(
+      isReady: viewModel.isPlayLabelReady,
+      seriesAction: viewModel.seriesPlayAction,
+      movieProgress: viewModel.movieProgress
+    )
+  }
+
+  /// 按钮行里会在加载后改变的内容：播放、跳转媒体库按钮出现，播放写上文字，订阅状态变化。变化时其余按钮平滑让位。
+  private var heroButtonsAnimationKey: HeroButtonsAnimationKey {
+    HeroButtonsAnimationKey(
+      showsPlay: viewModel.inAppPlaybackTarget != nil,
+      playLabel: heroPlayLabel,
+      showsLibraryApp: viewModel.libraryAppURL != nil,
+      isSubscribed: isSubscribed
+    )
   }
 
   init(
@@ -1048,6 +1067,32 @@ struct MediaDetailView: View {
     return "分季订阅"
   }
 
+  struct HeroPlayLabel: Equatable {
+    let title: String
+    var progress: Double? = nil
+    let accessibilityLabel: String
+  }
+
+  struct HeroButtonsAnimationKey: Equatable {
+    let showsPlay: Bool
+    let playLabel: HeroPlayLabel?
+    let showsLibraryApp: Bool
+    let isSubscribed: Bool
+  }
+
+  /// 头部「播放」按钮的文字和进度条；进度第一次读完前为 nil，按钮只有播放图标。
+  static func heroPlayLabel(isReady: Bool, seriesAction: SeriesPlayAction?, movieProgress: Double?) -> HeroPlayLabel? {
+    guard isReady else { return nil }
+    if let seriesAction {
+      return HeroPlayLabel(
+        title: seriesAction.title, progress: seriesAction.progress, accessibilityLabel: seriesAction.accessibilityLabel)
+    }
+    if let movieProgress {
+      return HeroPlayLabel(title: "继续播放", progress: movieProgress, accessibilityLabel: "继续播放")
+    }
+    return HeroPlayLabel(title: "播放", accessibilityLabel: "播放")
+  }
+
   private func handleHeaderSubscribe() {
     let source = navigationCoordinator.sourceToken()
     Task { @MainActor in
@@ -1200,99 +1245,6 @@ struct MediaDetailView: View {
               .font(.caption).foregroundStyle(.secondary)
           }
           HStack(spacing: 20) {
-            if let playbackTarget = viewModel.inAppPlaybackTarget {
-              // 剧有集号时写集号（有续播点直接接着播，不询问），看到一半时前面加已播放进度条。
-              // 电影看到一半是进度条和「继续播放」。没看过、读不到观看记录时是普通的「播放」。
-              let seriesAction = viewModel.seriesPlayAction
-              let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
-              let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : "继续播放")
-              Button(action: {
-                guard allowsRequests, !isEntryLoading else { return }
-                playbackFocusHandoff.play(
-                  returningTo: .detailHeader(routeID: routeID),
-                  on: apiService.sessionScope.playbackCoordinator
-                ) {
-                  viewModel.playFromHeader(playbackTarget)
-                }
-              }) {
-                HStack(spacing: 14) {
-                  Image(systemName: AppSymbol.play)
-                  if let progress {
-                    PlaybackProgressBar(fraction: progress)
-                  }
-                  if let title {
-                    Text(title)
-                  }
-                }
-                .foregroundStyle(.primary)
-                .opacity(isEntryLoading ? 0.35 : 1)
-              }
-              .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "播放")
-              .focused($focusedButton, equals: .play)
-              .transition(.opacity)
-              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
-            }
-
-            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
-            if canJumpToTMDB {
-              let preloadedTarget = preloadTask.tmdbTarget
-              let targetTmdbId =
-                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
-                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
-                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
-              let isButtonLoading =
-                targetTmdbId == nil
-                && (!preloadTask.isTmdbRecognitionFinished || preloadTask.isOpenedDetailTMDBPending)
-
-              Button(action: {
-                guard allowsRequests, !isEntryLoading, tmdbJumpTask == nil else { return }
-                let navigationSource = navigationCoordinator.sourceToken()
-                let waitsForIdentification = isButtonLoading
-                tmdbJumpTask = Task {
-                  defer { tmdbJumpTask = nil }
-                  // 识别还没结束时等它的结果，不另起一次；按钮一直在转圈。
-                  if waitsForIdentification { await preloadTask.waitForTMDBIdentification() }
-                  guard !Task.isCancelled else { return }
-                  let target: MediaInfo?
-                  if let preloadedTarget = preloadTask.tmdbTarget {
-                    target = preloadedTarget
-                  } else if waitsForIdentification,
-                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
-                  {
-                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
-                    mediaActionHandler.showTMDBNotFoundAlert = true
-                    target = nil
-                  } else {
-                    // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
-                    target = await mediaActionHandler.getTMDBJumpTarget(
-                      for: viewModel.detail,
-                      targetTmdbId: MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
-                        ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id),
-                      useSharedMapping: !waitsForIdentification
-                    )
-                  }
-                  if let target {
-                    navigationCoordinator.push(
-                      target,
-                      loadingPosterURL: viewModel.detail.imageURLs.poster,
-                      ifCurrent: navigationSource
-                    )
-                  }
-                }
-              }) {
-                Label(
-                  title: { Text("TMDB") },
-                  icon: {
-                    LoadingIcon(systemImage: AppSymbol.link, isLoading: isButtonLoading)
-                  }
-                )
-                .foregroundColor(.primary)
-                .opacity(isEntryLoading ? 0.35 : 1)
-              }
-              .transition(.opacity)
-              .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
-            }
-
             if canSubscribeMedia {
               let isDirect = detail.canDirectlySubscribe
               // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
@@ -1357,6 +1309,117 @@ struct MediaDetailView: View {
               )
               // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
               // 点击已由 action 内 guard 忽略。
+            }
+
+            if let playbackTarget = viewModel.inAppPlaybackTarget {
+              // 进度读完前只有播放图标；读完一次写上：剧有集号时写集号，看到一半时前面加已播放进度条；
+              // 电影看到一半是进度条和「继续播放」；其余是「播放」。
+              let label = heroPlayLabel
+              Button(action: {
+                guard allowsRequests, !isEntryLoading else { return }
+                playbackFocusHandoff.play(
+                  returningTo: .detailHeader(routeID: routeID),
+                  on: apiService.sessionScope.playbackCoordinator
+                ) {
+                  viewModel.playFromHeader(playbackTarget)
+                }
+              }) {
+                HStack(spacing: 14) {
+                  Image(systemName: AppSymbol.play)
+                  if let progress = label?.progress {
+                    PlaybackProgressBar(fraction: progress)
+                  }
+                  if let title = label?.title {
+                    Text(title)
+                  }
+                }
+                .foregroundStyle(.primary)
+                .opacity(isEntryLoading ? 0.35 : 1)
+              }
+              .accessibilityLabel(label?.accessibilityLabel ?? "播放")
+              .focused($focusedButton, equals: .play)
+              .transition(.opacity)
+              .accessibilityValue(isEntryStillLoading || label == nil ? "加载中" : "")
+            }
+
+            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
+            if canJumpToTMDB {
+              let preloadedTarget = preloadTask.tmdbTarget
+              let targetTmdbId =
+                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
+                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
+              let isButtonLoading =
+                targetTmdbId == nil
+                && (!preloadTask.isTmdbRecognitionFinished || preloadTask.isOpenedDetailTMDBPending)
+
+              Button(action: {
+                guard allowsRequests, !isEntryLoading, tmdbJumpTask == nil else { return }
+                let navigationSource = navigationCoordinator.sourceToken()
+                let waitsForIdentification = isButtonLoading
+                tmdbJumpTask = Task {
+                  defer { tmdbJumpTask = nil }
+                  // 识别还没结束时等它的结果，不另起一次；按钮一直在转圈。
+                  if waitsForIdentification { await preloadTask.waitForTMDBIdentification() }
+                  guard !Task.isCancelled else { return }
+                  let target: MediaInfo?
+                  if let preloadedTarget = preloadTask.tmdbTarget {
+                    target = preloadedTarget
+                  } else if waitsForIdentification,
+                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
+                  {
+                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
+                    mediaActionHandler.showTMDBNotFoundAlert = true
+                    target = nil
+                  } else {
+                    // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
+                    target = await mediaActionHandler.getTMDBJumpTarget(
+                      for: viewModel.detail,
+                      targetTmdbId: MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                        ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id),
+                      useSharedMapping: !waitsForIdentification
+                    )
+                  }
+                  if let target {
+                    navigationCoordinator.push(
+                      target,
+                      loadingPosterURL: viewModel.detail.imageURLs.poster,
+                      ifCurrent: navigationSource
+                    )
+                  }
+                }
+              }) {
+                Label(
+                  title: { Text("TMDB") },
+                  icon: {
+                    LoadingIcon(systemImage: AppSymbol.link, isLoading: isButtonLoading)
+                  }
+                )
+                .foregroundColor(.primary)
+                .opacity(isEntryLoading ? 0.35 : 1)
+              }
+              .transition(.opacity)
+              .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
+            }
+
+            if let libraryAppURL = viewModel.libraryAppURL {
+              // 已入库：打开媒体服务器 App（与媒体库页「跳转媒体库」同一个深链和图标）。
+              Button {
+                guard allowsRequests, !isEntryLoading else { return }
+                openURL(libraryAppURL) { accepted in
+                  if !accepted {
+                    notificationManager.show(message: MediaLibraryAppLink.openFailureMessage, type: .error)
+                  }
+                }
+              } label: {
+                Image(systemName: AppSymbol.openInLibrary)
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
+              }
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
+              .accessibilityLabel("跳转媒体库")
+              .transition(.opacity)
             }
 
             if canSearchResources {
@@ -1429,6 +1492,7 @@ struct MediaDetailView: View {
           // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
           .lineLimit(1)
           .animation(.snappy, value: shouldShowSiteFilter)
+          .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: heroButtonsAnimationKey)
           .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
           .animation(.easeInOut(duration: 0.3), value: preloadTask.fullDetail != nil)
           .disabled(!allowsRequests && presentationStyle == .standard)

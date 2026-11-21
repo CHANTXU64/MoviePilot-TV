@@ -518,16 +518,6 @@ class HomeViewModel: ObservableObject {
     return true
   }
 
-  private func validLinkValue(_ value: String?) -> String? {
-    guard let value else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    if ["none", "null", "undefined"].contains(trimmed.lowercased()) {
-      return nil
-    }
-    return trimmed
-  }
-
   /// 指定服务器上这个条目能在应用内播放时的条目 ID；不能播放时为 nil。
   /// 服务器由调用方给：媒体库页两行各有自己的选择，条目 ID 只在它自己的服务器上有意义。
   func inAppPlaybackItemID(_ item: MediaServerPlayItem, server: String) -> String? {
@@ -824,13 +814,7 @@ class HomeViewModel: ObservableObject {
 
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
   static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
-    guard let serverType else { return true }
-    switch serverType {
-    case .jellyfin, .trimemedia, .ugreen, .zspace:
-      return false
-    default:
-      return true
-    }
+    MediaLibraryAppLink.isSupported(serverType: serverType)
   }
 
   func openMediaItem(
@@ -838,110 +822,16 @@ class HomeViewModel: ObservableObject {
     using openURL: OpenURLAction,
     onFailure: @escaping (String) -> Void
   ) {
-    let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
-    guard originalUrl != nil || item.server_type == .emby else {
-      onFailure("无法打开媒体库：链接无效")
-      return
-    }
-
-    var finalUrl: URL? = nil
-
-    // 统一处理 Fragment 解析：有些后端返回 #!/item... 有些返回 #/item...
-    let cleanFragment: String? = {
-      guard let fragment = originalUrl?.fragment else { return nil }
-      return fragment.starts(with: "!") ? String(fragment.dropFirst(1)) : fragment
-    }()
-
-    switch item.server_type {
-    case .emby:
-      // 保留 Emby 社区提到的深度链接格式，但 tvOS 端仍受 Emby App 自身支持限制。
-      // 2026-06-29 使用 Emby for Apple TV 2.0.7 实机测试：该 URL 只能打开 Emby，尚不能跳转到具体媒体详情。
-      // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
-      // 尝试的深度链接格式: emby://items?serverId={your_server_id}&itemId={your_item_id}
-      var itemId = validLinkValue(item.item_id?.value)
-      var serverId = validLinkValue(item.server_id?.value)
-      if let fragment = cleanFragment,
-        let components = URLComponents(string: "https://dummy.com" + fragment)
-      {
-        let queryItems = components.queryItems ?? []
-        if itemId == nil {
-          itemId =
-            validLinkValue(queryItems.first { $0.name == "id" }?.value)
-            ?? validLinkValue(queryItems.first { $0.name == "parentId" }?.value)
-        }
-        if serverId == nil {
-          serverId = validLinkValue(queryItems.first { $0.name == "serverId" }?.value)
-        }
+    let outcome = MediaLibraryAppLink.resolve(
+      serverType: item.server_type, link: item.link, itemID: item.item_id?.value,
+      serverID: item.server_id?.value, rawID: item.raw_id?.value)
+    switch outcome {
+    case .url(let url):
+      openURL(url) { accepted in
+        if !accepted { onFailure(MediaLibraryAppLink.openFailureMessage) }
       }
-
-      if let itemId {
-        var queryItems = [URLQueryItem]()
-        if let serverId {
-          queryItems.append(URLQueryItem(name: "serverId", value: serverId))
-        }
-        queryItems.append(URLQueryItem(name: "itemId", value: itemId))
-
-        var deepLinkComponents = URLComponents()
-        deepLinkComponents.scheme = "emby"
-        deepLinkComponents.host = "items"
-        deepLinkComponents.queryItems = queryItems
-        finalUrl = deepLinkComponents.url
-      }
-
-    case .plex:
-      // 后端链接格式: http://ip:port/web/index.html#!/media/{server_id}/com.plexapp.plugins.library?source={library.key}&X-Plex-Token={token}
-      // plex://preplay/?metadataKey={metadataKey}&server={serverId}
-      if let fragment = cleanFragment,
-        let components = URLComponents(string: "https://dummy.com" + fragment)
-      {
-        let pathParts = components.path.split(separator: "/")
-        if pathParts.count >= 2, pathParts[0] == "media",
-          let rawId = validLinkValue(item.raw_id?.value)
-        {
-          let serverId = String(pathParts[1])
-          let metadataKey = "/library/metadata/\(rawId)"
-
-          var deepLinkComponents = URLComponents()
-          deepLinkComponents.scheme = "plex"
-          deepLinkComponents.host = "preplay"
-          deepLinkComponents.path = "/"
-          deepLinkComponents.queryItems = [
-            URLQueryItem(name: "metadataKey", value: metadataKey),
-            URLQueryItem(name: "server", value: serverId),
-          ]
-          finalUrl = deepLinkComponents.url
-        }
-      }
-      // 降级策略
-      if finalUrl == nil { finalUrl = URL(string: "plex://") }
-
-    case .jellyfin:
-      onFailure("Jellyfin 暂不支持在 tvOS 打开媒体")
-      return
-    case .trimemedia:
-      onFailure("飞牛 NAS 暂不支持在 tvOS 打开媒体")
-      return
-    case .ugreen:
-      onFailure("绿联 NAS 暂不支持在 tvOS 打开媒体")
-      return
-    case .zspace:
-      onFailure("极空间 NAS 暂不支持在 tvOS 打开媒体")
-      return
-    default:
-      // 处理未来未知的服务器类型（item.server_type.rawValue）
-      onFailure(
-        "未知的媒体服务器类型\(item.server_type.map { "（\($0.rawValue)）" } ?? "")暂不支持在 tvOS 打开媒体")
-      return
-    }
-
-    if let finalUrl = finalUrl {
-      openURL(finalUrl) { accepted in
-        if !accepted {
-          onFailure("无法打开媒体库 App，请确认已安装后重试")
-        }
-      }
-    } else if let serverType = item.server_type {
-      onFailure("未能生成 \(serverType.rawValue) 的有效媒体库链接")
+    case .failure(let message):
+      onFailure(message)
     }
   }
 }
