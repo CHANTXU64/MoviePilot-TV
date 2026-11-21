@@ -731,8 +731,14 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(resuming.accessibilityLabel, "继续播放 第 2 季第 5 集")
 
     let fresh = SeriesPlayAction.labeled(.play(target), resumeFile: nil, season: 2, episode: 6)
-    XCTAssertEqual(fresh.title, "播放 第 2 季第 6 集")
+    XCTAssertEqual(fresh.title, "第 2 季第 6 集", "有集号时只写集号，不写动词")
+    XCTAssertEqual(fresh.accessibilityLabel, "播放 第 2 季第 6 集")
     XCTAssertNil(fresh.progress)
+
+    let unnumbered = ServerMediaItem(id: "x", kind: .episode, runtimeSeconds: 3600, resumePositionSeconds: 900)
+    let resumingUnnumbered = SeriesPlayAction.labeled(.play(target), resumeFile: unnumbered, season: nil, episode: nil)
+    XCTAssertEqual(resumingUnnumbered.title, "继续播放", "没有集号时写动词")
+    XCTAssertEqual(resumingUnnumbered.progress, 0.25)
   }
 
   @MainActor

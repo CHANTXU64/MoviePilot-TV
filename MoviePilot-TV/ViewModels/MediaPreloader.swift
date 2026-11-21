@@ -610,8 +610,7 @@ class MediaPreloadTask: ObservableObject {
   private func startEpisodePreview(for detail: MediaInfo) {
     guard let apiService, let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail) else { return }
     guard !MediaDetailView.shouldShowSeasonSubscriptionSection(
-      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail, isSeasonDataLoaded: true,
-      seasonCount: detail.season_info?.count, hasSeasonLoadError: false
+      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail
     ) else { return }
 
     let seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)

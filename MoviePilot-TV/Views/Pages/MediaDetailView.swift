@@ -369,8 +369,9 @@ struct MediaDetailView: View {
     return false
   }
 
+  /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
   private var firstVisibleRow: String {
-    if shouldShowSeasonSubscriptionSection {
+    if shouldShowSeasonSubscriptionSection && !isSeasonInformationUnavailable {
       return "season"
     }
     if episodeTMDBID != nil {
@@ -408,15 +409,7 @@ struct MediaDetailView: View {
   }
 
   private var shouldShowSeasonSubscriptionSection: Bool {
-    Self.shouldShowSeasonSubscriptionSection(
-      canSubscribeMedia: canSubscribeMedia,
-      detail: viewModel.detail,
-      isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
-      seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError,
-      isSeasonLoading: isSeasonLoading,
-      hasSelectedEpisodeGroup: trimmedNonEmpty([preloadTask.seasonViewModel?.selectedGroupId]) != nil
-    )
+    Self.shouldShowSeasonSubscriptionSection(canSubscribeMedia: canSubscribeMedia, detail: viewModel.detail)
   }
 
   private var isSeasonInformationUnavailable: Bool {
@@ -1022,20 +1015,10 @@ struct MediaDetailView: View {
 
   // Xcode 27.2 的 Release 优化器内联此判断时可能触发 SIL 校验崩溃。
   @inline(never)
-  static func shouldShowSeasonSubscriptionSection(
-    canSubscribeMedia: Bool,
-    detail: MediaInfo,
-    isSeasonDataLoaded: Bool,
-    seasonCount: Int?,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool = false,
-    hasSelectedEpisodeGroup: Bool = false
-  ) -> Bool {
-    guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
-      return false
-    }
-    if isSeasonLoading || hasSeasonLoadError || hasSelectedEpisodeGroup { return true }
-    return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
+  /// 能订阅的剧一直显示分季订阅行：加载中、加载失败（可重试）、没有分季（说明查不到）都在这一行里显示，
+  /// 头部「分季订阅」按下后总能在第二页看到结果。
+  static func shouldShowSeasonSubscriptionSection(canSubscribeMedia: Bool, detail: MediaInfo) -> Bool {
+    canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
   }
 
   static func shouldShowOtherInfo(
@@ -1057,22 +1040,12 @@ struct MediaDetailView: View {
       && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError && !isSeasonLoading
   }
 
-  static func headerSubscribeButtonTitle(
-    isSubscribed: Bool,
-    detail: MediaInfo,
-    isSeasonInformationUnavailable: Bool,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool,
-    isInLibrary: Bool = false
-  ) -> String {
+  /// 剧的文案固定是「分季订阅」：加载中、加载失败、没有分季只换前导图标，按钮宽度不变。
+  static func headerSubscribeButtonTitle(isSubscribed: Bool, detail: MediaInfo) -> String {
     if detail.canDirectlySubscribe {
-      let title = isSubscribed ? "已订阅" : "订阅"
-      return isInLibrary ? "\(title)（已入库）" : title
+      return isSubscribed ? "已订阅" : "订阅"
     }
-    // 加载中文案保持「分季信息」不变，由前导图标传达加载，避免按钮先短后长再短地闪。
-    if isSeasonLoading { return "分季信息" }
-    if hasSeasonLoadError { return "分季信息加载失败" }
-    return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
+    return "分季订阅"
   }
 
   private func handleHeaderSubscribe() {
@@ -1228,11 +1201,11 @@ struct MediaDetailView: View {
           }
           HStack(spacing: 20) {
             if let playbackTarget = viewModel.inAppPlaybackTarget {
-              // 剧看过时写明从哪一集接着看（有续播点直接接着播，不询问）：看到一半是播放图标、已播放进度条和季集号。
-              // 电影看到一半只有播放图标和已播放进度条，不写字。没看过、读不到观看记录时是普通的「播放」。
+              // 剧有集号时写集号（有续播点直接接着播，不询问），看到一半时前面加已播放进度条。
+              // 电影看到一半是进度条和「继续播放」。没看过、读不到观看记录时是普通的「播放」。
               let seriesAction = viewModel.seriesPlayAction
               let progress = seriesAction?.progress ?? (seriesAction == nil ? viewModel.movieProgress : nil)
-              let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : nil)
+              let title: String? = seriesAction?.title ?? (progress == nil ? "播放" : "继续播放")
               Button(action: {
                 guard allowsRequests, !isEntryLoading else { return }
                 playbackFocusHandoff.play(
@@ -1254,7 +1227,7 @@ struct MediaDetailView: View {
                 .foregroundStyle(.primary)
                 .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "继续播放")
+              .accessibilityLabel(seriesAction?.accessibilityLabel ?? title ?? "播放")
               .focused($focusedButton, equals: .play)
               .transition(.opacity)
               .accessibilityValue(isEntryStillLoading ? "加载中" : "")
@@ -1331,7 +1304,7 @@ struct MediaDetailView: View {
                 && (isSeasonLoading
                   || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
                     && !preloadTask.isDetailFailed))
-              // 文案保持「订阅」「分季信息」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
+              // 文案保持「订阅」「分季订阅」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
               // 详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），此时不转圈，避免和失败提示同时出现。
               let showsLoadingIcon =
                 (isDirect ? isEntryLoading : seasonWaiting) && !preloadTask.isDetailFailed
@@ -1354,14 +1327,7 @@ struct MediaDetailView: View {
                   .foregroundColor(.primary)
                   .opacity(isEntryLoading ? 0.35 : 1)
                 } else {
-                  let label = Self.headerSubscribeButtonTitle(
-                    isSubscribed: isSubscribed,
-                    detail: detail,
-                    isSeasonInformationUnavailable: isSeasonInformationUnavailable,
-                    hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: seasonWaiting,
-                    isInLibrary: viewModel.isInLibrary
-                  )
+                  let label = Self.headerSubscribeButtonTitle(isSubscribed: isSubscribed, detail: detail)
                   let icon =
                     isDirect
                     ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
@@ -1382,8 +1348,13 @@ struct MediaDetailView: View {
               }
               .focused($focusedButton, equals: .subscribe)
               .transition(.opacity)
-              // 文案不再写「加载中」，等分季信息的状态要靠无障碍值告诉 VoiceOver。
-              .accessibilityValue(isEntryStillLoading || showsLoadingIcon ? "加载中" : "")
+              // 文案固定，加载中、加载失败、没有分季只换前导图标，状态靠无障碍值告诉 VoiceOver。
+              .accessibilityValue(
+                isEntryStillLoading || showsLoadingIcon
+                  ? "加载中"
+                  : (!isDirect && hasSeasonLoadError
+                    ? "分季信息加载失败" : (!isDirect && isSeasonInformationUnavailable ? "暂无分季信息" : ""))
+              )
               // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
               // 点击已由 action 内 guard 忽略。
             }
