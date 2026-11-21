@@ -101,6 +101,7 @@ struct PersonDetailView: View {
                 }
                 .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
+                .accessibilityLabel("正在加载个人简介")
               } else if let biography = person.biography, !biography.isEmpty {
                 Button(action: {
                   showFullBio = true

@@ -249,12 +249,16 @@ struct SubscribeSeasonContentView: View {
         }
       }
     } status: {
-      status
+      // 独立的季订阅页是整页：加载转圈改由外层 pageLoadingOverlay 居中；详情页里的分季区块仍原位转圈。
+      if !viewModel.showsLoadingState {
+        status
+      }
     } card: { index, onFocus in
       let season = seasons[page.lowerBound + index]
       seasonCard(season, onFocus: onFocus)
         .focused($focusedSeasonId, equals: season.season_number)
     }
+    .pageLoadingOverlay(viewModel.showsLoadingState)
   }
 
   private func seasonPagePicker(_ seasons: [TmdbSeason], page: Range<Int>) -> some View {
@@ -325,9 +329,8 @@ struct SubscribeSeasonContentView: View {
 
   @ViewBuilder
   private var status: some View {
-    if viewModel.isLoading {
-      ProgressView("加载中...")
-        .frame(maxWidth: .infinity, minHeight: 200)
+    if viewModel.showsLoadingState {
+      FirstLoadIndicator()
     } else if viewModel.hasSeasonLoadError {
       VStack(spacing: 16) {
         Image(systemName: AppSymbol.warning)
@@ -578,15 +581,15 @@ struct SeasonDetailSheet: View {
     case .subscribe:
       title = "订阅"
       systemImage = AppSymbol.subscribe
-      loadingTitle = "正在订阅"
+      loadingTitle = "订阅中"
     case .unsubscribe:
       title = "取消订阅"
       systemImage = AppSymbol.unsubscribe
-      loadingTitle = "正在取消订阅"
+      loadingTitle = "取消订阅中"
     case .cancelTrial:
       title = EpisodeTrialHoldNotice.cancelTitle
       systemImage = AppSymbol.unsubscribe
-      loadingTitle = "正在取消试看"
+      loadingTitle = "取消试看中"
     }
     return SheetActionButton(
       title: title, systemImage: systemImage, loadingTitle: loadingTitle, isLoading: panel.isProcessing,

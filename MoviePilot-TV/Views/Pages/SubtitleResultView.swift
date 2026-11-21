@@ -87,7 +87,7 @@ struct SubtitleResultsBody<Header: View>: View {
         if search.progress > 0 {
           ProgressView(value: search.progress, total: 100)
             .progressViewStyle(.linear)
-            .frame(width: 420)
+            .frame(width: 360)
         }
         Text(search.receivedSummary)
           .font(.caption)

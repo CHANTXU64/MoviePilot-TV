@@ -23,7 +23,7 @@ class StatusViewModel: ObservableObject {
   }
 
   var unavailableValueText: String {
-    hasCompletedInitialLoad ? "未获取" : "获取中…"
+    hasCompletedInitialLoad ? "未获取" : "正在获取…"
   }
 
   func refreshAllData() async {

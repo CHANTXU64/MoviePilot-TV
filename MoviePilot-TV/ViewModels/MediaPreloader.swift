@@ -205,7 +205,16 @@ class MediaPreloadTask: ObservableObject {
   /// 名称识别已确认没有匹配时用的片名、年份和类型。
   @Published private var unrecognizedQuery: RecognitionQuery?
   @Published var isSubscribed: Bool?
-  @Published var seasonViewModel: SubscribeSeasonViewModel?
+  @Published var seasonViewModel: SubscribeSeasonViewModel? {
+    didSet { observeSeasonViewModel() }
+  }
+  /// 嵌套 ObservableObject 的变化不会自动冒泡到 MediaPreloadTask；转发后详情页顶部
+  /// 按钮与区块判定才能跟随分季 isLoading/hasSeasonLoadError/seasonInfos 刷新。
+  private var seasonViewModelObservation: AnyCancellable?
+  private func observeSeasonViewModel() {
+    seasonViewModelObservation = seasonViewModel?.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+  }
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
   @Published var isSeasonDataLoaded = false
 

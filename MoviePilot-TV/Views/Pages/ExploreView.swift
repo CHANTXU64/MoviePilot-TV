@@ -73,8 +73,7 @@ private struct ExploreRootContent: View {
           )
         } else {
           // 在 Paginator 初始化完成前显示加载指示器
-          ProgressView()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+          FirstLoadIndicator(minHeight: nil, maxHeight: .infinity)
         }
       }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in

@@ -33,7 +33,7 @@ struct SearchSiteSelectionMenu<Label: View>: View {
         sectionTitle: "指定站点"
       ) {
         if viewModel.isLoadingSites {
-          Text("加载站点中…")
+          Text("正在加载站点…")
         } else if let error = viewModel.siteLoadError {
           Button("\(error) 重新加载") {
             Task { await viewModel.loadSites() }

@@ -12,17 +12,7 @@ struct MediaActionModifier: ViewModifier {
       }
       .overlay {
         if handler.isRecognizingTmdb {
-          Color.black.opacity(0.4).ignoresSafeArea()
-          VStack(spacing: 28) {
-            ProgressView()
-              .scaleEffect(1.5)
-            Text("正在识别媒体信息...")
-              .font(.headline)
-              .foregroundColor(.white)
-          }
-          .frame(width: 500, height: 230)
-          .background(.ultraThinMaterial)
-          .cornerRadius(36)
+          BlockingProgressOverlay(text: "正在识别媒体信息…")
         }
       }
   }

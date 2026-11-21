@@ -58,28 +58,23 @@ struct PersonCard: View {
   }
 
   private var textInfoView: some View {
-    VStack(spacing: 4) {
-      VStack {
-        Text(person.name ?? "未知")
-          .font(.caption)
-          .foregroundStyle(isFocused ? .primary : .secondary)
+    VStack {
+      Text(person.name ?? "未知")
+        .font(.caption)
+        .foregroundStyle(isFocused ? .primary : .secondary)
 
-        if let subtitle = (person.job != nil && !person.job!.isEmpty)
-          ? person.job : person.character, !subtitle.isEmpty
-        {
-          Text(subtitle)
-            .font(.caption2)
-            .foregroundStyle(isFocused ? .secondary : .tertiary)
-        }
+      if let subtitle = (person.job != nil && !person.job!.isEmpty)
+        ? person.job : person.character, !subtitle.isEmpty
+      {
+        Text(subtitle)
+          .font(.caption2)
+          .foregroundStyle(isFocused ? .secondary : .tertiary)
       }
-      .lineLimit(1)
-      .compositingGroup()
-      .frame(maxWidth: isFocused ? width + PosterCardFocus.focusedTextExtraWidth : width, alignment: .center)
     }
-    .frame(width: width + PosterCardFocus.focusedTextExtraWidth)
-    .padding(.horizontal, -PosterCardFocus.focusedTextExtraWidth / 2)
-    .offset(y: isFocused ? PosterCardFocus.focusedTextOffset(forImageSize: CGSize(width: width, height: height)) : 0)
-    .posterCardTitleAnimation(isFocused: isFocused)
+    .lineLimit(1)
+    .compositingGroup()
+    .posterCardTitleLayout(
+      isFocused: isFocused, width: width, imageSize: CGSize(width: width, height: height))
   }
 
   private var posterContent: some View {

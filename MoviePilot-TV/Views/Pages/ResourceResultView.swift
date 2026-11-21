@@ -40,7 +40,7 @@ struct ResourceResultView: View {
           if viewModel.searchProgress > 0 {
             ProgressView(value: viewModel.searchProgress, total: 100)
               .progressViewStyle(.linear)
-              .frame(width: 300)
+              .frame(width: 360)
           }
           Button("取消") {
             viewModel.cancelSearch()

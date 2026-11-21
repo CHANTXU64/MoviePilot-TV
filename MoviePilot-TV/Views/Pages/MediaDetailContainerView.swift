@@ -160,7 +160,7 @@ private struct MediaDetailContainerContent: View {
     if preloadTask.isDetailFailed {
       guard let reason = preloadTask.detailFailureReason else { return "无法加载详情，请返回后重试" }
       return "无法加载详情（\(reason)），请返回后重试" }
-    return preloadTask.detailRetryNumber.map { "重试加载中……（第 \($0) 次）" }
+    return preloadTask.detailRetryNumber.map { "正在重试（第 \($0) 次）…" }
   }
 
   private var tmdbPreloadTarget: MediaInfo? {
