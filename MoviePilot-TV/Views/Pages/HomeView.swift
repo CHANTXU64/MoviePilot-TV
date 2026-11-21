@@ -239,7 +239,6 @@ private struct MediaSectionView: View {
 
   @Environment(\.openURL) private var openURL
   @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
-  @Environment(\.playbackEndedGeneration) private var playbackEndedGeneration
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
@@ -249,10 +248,8 @@ private struct MediaSectionView: View {
   @State private var imageAnchorId: String?
   /// 这一行的实例身份，焦点只交回起播的那一个。
   @State private var focusOwnerID = UUID()
-  /// 正在等待焦点写回的媒体卡；播放器收起有转场，同一次更新里写回会被丢掉，交给 `PresentationReadyAction` 轮询。
-  @State private var pendingFocusRestore: String?
-  /// 每次开始恢复自增，用来让上一轮的 3 秒超时失效。
-  @State private var focusRestoreGeneration = 0
+  /// 播放结束后等着补写焦点的媒体卡（见 `playbackFocusReturn`）。
+  @State private var focusRestore = PlaybackFocusRestore<String>()
 
   private var cardImageSize: CGSize {
     content == .continueWatching ? ContinueWatchingCard.stillSize : MediaCard.defaultPosterSize
@@ -338,58 +335,26 @@ private struct MediaSectionView: View {
       }
     }
     .focusLiftRow(cardImageSize: cardImageSize)
-    // 盖播放器之前把焦点交回起播的媒体卡：模态关闭时系统还原的是盖上去那一刻的焦点项。
-    .onChange(of: playbackFocusHandoff.request) { _, _ in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID
-      else { return }
-      focusedItemId = itemID
-    }
-    // 焦点真的落回这张卡了，通知呈现层可以盖播放器。
-    .onChange(of: focusedItemId) { _, newValue in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID, newValue == itemID
-      else { return }
-      playbackFocusHandoff.acknowledged = playbackFocusHandoff.request
-    }
-    // 播放结束：盖上过播放器时由系统还原，准备期取消没出来时主动写回。两者都等转场结束后再写。
-    .onChange(of: playbackEndedGeneration) { _, _ in
-      guard case .homeMedia(let owner, let itemID)? = playbackFocusHandoff.target,
-        owner == focusOwnerID
-      else { return }
-      playbackFocusHandoff.target = nil
-      beginFocusRestore(itemID)
-    }
+    // 起播的卡：盖播放器前交回焦点，准备期取消时补写回来（卡被刷掉就交给系统）。
+    .playbackFocusReturn(
+      $focusRestore, focused: focusedItemId, focus: $focusedItemId,
+      canRestore: { id in items.contains(where: { $0.id == id }) },
+      match: { target in
+        guard case .homeMedia(let owner, let itemID) = target, owner == focusOwnerID else { return nil }
+        return itemID
+      }
+    )
     // 聚焦（或正等着还原焦点）的卡被刷掉了，比如刚看完从「继续观看」里消失：交给它原位置的相邻卡，
     // 不让系统随便挑一个（HIG：聚焦项消失时把焦点移到一步之内的剩余项）。
     // 两个都要换：播放器收起的转场会吞掉立即写入，等着还原的目标也换成相邻卡，转场后由 `PresentationReadyAction` 补写。
     .onChange(of: items.map(\.id)) { oldIDs, newIDs in
-      if let pending = pendingFocusRestore, !newIDs.contains(pending) {
-        pendingFocusRestore = HomeRowFocus.neighbor(of: pending, from: oldIDs, in: newIDs)
+      if let pending = focusRestore.pending, !newIDs.contains(pending) {
+        focusRestore.pending = HomeRowFocus.neighbor(of: pending, from: oldIDs, in: newIDs)
       }
       if let neighbor = HomeRowFocus.neighbor(of: focusedItemId, from: oldIDs, in: newIDs) {
         focusedItemId = neighbor
       }
     }
-    .background(PresentationReadyAction(
-      isEnabled: pendingFocusRestore != nil,
-      requiresNavigationTop: true,
-      contentFocusMatches: pendingFocusRestore.map { focusedItemId == $0 } ?? false,
-      onContentFocus: {
-        pendingFocusRestore = nil
-        focusRestoreGeneration += 1
-      },
-      action: {
-        // 值没变时 SwiftUI 不会重新请求焦点：先把绑定清空，下一帧再写回。
-        guard let id = pendingFocusRestore else { return }
-        // 轮询期间卡被刷掉：立刻放弃，焦点交给系统默认，不再空转。
-        guard items.contains(where: { $0.id == id }) else {
-          pendingFocusRestore = nil
-          return
-        }
-        focusedItemId = focusedItemId == id ? nil : id
-      }
-    ))
   }
 
   /// 这一行的图片加载窗口：以当前聚焦的卡为中心。剧照卡较宽，一屏只放 4 张。
@@ -506,21 +471,6 @@ private struct MediaSectionView: View {
         info: ContinueWatchingDisplay.mediaInfo(
           title: item.title, type: item.type, subtitle: item.subtitle),
         resolveIdentity: { await viewModel.continueWatchingMediaInfo(for: item, server: server) })
-    }
-  }
-
-  /// 焦点没被系统还原回来时把焦点补写回这张卡。真正的写回由 `PresentationReadyAction` 轮询完成：
-  /// 播放器收起有转场，同一次更新里写回会被丢掉。3 秒内没落回就放弃。
-  private func beginFocusRestore(_ id: String) {
-    // 卡已经被刷掉就别等了，焦点交给系统默认。
-    guard items.contains(where: { $0.id == id }) else { return }
-    focusRestoreGeneration += 1
-    let generation = focusRestoreGeneration
-    pendingFocusRestore = id
-    Task { @MainActor in
-      try? await Task.sleep(for: .seconds(3))
-      guard focusRestoreGeneration == generation else { return }
-      pendingFocusRestore = nil
     }
   }
 

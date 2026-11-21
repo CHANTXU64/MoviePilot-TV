@@ -1337,6 +1337,8 @@ private final class SeasonListReads {
     self.read = read
   }
 
+  nonisolated deinit {}
+
   /// 按顺序开始读这几季（已开始过的跳过），到上限为止。
   func start(_ numbers: [Int]) {
     for number in numbers where budget > 0 && !started.contains(number) {

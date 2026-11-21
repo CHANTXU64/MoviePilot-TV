@@ -665,14 +665,16 @@ extension VideoPlayer {
 
                     refreshAutoDismiss()
                 },
-                // 自动接下一集时控制条可能已自动隐藏：换集加载期间主动露出进度条，让加载转圈可见。
+                // 换集、换版本开始加载：加载转圈在进度条上，要让它看得见，用户才知道操作已受理。
+                // 控制条已自动隐藏（自动接下一集）时露出进度条；在「选集」等面板里选了别的集时收起面板、露出进度条
+                // （系统播放器从选集列表选集后同样收起列表）。已经显示着进度条或控制条时不动。
                 // 加载期间 activity 非 nil，canAutoDismiss 为假不会提前收；加载结束后由现有自动收起逻辑收掉。
                 ObservationToken { [weak mediaSession] in
                     mediaSession?.state == .loadingItem
                 } onChange: { [weak self] isLoadingItem in
-                    guard let self, isLoadingItem, presentation == .hidden else { return }
+                    guard let self, isLoadingItem, Self.revealsProgressForItemLoading(from: presentation) else { return }
 
-                    showProgress()
+                    showProgress(keepingControls: false)
                 },
             ]
 
@@ -718,6 +720,15 @@ extension VideoPlayer {
                 transition(to: .controls)
             } else {
                 refreshAutoDismiss()
+            }
+        }
+
+        /// 换集、换版本开始加载时是否切到只显示进度条（加载转圈在进度条上）：控制条隐藏着、或开着面板时切过去；
+        /// 已经显示着进度条或控制条时不动。
+        static func revealsProgressForItemLoading(from presentation: Presentation) -> Bool {
+            switch presentation {
+            case .hidden, .supplement: true
+            case .progress, .controls: false
             }
         }
 

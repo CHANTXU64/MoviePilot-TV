@@ -40,6 +40,18 @@ final class PlayerRemoteCommandTests: XCTestCase {
     XCTAssertFalse(Container.isKeyboardOnlyPress(space, hasKey: false), "不是键盘发来的未知按键不归这里管")
   }
 
+  // MARK: 换集加载
+
+  /// 换集、换版本开始加载时露出进度条（转圈在上面）：在「选集」面板里选了别的集也要收起面板露出来，
+  /// 不然画面停在上一集，看不出选集已受理。
+  func testItemLoadingRevealsProgressFromHiddenControlsAndOpenPanels() {
+    XCTAssertTrue(ViewState.revealsProgressForItemLoading(from: .hidden), "自动接下一集时控制条已隐藏")
+    XCTAssertTrue(ViewState.revealsProgressForItemLoading(from: .supplement("Queue-1")), "在选集面板里选了别的集")
+    XCTAssertTrue(ViewState.revealsProgressForItemLoading(from: .supplement("Queue-1", showsPlaybackButtons: false)))
+    XCTAssertFalse(ViewState.revealsProgressForItemLoading(from: .progress), "进度条已经显示")
+    XCTAssertFalse(ViewState.revealsProgressForItemLoading(from: .controls), "控制条已经显示，不收成只有进度条")
+  }
+
   // MARK: 播放/暂停键、触控板中央
 
   func testPlayPauseWhileWatchingPausesAtOnceAndShowsControls() {
