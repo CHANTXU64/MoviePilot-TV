@@ -770,6 +770,15 @@ enum UIPreviewScenesDetail {
           UIPreviewDetailSceneRoot(media: externalMovie)
         },
         .page(
+          id: "detail.tmdbNotFound",
+          title: "详情 · TMDB 未识别到匹配",
+          note:
+            "识别接口正常返回空结果（不是失败）：点按 TMDB 后等识别结束，弹「未找到匹配」提示，不跳转；与上一场景的接口失败区分。",
+          behaviors: [UIPreviewBehaviorKey.detailRecognizeTmdb: .empty]
+        ) {
+          UIPreviewDetailSceneRoot(media: externalMovie)
+        },
+        .page(
           id: "detail.collectionFailure",
           title: "合集 · 首屏加载失败",
           note: "合集详情接口失败与空合集都只渲染「暂无数据」，没有错误文案或重试按钮；用于锁定当前真实行为。",
