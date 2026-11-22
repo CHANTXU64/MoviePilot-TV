@@ -186,7 +186,7 @@ private struct PreviewSceneDestination: View {
   var body: some View {
     scene.content()
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color(white: 0.1).ignoresSafeArea())
+      .background(AppBackground())
       .onExitCommand(perform: onExit)
   }
 }

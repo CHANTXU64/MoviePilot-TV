@@ -278,6 +278,47 @@ final class UIPreviewModeTests: XCTestCase {
   }
 
   @MainActor
+  func testPageScenesUseWholePageAndAppBackground() throws {
+    let hosts = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/Scenes/SharedSceneViews.swift"))
+    let tabHost = try sourceSlice(
+      hosts, from: "struct UIPreviewTabRootView", to: "/// 单页预览容器")
+    XCTAssertTrue(tabHost.contains("AppBackground()"))
+    let pageHost = try sourceSlice(
+      hosts, from: "struct UIPreviewPageHost", to: "/// Sheet 预览容器")
+    XCTAssertTrue(pageHost.contains("AppBackground()"))
+    let sheetHost = try sourceSlice(
+      hosts, from: "struct UIPreviewSheetHost", to: "/// 顶部通知条场景容器")
+    XCTAssertTrue(sheetHost.contains("AppBackground()"))
+    XCTAssertTrue(sheetHost.contains(".sheet(isPresented:"))
+
+    let catalog = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let destination = try sourceSlice(
+      catalog, from: "struct PreviewSceneDestination", to: "#endif")
+    XCTAssertTrue(destination.contains(".background(AppBackground())"))
+
+    // 状态页里的空态/失败态必须渲染完整状态页，不能只拉下载任务或整理历史区块。
+    let tabs = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/Scenes/TabScenes.swift"))
+    XCTAssertFalse(tabs.contains("UIPreviewPageHost"))
+    for sceneID in [
+      "status.downloading", "status.downloadingEmpty", "status.transferHistoryEmpty",
+      "status.transferHistoryFailure",
+    ] {
+      let scene = try sourceSlice(tabs, from: "id: \"\(sceneID)\"", to: ".page(")
+      XCTAssertTrue(
+        scene.contains("UIPreviewTabRootView(tab: .status)"),
+        "\(sceneID) 必须渲染完整状态页")
+    }
+
+    // 纯组件特写只留在核心组件分区。
+    let components = try String(
+      contentsOf: repoFile("MoviePilot-TV/PreviewSupport/Scenes/ComponentScenes.swift"))
+    let episodes = try String(
+      contentsOf: repoFile("MoviePilot-TV/PreviewSupport/Scenes/EpisodeScenes.swift"))
+    XCTAssertTrue(components.contains("component.episodeCardOverlay"))
+    XCTAssertFalse(episodes.contains("id: \"episode.cardOverlay.states\""))
+  }
+
+  @MainActor
   func testPreviewSceneTitlesAreChineseAndNotesDescribeStates() {
     for section in UIPreviewCatalog.sections {
       for scene in section.scenes {

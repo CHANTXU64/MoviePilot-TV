@@ -996,17 +996,12 @@ private struct UIPreviewSubscribePanelScene: View {
   }
 
   var body: some View {
-    UIPreviewPageHost {
-      VStack {
-        SubscribePanel(
-          viewModel: viewModel,
-          isSaving: viewModel.isSaving,
-          onSubscribe: startSubscribing
-        )
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(80)
-      .background(Color(white: 0.08).ignoresSafeArea())
+    UIPreviewSheetHost {
+      SubscribePanel(
+        viewModel: viewModel,
+        isSaving: viewModel.isSaving,
+        onSubscribe: startSubscribing
+      )
       .task { await prepare() }
     }
   }
@@ -1045,9 +1040,8 @@ private struct UIPreviewSubtitleDownloadScene: View {
   }
 
   var body: some View {
-    UIPreviewPageHost {
+    UIPreviewSheetHost {
       SubtitleDownloadSheet(viewModel: viewModel)
-        .background(Color(white: 0.08).ignoresSafeArea())
         .task {
           guard autoSubmit else { return }
           try? await Task.sleep(for: .seconds(1))
@@ -1164,7 +1158,7 @@ private struct UIPreviewReadingScene: View {
   let entry: DoubanDiscussionEntry
 
   var body: some View {
-    UIPreviewPageHost {
+    UIPreviewSheetHost {
       DoubanDiscussionDetailSheet(entry: entry, avatarURL: nil)
     }
   }

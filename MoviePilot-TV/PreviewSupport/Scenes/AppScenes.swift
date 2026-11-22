@@ -144,7 +144,7 @@ private struct UIPreviewAppLoginForm: View {
   var body: some View {
     LoginView()
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color(white: 0.1))
+      .background(AppBackground())
   }
 }
 
@@ -153,6 +153,7 @@ private struct UIPreviewStartupPreparingScene: View {
 
   var body: some View {
     ZStack {
+      AppBackground()
       ProgressView("正在准备会话...")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 

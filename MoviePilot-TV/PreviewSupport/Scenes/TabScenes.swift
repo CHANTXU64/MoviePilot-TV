@@ -429,18 +429,13 @@ enum UIPreviewScenesTabs {
           UIPreviewTabRootView(tab: .home)
         },
 
-        // MARK: 状态子区块（直接渲染子视图，便于单独走查）
+        // MARK: 状态页细节状态（统一走真实状态页，保留 Tab 栏与仪表盘）
         .page(
           id: "status.downloading",
           title: "状态 · 下载任务",
-          note: "只渲染下载任务区块：客户端选择、进度、状态徽标。"
+          note: "整页状态页：仪表盘概览、下载任务区块（客户端选择、进度、状态徽标）和整理历史。"
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingEmpty",
@@ -448,12 +443,7 @@ enum UIPreviewScenesTabs {
           note: "没有下载任务时展示空状态。",
           behaviors: [UIPreviewBehaviorKey.downloadingItems: .empty]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingFailure",
@@ -461,12 +451,7 @@ enum UIPreviewScenesTabs {
           note: "下载任务接口失败时展示错误与重试。",
           behaviors: [UIPreviewBehaviorKey.downloadingItems: .failure]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingItemsTimeout",
@@ -475,12 +460,7 @@ enum UIPreviewScenesTabs {
             "下载器在线、任务列表接口超时：页面最终显示“暂无下载任务”，没有错误文案或重试入口；只有连续失败 5 次才弹出“下载任务刷新失败，正在自动重试。”，这是当前的一处反馈缺口。",
           behaviors: [UIPreviewBehaviorKey.downloadingItems: .error(.networkTimeout)]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingClientsFailure",
@@ -489,12 +469,7 @@ enum UIPreviewScenesTabs {
             "下载器配置接口失败：页面显示“下载器加载失败，正在自动重试”，任务列表为空；与任务接口失败时的纯空态不同。",
           behaviors: [UIPreviewBehaviorKey.downloadClients: .error(.unauthorized)]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingNoClients",
@@ -503,12 +478,7 @@ enum UIPreviewScenesTabs {
             "下载器配置返回空列表：没有可选择的下载器，页面只显示“暂无下载任务”，不会提示“未配置下载器”或引导去设置。",
           behaviors: [UIPreviewBehaviorKey.downloadClients: .empty]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              DownloadTaskView(isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.downloadingOperationFailure",
@@ -522,98 +492,85 @@ enum UIPreviewScenesTabs {
             message: "暂停下载失败，请稍后重试。",
             duration: 600
           ) {
-            UIPreviewPageHost {
-              ScrollView {
-                DownloadTaskView(isSelected: true)
-                  .padding(60)
-              }
-            }
+            UIPreviewTabRootView(tab: .status)
           }
         },
         .page(
           id: "status.transferHistory",
           title: "状态 · 整理历史",
-          note: "整理历史列表：媒体信息、整理状态、批量操作入口。"
+          note: "整页状态页：仪表盘、下载任务和整理历史列表（媒体信息、整理状态、批量操作入口）。下载任务置空，保证整理历史首屏可见。",
+          behaviors: [UIPreviewBehaviorKey.downloadingItems: .empty]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistoryEmpty",
           title: "状态 · 整理历史为空",
-          note: "没有整理记录时展示空状态。",
-          behaviors: [UIPreviewBehaviorKey.transferHistory: .empty]
+          note: "整页状态页；没有整理记录时展示空状态。下载任务置空，保证整理历史首屏可见。",
+          behaviors: [
+            UIPreviewBehaviorKey.downloadingItems: .empty,
+            UIPreviewBehaviorKey.transferHistory: .empty,
+          ]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistoryFailure",
           title: "状态 · 整理历史失败",
-          note: "整理历史接口失败时展示错误与重试。",
-          behaviors: [UIPreviewBehaviorKey.transferHistory: .failure]
+          note: "整页状态页；整理历史接口失败时展示错误与重试。下载任务置空，保证整理历史首屏可见。",
+          behaviors: [
+            UIPreviewBehaviorKey.downloadingItems: .empty,
+            UIPreviewBehaviorKey.transferHistory: .failure,
+          ]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistoryTimeout",
           title: "状态 · 整理历史超时",
           note:
-            "整理历史接口网络超时。页面只显示“没有数据”，与真正空列表同形；超时/解析失败等错误细节不会出现在列表里。",
-          behaviors: [UIPreviewBehaviorKey.transferHistory: .error(.networkTimeout)]
+            "整页状态页；整理历史接口网络超时。页面只显示“没有数据”，与真正空列表同形；超时/解析失败等错误细节不会出现在列表里。下载任务置空，保证整理历史首屏可见。",
+          behaviors: [
+            UIPreviewBehaviorKey.downloadingItems: .empty,
+            UIPreviewBehaviorKey.transferHistory: .error(.networkTimeout),
+          ]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistorySearchEmpty",
           title: "状态 · 整理历史搜索为空",
           note:
-            "进入场景后立即用不存在的关键词调用真实 search(with:)：无论首次加载是否先完成，搜索都会重置分页并再刷新一次，最终展示“没有数据”。整理历史没有状态筛选，只支持关键词。",
-          environment: UIPreviewEnvironment.standard
+            "整页状态页；整理历史为空。真实搜索不存在的关键词后也会重置分页并展示同样的“没有数据”，预览直接呈现该结果。整理历史没有状态筛选，只支持关键词。",
+          behaviors: [
+            UIPreviewBehaviorKey.downloadingItems: .empty,
+            UIPreviewBehaviorKey.transferHistory: .empty,
+          ]
         ) {
-          UIPreviewTransferSearchEmptyScene()
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistoryFailedOnly",
           title: "状态 · 整理失败记录",
           note:
-            "只返回失败记录（状态 false），聚焦其中一条时展示红色失败原因；原因超过 20 个字符会截断，完整内容需进入详情或日志确认。",
-          environment: transferFailedEnvironment
+            "整页状态页；只返回失败记录（状态 false），聚焦其中一条时展示红色失败原因；原因超过 20 个字符会截断，完整内容需进入详情或日志确认。下载任务置空，保证整理历史首屏可见。",
+          environment: transferFailedEnvironment,
+          behaviors: [UIPreviewBehaviorKey.downloadingItems: .empty]
         ) {
-          UIPreviewPageHost {
-            ScrollView {
-              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
-                .padding(60)
-            }
-          }
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.transferHistoryLoadMoreFailure",
           title: "状态 · 整理历史加载更多失败",
           note:
-            "先加载 24 条记录的第一页（20 条），再用真实分页器连续触发 3 次第二页失败：列表保留第一页内容，触达错误上限后分页器停止加载并弹出“加载数据失败，请重试。”。",
+            "整页状态页，首屏 20 条；滚动到整理历史底部会触发真实 loadMore，连续 3 次第二页失败后列表保留第一页并弹出“加载数据失败，请重试。”。",
           environment: transferLoadMoreFailureEnvironment,
-          behaviors: [UIPreviewBehaviorKey.transferHistoryMore: .error(.networkTimeout)]
+          behaviors: [
+            UIPreviewBehaviorKey.downloadingItems: .empty,
+            UIPreviewBehaviorKey.transferHistoryMore: .error(.networkTimeout),
+          ]
         ) {
-          UIPreviewTransferLoadMoreFailureScene()
+          UIPreviewTabRootView(tab: .status)
         },
         .page(
           id: "status.manageOnly",
@@ -670,6 +627,7 @@ private struct UIPreviewHomeRefreshFailureScene: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
+    .background(AppBackground())
     .environmentObject(mediaActionHandler)
     .withNotification()
     .task {
@@ -688,53 +646,4 @@ private struct UIPreviewHomeRefreshFailureScene: View {
   }
 }
 
-/// 用真实 `search(with:)` 走一次不存在的关键词，验证过滤后的空结果。
-@MainActor
-private struct UIPreviewTransferSearchEmptyScene: View {
-  @StateObject private var viewModel = TransferHistoryViewModel()
-  @State private var didSearch = false
-
-  var body: some View {
-    UIPreviewPageHost {
-      ScrollView {
-        TransferHistoryView(viewModel: viewModel, isSelected: true)
-          .padding(60)
-      }
-    }
-    .task {
-      guard !didSearch else { return }
-      didSearch = true
-      viewModel.search(with: "不存在的整理记录")
-    }
-  }
-}
-
-/// 第一页加载 20 条后连续触发 3 次第二页失败，触达分页器错误上限。
-@MainActor
-private struct UIPreviewTransferLoadMoreFailureScene: View {
-  @StateObject private var viewModel = TransferHistoryViewModel()
-  @State private var didStart = false
-
-  var body: some View {
-    UIPreviewPageHost {
-      ScrollView {
-        TransferHistoryView(viewModel: viewModel, isSelected: true)
-          .padding(60)
-      }
-    }
-    .task {
-      guard !didStart else { return }
-      didStart = true
-
-      // 等页面自己的首次 refresh 完成，再基于真实条目触发加载更多。
-      for _ in 0..<30 where viewModel.items.isEmpty {
-        try? await Task.sleep(for: .milliseconds(100))
-      }
-      guard let last = viewModel.items.last else { return }
-      for _ in 0..<3 {
-        await viewModel.loadMore(currentItemId: last.id)
-      }
-    }
-  }
-}
 #endif

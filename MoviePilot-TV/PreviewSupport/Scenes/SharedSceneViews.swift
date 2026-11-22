@@ -17,11 +17,15 @@ struct UIPreviewTabRootView: View {
   }
 
   var body: some View {
-    MainContentView(viewModel: viewModel)
-      .task {
-        await viewModel.prepareStartupIfNeeded()
-        viewModel.selectedTab = tab
-      }
+    ZStack {
+      AppBackground()
+      MainContentView(viewModel: viewModel)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task {
+      await viewModel.prepareStartupIfNeeded()
+      viewModel.selectedTab = tab
+    }
   }
 }
 
@@ -34,10 +38,41 @@ struct UIPreviewPageHost<Content: View>: View {
   }
 
   var body: some View {
-    NavigationStack {
+    ZStack {
+      AppBackground()
+      NavigationStack {
+        content
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .withNotification()
+  }
+}
+
+/// Sheet 预览容器：用系统 `.sheet` 呈现真实面板，底层铺 AppBackground 并压暗，
+/// 保留模态尺寸、焦点与居中对齐，不把面板撑成整页。
+struct UIPreviewSheetHost<Content: View>: View {
+  private let content: Content
+  @State private var isPresented = false
+
+  init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  var body: some View {
+    ZStack {
+      AppBackground()
+      Color.black.opacity(0.15).ignoresSafeArea()
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .sheet(isPresented: $isPresented) {
       content
     }
     .withNotification()
+    .task {
+      try? await Task.sleep(for: .milliseconds(400))
+      isPresented = true
+    }
   }
 }
 

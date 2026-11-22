@@ -92,15 +92,6 @@ enum UIPreviewScenesEpisode {
           UIPreviewEpisodeTrialRuleScene()
         },
         .page(
-          id: "episode.cardOverlay.states",
-          title: "单集剧照状态 · 播放与试看",
-          note:
-            "单集卡片剧照上的状态叠层：可播放（带时长与观看进度）、检查中/需注意、试看搜索、下载 42%、等待整理、等待入库、正在取消。",
-          environment: .playback
-        ) {
-          UIPreviewEpisodeCardOverlayGrid()
-        },
-        .page(
           id: "episode.trialNotice.manage",
           title: "试看提示 · 正在占用这一季",
           note: "管理本机试看订阅时按到季订阅/试看入口弹出的系统提示框：说明取消试看的后果，可取消或返回。",
@@ -135,7 +126,7 @@ private struct UIPreviewEpisodeActionScene: View {
   )
 
   var body: some View {
-    UIPreviewPageHost {
+    UIPreviewSheetHost {
       EpisodeActionSheet(
         episode: Self.episode,
         seriesTitle: "边境信号",
@@ -144,8 +135,6 @@ private struct UIPreviewEpisodeActionScene: View {
         isRechecking: false,
         onAction: { _ in }
       )
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color(white: 0.06).ignoresSafeArea())
     }
   }
 }
@@ -157,13 +146,8 @@ private struct UIPreviewEpisodeTrialRuleScene: View {
   private let api = APIService.shared
 
   var body: some View {
-    UIPreviewPageHost {
-      VStack {
-        EpisodeTrialRuleSheet(service: api.sessionScope.episodeTrial, apiService: api)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .padding(60)
-      .background(Color(white: 0.06).ignoresSafeArea())
+    UIPreviewSheetHost {
+      EpisodeTrialRuleSheet(service: api.sessionScope.episodeTrial, apiService: api)
     }
   }
 }
@@ -171,7 +155,7 @@ private struct UIPreviewEpisodeTrialRuleScene: View {
 // MARK: - 剧照状态叠层
 
 @MainActor
-private struct UIPreviewEpisodeCardOverlayGrid: View {
+struct UIPreviewEpisodeCardOverlayGrid: View {
   private struct State {
     let label: String
     let status: EpisodeEntry.CardStatus?
@@ -266,7 +250,7 @@ private struct UIPreviewEpisodeTrialNoticeScene: View {
           .foregroundStyle(.secondary)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color(white: 0.08).ignoresSafeArea())
+      .background(AppBackground())
       .episodeTrialNotice(
         isPresented: $isPresented,
         context: .manage,

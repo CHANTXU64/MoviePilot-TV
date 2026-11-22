@@ -308,6 +308,15 @@ enum UIPreviewScenesComponents {
         ) {
           UIPreviewNotificationDemo(type: .error, message: "加载数据失败，请重试。")
         },
+        .page(
+          id: "component.episodeCardOverlay",
+          title: "单集剧照状态叠层",
+          note:
+            "单集卡片剧照上的状态叠层：可播放（带时长与观看进度）、检查中/需注意、试看搜索、下载 42%、等待整理、等待入库、正在取消。",
+          environment: .playback
+        ) {
+          UIPreviewEpisodeCardOverlayGrid()
+        },
       ]
     )
   }

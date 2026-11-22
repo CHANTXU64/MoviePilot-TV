@@ -394,20 +394,19 @@ private struct UIPreviewSubtitleDownloadPage: View {
   }
 
   var body: some View {
-    UIPreviewPageHost {
+    UIPreviewSheetHost {
       SubtitleDownloadSheet(viewModel: viewModel)
-        .background(Color(white: 0.08).ignoresSafeArea())
-    }
-    .task {
-      guard autoSubmit else { return }
-      // 等面板自己的目录加载先跑起来，再按用户确认的时机提交。
-      try? await Task.sleep(for: .milliseconds(300))
-      for _ in 0..<40 {
-        if !viewModel.isLoadingDirectories, viewModel.canSubmit { break }
-        try? await Task.sleep(for: .milliseconds(100))
-      }
-      guard !Task.isCancelled, viewModel.canSubmit else { return }
-      viewModel.submit()
+        .task {
+          guard autoSubmit else { return }
+          // 等面板自己的目录加载先跑起来，再按用户确认的时机提交。
+          try? await Task.sleep(for: .milliseconds(300))
+          for _ in 0..<40 {
+            if !viewModel.isLoadingDirectories, viewModel.canSubmit { break }
+            try? await Task.sleep(for: .milliseconds(100))
+          }
+          guard !Task.isCancelled, viewModel.canSubmit else { return }
+          viewModel.submit()
+        }
     }
   }
 }

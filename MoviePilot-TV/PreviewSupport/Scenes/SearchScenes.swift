@@ -787,10 +787,8 @@ enum UIPreviewScenesSearch {
       note: note,
       environment: previewEnvironment(permissions: permissions).with(behaviors: behaviors)
     ) {
-      UIPreviewPageHost {
-        SearchPreviewSheetHost {
-          content()
-        }
+      UIPreviewSheetHost {
+        content()
       }
     }
   }
@@ -1059,29 +1057,6 @@ private struct SearchPreviewCancellableResource: View {
     }
     .task { search.start() }
     .onDisappear { search.deactivate() }
-  }
-}
-
-/// 自动弹出 Sheet 的预览根视图。tvOS 上直接渲染 Sheet 内容不会呈现，
-/// 需要一个已进入窗口的承载视图；这里延后一帧再设置 `isPresented`。
-private struct SearchPreviewSheetHost<Content: View>: View {
-  private let content: Content
-  @State private var isPresented = false
-
-  init(@ViewBuilder content: () -> Content) {
-    self.content = content()
-  }
-
-  var body: some View {
-    Color.black
-      .ignoresSafeArea()
-      .sheet(isPresented: $isPresented) {
-        content
-      }
-      .task {
-        try? await Task.sleep(for: .milliseconds(400))
-        isPresented = true
-      }
   }
 }
 

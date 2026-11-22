@@ -34,7 +34,7 @@ private struct UIPreviewPlaybackFlowScene: View {
         UIPreviewTabRootView(tab: .home)
           .playbackPresentation(coordinator)
       } else {
-        Color(white: 0.08)
+        AppBackground()
       }
     }
     .onAppear {

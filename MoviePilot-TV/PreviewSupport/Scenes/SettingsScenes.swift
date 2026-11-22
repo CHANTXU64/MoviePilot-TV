@@ -722,8 +722,11 @@ private struct UIPreviewSettingsPage: View {
   let page: SystemSettingsPage
 
   var body: some View {
-    SystemView(isSelected: true, apiService: .shared, initialPage: page)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    ZStack {
+      AppBackground()
+      SystemView(isSelected: true, apiService: .shared, initialPage: page)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
@@ -737,7 +740,7 @@ private struct UIPreviewLoginForm: View {
   var body: some View {
     LoginView()
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(Color(white: 0.1))
+      .background(AppBackground())
   }
 }
 
@@ -751,14 +754,18 @@ private struct UIPreviewInvalidFilterRuleResult: View {
   @State private var didOverrideHardRule = false
 
   var body: some View {
-    Group {
-      if isSettingsReady {
-        ResourceResultView(request: request, imageLifecycle: imageLifecycle)
-      } else {
-        ProgressView()
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+    ZStack {
+      AppBackground()
+      Group {
+        if isSettingsReady {
+          ResourceResultView(request: request, imageLifecycle: imageLifecycle)
+        } else {
+          ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .task {
       if !didOverrideHardRule {
         let viewModel = SystemViewModel(apiService: .shared)
