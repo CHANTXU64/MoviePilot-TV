@@ -265,7 +265,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 
 维护该分支时：
 
-1. 预览入口与全部预览代码只允许放在 `#if DEBUG` 中，Debug 启动参数为 `-uiPreviewMode`，可选 `-uiPreviewScene <场景 ID>` 直接打开某个场景。
+1. 预览入口与全部预览代码只允许放在 `#if DEBUG` 中；该分支 Debug 运行默认进入预览目录（测试宿主除外）。
 2. 预览渲染的是线上真实 View/ViewModel，只通过 `APIService` 的 DEBUG fixture 钩子替换数据。修改生产 ViewModel/View 的加载链路、模型字段或页面入口后，要同步检查预览目录对应场景是否仍能正常渲染，并补充新增页面/状态（如订阅 Tab、媒体库「继续观看」、单集操作面板、试看规则与进度）。
 3. 不要把 `.github/workflows/release-preview-guard.yml` 删掉或放宽；它负责确保 Release 产物不包含预览入口。
 4. 预览数据、订阅/下载等写操作都必须走模拟后端，不能在预览里访问真实 MoviePilot 后端或写入真实登录状态。

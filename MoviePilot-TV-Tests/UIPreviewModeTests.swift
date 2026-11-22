@@ -8,10 +8,20 @@ import XCTest
 final class UIPreviewModeTests: XCTestCase {
   // MARK: - 启动参数
 
-  func testPreviewModeRequiresExplicitLaunchArgument() {
-    XCTAssertTrue(UIPreviewMode.isEnabled(arguments: ["MoviePilot-TV", "-uiPreviewMode"]))
-    XCTAssertFalse(UIPreviewMode.isEnabled(arguments: ["MoviePilot-TV"]))
-    XCTAssertFalse(UIPreviewMode.isEnabled(arguments: ["MoviePilot-TV", "uiPreviewMode"]))
+  func testPreviewModeIsOnForDebugAppButOffInsideTestHost() {
+    // Debug App 直接运行就是预览，不需要任何启动参数。
+    XCTAssertTrue(UIPreviewMode.isEnabled(arguments: [], isRunningTests: false))
+    XCTAssertTrue(UIPreviewMode.isEnabled(arguments: ["MoviePilot-TV"], isRunningTests: false))
+    // 测试宿主默认关闭，避免普通单元测试走到预览 fixture。
+    XCTAssertFalse(UIPreviewMode.isEnabled(arguments: [], isRunningTests: true))
+    XCTAssertTrue(
+      UIPreviewMode.isEnabled(arguments: ["MoviePilot-TV", "-uiPreviewMode"], isRunningTests: true)
+    )
+  }
+
+  func testPreviewModeIsOffInTestHostProcess() {
+    XCTAssertTrue(UIPreviewMode.isRunningTests)
+    XCTAssertFalse(UIPreviewMode.isEnabled())
   }
 
   func testLaunchArgumentMatchesDocumentedEntryPoint() {
@@ -313,11 +323,15 @@ final class UIPreviewModeTests: XCTestCase {
 
   func testDocsDescribePreviewEntry() throws {
     let readme = try String(contentsOf: repoFile("README.md"))
-    XCTAssertTrue(readme.contains("-uiPreviewMode"))
-    XCTAssertTrue(readme.contains("-uiPreviewScene"))
+    XCTAssertTrue(readme.contains("UI 预览"))
+    XCTAssertTrue(readme.contains("启动后直接进入"))
+    // 文档不再让读者手动加启动参数。
+    XCTAssertFalse(readme.contains("-uiPreviewMode"))
+    XCTAssertFalse(readme.contains("-uiPreviewScene"))
 
     let agents = try String(contentsOf: repoFile("AGENTS.md"))
     XCTAssertTrue(agents.contains("ai/ui-preview-mode"))
+    XCTAssertTrue(agents.contains("Debug 运行默认进入预览目录"))
   }
 
   // MARK: - Helpers
