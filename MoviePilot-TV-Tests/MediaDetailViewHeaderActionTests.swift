@@ -418,11 +418,13 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
       title: "详情页取消订阅",
-      type: "电影",
+      type: "电视剧",
       year: "2026"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
@@ -463,7 +465,47 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       },
       "详情页 TMDB fallback 取消定位也必须保持精确身份查询"
     )
-    XCTAssertEqual(preloadTask.isSubscribed, false)
+  }
+
+  /// 电影名称识别出的编号可能是同名同年的另一部：详情页取消不按它查找，也不按它删除。
+  @MainActor
+  func testMovieCancelIgnoresNameRecognizedTmdbId() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-douban",
+      title: "详情页取消订阅",
+      type: "电影",
+      year: "2026"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+    XCTAssertNil(viewModel.buildSubscribeRequest().tmdbid)
+
+    await viewModel.cancelSubscription()
+
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+    let fallbackLookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 998_877
+    )
+    XCTAssertEqual(deletedSubscriptionIDs, [])
+    XCTAssertTrue(deletedMediaRequests.isEmpty)
+    XCTAssertEqual(fallbackLookupCount, 0)
   }
 
   @MainActor
@@ -609,6 +651,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-title-fallback-douban",
@@ -646,11 +690,13 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       douban_id: "detail-header-minimal-alias-douban",
       title: "原始 ID 最小响应",
-      type: "电影"
+      type: "电视剧"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
@@ -666,7 +712,42 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
-    XCTAssertEqual(preloadTask.isSubscribed, false)
+  }
+
+  /// 版本未知时媒体级删除被拒，不能退回去删前一个候选查到的订阅 ID（这里是 7001）。
+  @MainActor
+  func testCancelSubscriptionWithUnknownBackendVersionDoesNotFallBackToSubscriptionID() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+    service.settings = nil
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-minimal-alias-douban",
+      title: "原始 ID 最小响应",
+      type: "电视剧"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+
+    await viewModel.cancelSubscription()
+
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+
+    XCTAssertEqual(deletedSubscriptionIDs, [])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), [])
   }
 
   /// 清单要求 lookup 只用于确认：删除目标必须是本次查询使用的媒体身份。
@@ -774,11 +855,13 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let detail = MediaInfo(
       bangumi_id: 12_345,
       title: "Bangumi 详情页取消订阅",
-      type: "电影"
+      type: "电视剧"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
@@ -794,7 +877,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
-    XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
   @MainActor
@@ -852,7 +934,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-stale-douban",
       title: "详情页远端取消",
-      type: "电影",
+      type: "电视剧",
       season: 1
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
@@ -869,7 +951,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertTrue(deletedMediaRequests.isEmpty)
-    XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
   @MainActor
@@ -892,14 +973,9 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_655, id: nil)
 
     let preloadTask = MediaPreloadTask(
-      partialMedia: MediaInfo(
-        douban_id: "detail-header-remote-complete-douban",
-        title: "详情页远端完成",
-        type: "电影"
-      ),
+      partialMedia: MediaInfo(tmdb_id: 776_655, title: "详情页远端完成", type: "电影"),
       apiService: service
     )
-    preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
 
     await preloadTask.refreshSubscriptionStatus()
@@ -954,13 +1030,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: nil)
 
-    let fullDetail = MediaInfo(
-      douban_id: "detail-ready-remote-complete-douban",
-      title: "详情页后完成",
-      type: "电影"
-    )
+    let fullDetail = MediaInfo(tmdb_id: 776_656, title: "详情页后完成", type: "电影")
     let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
-    preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
     preloadTask.isDetailReady = true
     preloadTask.isSubscribed = true
@@ -1305,6 +1376,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let success = try await service.deleteSubscription(
       mediaId: "custom:abc/def value",
@@ -1338,31 +1411,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testMovieHeaderAppendsLibraryStatusToSubscribeTitle() {
-    let detail = MediaInfo(title: "已入库电影", type: "电影")
+  func testMovieHeaderSubscribeTitleOnlyShowsSubscriptionState() {
+    let detail = MediaInfo(title: "电影", type: "电影")
 
-    XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false,
-        isInLibrary: true
-      ),
-      "订阅（已入库）"
-    )
-    XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: true,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false,
-        isInLibrary: true
-      ),
-      "已订阅（已入库）"
-    )
+    XCTAssertEqual(MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail), "订阅")
+    XCTAssertEqual(MediaDetailView.headerSubscribeButtonTitle(isSubscribed: true, detail: detail), "已订阅")
   }
 
   @MainActor
@@ -1474,7 +1527,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testSeasonSubscribeHeaderShowsUnavailableStateWhenLoadedWithoutSeasons() {
+  func testSeasonSubscribeSectionExplainsMissingSeasonsWithFixedHeaderTitle() {
     let detail = MediaInfo(title: "无分季剧集", type: "电视剧")
 
     XCTAssertTrue(
@@ -1486,24 +1539,12 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         hasSeasonLoadError: false
       )
     )
-    XCTAssertFalse(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: false
-      )
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: true,
-        hasSeasonLoadError: false,
-        isSeasonLoading: false
-      ),
-      "暂无分季信息"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
   }
 
@@ -1521,23 +1562,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       )
     )
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: true
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: true,
-        isSeasonLoading: false
-      ),
-      "分季信息加载失败"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
   }
 
@@ -1552,13 +1581,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertTrue(seasonViewModel.hasSeasonLoadError)
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: seasonViewModel.hasSeasonLoadError
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertFalse(
       MediaDetailView.isSeasonInformationUnavailable(
@@ -1576,33 +1599,30 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(title: "有分季剧集", type: "电视剧")
 
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: false,
-        seasonCount: nil,
-        hasSeasonLoadError: false
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 1,
-        hasSeasonLoadError: false
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertEqual(
-      MediaDetailView.headerSubscribeButtonTitle(
-        isSubscribed: false,
-        detail: detail,
-        isSeasonInformationUnavailable: false,
-        hasSeasonLoadError: false,
-        isSeasonLoading: true
-      ),
-      "分季信息加载中"
+      MediaDetailView.headerSubscribeButtonTitle(isSubscribed: false, detail: detail),
+      "分季订阅"
     )
+  }
+
+  /// 嵌套 seasonViewModel 的加载态变化必须冒泡到 MediaPreloadTask，详情页顶部按钮才会刷新。
+  @MainActor
+  func testPreloadTaskForwardsSeasonViewModelChanges() {
+    let detail = MediaInfo(tmdb_id: 100_083, title: "转发观察", type: "电视剧")
+    let task = MediaPreloadTask(partialMedia: detail, apiService: nil)
+    let season = SubscribeSeasonViewModel(mediaInfo: detail, apiService: APIService.shared)
+    task.seasonViewModel = season
+
+    let forwarded = expectation(description: "seasonViewModel 变化转发到 preloadTask")
+    let cancellable = task.objectWillChange.sink { _ in forwarded.fulfill() }
+    defer { cancellable.cancel() }
+    season.isLoading = true
+    wait(for: [forwarded], timeout: 1)
   }
 
   func testOtherInfoOnlyDependsOnSubscribeAndSearchActions() {
@@ -1631,14 +1651,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(title: "重试分季剧集", type: "电视剧")
 
     XCTAssertTrue(
-      MediaDetailView.shouldShowSeasonSubscriptionSection(
-        canSubscribeMedia: true,
-        detail: detail,
-        isSeasonDataLoaded: true,
-        seasonCount: 0,
-        hasSeasonLoadError: false,
-        isSeasonLoading: true
-      )
+      MediaDetailView.shouldShowSeasonSubscriptionSection(canSubscribeMedia: true, detail: detail)
     )
     XCTAssertFalse(
       MediaDetailView.isSeasonInformationUnavailable(

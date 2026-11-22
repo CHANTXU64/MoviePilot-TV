@@ -1227,7 +1227,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let viewModel = TransferHistoryViewModel(apiService: service)
     var didSwitchSession = false
     let progressCancellable = viewModel.$aiRedoProgressText.sink { text in
-      guard text == "正在启动 AI 整理...", !didSwitchSession else { return }
+      guard text == "正在启动 AI 整理…", !didSwitchSession else { return }
       didSwitchSession = true
       let accountB = Token(
         access_token: "manager-b",

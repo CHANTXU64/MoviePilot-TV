@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 
 /// 详情页「演员 / 职员」合并行当前展示的分类。
@@ -46,42 +47,76 @@ private struct MediaDetailBackgroundLayer: View {
   let usingPosterAsBackdrop: Bool
   let showingContentPage: Bool
   let hidesContentPageBackground: Bool
+  /// 第二页显示模糊背景（内存优化关闭时）；开启时第二页淡成纯色。
+  let providesBlurredContentPage: Bool
+  /// 这一页背景的模糊缩略图（`PageImageLifecycle.currentBackdropPreview`）。
+  /// 只有属于当前背景图片 slot 的才用作第二页模糊背景。
+  let backdropPreview: PageImageLifecycle.BackdropPreview?
   var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
   var body: some View {
-    let showsBlurredBackground = showingContentPage && !hidesContentPageBackground
-    image
-      .blur(
-        radius: showsBlurredBackground && !usingPosterAsBackdrop ? MediaDetailBackgroundImage.blurRadius : 0,
-        opaque: true
-      )
-      .opacity(hidesContentPageBackground ? 0 : 1)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
-      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
-      .accessibilityHidden(true)
+    // 海报当背景时主背景本身就是模糊图，不用再叠一张。
+    let usesBlurredLayer = providesBlurredContentPage && !usingPosterAsBackdrop && url != nil
+    let showsBlurredLayer = usesBlurredLayer && showingContentPage && !hidesContentPageBackground
+    let blurredBackdrop = usesBlurredLayer ? currentBlurredBackdrop : nil
+    ZStack {
+      image
+        // 第二页还没有当前背景的模糊图（新背景未就绪或加载失败）时，不露出清晰背景，只留底色。
+        .opacity(showsBlurredLayer && blurredBackdrop == nil ? 0 : 1)
+      if let blurredBackdrop {
+        // 缩略图在主背景解码时就已生成并模糊过：首屏就挂着、透明度为 0，切到第二页时淡入。
+        // 不另外下载、解码，也不在每帧实时模糊。
+        let size = UIScreen.main.bounds.size
+        Image(uiImage: blurredBackdrop)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: size.width, height: size.height)
+          .clipped()
+          .opacity(showsBlurredLayer ? 1 : 0)
+      }
+    }
+    .opacity(hidesContentPageBackground ? 0 : 1)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
+    .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
+    .ignoresSafeArea()
+    .accessibilityHidden(true)
+  }
+
+  private var heroProcessor: any ImageProcessor {
+    MediaDetailBackgroundImage.heroProcessor(
+      for: UIScreen.main.bounds.size,
+      usingPosterAsBackdrop: usingPosterAsBackdrop,
+      screenScale: UIScreen.main.scale
+    )
+  }
+
+  private var heroScaleFactor: CGFloat {
+    MediaDetailBackgroundImage.downsampleScale(for: UIScreen.main.bounds.size, screenScale: UIScreen.main.scale)
+  }
+
+  /// 属于当前背景图片 slot 的模糊缩略图；key 和下面 `PageManagedImage` 的参数一致。
+  private var currentBlurredBackdrop: UIImage? {
+    guard let url, let backdropPreview else { return nil }
+    let key = PageManagedImageView.slotKey(
+      url: url, processor: heroProcessor, role: role,
+      skipsMemoryCache: true, fadeDuration: 0, scaleFactor: heroScaleFactor
+    )
+    return backdropPreview.key == key ? backdropPreview.image : nil
   }
 
   @ViewBuilder
   private var image: some View {
     if let url {
       let size = UIScreen.main.bounds.size
-      let screenScale = UIScreen.main.scale
       PageManagedImage(
         url: url,
-        processor: MediaDetailBackgroundImage.heroProcessor(
-          for: size,
-          usingPosterAsBackdrop: usingPosterAsBackdrop,
-          screenScale: screenScale
-        ),
+        processor: heroProcessor,
         isEnabled: true,
         role: role,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
-        scaleFactor: MediaDetailBackgroundImage.downsampleScale(
-          for: size,
-          screenScale: screenScale
-        ),
+        scaleFactor: heroScaleFactor,
         alignsImageAtTop: usingPosterAsBackdrop,
         fadeDuration: 0,
         onFailure: { onFailure?(url) }
@@ -95,11 +130,47 @@ private struct MediaDetailBackgroundLayer: View {
   }
 }
 
+/// 占位行上的斜向高光自左向右扫过，代替加载图标传达「正在加载」；
+/// 只遮罩在占位形状上，Reduce Motion 时保持静态不扫。
+private struct PlaceholderShimmer: ViewModifier {
+  /// 失败后停扫，避免「已失败却仍像在加载」。
+  var isActive: Bool = true
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func body(content: Content) -> some View {
+    content.overlay {
+      if !reduceMotion && isActive {
+        TimelineView(.animation) { timeline in
+          GeometryReader { geo in
+            let phase = CGFloat(
+              (timeline.date.timeIntervalSinceReferenceDate / 2.0)
+                .truncatingRemainder(dividingBy: 1.0)
+            )
+            LinearGradient(
+              colors: [.clear, .white.opacity(0.5), .clear],
+              startPoint: .leading,
+              endPoint: .trailing
+            )
+            .rotationEffect(.degrees(18))
+            .frame(width: max(geo.size.width * 0.35, 80), height: geo.size.height * 2)
+            .offset(
+              x: geo.size.width * (phase * 1.8 - 0.6),
+              y: -geo.size.height * 0.5
+            )
+          }
+        }
+        .mask(content)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+      }
+    }
+  }
+}
+
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
-  @Environment(\.topShelfPresentation) private var topShelfPresentation
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
@@ -113,15 +184,37 @@ struct MediaDetailView: View {
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
   let presentationStyle: MediaDetailPresentationStyle
+  let initialEpisodeSeason: Int?
   @State private var cachedBackgroundFailed = false
   private var cachedContent: TopShelfCachedContent? {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
   }
+  /// 冷加载阶段背景兜底：完整详情未到时优先用入口携带的海报（远程或本地均可），
+  /// 详情返回后切换为 ViewModel 解析出的背景图。
+  private var coldLoadBackground: (url: URL?, usingPosterAsBackdrop: Bool) {
+    if let backgroundUrl = viewModel.backgroundUrl {
+      return (backgroundUrl, viewModel.isUsingPosterAsBackdrop)
+    }
+    if let loadingPosterURL {
+      return (loadingPosterURL, true)
+    }
+    return (nil, viewModel.isUsingPosterAsBackdrop)
+  }
   let allowsRequests: Bool
+  /// 入口渐进渲染：true 时标题已 move-in、按钮胶囊在但文案透明且不可按、可变槽位就地占位；
+  /// 就绪后仅文案/可变内容淡入，标题与按钮形状位置不变。
+  let isEntryLoading: Bool
+  /// 无障碍值用：详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），但画面已显示失败，不能再读「加载中」。
+  private var isEntryStillLoading: Bool { isEntryLoading && !preloadTask.isDetailFailed }
+  let entryStatusMessage: String?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.openURL) private var openURL
+  @State private var entryTitleOffset: CGFloat = 28
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
-  @State private var isTMDBJumpInFlight = false
+  /// TMDB 按钮按下后的识别与跳转；离开页面时取消。
+  @State private var tmdbJumpTask: Task<Void, Never>?
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var didReleaseAfterPop = false
@@ -129,10 +222,9 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
-  @State private var unsubscribeConfirmationMessage = ""
+  @State private var unsubscribeConfirmation: MediaDetailViewModel.UnsubscribeConfirmation?
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
-  @State private var selectedEpisode: MoviePilotEpisode?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
   /// 之后演员重新加载（如页面重新激活时重试空结果）也不会让这一行消失或被换掉。
   @State private var selectedCreditKind: MediaDetailCreditKind = .cast
@@ -156,10 +248,12 @@ struct MediaDetailView: View {
   /// 第二页当前含焦点的行，取值与 `firstVisibleRow` 相同。
   @FocusState private var focusedContentRow: String?
   enum ButtonField {
-    case play, subscribe, search, subtitleSearch, sites, otherInfo
+    case play, subscribe, search, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
-  @State private var lastFocusedButton: ButtonField?
+  @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
+  /// 播放结束后等着把焦点补写回「播放」（见 `playbackFocusReturn`）。
+  @State private var playButtonRestore = PlaybackFocusRestore<ButtonField>()
 
   /// 音乐走独立订阅链，TV 不提供入口：既不能当电影直接订阅，也不能进分季流程（否则是死按钮）。
   private var canSubscribeMedia: Bool {
@@ -261,22 +355,9 @@ struct MediaDetailView: View {
     )
   }
 
-  private var shouldShowSiteFilter: Bool {
-    guard canSearchResources else { return false }
-    if focusedButton == .search || focusedButton == .subtitleSearch || focusedButton == .sites {
-      return true
-    }
-    if focusedButton == nil
-      && (lastFocusedButton == .search || lastFocusedButton == .subtitleSearch
-        || lastFocusedButton == .sites)
-    {
-      return true
-    }
-    return false
-  }
-
+  /// 第二页第一个能聚焦的行。没有分季时分季订阅行只有说明、没有可聚焦内容，从它下面一行算起。
   private var firstVisibleRow: String {
-    if shouldShowSeasonSubscriptionSection {
+    if shouldShowSeasonSubscriptionSection && !isSeasonInformationUnavailable {
       return "season"
     }
     if episodeTMDBID != nil {
@@ -314,15 +395,7 @@ struct MediaDetailView: View {
   }
 
   private var shouldShowSeasonSubscriptionSection: Bool {
-    Self.shouldShowSeasonSubscriptionSection(
-      canSubscribeMedia: canSubscribeMedia,
-      detail: viewModel.detail,
-      isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
-      seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError,
-      isSeasonLoading: isSeasonLoading,
-      hasSelectedEpisodeGroup: trimmedNonEmpty([preloadTask.seasonViewModel?.selectedGroupId]) != nil
-    )
+    Self.shouldShowSeasonSubscriptionSection(canSubscribeMedia: canSubscribeMedia, detail: viewModel.detail)
   }
 
   private var isSeasonInformationUnavailable: Bool {
@@ -341,16 +414,39 @@ struct MediaDetailView: View {
     viewModel.isSubscribed
   }
 
+  private var heroPlayLabel: HeroPlayLabel? {
+    Self.heroPlayLabel(
+      isReady: viewModel.isPlayLabelReady,
+      seriesAction: viewModel.seriesPlayAction,
+      movieProgress: viewModel.movieProgress
+    )
+  }
+
+  /// 按钮行里会在加载后改变的内容：播放、跳转媒体库按钮出现，播放写上文字，订阅状态变化。变化时其余按钮平滑让位。
+  private var heroButtonsAnimationKey: HeroButtonsAnimationKey {
+    HeroButtonsAnimationKey(
+      showsPlay: viewModel.inAppPlaybackTarget != nil,
+      playLabel: heroPlayLabel,
+      showsLibraryApp: viewModel.libraryAppURL != nil,
+      isSubscribed: isSubscribed
+    )
+  }
+
   init(
     detail: MediaInfo,
+    libraryItemHint: MediaServerItemRef? = nil,
+    initialEpisodeSeason: Int? = nil,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
     loadingPosterURL: URL?,
     presentationStyle: MediaDetailPresentationStyle = .standard,
-    allowsRequests: Bool = true
+    allowsRequests: Bool = true,
+    isEntryLoading: Bool = false,
+    entryStatusMessage: String? = nil
   ) {
     let vm = MediaDetailViewModel(detail: detail)
+    vm.libraryItemHint = libraryItemHint
     vm.preloadTask = preloadTask
     _viewModel = StateObject(wrappedValue: vm)
     self.preloadTask = preloadTask
@@ -358,7 +454,14 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.initialEpisodeSeason = initialEpisodeSeason
     self.presentationStyle = presentationStyle
+    self.isEntryLoading = isEntryLoading
+    self.entryStatusMessage = entryStatusMessage
+    // 已就绪（预载命中）首帧直接显示，标题不做 move-in；仅冷加载才移动进位。
+    _entryTitleOffset = State(
+      initialValue: isEntryLoading && presentationStyle == .standard ? 28 : 0
+    )
     self.allowsRequests = allowsRequests
   }
 
@@ -371,6 +474,15 @@ struct MediaDetailView: View {
       backgroundColor
         .ignoresSafeArea()
 
+      // 第二页露出底色时（内存优化淡掉背景图，或模糊图未就绪）用全 App 统一的背景。
+      // 首屏仍是纯色底，和底部渐隐衔接。
+      AppBackground()
+        .opacity(showContentPage ? 1 : 0)
+        .animation(
+          .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+          value: showContentPage
+        )
+
       if (cachedContent != nil || presentationStyle == .direct),
         let localBackground = cachedContent?.backgroundURL ?? loadingPosterURL,
         localBackground.isFileURL
@@ -379,6 +491,8 @@ struct MediaDetailView: View {
           url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
@@ -388,10 +502,12 @@ struct MediaDetailView: View {
         presentationStyle == .standard || (allowsRequests && preloadTask.fullDetail != nil)
       {
         MediaDetailBackgroundLayer(
-          url: viewModel.backgroundUrl,
-          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          url: coldLoadBackground.url,
+          usingPosterAsBackdrop: coldLoadBackground.usingPosterAsBackdrop,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          providesBlurredContentPage: !memoryOptimization.isEnabled,
+          backdropPreview: imageLifecycle.currentBackdropPreview,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
           }
@@ -408,6 +524,14 @@ struct MediaDetailView: View {
           .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
           value: showContentPage
         )
+
+      // 入口加载期整体压暗防大屏刺眼，就绪后淡出（不改变色相，避免发泥）。
+      Color.black
+        .opacity(isEntryLoading ? 0.22 : 0)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
 
       // 首屏动态阴影
       ZStack {
@@ -470,31 +594,43 @@ struct MediaDetailView: View {
                   .transition(.opacity)
               }
 
-              seasonSubscriptionSection
-                .focused($focusedContentRow, equals: "season")
-              if let episodeTMDBID {
-                MediaDetailEpisodesView(
-                  media: viewModel.detail,
-                  tmdbID: episodeTMDBID,
-                  subscriptionSeasons: shouldShowSeasonSubscriptionSection
-                    ? preloadTask.seasonViewModel : nil,
-                  allowsRequests: allowsRequests,
-                  isContentVisible: showContentPage,
-                  showsHeader: showContentPage || firstVisibleRow != "episodes",
-                  onExpand: { navigationCoordinator.push($0) },
-                  onSelect: { selectedEpisode = $0 }
-                )
-                .id(episodeTMDBID)
-                .focused($focusedContentRow, equals: "episodes")
+              // 第二页等完整详情应用后再挂载：避免剧集行用卡片数据提前查询，
+              // 同时仍早于入口就绪，保留与首行准备并行的窗口。
+              if viewModel.hasAppliedFullDetail {
+                Group {
+                  seasonSubscriptionSection
+                    .focused($focusedContentRow, equals: "season")
+                  if let episodeTMDBID {
+                    MediaDetailEpisodesView(
+                      media: viewModel.detail,
+                      tmdbID: episodeTMDBID,
+                      subscriptionSeasons: shouldShowSeasonSubscriptionSection
+                        ? preloadTask.seasonViewModel : nil,
+                      playback: viewModel.episodePlayback,
+                      initialSeason: initialEpisodeSeason,
+                      rowHint: viewModel.episodeRowHint,
+                      panelRequest: viewModel.episodePanelRequest,
+                      defaultSeasons: viewModel.episodeSeasons,
+                      allowsRequests: allowsRequests,
+                      isContentVisible: showContentPage,
+                      showsHeader: showContentPage || firstVisibleRow != "episodes",
+                      onExpand: { navigationCoordinator.push($0) }
+                    )
+                    .id(episodeTMDBID)
+                    .focused($focusedContentRow, equals: "episodes")
+                  }
+                  creditsSection
+                    .focused($focusedContentRow, equals: "credits")
+                  doubanDiscussionSection
+                    .focused($focusedContentRow, equals: "doubanDiscussion")
+                  recommendationsSection
+                    .focused($focusedContentRow, equals: "recommendations")
+                  similarSection
+                    .focused($focusedContentRow, equals: "similar")
+                }
+                .disabled(isEntryLoading)
+                .accessibilityHidden(isEntryLoading)
               }
-              creditsSection
-                .focused($focusedContentRow, equals: "credits")
-              doubanDiscussionSection
-                .focused($focusedContentRow, equals: "doubanDiscussion")
-              recommendationsSection
-                .focused($focusedContentRow, equals: "recommendations")
-              similarSection
-                .focused($focusedContentRow, equals: "similar")
             }
             .id("contentTop")
             // tvOS 会把聚焦控件保持在离滚动区顶部约 180pt 以外。60pt 时首行可聚焦标题（胶囊、
@@ -533,7 +669,7 @@ struct MediaDetailView: View {
         }
       }
     }
-    .disabled(!allowsRequests)
+    .disabled(!allowsRequests && presentationStyle == .standard)
     .environment(\.pageImageLifecycle, imageLifecycle)
     .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
       guard allowsRequests else { return }
@@ -545,10 +681,20 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      tmdbJumpTask?.cancel()
       handleRouteRemovalIfNeeded()
     }
     .onAppear {
       handleRouteRemovalIfNeeded()
+    }
+    .onChange(of: isEntryLoading) { _, loading in
+      guard !loading else { return }
+      // 揭示后通知 VoiceOver 内容已更新；standard 模式初始焦点兜底补到首个可用按钮。
+      // direct 模式的首个焦点由下方 `PresentationReadyAction` 等转场结束再写，这里不写，避免写入被丢弃或触发滚动。
+      UIAccessibility.post(notification: .announcement, argument: "详情已加载")
+      if presentationStyle == .standard, focusedButton == nil, let target = preferredHeaderFocus {
+        focusedButton = target
+      }
     }
     .task(id: hidesContentPageBackground) {
       if hidesContentPageBackground {
@@ -572,11 +718,12 @@ struct MediaDetailView: View {
     }
     .task(id: allowsRequests) {
       guard allowsRequests else { return }
-      if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus {
-        focusedButton = preferredHeaderFocus
+      if presentationStyle == .standard, !hasAppeared {
         hasAppeared = true
-      } else if presentationStyle == .standard, !hasAppeared {
-        hasAppeared = true
+        // 按钮加载期仍可聚焦，初始焦点直接进详情页，避免焦点留在 Tab 栏导致 Menu 退出 App。
+        if let preferredHeaderFocus {
+          focusedButton = preferredHeaderFocus
+        }
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
       hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
@@ -585,6 +732,9 @@ struct MediaDetailView: View {
         hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail,
         requiresBackgroundReady: presentationStyle.usesLoadingTransition
       )
+      if presentationStyle == .direct, preloadTask.fullDetail != nil {
+        isContentReady = true
+      }
       if canSearchResources {
         await viewModel.siteFilter.loadSites()
       }
@@ -635,14 +785,12 @@ struct MediaDetailView: View {
       }
     }
     .onChange(of: preloadTask.fullDetail) { _, detail in
-      guard allowsRequests, presentationStyle == .direct, detail != nil else { return }
+      guard allowsRequests, presentationStyle == .direct, let detail else { return }
+      viewModel.applyFullDetail(detail)
+      isContentReady = true
+      guard !hasRefreshedSubscriptionAfterFullDetail else { return }
       Task { @MainActor in
-        hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
-          from: preloadTask,
-          to: viewModel,
-          hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail,
-          requiresBackgroundReady: false
-        )
+        hasRefreshedSubscriptionAfterFullDetail = await viewModel.refreshSubscriptionStatus()
       }
     }
     // 当 ViewModel 的 isFirstRowReady 变为 true 时，回写给 ContainerView 控制 Loading 遮罩
@@ -673,11 +821,16 @@ struct MediaDetailView: View {
         }
       }
     }
-    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
-      Button("取消", role: .cancel) {}
+    .alert(
+      SubscriptionCancelConfirmation.title,
+      isPresented: $showUnsubscribeConfirm,
+      presenting: unsubscribeConfirmation
+    ) { confirmation in
+      Button("取消", role: .cancel) { unsubscribeConfirmation = nil }
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        unsubscribeConfirmation = nil
         Task {
-          guard await viewModel.cancelSubscription() else {
+          guard await viewModel.cancelSubscription(confirmation: confirmation) else {
             notificationManager.show(
               message: SubscriptionCancelConfirmation.failureMessage,
               type: .error
@@ -686,20 +839,16 @@ struct MediaDetailView: View {
           }
         }
       }
-    } message: {
-      Text(
-        unsubscribeConfirmationMessage.isEmpty
-          ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
-          : unsubscribeConfirmationMessage
-      )
+    } message: { confirmation in
+      Text(confirmation.message)
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
+      unsubscribeConfirmation = nil
       selectedDoubanDiscussion = nil
-      selectedEpisode = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     // 短评/影评详情：正文长文靠段落焦点停靠点驱动纵向滚动，不用浏览器打开豆瓣链接。
@@ -709,26 +858,26 @@ struct MediaDetailView: View {
         avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
       )
     }
-    .sheet(item: $selectedEpisode) { episode in
-      EpisodeDetailSheet(episode: episode)
-    }
-    .onChange(of: focusedButton) { _, newValue in
-      if let newValue = newValue {
-        lastFocusedButton = newValue
-      }
-    }
+    // 头部「播放」起播：盖播放器前交回焦点，准备期取消时补写回来（详情页已不在栈顶就不写）。
+    .playbackFocusReturn(
+      $playButtonRestore, focused: focusedButton, focus: $focusedButton, isEnabled: allowsRequests,
+      canRestore: { _ in navigationCoordinator.topEntryID == routeID },
+      match: { $0 == .detailHeader(routeID: routeID) ? .play : nil }
+    )
     // 设置为晚到（例如启动后才拿到 BACKEND_VERSION）或详情后到时补发首屏请求；
     // 请求成功后 `loadDoubanDiscussionIfNeeded` 自己不会再重发。
     .onChange(of: isDoubanDiscussionEligible) { _, eligible in
       guard eligible, allowsRequests else { return }
       viewModel.loadDoubanDiscussionIfNeeded()
     }
+    // 外部入口（Top Shelf）直达详情的首个焦点：转场结束、详情在栈顶后写到首选按钮；栈不可交互时写 FocusState
+    // 会被丢弃并让 ScrollView 滚动。焦点落进头部或内容区（含用户主动移动）就停，返回详情页不再抢焦点。
+    // Top Shelf 交接等焦点进了详情才结束（见 `ImageNavigationDestination`），这里在交接期间也要写。
     .background(PresentationReadyAction(
-      isEnabled: presentationStyle == .direct && !hasAppeared && allowsRequests
-        && !topShelfPresentation.blocksInteraction && scenePhase == .active
+      isEnabled: presentationStyle == .direct && !hasAppeared && scenePhase == .active
         && navigationCoordinator.isStackInteractive && navigationCoordinator.topEntryID == routeID,
       requiresNavigationTop: true,
-      contentFocusMatches: isHeroFocused && focusedButton == preferredHeaderFocus,
+      contentFocusMatches: isHeroFocused || isContentFocused,
       onContentFocus: { hasAppeared = true },
       action: { focusedButton = preferredHeaderFocus }
     ))
@@ -874,20 +1023,10 @@ struct MediaDetailView: View {
 
   // Xcode 27.2 的 Release 优化器内联此判断时可能触发 SIL 校验崩溃。
   @inline(never)
-  static func shouldShowSeasonSubscriptionSection(
-    canSubscribeMedia: Bool,
-    detail: MediaInfo,
-    isSeasonDataLoaded: Bool,
-    seasonCount: Int?,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool = false,
-    hasSelectedEpisodeGroup: Bool = false
-  ) -> Bool {
-    guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
-      return false
-    }
-    if isSeasonLoading || hasSeasonLoadError || hasSelectedEpisodeGroup { return true }
-    return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
+  /// 能订阅的剧一直显示分季订阅行：加载中、加载失败（可重试）、没有分季（说明查不到）都在这一行里显示，
+  /// 头部「分季订阅」按下后总能在第二页看到结果。
+  static func shouldShowSeasonSubscriptionSection(canSubscribeMedia: Bool, detail: MediaInfo) -> Bool {
+    canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
   }
 
   static func shouldShowOtherInfo(
@@ -909,21 +1048,38 @@ struct MediaDetailView: View {
       && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError && !isSeasonLoading
   }
 
-  static func headerSubscribeButtonTitle(
-    isSubscribed: Bool,
-    detail: MediaInfo,
-    isSeasonInformationUnavailable: Bool,
-    hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool,
-    isInLibrary: Bool = false
-  ) -> String {
+  /// 剧的文案固定是「分季订阅」：加载中、加载失败、没有分季只换前导图标，按钮宽度不变。
+  static func headerSubscribeButtonTitle(isSubscribed: Bool, detail: MediaInfo) -> String {
     if detail.canDirectlySubscribe {
-      let title = isSubscribed ? "已订阅" : "订阅"
-      return isInLibrary ? "\(title)（已入库）" : title
+      return isSubscribed ? "已订阅" : "订阅"
     }
-    if isSeasonLoading { return "分季信息加载中" }
-    if hasSeasonLoadError { return "分季信息加载失败" }
-    return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
+    return "分季订阅"
+  }
+
+  struct HeroPlayLabel: Equatable {
+    let title: String
+    var progress: Double? = nil
+    let accessibilityLabel: String
+  }
+
+  struct HeroButtonsAnimationKey: Equatable {
+    let showsPlay: Bool
+    let playLabel: HeroPlayLabel?
+    let showsLibraryApp: Bool
+    let isSubscribed: Bool
+  }
+
+  /// 头部「播放」按钮的文字和进度条；进度第一次读完前为 nil，按钮只有播放图标。
+  static func heroPlayLabel(isReady: Bool, seriesAction: SeriesPlayAction?, movieProgress: Double?) -> HeroPlayLabel? {
+    guard isReady else { return nil }
+    if let seriesAction {
+      return HeroPlayLabel(
+        title: seriesAction.title, progress: seriesAction.progress, accessibilityLabel: seriesAction.accessibilityLabel)
+    }
+    if let movieProgress {
+      return HeroPlayLabel(title: "继续播放", progress: movieProgress, accessibilityLabel: "继续播放")
+    }
+    return HeroPlayLabel(title: "播放", accessibilityLabel: "播放")
   }
 
   private func handleHeaderSubscribe() {
@@ -937,12 +1093,28 @@ struct MediaDetailView: View {
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {
-          unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           Task { @MainActor in
-            let message = await viewModel.headerUnsubscribeConfirmationMessage()
-            guard navigationCoordinator.isCurrent(source) else { return }
-            unsubscribeConfirmationMessage = message
-            showUnsubscribeConfirm = true
+            do {
+              let confirmation = try await viewModel.prepareHeaderUnsubscribeConfirmation()
+              guard navigationCoordinator.isCurrent(source) else { return }
+              if let confirmation {
+                unsubscribeConfirmation = confirmation
+                showUnsubscribeConfirm = true
+              } else {
+                notificationManager.show(
+                  message: "无法确认是哪条订阅，请到订阅列表里取消。",
+                  type: .error
+                )
+              }
+            } catch is CancellationError {
+              return
+            } catch {
+              guard navigationCoordinator.isCurrent(source) else { return }
+              notificationManager.show(
+                message: SubscriptionCancelConfirmation.failureMessage,
+                type: .error
+              )
+            }
           }
         },
         startSubscribe: {
@@ -951,6 +1123,25 @@ struct MediaDetailView: View {
       )
     }
   }
+
+  private static let entryCaptionLineHeight = UIFont.preferredFont(forTextStyle: .caption1).lineHeight
+
+  /// 入口加载期的就地占位行：与真实 caption 文本等高，细而淡。
+  private func placeholderLine(width: CGFloat) -> some View {
+    Text("\u{00A0}")
+      .font(.caption)
+      .frame(width: width)
+      .overlay {
+        RoundedRectangle(cornerRadius: 3)
+          .fill(Color.white.opacity(0.18))
+          .frame(height: Self.entryCaptionLineHeight * 0.4)
+      }
+      .accessibilityHidden(true)
+  }
+
+  /// 多行 caption 文本相比「单行 × 行数」多出的行距：占位两行需补 2pt 才等于真实两行文本高度，
+  /// 否则两行简介就绪后标题会被顶起约 2pt。
+  private static let entryCaptionInterlineSpacing: CGFloat = 2
 
   @ViewBuilder
   private func heroSection(scrollProxy: ScrollViewProxy) -> some View {
@@ -968,22 +1159,43 @@ struct MediaDetailView: View {
             .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 740, alignment: .leading)
+            .offset(y: entryTitleOffset)
+            .onAppear {
+              // 标题用移动进位，不淡入；Reduce Motion 时直接落位，不做轴位移动画。
+              guard isEntryLoading, presentationStyle == .standard, !reduceMotion else {
+                entryTitleOffset = 0
+                return
+              }
+              withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }
+            }
 
           // 第一行元数据组装见 `MediaMetadataText.primaryLine`：
           // 空串/畸形类型不再拼出悬空分隔符（F-038/F-043/F-046）。
           let metadataTexts1: [String] = MediaMetadataText.primaryLine(for: detail)
 
-          if !metadataTexts1.isEmpty {
+          if isEntryLoading {
+            placeholderLine(width: 320)
+              .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
+              .transition(.opacity)
+          } else if !metadataTexts1.isEmpty {
             Text(metadataTexts1.joined(separator: " · "))
               .font(.caption)
               .lineLimit(2)
               .foregroundColor(.primary)
               .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
               .frame(maxWidth: 740, alignment: .leading)
+              .transition(.opacity)
           }
 
           // Overview
-          if let overview = detail.overview, !overview.isEmpty {
+          if isEntryLoading {
+            VStack(alignment: .leading, spacing: Self.entryCaptionInterlineSpacing) {
+              placeholderLine(width: 720)
+              placeholderLine(width: 640)
+            }
+            .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
+            .transition(.opacity)
+          } else if let overview = detail.overview, !overview.isEmpty {
             let cleanedOverview =
               overview
               .components(separatedBy: .newlines)
@@ -996,18 +1208,24 @@ struct MediaDetailView: View {
               .frame(maxWidth: 740, alignment: .leading)
               .foregroundColor(.secondary)
               .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
+              .transition(.opacity)
           }
 
           // Detailed metadata line
           // 第二行元数据组装见 `MediaMetadataText.secondaryLine`（同上）。
           let metadataTexts2: [String] = MediaMetadataText.secondaryLine(for: detail)
 
-          if !metadataTexts2.isEmpty {
+          if isEntryLoading {
+            placeholderLine(width: 280)
+              .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
+              .transition(.opacity)
+          } else if !metadataTexts2.isEmpty {
             Text(metadataTexts2.joined(separator: " · "))
               .font(.caption)
               .lineLimit(2)
               .foregroundColor(.primary)
               .frame(maxWidth: 740, alignment: .leading)
+              .transition(.opacity)
           }
 
           // Action Buttons — Apple TV style: primary + icon buttons
@@ -1016,32 +1234,142 @@ struct MediaDetailView: View {
               .font(.caption).foregroundStyle(.secondary)
           }
           HStack(spacing: 20) {
-            if let playbackTarget = viewModel.inAppPlaybackTarget {
+            if canSubscribeMedia {
+              let isDirect = detail.canDirectlySubscribe
+              // 进详情页就视为等分季信息：分季请求要等完整详情返回才发起，
+              // 不能等它发起才显示加载，否则按钮先短后长再短地闪。
+              // 二次加载（重试/换剧集组）时 isSeasonDataLoaded 已为 true，仍要靠 isSeasonLoading 显示转圈；
+              // 详情本身加载失败时分季请求永不发起，不能永久转圈。
+              let seasonWaiting =
+                !isDirect
+                && (isSeasonLoading
+                  || (!preloadTask.isSeasonDataLoaded && !hasSeasonLoadError
+                    && !preloadTask.isDetailFailed))
+              // 文案保持「订阅」「分季订阅」不变，只把前导图标换成加载指示，按钮宽度不随加载变化。
+              // 详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），此时不转圈，避免和失败提示同时出现。
+              let showsLoadingIcon =
+                (isDirect ? isEntryLoading : seasonWaiting) && !preloadTask.isDetailFailed
+              // Primary subscribe button — 使用预加载的订阅状态
               Button(action: {
-                apiService.sessionScope.playbackCoordinator.play(playbackTarget)
+                guard allowsRequests, !isEntryLoading else { return }
+                guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
+                if detail.canDirectlySubscribe {
+                  handleHeaderSubscribe()
+                } else if detail.type == "电视剧" {
+                  isContentFocused = true
+                }
               }) {
-                Label("播放", systemImage: AppSymbol.play)
+                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
+                  Label {
+                    Text("取消订阅中")
+                  } icon: {
+                    LoadingIcon(systemImage: AppSymbol.subscribed, isLoading: true)
+                  }
                   .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
+                } else {
+                  let label = Self.headerSubscribeButtonTitle(isSubscribed: isSubscribed, detail: detail)
+                  let icon =
+                    isDirect
+                    ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
+                    : (
+                      hasSeasonLoadError
+                        ? AppSymbol.warning
+                        : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
+                    )
+
+                  Label {
+                    Text(label)
+                  } icon: {
+                    LoadingIcon(systemImage: icon, isLoading: showsLoadingIcon)
+                  }
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
+                }
               }
-              .focused($focusedButton, equals: .play)
+              .focused($focusedButton, equals: .subscribe)
+              .transition(.opacity)
+              // 文案固定，加载中、加载失败、没有分季只换前导图标，状态靠无障碍值告诉 VoiceOver。
+              .accessibilityValue(
+                isEntryStillLoading || showsLoadingIcon
+                  ? "加载中"
+                  : (!isDirect && hasSeasonLoadError
+                    ? "分季信息加载失败" : (!isDirect && isSeasonInformationUnavailable ? "暂无分季信息" : ""))
+              )
+              // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
+              // 点击已由 action 内 guard 忽略。
             }
 
-            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
+            if let playbackTarget = viewModel.inAppPlaybackTarget {
+              // 进度读完前只有播放图标；读完一次写上：剧有集号时写集号，看到一半时前面加已播放进度条；
+              // 电影看到一半是进度条和「继续播放」；其余是「播放」。
+              let label = heroPlayLabel
+              Button(action: {
+                guard allowsRequests, !isEntryLoading else { return }
+                playbackFocusHandoff.play(
+                  returningTo: .detailHeader(routeID: routeID),
+                  on: apiService.sessionScope.playbackCoordinator
+                ) {
+                  viewModel.playFromHeader(playbackTarget)
+                }
+              }) {
+                HStack(spacing: 14) {
+                  Image(systemName: AppSymbol.play)
+                  if let progress = label?.progress {
+                    PlaybackProgressBar(fraction: progress)
+                  }
+                  if let title = label?.title {
+                    Text(title)
+                  }
+                }
+                .foregroundStyle(.primary)
+                .opacity(isEntryLoading ? 0.35 : 1)
+              }
+              .accessibilityLabel(label?.accessibilityLabel ?? "播放")
+              .focused($focusedButton, equals: .play)
+              .transition(.opacity)
+              .accessibilityValue(isEntryStillLoading || label == nil ? "加载中" : "")
+            }
+
+            // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId / 映射目标
             if canJumpToTMDB {
-              let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
+              let preloadedTarget = preloadTask.tmdbTarget
+              let targetTmdbId =
+                MediaIdentifier.validNumericIdentifier(preloadedTarget?.tmdb_id)
+                ?? MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id)
               let isButtonLoading =
-                targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
+                targetTmdbId == nil
+                && (!preloadTask.isTmdbRecognitionFinished || preloadTask.isOpenedDetailTMDBPending)
 
               Button(action: {
-                // 预识别期间沿用原有禁用门禁；其余重复 Select 只在动作入口被忽略。
-                guard !isButtonLoading, !isTMDBJumpInFlight else { return }
-                isTMDBJumpInFlight = true
+                guard allowsRequests, !isEntryLoading, tmdbJumpTask == nil else { return }
                 let navigationSource = navigationCoordinator.sourceToken()
-                Task {
-                  defer { isTMDBJumpInFlight = false }
-                  if let target = await mediaActionHandler.getTMDBJumpTarget(
-                    for: viewModel.detail, targetTmdbId: targetTmdbId)
+                let waitsForIdentification = isButtonLoading
+                tmdbJumpTask = Task {
+                  defer { tmdbJumpTask = nil }
+                  // 识别还没结束时等它的结果，不另起一次；按钮一直在转圈。
+                  if waitsForIdentification { await preloadTask.waitForTMDBIdentification() }
+                  guard !Task.isCancelled else { return }
+                  let target: MediaInfo?
+                  if let preloadedTarget = preloadTask.tmdbTarget {
+                    target = preloadedTarget
+                  } else if waitsForIdentification,
+                    preloadTask.isTMDBUnrecognized(for: viewModel.detail)
                   {
+                    // 刚等完的识别已按当前片名、年份和类型确认没有匹配，直接提示。
+                    mediaActionHandler.showTMDBNotFoundAlert = true
+                    target = nil
+                  } else {
+                    // 刚等完的识别已查过映射，这里只按名称识别，不再等一次按需查找。
+                    target = await mediaActionHandler.getTMDBJumpTarget(
+                      for: viewModel.detail,
+                      targetTmdbId: MediaIdentifier.validNumericIdentifier(preloadTask.tmdbId)
+                        ?? MediaIdentifier.validNumericIdentifier(viewModel.detail.tmdb_id),
+                      useSharedMapping: !waitsForIdentification
+                    )
+                  }
+                  if let target {
                     navigationCoordinator.push(
                       target,
                       loadingPosterURL: viewModel.detail.imageURLs.poster,
@@ -1053,133 +1381,151 @@ struct MediaDetailView: View {
                 Label(
                   title: { Text("TMDB") },
                   icon: {
-                    if isButtonLoading {
-                      ProgressView().controlSize(.small)
-                    } else {
-                      Image(systemName: AppSymbol.link)
-                    }
+                    LoadingIcon(systemImage: AppSymbol.link, isLoading: isButtonLoading)
                   }
                 )
                 .foregroundColor(.primary)
+                .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .disabled(isButtonLoading)
+              .transition(.opacity)
+              .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
             }
 
-            if canSubscribeMedia {
-              // Primary subscribe button — 使用预加载的订阅状态
-              Button(action: {
-                guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
-                if detail.canDirectlySubscribe {
-                  handleHeaderSubscribe()
-                } else if detail.type == "电视剧" {
-                  isContentFocused = true
-                }
-              }) {
-                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
-                  HStack(spacing: 8) {
-                    ProgressView()
-                    Text("取消订阅中")
+            if let libraryAppURL = viewModel.libraryAppURL {
+              // 已入库：打开媒体服务器 App（与媒体库页「跳转媒体库」同一个深链和图标）。
+              Button {
+                guard allowsRequests, !isEntryLoading else { return }
+                openURL(libraryAppURL) { accepted in
+                  if !accepted {
+                    notificationManager.show(message: MediaLibraryAppLink.openFailureMessage, type: .error)
                   }
-                  .foregroundColor(.primary)
-                } else {
-                  let isDirect = detail.canDirectlySubscribe
-                  let label = Self.headerSubscribeButtonTitle(
-                    isSubscribed: isSubscribed,
-                    detail: detail,
-                    isSeasonInformationUnavailable: isSeasonInformationUnavailable,
-                    hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: isSeasonLoading,
-                    isInLibrary: viewModel.isInLibrary
-                  )
-                  let icon =
-                    isDirect
-                    ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
-                    : (
-                      isSeasonLoading
-                        ? AppSymbol.loading
-                        : (
-                          hasSeasonLoadError
-                            ? AppSymbol.warning
-                            : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
-                        )
-                    )
-
-                  Label(label, systemImage: icon)
-                    .foregroundColor(.primary)
                 }
+              } label: {
+                Image(systemName: AppSymbol.openInLibrary)
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .focused($focusedButton, equals: .subscribe)
-              // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
-              // 点击已由 action 内 guard 忽略。
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
+              .accessibilityLabel("跳转媒体库")
+              .transition(.opacity)
             }
 
             if canSearchResources {
-              // Search resources icon button
-              Button(action: {
-                let request = mediaActionHandler.searchResourcesTarget(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .resource)
-                )
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索资源", systemImage: AppSymbol.search)
-                  .foregroundColor(.primary)
-              }
-              .focused($focusedButton, equals: .search)
-            }
-
-            if canSearchSubtitles {
-              Button(action: {
-                guard let request = mediaActionHandler.subtitleSearchRequest(
-                  for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString(for: .subtitle)
-                ) else { return }
-                navigateFromSecondPage(to: request)
-              }) {
-                Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
-                  .foregroundColor(.primary)
-              }
-              .focused($focusedButton, equals: .subtitleSearch)
-            }
-
-            // Site selection button
-            if canSearchResources && shouldShowSiteFilter {
-              SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
-                HStack(spacing: 8) {
-                  Image(systemName: AppSymbol.site)
-                  Text(viewModel.siteFilter.siteButtonLabel)
+              // 搜索资源、搜索字幕收进一个圆形按钮的菜单；选哪种搜索后在二级菜单里选站点再搜，不用来回切换。
+              Menu {
+                Group {
+                  Menu {
+                    Button {
+                      guard allowsRequests, !isEntryLoading else { return }
+                      let request = mediaActionHandler.searchResourcesTarget(
+                        for: viewModel.detail,
+                        sites: viewModel.siteFilter.sitesString(for: .resource)
+                      )
+                      navigateFromSecondPage(to: request)
+                    } label: {
+                      Label("开始搜索", systemImage: AppSymbol.search)
+                    }
+                    // 多选：点站点不收起菜单，勾好再按「开始搜索」。
+                    SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                      .menuActionDismissBehavior(.disabled)
+                  } label: {
+                    Label {
+                      Text("搜索资源")
+                      Text(viewModel.siteFilter.siteButtonLabel)
+                    } icon: {
+                      Image(systemName: AppSymbol.search)
+                    }
+                  }
+                  if canSearchSubtitles {
+                    Menu {
+                      Button {
+                        guard allowsRequests, !isEntryLoading else { return }
+                        guard let request = mediaActionHandler.subtitleSearchRequest(
+                          for: viewModel.detail,
+                          sites: viewModel.siteFilter.sitesString(for: .subtitle)
+                        ) else { return }
+                        navigateFromSecondPage(to: request)
+                      } label: {
+                        Label("开始搜索", systemImage: AppSymbol.search)
+                      }
+                      SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)
+                        .menuActionDismissBehavior(.disabled)
+                    } label: {
+                      Label {
+                        Text("搜索字幕")
+                        Text(viewModel.siteFilter.siteButtonLabel)
+                      } icon: {
+                        Image(systemName: AppSymbol.searchSubtitles)
+                      }
+                    }
+                  }
                 }
-                .font(.caption)
-                .foregroundColor(.primary)
+                // 加载期按钮仍可聚焦（与其他头部按钮一致），菜单项不可用。
+                .disabled(!allowsRequests || isEntryLoading)
+              } label: {
+                Image(systemName: AppSymbol.searchMenu)
+                  .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
               }
-              .controlSize(.small)
-              .focused($focusedButton, equals: .sites)
-              .transition(.move(edge: .leading).combined(with: .opacity))
+              .menuStyle(.button)
+              // 只有图标的按钮用正圆，系统默认是胶囊。
+              .buttonBorderShape(.circle)
+              .focused($focusedButton, equals: .search)
+              .transition(.opacity)
+              .accessibilityLabel("搜索")
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
 
             // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
             if shouldShowOtherInfo {
               Button(action: {
+                guard allowsRequests, !isEntryLoading else { return }
                 isContentFocused = true
               }) {
                 Label("其他信息", systemImage: AppSymbol.details)
                   .foregroundColor(.primary)
+                  .opacity(isEntryLoading ? 0.35 : 1)
               }
               .focused($focusedButton, equals: .otherInfo)
+              .transition(.opacity)
+              .accessibilityValue(isEntryStillLoading ? "加载中" : "")
             }
           }
           // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
           .lineLimit(1)
-          .animation(.snappy, value: shouldShowSiteFilter)
-          .disabled(!allowsRequests)
+          .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: heroButtonsAnimationKey)
+          .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
+          .animation(.easeInOut(duration: 0.3), value: preloadTask.fullDetail != nil)
+          .disabled(!allowsRequests && presentationStyle == .standard)
         }
         .padding(.bottom, 40)
         .frame(maxWidth: UIScreen.main.bounds.width * 0.62, alignment: .leading)
+        .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
 
         Spacer()
 
         // Right Side: Cast & Director — Apple TV style
         VStack(alignment: .leading, spacing: 12) {
+          if isEntryLoading {
+            VStack(alignment: .leading, spacing: 12) {
+              placeholderLine(width: 360)
+              placeholderLine(width: 300)
+              placeholderLine(width: 320)
+            }
+            .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
+            if reduceMotion && !preloadTask.isDetailFailed {
+              // Reduce Motion 不扫高光：用静态文字传达加载，避免静止占位被读作卡死。
+              Text("正在加载…")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+            if let entryStatusMessage {
+              Text(entryStatusMessage)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+          } else {
           let topActors = viewModel.heroTopActors
           let topStaff = viewModel.heroTopStaff
 
@@ -1202,7 +1548,9 @@ struct MediaDetailView: View {
                 .lineLimit(2)
             }
           }
+          }
         }
+        .animation(.easeInOut(duration: 0.3), value: isEntryLoading)
         .padding(.bottom, 40)
         .frame(width: 480, alignment: .leading)
       }
@@ -1248,12 +1596,8 @@ struct MediaDetailView: View {
           )
         } else {
           // 分季信息尚在加载中
-          HStack {
-            Spacer()
-            ProgressView()
-              .padding()
-            Spacer()
-          }
+          FirstLoadIndicator(minHeight: nil)
+            .padding()
         }
       }
       .id("seasonSubscriptionSection")
@@ -1281,7 +1625,8 @@ struct MediaDetailView: View {
                   get: { creditKind },
                   set: { if let option = $0 { selectCreditKind(option) } }
                 ),
-                title: \.title
+                title: \.title,
+                liftsWithFocusedCard: true
               )
               .font(.callout)
               .padding(.leading, 81)
@@ -1290,6 +1635,7 @@ struct MediaDetailView: View {
                 .font(.callout)
                 .bold()
                 .foregroundStyle(.secondary)
+                .focusLiftHeaderPart()
                 .padding(.leading, 89)
             }
           }
@@ -1346,6 +1692,7 @@ struct MediaDetailView: View {
         // 否则实心胶囊会在滑动途中挡住头像；纯文字标题本来就画在卡片下面，效果与之一致。
         .zIndex(2)
       }
+      .focusLiftRow(cardImageSize: PersonCard.imageSize)
     }
   }
 
@@ -1377,7 +1724,7 @@ struct MediaDetailView: View {
       }
     }
     if viewModel.actorsPaginator.isLoadingMore {
-      posterCenteredLoadingIndicator(height: 315)
+      RowLoadingTail(height: 315)
     }
   }
 
@@ -1451,10 +1798,15 @@ struct MediaDetailView: View {
             LazyHStack(spacing: 40) {
               if paginator.items.isEmpty {
                 // 加载中 / 失败 / 为空共用同一个状态卡，状态变化时焦点不丢。
-                let status = doubanStatus(for: viewModel.doubanRowState(for: kind))
-                DoubanDiscussionStatusCard(kind: kind, status: status)
+                let status = doubanStatus(kind: kind, state: viewModel.doubanRowState(for: kind))
+                ShelfStatusCard(
+                  status: status,
+                  size: CGSize(
+                    width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight),
+                  emptyIcon: AppSymbol.noComments, failedEmphasis: true, focusStyle: .button
+                )
                   .focused($focusedDiscussionId, equals: Self.doubanStatusFocusID)
-                if status == .failed {
+                if case .failed = status {
                   Button {
                     // 先把焦点交给状态卡：按下后按钮随即消失，焦点不能跟着掉出本区块。
                     focusedDiscussionId = Self.doubanStatusFocusID
@@ -1473,7 +1825,7 @@ struct MediaDetailView: View {
                   .focused($focusedDiscussionId, equals: entry.id)
                 }
                 if paginator.isLoadingMore {
-                  posterCenteredLoadingIndicator(height: DoubanDiscussionCard.cardHeight)
+                  RowLoadingTail(height: DoubanDiscussionCard.cardHeight)
                 } else if paginator.hasError {
                   // 加载更多失败：连续失败到上限后移动焦点不会再请求，这里给一个手动恢复入口。
                   Button {
@@ -1517,12 +1869,12 @@ struct MediaDetailView: View {
   }
 
   private func doubanStatus(
-    for state: DoubanDiscussionRowState
-  ) -> DoubanDiscussionStatusCard.Status {
+    kind: DoubanDiscussionEntry.Kind, state: DoubanDiscussionRowState
+  ) -> ShelfStatusCard.Status {
     switch state {
-    case .failed: return .failed
-    case .empty: return .empty
-    case .idle, .loading, .ready: return .loading
+    case .failed: return .failed(kind.failureText)
+    case .empty: return .empty(kind.emptyText)
+    case .idle, .loading, .ready: return .loading("正在加载\(kind.title)…")
     }
   }
 
@@ -1535,6 +1887,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1565,7 +1918,7 @@ struct MediaDetailView: View {
               .mediaContextMenu(item: media)
             }
             if viewModel.recommendPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(height: 384)
+              RowLoadingTail(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1601,6 +1954,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 
@@ -1613,6 +1967,7 @@ struct MediaDetailView: View {
             .font(.callout)
             .bold()
             .foregroundStyle(.secondary)
+            .focusLiftHeaderPart()
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1643,7 +1998,7 @@ struct MediaDetailView: View {
               .mediaContextMenu(item: media)
             }
             if viewModel.similarPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(height: 384)
+              RowLoadingTail(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1679,15 +2034,7 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
-    }
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
+      .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
     }
   }
 }

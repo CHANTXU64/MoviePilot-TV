@@ -104,10 +104,15 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
 
   static let current = BackendCompatibilityRegistry(
     versions: [
+      "v2.15.6",
       "v3.0.4", "v3.0.5", "v3.0.7", "v3.0.10", "v3.0.10-1", "v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1",
       "v3.1.4", "v3.1.6", "v3.1.7", "v3.1.8", "v3.1.9", "v3.2.0", "v3.2.1", "v3.2.2", "v3.2.3",
       "v3.2.4",
       "v3.2.5",
+      "v3.2.6",
+      "v3.2.7",
+      "v3.2.8",
+      "v3.2.9",
     ].map { MoviePilotVersion($0)! }
   )
 }

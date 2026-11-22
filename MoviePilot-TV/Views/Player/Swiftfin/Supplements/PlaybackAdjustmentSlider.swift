@@ -10,6 +10,7 @@
 //
 // 修改：删去 iOS 分支（系统 Slider）。
 // 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// 按钮和数值底换成播放界面统一的玻璃样式（`PlayerGlass.swift`）。
 //
 
 import SwiftUI
@@ -59,7 +60,7 @@ struct PlaybackAdjustmentSlider: View {
             } label: {
                 Text(preset == resetValue ? L10n.reset : formatValue(preset))
                     .monospacedDigit()
-                    .frame(minWidth: viewLayout.isLarge ? 104 : nil, minHeight: viewLayout.isLarge ? 48 : nil)
+                    .frame(minWidth: viewLayout.isLarge ? 80 : nil)
             }
             .fixedSize()
         }
@@ -74,14 +75,11 @@ struct PlaybackAdjustmentSlider: View {
                 .animation(.easeInOut(duration: 0.15), value: value)
                 .padding(.horizontal, viewLayout.isLarge ? 24 : 16)
                 .padding(.vertical, viewLayout.isLarge ? 12 : 8)
-                .backport
-                .glassEffect(.regular.interactive(false), in: .capsule)
+                .background { PlayerGlassBackground(shape: Capsule()) }
 
             HStack(spacing: viewLayout.isLarge ? 32 : 12) {
                 Button { sliderValue.wrappedValue = value - step } label: {
                     Label(L10n.decrease, systemImage: AppSymbol.decrease)
-                        .labelStyle(.iconOnly)
-                        .frame(width: viewLayout.isLarge ? 48 : 24, height: viewLayout.isLarge ? 48 : 34)
                 }
                 .disabled(value <= range.lowerBound)
 
@@ -115,12 +113,10 @@ struct PlaybackAdjustmentSlider: View {
 
                 Button { sliderValue.wrappedValue = value + step } label: {
                     Label(L10n.increase, systemImage: AppSymbol.increase)
-                        .labelStyle(.iconOnly)
-                        .frame(width: viewLayout.isLarge ? 48 : 24, height: viewLayout.isLarge ? 48 : 34)
                 }
                 .disabled(value >= range.upperBound)
             }
-            .buttonStyle(.capsule)
+            .buttonStyle(.playerGlassCircle)
 
             FlowLayout(
                 alignment: .center,
@@ -132,10 +128,9 @@ struct PlaybackAdjustmentSlider: View {
             }
             .frame(maxWidth: .infinity)
             .focusSection()
-            .buttonStyle(.capsule)
+            .buttonStyle(.playerGlass)
             .padding(.top, viewLayout.isLarge ? 8 : 4)
         }
-        .controlSize(viewLayout.isLarge ? .large : .regular)
         .accessibilityElement(children: .contain)
     }
 }

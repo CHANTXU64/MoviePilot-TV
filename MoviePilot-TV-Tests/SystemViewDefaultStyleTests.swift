@@ -397,18 +397,23 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
-    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared {"))
+    XCTAssertTrue(source.contains("if let preferredHeaderFocus {"))
     XCTAssertFalse(source.contains("isFocusEnabled"))
     XCTAssertFalse(source.contains("requestPreferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
     XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
-    XCTAssertTrue(source.contains("case play, subscribe, search, subtitleSearch, sites, otherInfo"))
+    XCTAssertTrue(source.contains("case play, subscribe, search, otherInfo"))
     // 播放按钮只在可应用内播放时出现，焦点目标随之存在。
     XCTAssertTrue(source.contains("if let playbackTarget = viewModel.inAppPlaybackTarget"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
-    XCTAssertTrue(containerSource.contains(".allowsHitTesting(!isReady)"))
-    XCTAssertFalse(containerSource.contains(".allowsHitTesting(isReady)"))
+    // 渐进渲染：加载期头部按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
+    // 但 action 门禁忽略按下；只有第二页内容用 disabled 挡焦点。
+    XCTAssertTrue(source.contains("guard allowsRequests, !isEntryLoading else { return }"))
+    XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading)").count - 1, 1)
+    XCTAssertTrue(containerSource.contains("isEntryLoading: !isReady"))
+    XCTAssertFalse(containerSource.contains(".allowsHitTesting(!isReady)"))
     XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
     XCTAssertFalse(containerSource.contains(".focusable(!isReady)"))
     XCTAssertFalse(containerSource.contains(".disabled(!isReady)"))
@@ -439,7 +444,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(source.contains("@EnvironmentObject private var notificationManager: NotificationManager"))
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
-    XCTAssertTrue(source.contains("ProgressView()"))
+    XCTAssertTrue(
+      source.contains("LoadingIcon(systemImage: AppSymbol.account, isLoading: viewModel.isLoading)"))
     XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
     XCTAssertTrue(source.contains("guard !viewModel.isLoading else { return }"))
     XCTAssertFalse(
@@ -456,7 +462,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testHomeMediaHeaderPickerRowIsFocusSection() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
     let start = try XCTUnwrap(source.range(of: "private struct MediaSectionView"))
-    let end = try XCTUnwrap(source.range(of: "private struct SubscribeSectionView", range: start.upperBound..<source.endIndex))
+    let end = try XCTUnwrap(source.range(of: "private struct MediaServerSearchMenuItems", range: start.upperBound..<source.endIndex))
     let mediaSection = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
@@ -470,14 +476,16 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   @MainActor
   func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
-    let homeSource = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let subscriptionsSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let failureMessage = SubscriptionCancelConfirmation.failureMessage
 
     XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
-    XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
-    XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
-    XCTAssertTrue(detailSource.contains("guard await viewModel.cancelSubscription() else"))
+    XCTAssertTrue(subscriptionsSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
+    XCTAssertTrue(subscriptionsSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+    XCTAssertTrue(
+      detailSource.contains("guard await viewModel.cancelSubscription(confirmation: confirmation) else")
+    )
     XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
   }
 
@@ -504,17 +512,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertGreaterThan(checked, 50)
   }
 
-  /// AppSymbol 里每个图标名只出现一次，并且在当前系统能取到图标。
-  /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
-  func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
+  /// AppSymbol 里每个图标名在当前系统都能取到图标。不同意思可以共用一个图标，这里不检查重复。
+  func testAppSymbolNamesAreResolvableInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
     let names = source.matches(of: #/static let (\w+) = "([^"]+)"/#)
       .map { (constant: String($0.1), symbol: String($0.2)) }
     XCTAssertGreaterThan(names.count, 50)
-
-    let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
-      .mapValues { $0.map(\.constant) }
-    XCTAssertEqual(duplicates, [:], "同一个图标名写了多次，同义请写成别名，不同意思请换图标。")
 
     for name in names {
       XCTAssertNotNil(UIImage(systemName: name.symbol), "AppSymbol.\(name.constant)（\(name.symbol)）取不到图标。")
@@ -781,10 +784,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
 
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 315)"))
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 315)"))
+    XCTAssertTrue(detailSource.contains("RowLoadingTail(height: 315)"))
+    XCTAssertTrue(detailSource.contains("RowLoadingTail(height: 384)"))
+    XCTAssertTrue(searchSource.contains("RowLoadingTail(height: 384)"))
+    XCTAssertTrue(searchSource.contains("RowLoadingTail(height: 315)"))
   }
 
   func testSeasonLoadFailureUsesRetryAndGlobalNotification() throws {
@@ -845,37 +848,86 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
   }
 
-  func testMediaDetailLoadingPosterReleasesAfterFadeCompletes() throws {
-    let source = try Self.source(
-      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+  func testLoadingCoverReadinessRequiresFullDetailAndFirstRow() {
+    XCTAssertFalse(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: false, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: true
+      )
     )
+    XCTAssertFalse(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: false
+      )
+    )
+    XCTAssertTrue(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: false,
+        detailReady: true, contentReady: true
+      )
+    )
+  }
 
+  func testLoadingCoverPreloadedSkipsFirstRowAndDirectWaitsForAppliedDetail() {
+    // 预载命中：有完整详情即就绪，不等首行内容，直出真实页。
     XCTAssertTrue(
-      source.contains(
-        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
-      )
-    )
-    XCTAssertTrue(
-      source.contains(
-        "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
-      )
-    )
-    XCTAssertTrue(
-      source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
-    )
-    XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
-    XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
-    XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
-    XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
-    XCTAssertFalse(
-      containsTrimmedLineSequence(
-        source,
-        ["if isReady {", "keepsLoadingPosterImage = false"]
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: true, wasPreloaded: true,
+        detailReady: false, contentReady: false
       )
     )
     XCTAssertFalse(
-      source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: false, wasPreloaded: false,
+        detailReady: false, contentReady: false
+      )
     )
+    XCTAssertTrue(
+      MediaDetailLoadingCover.isReady(
+        fullDetailLoaded: true, usesLoadingTransition: false, wasPreloaded: false,
+        detailReady: false, contentReady: true
+      )
+    )
+  }
+
+  func testDetailEntryProgressiveRenderWiringInSource() throws {
+    let view = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let container = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    // 渐进渲染：容器立即渲染详情页，完整详情未到先用卡片媒体；不再整块遮罩交叉淡入。
+    XCTAssertTrue(container.contains("detail: preloadTask.fullDetail ?? media"))
+    XCTAssertTrue(container.contains("isEntryLoading: !isReady"))
+    XCTAssertTrue(container.contains("MediaDetailLoadingCover.isReady("))
+    XCTAssertFalse(container.contains("MediaLoadingView("))
+    // 标题移动进位，不淡入。
+    XCTAssertTrue(view.contains("entryTitleOffset"))
+    XCTAssertTrue(view.contains("initialValue: isEntryLoading && presentationStyle == .standard ? 28 : 0"))
+    XCTAssertTrue(view.contains("guard isEntryLoading, presentationStyle == .standard, !reduceMotion else"))
+    XCTAssertTrue(view.contains("withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }"))
+    // 按钮加载期胶囊在、文案透明、action 门禁不可按（但仍可聚焦保返回导航）；就绪后文案淡入。
+    XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
+    XCTAssertTrue(view.contains("guard allowsRequests, !isEntryLoading else { return }"))
+    XCTAssertTrue(view.contains(".transition(.opacity)"))
+    XCTAssertTrue(view.contains("if viewModel.hasAppliedFullDetail {"))
+    XCTAssertTrue(view.contains(".disabled(isEntryLoading)"))
+    XCTAssertTrue(view.contains(".accessibilityHidden(isEntryLoading)"))
+    XCTAssertTrue(view.contains("guard allowsRequests, presentationStyle == .direct, let detail else { return }"))
+    XCTAssertTrue(view.contains("viewModel.applyFullDetail(detail)"))
+    // 可变槽位就地占位，行高对齐真实 caption；加载感用占位上的斜向高光扫过，不用加载图标。
+    XCTAssertTrue(view.contains("placeholderLine(width:"))
+    XCTAssertTrue(view.contains("UIFont.preferredFont(forTextStyle: .caption1).lineHeight"))
+    XCTAssertTrue(view.contains("PlaceholderShimmer"))
+    XCTAssertTrue(view.contains("TimelineView(.animation)"))
+    XCTAssertTrue(view.contains("timeline.date.timeIntervalSinceReferenceDate / 2.0"))
+    XCTAssertTrue(view.contains(".white.opacity(0.5)"))
+    XCTAssertTrue(view.contains(".fill(Color.white.opacity(0.18))"))
+    XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.22 : 0)"))
+    XCTAssertTrue(view.contains(".mask(content)"))
+    XCTAssertTrue(view.contains("accessibilityReduceMotion"))
+    // 不预填卡片简介/评分。
+    XCTAssertFalse(container.contains("media.overview"))
+    XCTAssertFalse(container.contains("media.vote_average"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

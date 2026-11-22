@@ -1,4 +1,3 @@
-import Kingfisher
 import SwiftUI
 
 nonisolated enum MediaDetailPresentationStyle: Hashable {
@@ -8,196 +7,25 @@ nonisolated enum MediaDetailPresentationStyle: Hashable {
   var usesLoadingTransition: Bool { self == .standard }
 }
 
-/// 媒体详情加载占位视图（共享组件）
-/// 用于 MediaDetailContainerView 的加载状态遮罩
-/// 海报缩放进入屏幕中央 + 标题/元数据/加载指示器
-private struct MediaLoadingView: View {
-  let title: String?
-  let posterUrl: URL?
-  let type: String?
-  let year: String?
-  let rating: Double?
-  let overview: String?
-  let statusMessage: String?
-  let isUnavailable: Bool
-  /// 如果数据已预加载完毕，跳过飞入动画
-  let isAlreadyLoaded: Bool
-  /// 加载结束后卸载透明遮罩内的解码海报，只保留稳定的视图结构。
-  let loadsImage: Bool
-
-  private final class LoadingPosterLifetime {
-    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
-    nonisolated deinit {}
-
-    var hasDisappeared = false
-    let releaseScheduler = PresentationReleaseScheduler()
-  }
-
-  @State private var loadingPosterLifetime = LoadingPosterLifetime()
-
-  /// 海报缩放比
-  @State private var posterScale: CGFloat = 1.0
-  /// 文本是否已显示
-  @State private var textAppeared = false
-  /// 防止重复触发动画
-  @State private var hasAnimated = false
-
-  /// 组合元数据文本（类型 · 年份）
-  private var metadataString: String {
-    var parts: [String] = []
-    if let type = type, !type.isEmpty { parts.append(type) }
-    if let year = year, !year.isEmpty { parts.append(year) }
-    return parts.joined(separator: " · ")
-  }
-
-  private var ratingString: String? {
-    guard let rating = rating, rating > 0 else { return nil }
-    return String(format: "%.1f", rating)
-  }
-
-  var body: some View {
-    ZStack {
-      Rectangle()
-        .fill(Color(white: 0.08))
-        .ignoresSafeArea()
-
-      VStack(spacing: 28) {
-        Spacer()
-
-        // 海报图片
-        ZStack {
-          RoundedRectangle(cornerRadius: 20)
-            .fill(Color(white: 0.12))
-            .overlay(
-              Image(systemName: AppSymbol.movie)
-                .font(.title)
-                .foregroundStyle(.gray.opacity(0.5))
-            )
-
-          PageManagedImage(
-            url: posterUrl,
-            processor: MediaDetailLoadingPoster.processor,
-            isEnabled: loadsImage,
-            role: .activePage,
-            participatesInPageLifecycle: true,
-            skipsMemoryCache: true,
-            loadsDiskFileSynchronously: true,
-            fadeDuration: 0,
-            onSuccess: {
-              scheduleLoadingPosterDiscardIfAbandoned()
-            }
-          )
-        }
-        .frame(
-          width: MediaDetailLoadingPoster.size.width,
-          height: MediaDetailLoadingPoster.size.height
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.8), radius: 30, y: 15)
-        .scaleEffect(posterScale)
-
-        // 文本信息区
-        VStack(spacing: 12) {
-          HStack(spacing: 12) {
-            if !isUnavailable {
-              ProgressView()
-                .tint(.primary)
-            }
-            if let title, !title.isEmpty {
-              Text(title)
-                .font(.title3.bold())
-                .foregroundColor(.primary)
-            }
-          }
-          if let statusMessage {
-            Text(statusMessage)
-              .font(.caption)
-          }
-
-          HStack(spacing: 8) {
-            if !metadataString.isEmpty {
-              Text(metadataString)
-            }
-
-            if !metadataString.isEmpty && ratingString != nil {
-              Text("·")
-            }
-
-            if let ratingString {
-              Image(systemName: AppSymbol.rating)
-                .foregroundStyle(.yellow)
-              Text(ratingString)
-            }
-          }
-          .font(.caption)
-          .opacity((metadataString.isEmpty && ratingString == nil) ? 0 : 1)
-
-          if let overview = overview, !overview.isEmpty {
-            Text(overview)
-              .font(.caption)
-          }
-        }
-        .foregroundColor(.secondary)
-        .lineLimit(1)
-        .truncationMode(.tail)
-        .frame(width: 1500, alignment: .center)
-        .transaction { transaction in
-          transaction.disablesAnimations = true
-        }
-        .opacity(textAppeared ? 1.0 : 0)
-        .offset(y: textAppeared ? 0 : 20)
-
-        Spacer()
-      }
-    }
-    .onAppear {
-      loadingPosterLifetime.releaseScheduler.cancel()
-      loadingPosterLifetime.hasDisappeared = false
-      guard !hasAnimated else { return }
-      hasAnimated = true
-
-      // 数据已预加载完毕，跳过所有动画
-      guard !isAlreadyLoaded else {
-        textAppeared = true
-        return
-      }
-
-      var t = Transaction()
-      t.disablesAnimations = true
-      withTransaction(t) {
-        posterScale = 0.6
-      }
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-        withAnimation(.spring(duration: 0.6, bounce: 0.15)) {
-          posterScale = 1.0
-        }
-        withAnimation(.easeOut(duration: 0.5).delay(0.3)) {
-          textAppeared = true
-        }
-      }
-    }
-    .onDisappear {
-      loadingPosterLifetime.hasDisappeared = true
-      scheduleLoadingPosterDiscardIfAbandoned()
-    }
-  }
-
-  private func scheduleLoadingPosterDiscardIfAbandoned() {
-    guard loadingPosterLifetime.hasDisappeared, let posterUrl else { return }
-    guard !loadingPosterLifetime.releaseScheduler.isPending else { return }
-    let lifetime = loadingPosterLifetime
-    let cacheKey = APIService.shared.imageSource(for: posterUrl).cacheKey
-    lifetime.releaseScheduler.schedule {
-      guard lifetime.hasDisappeared else { return }
-      MediaDetailLoadingPoster.removeFromMemory(for: posterUrl, cacheKey: cacheKey)
-    }
+/// 详情入口就绪判定。抽成纯函数以便直接验证「有完整详情且首行就绪才揭示」。
+nonisolated enum MediaDetailLoadingCover {
+  static func isReady(
+    fullDetailLoaded: Bool,
+    usesLoadingTransition: Bool,
+    wasPreloaded: Bool,
+    detailReady: Bool,
+    contentReady: Bool
+  ) -> Bool {
+    guard fullDetailLoaded else { return false }
+    if !usesLoadingTransition { return contentReady }
+    return wasPreloaded || (detailReady && contentReady)
   }
 }
 
 /// 媒体详情的容器视图。
-/// 负责从 MediaPreloader 获取预加载任务，管理加载状态，
-/// 在 fullDetail 就绪后通过 applyFullDetail 刷新 MediaDetailView。
-///
+/// 入口采用渐进渲染：立即渲染 MediaDetailView（完整详情未到先用卡片媒体），
+/// 标题 move-in、固定按钮胶囊在但文案透明不可按、可变槽位就地占位；就绪后仅可变内容淡入。
+/// 不再用整块交叉淡入的遮罩盖住文字。
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   let routeID: UUID
@@ -238,22 +66,26 @@ struct MediaDetailContainerView: View {
     for sourceMedia: MediaInfo,
     fullDetail: MediaInfo?,
     recognizedTmdbId: Int?,
+    jumpTarget: MediaInfo? = nil,
     isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
   ) -> MediaInfo? {
     guard isEnabled,
-      sourceMedia.tmdb_id == nil,
+      MediaIdentifier.validNumericIdentifier(sourceMedia.tmdb_id) == nil,
       sourceMedia.canJumpToTMDB,
-      let fullDetail,
-      let tmdbId = recognizedTmdbId ?? fullDetail.tmdb_id
+      let fullDetail
     else {
       return nil
     }
 
+    if let jumpTarget { return jumpTarget }
+    guard let tmdbId =
+      MediaIdentifier.validNumericIdentifier(recognizedTmdbId)
+      ?? MediaIdentifier.validNumericIdentifier(fullDetail.tmdb_id)
+    else { return nil }
     return MediaActionHandler.tmdbJumpTarget(for: fullDetail, tmdbId: tmdbId)
   }
 
   var body: some View {
-    // 直接传入 preloadTask（非 Optional，无条件分支）
     MediaDetailContainerContent(
       media: media,
       preloadTask: preloadTask,
@@ -269,9 +101,7 @@ struct MediaDetailContainerView: View {
 
 /// 内部辅助视图：通过 @ObservedObject 监听 MediaPreloadTask 的 @Published 属性变化，驱动 UI 刷新
 private struct MediaDetailContainerContent: View {
-  /// 统一保留 1 秒，确保快速导航或转场中断时等待海报不会提前消失。
-  private static let loadingPosterReleaseDelay = PresentationTransitionRetention.duration
-
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   let media: MediaInfo
   @ObservedObject var preloadTask: MediaPreloadTask
   let routeID: UUID
@@ -284,13 +114,8 @@ private struct MediaDetailContainerContent: View {
   @State private var isContentReady = false
   /// 记录首次出现时数据是否已预加载完毕（在 init 中设置，确保第一帧就生效）
   @State private var wasPreloaded: Bool
-  /// 记录进入页面时由导航条目携带的加载海报，确保转场期间图片稳定。
+  /// 记录进入页面时由导航条目携带的加载海报，供详情页背景兜底使用。
   @State private var loadingPosterURL: URL?
-  /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
-  @State private var minTimeElapsed = false
-  /// Loading 层淡出完成前继续保留海报，避免动画刚开始底层图片就被清空。
-  @State private var keepsLoadingPosterImage: Bool
-  @State private var loadingPosterReleaseTask: Task<Void, Never>?
 
   init(
     media: MediaInfo,
@@ -309,90 +134,75 @@ private struct MediaDetailContainerContent: View {
     self.presentationStyle = presentationStyle
     self.allowsRequests = allowsRequests
     self.onInitialContentReady = onInitialContentReady
+    _isContentReady = State(
+      initialValue: presentationStyle == .direct && preloadTask.fullDetail != nil
+    )
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
       initialValue: transitionPosterURL ?? media.imageURLs.poster
     )
-    _keepsLoadingPosterImage = State(
-      initialValue: !preloadTask.isDetailReady
-    )
   }
 
-  /// 冷加载在完整详情的首行准备好后结束过渡。
+  /// 冷加载在完整详情的首行准备好后结束入口加载态。
   private var isReady: Bool {
-    guard preloadTask.fullDetail != nil else { return false }
-    return !presentationStyle.usesLoadingTransition || wasPreloaded
-      || (preloadTask.isDetailReady && isContentReady && minTimeElapsed)
+    MediaDetailLoadingCover.isReady(
+      fullDetailLoaded: preloadTask.fullDetail != nil,
+      usesLoadingTransition: presentationStyle.usesLoadingTransition,
+      wasPreloaded: wasPreloaded,
+      detailReady: preloadTask.isDetailReady,
+      contentReady: isContentReady
+    )
   }
 
   private var loadingStatusMessage: String? {
     if !allowsRequests { return "正在验证登录状态…" }
     if preloadTask.isDetailFailed {
       guard let reason = preloadTask.detailFailureReason else { return "无法加载详情，请返回后重试" }
-      return "无法加载详情（\(reason)），请返回后重试"
-    }
-    return preloadTask.detailRetryNumber.map { "重试加载中……（第 \($0) 次）" }
+      return "无法加载详情（\(reason)），请返回后重试" }
+    return preloadTask.detailRetryNumber.map { "正在重试（第 \($0) 次）…" }
   }
 
   private var tmdbPreloadTarget: MediaInfo? {
     MediaDetailContainerView.tmdbPreloadTarget(
       for: media,
       fullDetail: preloadTask.fullDetail,
-      recognizedTmdbId: preloadTask.tmdbId
+      recognizedTmdbId: preloadTask.tmdbId,
+      jumpTarget: preloadTask.tmdbTarget
     )
   }
 
-  var body: some View {
-    ZStack {
-      if let detail = preloadTask.fullDetail {
-        MediaDetailView(
-          detail: detail,
-          preloadTask: preloadTask,
-          isContentReady: $isContentReady,
-          routeID: routeID,
-          imageLifecycle: imageLifecycle,
-          loadingPosterURL: loadingPosterURL,
-          presentationStyle: presentationStyle,
-          allowsRequests: allowsRequests
-        )
-      }
+  private var detailForTMDBMatch: MediaInfo? {
+    guard allowsRequests, navigationCoordinator.isStackInteractive,
+      navigationCoordinator.topEntryID == routeID, preloadTask.isTmdbRecognitionFinished
+    else { return nil }
+    return preloadTask.fullDetail
+  }
 
-      if presentationStyle.usesLoadingTransition || !isReady {
-        MediaLoadingView(
-          title: media.cleanedTitle ?? media.title,
-          posterUrl: loadingPosterURL,
-          type: media.type,
-          year: media.year,
-          rating: media.vote_average,
-          overview: media.overview,
-          statusMessage: loadingStatusMessage,
-          isUnavailable: preloadTask.isDetailFailed,
-          isAlreadyLoaded: wasPreloaded,
-          loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
-        )
-        .opacity(isReady ? 0 : 1)
-        .allowsHitTesting(!isReady)
-        .accessibilityHidden(isReady)
-      }
-    }
-    .animation(presentationStyle.usesLoadingTransition ? .easeInOut(duration: 0.3) : nil, value: isReady)
-    .onChange(of: isReady) { _, isReady in
-      guard presentationStyle.usesLoadingTransition else { return }
-      updateLoadingPosterRetention(isReady: isReady)
-    }
-    .onAppear {
-      // 最短展示计时器（仅在需要加载时生效）
-      if presentationStyle.usesLoadingTransition, !wasPreloaded {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-          withAnimation(.easeInOut(duration: 0.3)) {
-            minTimeElapsed = true
-          }
-        }
-      }
-      reportInitialContentReady()
-    }
+  var body: some View {
+    // 渐进渲染：完整详情未到先用卡片媒体，真实内容首帧即可显示稳定部分，
+    // 不存在「已显示→闪成占位→闪回」的整块遮罩。
+    MediaDetailView(
+      detail: preloadTask.fullDetail ?? media,
+      libraryItemHint: media.libraryItemHint,
+      initialEpisodeSeason: MediaDetailEpisodeSeasons.navigationSeason(
+        for: preloadTask.fullDetail ?? media, routeMedia: media),
+      preloadTask: preloadTask,
+      isContentReady: $isContentReady,
+      routeID: routeID,
+      imageLifecycle: imageLifecycle,
+      loadingPosterURL: loadingPosterURL,
+      presentationStyle: presentationStyle,
+      allowsRequests: allowsRequests,
+      isEntryLoading: !isReady,
+      entryStatusMessage: loadingStatusMessage
+    )
+    .onAppear { reportInitialContentReady() }
     .onChange(of: preloadTask.fullDetail) { _, _ in reportInitialContentReady() }
+    .task(id: detailForTMDBMatch?.id) { [detail = detailForTMDBMatch] in
+      guard let detail else { return }
+      await preloadTask.matchTMDBForOpenedDetail(detail)
+    }
     .task(id: tmdbPreloadTarget?.id) {
       guard allowsRequests, let target = tmdbPreloadTarget else { return }
       APIService.shared.mediaPreloader.preloadAuxiliary(
@@ -405,23 +215,6 @@ private struct MediaDetailContainerContent: View {
   private func reportInitialContentReady() {
     if preloadTask.fullDetail != nil {
       onInitialContentReady()
-    }
-  }
-
-  private func updateLoadingPosterRetention(isReady: Bool) {
-    loadingPosterReleaseTask?.cancel()
-    loadingPosterReleaseTask = nil
-
-    guard isReady else {
-      keepsLoadingPosterImage = true
-      return
-    }
-
-    loadingPosterReleaseTask = Task { @MainActor in
-      try? await Task.sleep(for: Self.loadingPosterReleaseDelay)
-      guard !Task.isCancelled else { return }
-      keepsLoadingPosterImage = false
-      loadingPosterReleaseTask = nil
     }
   }
 }

@@ -20,10 +20,11 @@ nonisolated enum L10n {
     static let audio = "音频"
     static let audioBitrate = "音频码率"
     static let audioCodec = "音频编码"
+    static let audioDropped = "此片源的音频无法播放，可尝试其他版本或媒体服务器 App。"
+    static let audioDroppedWithTracks = "当前音频无法播放，可在「音频」菜单切换音轨。"
     static let audioOffset = "音频偏移"
     static let audioSampleRate = "音频采样率"
     static let auto = "自动"
-    static let autoPlay = "自动播放"
     static let bitrate = "比特率"
     static let bitsPerSecond = "bps"
     static let cancel = "取消"
@@ -44,7 +45,7 @@ nonisolated enum L10n {
         String(format: "结束于 %@", String(describing: p1))
     }
     static func episodeNumber(_ p1: Any) -> String {
-        String(format: "第%1$@集", String(describing: p1))
+        String(format: "第 %1$@ 集", String(describing: p1))
     }
     static let error = "错误"
     static let fromBeginning = "从头播放"
@@ -80,12 +81,12 @@ nonisolated enum L10n {
     static let previousChapter = "上一章节"
     static let primarySubtitles = "首选字幕"
     static let `protocol` = "协议"
-    static let queue = "队列"
+    static let queue = "选集"
     static let reset = "重置"
     static let resolution = "分辨率"
     static let retry = "重试"
     static func seasonAndEpisode(_ p1: Any, _ p2: Any) -> String {
-        String(format: "第%1$@季:%2$@集", String(describing: p1), String(describing: p2))
+        String(format: "第 %1$@ 季第 %2$@ 集", String(describing: p1), String(describing: p2))
     }
     static let secondarySubtitleOffset = "辅助字幕偏移"
     static let secondarySubtitles = "辅助字幕"

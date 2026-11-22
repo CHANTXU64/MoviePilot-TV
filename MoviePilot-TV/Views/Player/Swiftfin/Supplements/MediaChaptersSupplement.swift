@@ -10,6 +10,8 @@
 //
 // 修改：去掉 `import JellyfinAPI`；Jellyfin 类型换成 MoviePilot-TV 的同名 Emby 适配类型（见 Views/Player/SwiftfinPlayerModels.swift）。
 // Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
+// 新增 `isLoading`：服务器没有章节、播放器还在读文件里的章节时，面板先转圈。
+// 章节卡用 App 的剧照卡（`StillCard`）：章节起点写在剧照左下角，下面是章节名。
 //
 
 import SwiftUI
@@ -20,6 +22,8 @@ struct MediaChaptersSupplement {
     let displayTitle: String = L10n.chapters
     let id: String
     let chapters: [ChapterInfo.FullInfo]
+    /// 播放器还在读文件里的章节，读完后换成章节列表（见 `PlaybackChapters`）。
+    var isLoading = false
 
     func chapterID(at seconds: Duration) -> ChapterInfo.FullInfo.ID? {
         let started = chapters.split(after: seconds, sortedBy: \.startSeconds).atOrBefore
@@ -51,8 +55,6 @@ extension MediaChaptersSupplement: @MainActor VideoPlayerSupplement {
 
     private struct ChapterOverlay: View {
 
-        @Environment(VideoPlayer.ViewState.self)
-        private var viewState
         @Environment(MediaSession.self)
         private var mediaSession
 
@@ -66,12 +68,29 @@ extension MediaChaptersSupplement: @MainActor VideoPlayerSupplement {
         }
 
         var body: some View {
-            VideoPlayer.PosterCollectionView(
-                data: supplement.chapters,
-                currentElementID: supplement.chapterID(at: mediaSession.seconds),
-                isCompact: viewState.isCompact,
-                action: select
-            )
+            if supplement.isLoading {
+                // 画面不压暗，提示垫一块和简介面板相同的玻璃。
+                PlayerGlassPanel {
+                    HStack(spacing: 20) {
+                        ProgressView()
+                        Text("正在读取章节…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
+                }
+                .padding(.top, PlayerPanelLayout.tabGap)
+                .edgePadding(.horizontal)
+            } else {
+                VideoPlayer.PosterCollectionView(
+                    data: supplement.chapters,
+                    currentElementID: supplement.chapterID(at: mediaSession.seconds),
+                    badge: { $0.startSeconds.formatted(.runtime) },
+                    title: \.chapterInfo.displayTitle,
+                    action: select
+                )
+            }
         }
     }
 }

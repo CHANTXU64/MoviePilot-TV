@@ -171,27 +171,6 @@ struct MediaDetailHeroDownsamplingProcessor: ImageProcessor {
   }
 }
 
-enum MediaDetailLoadingPoster {
-  nonisolated static let size = CGSize(width: 460, height: 690)
-
-  nonisolated static var processor: DownsamplingImageProcessor {
-    DownsamplingImageProcessor(size: size)
-  }
-
-  nonisolated static func removeFromMemory(
-    for url: URL,
-    cacheKey: String? = nil,
-    cache: ImageCache = .default
-  ) {
-    cache.removeImage(
-      forKey: cacheKey ?? url.cacheKey,
-      processorIdentifier: processor.identifier,
-      fromMemory: true,
-      fromDisk: false
-    )
-  }
-}
-
 // MARK: - 单个媒体的预加载任务
 
 /// 管理单个媒体项的所有预加载数据。
@@ -215,10 +194,27 @@ class MediaPreloadTask: ObservableObject {
   fileprivate var isNavigationOwned: @MainActor () -> Bool = { false }
 
   // 可选预加载数据（持久存在，加载完直接显示）
+  /// 名称识别得到的 ID，用于 TMDB 跳转。只凭片名猜出，电影等直接订阅的条目不按它补查订阅状态。
   @Published var tmdbId: Int?
+  /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
+  var tmdbTarget: MediaInfo? { tmdbResolution?.target }
+  @Published private var tmdbResolution: TMDBTargetResolution?
   @Published var isTmdbRecognitionFinished = false
+  /// 打开详情后才做的 TMDB 识别（按需查找，没找到再按名称识别）还没结束。
+  @Published private(set) var isOpenedDetailTMDBPending = false
+  /// 名称识别已确认没有匹配时用的片名、年份和类型。
+  @Published private var unrecognizedQuery: RecognitionQuery?
   @Published var isSubscribed: Bool?
-  @Published var seasonViewModel: SubscribeSeasonViewModel?
+  @Published var seasonViewModel: SubscribeSeasonViewModel? {
+    didSet { observeSeasonViewModel() }
+  }
+  /// 嵌套 ObservableObject 的变化不会自动冒泡到 MediaPreloadTask；转发后详情页顶部
+  /// 按钮与区块判定才能跟随分季 isLoading/hasSeasonLoadError/seasonInfos 刷新。
+  private var seasonViewModelObservation: AnyCancellable?
+  private func observeSeasonViewModel() {
+    seasonViewModelObservation = seasonViewModel?.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+  }
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
   @Published var isSeasonDataLoaded = false
 
@@ -285,11 +281,12 @@ class MediaPreloadTask: ObservableObject {
     detailTask = detailLoad
     internalTasks.append(
       Task {
-        // ⑤ TMDB 识别 — 必须先于 checkSubscription 完成，否则 fallback 查询会因 tmdbId 为 nil 而跳过
-        // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
+        // 预读跳转映射，或对内置来源执行名称识别。打开详情后的按需查找独立运行。
         async let tmdbRecognition: Void = {
-          if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
-            try await self.recognizeTmdb(using: self.partialMedia)
+          if MediaIdentifier.validNumericIdentifier(self.partialMedia.tmdb_id) == nil,
+            self.partialMedia.canJumpToTMDB
+          {
+            try await self.preloadTMDBTarget(using: self.partialMedia)
           }
         }()
         // 识别可能先抛出取消；基础详情结束前必须保留其取消句柄。
@@ -298,21 +295,19 @@ class MediaPreloadTask: ObservableObject {
         try? await tmdbRecognition
         guard !Task.isCancelled, let canonical = fullDetail else { return }
 
-        // F-221: partial 阶段可能因 canJumpToTMDB=false（无可识别身份）跳过识别；
-        // full detail 到达后若补出 douban/bangumi/anilist 身份但无 TMDB 目标，
-        // 按最终 canonical media 补一次识别，让 isTmdbRecognitionFinished 明确落定，
-        // 否则 Header 的 TMDB 跳转按钮会因「无目标且识别未结束」永久转圈（F-221）。
+        // 卡片缺少可识别身份时，用完整详情补查，让 TMDB 按钮能够结束加载。
         if self.tmdbId == nil, !self.isTmdbRecognitionFinished,
-          canonical.tmdb_id == nil, canonical.canJumpToTMDB
+          MediaIdentifier.validNumericIdentifier(canonical.tmdb_id) == nil,
+          canonical.canJumpToTMDB
         {
-          try? await self.recognizeTmdb(using: canonical)
+          try? await self.preloadTMDBTarget(using: canonical)
         }
 
         await withTaskGroup(of: Void.self) { group in
           // ③ 分季信息（仅电视剧）
           group.addTask { await self.loadSeasonData(for: canonical) }
-          // ④ 订阅状态（此时 self.tmdbId 已就绪，可正确执行 fallback 查询）
-          group.addTask { await self.checkSubscription(for: canonical) }
+          // ④ 直接订阅状态，电视剧由分季流程处理。
+          group.addTask { _ = await self.refreshDirectSubscription(for: canonical) }
         }
       })
   }
@@ -448,7 +443,7 @@ class MediaPreloadTask: ObservableObject {
       guard let status = APIService.httpStatusCode(fromServerMessage: message) else { return false }
       return status >= 500 || status == 408 || status == 429
     case .invalidURL, .decodingError, .authenticationChallenge, .credentialsRejected,
-      .mfaUnsupported, .unauthorized, .unknown:
+      .mfaUnsupported, .unauthorized, .backendVersionUnavailable, .unknown:
       return false
     }
   }
@@ -615,13 +610,13 @@ class MediaPreloadTask: ObservableObject {
   private func startEpisodePreview(for detail: MediaInfo) {
     guard let apiService, let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail) else { return }
     guard !MediaDetailView.shouldShowSeasonSubscriptionSection(
-      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail, isSeasonDataLoaded: true,
-      seasonCount: detail.season_info?.count, hasSeasonLoadError: false
+      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail
     ) else { return }
 
     let seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
     guard let season = MediaDetailEpisodeSeasons.current(
-      selected: nil, preferred: detail.season, available: seasons
+      selected: MediaDetailEpisodeSeasons.navigationSeason(for: detail, routeMedia: partialMedia),
+      preferred: detail.season, available: seasons
     ) else { return }
 
     // 只预载首行的单集信息，进入详情后复用同一接口缓存。
@@ -639,26 +634,44 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ④ 订阅状态
 
-  private func checkSubscription(for detail: MediaInfo) async {
-    guard let apiService else { return }
-    guard apiService.canAccess(.subscribe) else {
-      self.isSubscribed = false
-      return
-    }
-    // 电视剧的订阅是分季维度，由 seasonViewModel 内部处理，预加载阶段不查全局订阅
-    guard detail.canDirectlySubscribe else { return }
+  /// 电影订阅补查只接受同一来源条目、后端确认过的同类型目标（共享映射或按需查找）。
+  /// 名称识别可能猜中同名同年的另一部，原影片的订阅状态、新建与取消都不能按它走。
+  func mappedMovieTarget(for media: MediaInfo) -> MediaInfo? {
+    guard let apiService, media.canDirectlySubscribe,
+      MediaIdentifier.validNumericIdentifier(media.tmdb_id) == nil,
+      let type = media.type, apiService.normalizeMediaType(type) == "movie",
+      let resolution = tmdbResolution, !resolution.isNameRecognized,
+      resolution.origin == media.identity, resolution.target.type == "电影"
+    else { return nil }
+    return resolution.target
+  }
 
+  func refreshDirectSubscription(for detail: MediaInfo, forceRefresh: Bool = false) async -> Bool {
+    guard let apiService else { return false }
+    guard apiService.canAccess(.subscribe) else {
+      isSubscribed = false
+      return true
+    }
+    guard detail.canDirectlySubscribe else { return false }
+
+    let snapshot = apiService.sessionSnapshot()
     do {
-      var subscribed = try await apiService.checkSubscription(media: detail)
-      // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
-      // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
-      if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
-        let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-        subscribed = try await apiService.checkSubscription(media: tmdbMedia)
+      var subscribed = try await apiService.checkSubscription(
+        media: detail, forceRefresh: forceRefresh
+      )
+      if !subscribed, let target = mappedMovieTarget(for: detail) {
+        subscribed = try await apiService.checkSubscription(
+          media: target, forceRefresh: forceRefresh, requireExactMovieIdentity: true
+        )
       }
-      self.isSubscribed = subscribed
+      try apiService.validateSessionSnapshot(snapshot)
+      isSubscribed = subscribed
+      return true
+    } catch is CancellationError {
+      return false
     } catch {
       Logger.error("[MediaPreloadTask] 检查订阅状态失败: \(error)")
+      return false
     }
   }
 
@@ -671,25 +684,7 @@ class MediaPreloadTask: ObservableObject {
     }
     let detail = fullDetail ?? partialMedia
     if detail.canDirectlySubscribe {
-      // 电影等可直接订阅的类型：重新查询全局订阅状态
-      do {
-        var subscribed = try await apiService.checkSubscription(
-          media: detail,
-          forceRefresh: true
-        )
-        // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
-        // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
-        if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
-          let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-          subscribed = try await apiService.checkSubscription(
-            media: tmdbMedia,
-            forceRefresh: true
-          )
-        }
-        self.isSubscribed = subscribed
-      } catch {
-        Logger.error("[MediaPreloadTask] 刷新订阅状态失败: \(error)")
-      }
+      _ = await refreshDirectSubscription(for: detail, forceRefresh: true)
     } else if let seasonVM = seasonViewModel {
       // 电视剧：刷新分季订阅状态
       await seasonVM.checkSubscriptionStatus(forceRefresh: forceRefreshSeasonSnapshot)
@@ -698,9 +693,32 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ⑤ TMDB 识别
 
-  private func recognizeTmdb(using media: MediaInfo) async throws {
+  private func preloadTMDBTarget(using media: MediaInfo) async throws {
     guard let apiService else { throw CancellationError() }
     defer { isTmdbRecognitionFinished = true }
+
+    do {
+      if let target = try await MediaActionHandler.sharedTMDBTarget(
+        for: media,
+        apiService: apiService
+      ) {
+        self.tmdbResolution = target
+        return
+      }
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      Logger.error("[MediaPreloadTask] TMDB 共享映射查询失败: \(error)")
+    }
+
+    // 能按需查找的条目等打开详情后再查找，没有结果时才按名称识别；焦点预载不占后端的查找名额。
+    if MediaActionHandler.canMatchTMDB(for: media, apiService: apiService) {
+      isOpenedDetailTMDBPending = true
+      return
+    }
+    // 插件等其他来源不静默识别，用户按下 TMDB 时再识别。
+    guard MediaActionHandler.hasBuiltInTMDBConversion(for: media) else { return }
+
     // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
     // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
     let result: Int?
@@ -713,11 +731,96 @@ class MediaPreloadTask: ObservableObject {
     } catch is CancellationError {
       throw CancellationError()
     } catch {
-      result = nil
+      return
     }
-    if let tmdbId = result {
-      self.tmdbId = tmdbId
+    applyRecognition(result, for: media, apiService: apiService)
+  }
+
+  /// 写入名称识别结论：找到时同时记下带原来源身份的目标，没找到时记下已确认无匹配。
+  private func applyRecognition(
+    _ result: Int?, for media: MediaInfo, season: Int?? = nil, apiService: APIService
+  ) {
+    guard let tmdbId = MediaIdentifier.validNumericIdentifier(result) else {
+      let query = RecognitionQuery(media)
+      unrecognizedQuery = query.title.isEmpty ? nil : query
+      return
     }
+    self.tmdbId = tmdbId
+    if let target = MediaActionHandler.recognizedTMDBTarget(
+      for: media, tmdbId: tmdbId, season: season, apiService: apiService)
+    {
+      tmdbResolution = target
+    }
+  }
+
+  /// 由已打开的详情页启动，分季和订阅的首次加载不等待这个长请求。
+  /// 按需查找没有结果（含失败）时按名称识别，结论与预载识别写法相同。
+  /// 被取消时保留待办，详情页再次显示时重新开始。
+  func matchTMDBForOpenedDetail(_ detail: MediaInfo) async {
+    guard let apiService, isOpenedDetailTMDBPending else { return }
+    guard MediaIdentifier.validNumericIdentifier(detail.tmdb_id) == nil, detail.canJumpToTMDB else {
+      isOpenedDetailTMDBPending = false
+      return
+    }
+
+    // 完整详情可能只返回整剧。来源与类型一致时保留卡片预读过的明确季号，映射按卡片的季查；
+    // 名称识别仍用完整详情的片名和年份，卡片简称可能识别到另一部作品。
+    let keepsCardSeason =
+      detail.season == nil && partialMedia.season != nil
+      && detail.identity == partialMedia.identity && detail.type == partialMedia.type
+    let mappingMedia = keepsCardSeason ? partialMedia : detail
+    let snapshot = apiService.sessionSnapshot()
+    do {
+      if let target = try await MediaActionHandler.mappedTMDBTarget(
+        for: mappingMedia, apiService: apiService)
+      {
+        try apiService.validateSessionSnapshot(snapshot)
+        tmdbResolution = target
+      } else {
+        let result = try await apiService.recognizeTmdbId(
+          title: detail.title ?? "", year: detail.year, type: detail.type)
+        try apiService.validateSessionSnapshot(snapshot)
+        applyRecognition(
+          result, for: detail, season: .some(mappingMedia.season), apiService: apiService)
+      }
+    } catch {
+      if error is CancellationError || Task.isCancelled { return }
+      // 失败不弹提示，用户按下 TMDB 时再识别一次。
+      Logger.error("[MediaPreloadTask] TMDB 识别失败: \(error)")
+    }
+    isOpenedDetailTMDBPending = false
+
+    if isSubscribed != true, mappedMovieTarget(for: detail) != nil {
+      _ = await refreshDirectSubscription(for: detail)
+    }
+  }
+
+  /// 已确认按 `media` 当前的片名、年份和类型识别不到。卡片用简称没识别到时，
+  /// 完整详情的正式片名还要再识别一次。
+  func isTMDBUnrecognized(for media: MediaInfo) -> Bool {
+    unrecognizedQuery != nil && unrecognizedQuery == RecognitionQuery(media)
+  }
+
+  /// 等预载和打开详情后的 TMDB 识别结束；调用方随后读取 `tmdbTarget` / `tmdbId`。
+  func waitForTMDBIdentification() async {
+    // 不给 Combine 传闭包：闭包会继承主线程隔离，而 Combine 在别的线程调用它。
+    let states = $isTmdbRecognitionFinished.combineLatest($isOpenedDetailTMDBPending).values
+    for await (finished, pending) in states where finished && !pending {
+      return
+    }
+  }
+}
+
+/// 名称识别实际使用的参数，用来判断“没有匹配”的结论是否适用于另一份详情。
+private struct RecognitionQuery: Equatable {
+  let title: String
+  let year: String?
+  let type: String?
+
+  init(_ media: MediaInfo) {
+    title = media.title?.trimmingCharacters(in: .whitespaces) ?? ""
+    year = media.year
+    type = media.type
   }
 }
 
@@ -834,7 +937,6 @@ class MediaPreloader: ObservableObject {
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
-  private var loadingPosterWarmDownloadTask: DownloadTask?
   // 服务拥有预载缓存；缓存及其子任务只在执行操作期间保留服务。
   private weak var apiService: APIService?
 
@@ -901,27 +1003,6 @@ class MediaPreloader: ObservableObject {
     guard media.shouldPreloadDetail else { return nil }
     replaceCandidate(with: media.id, stackID: stackID)
     return preload(for: media)
-  }
-
-  /// 预热详情页加载遮罩海报：与转场海报使用相同缓存 key（URL + 460x690 processor），
-  /// 提前经 Kingfisher 下载并写入磁盘缓存（解码图不占内存缓存）。
-  /// 详情页 PageManagedImage 加载时磁盘同步命中，跳转动画期间即可显示，
-  /// 避免“先空白再出现”；缓存已命中时无任何网络开销。
-  @discardableResult
-  func warmLoadingPoster(_ url: URL?) -> DownloadTask? {
-    loadingPosterWarmDownloadTask?.cancel()
-    loadingPosterWarmDownloadTask = nil
-    guard let url, let apiService else { return nil }
-    var options = apiService.imageOptions(for: url)
-    options.append(.processor(MediaDetailLoadingPoster.processor))
-    options.append(TransientDecodedImage.skipMemoryCache)
-    let downloadTask = KingfisherManager.shared.retrieveImage(
-      with: apiService.imageSource(for: url),
-      options: options,
-      completionHandler: { _ in }
-    )
-    loadingPosterWarmDownloadTask = downloadTask
-    return downloadTask
   }
 
   /// 给当前详情页附带预载，不抢走推荐页焦点候选。
@@ -1105,8 +1186,6 @@ class MediaPreloader: ObservableObject {
   func clearAll() {
     subscriptionRefreshTask?.cancel()
     subscriptionRefreshTask = nil
-    loadingPosterWarmDownloadTask?.cancel()
-    loadingPosterWarmDownloadTask = nil
     for task in cache.values {
       task.cancel()
     }
@@ -1202,18 +1281,6 @@ class MediaPreloader: ObservableObject {
       size: size,
       screenScale: screenScale,
       imageCache: imageCache
-    )
-  }
-
-  func removeLoadingPosterFromMemory(
-    url: URL?,
-    imageCache: ImageCache = .default
-  ) {
-    guard let url, let apiService else { return }
-    MediaDetailLoadingPoster.removeFromMemory(
-      for: url,
-      cacheKey: apiService.imageSource(for: url).cacheKey,
-      cache: imageCache
     )
   }
 

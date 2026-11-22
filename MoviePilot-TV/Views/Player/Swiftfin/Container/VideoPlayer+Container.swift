@@ -16,8 +16,13 @@
 // - 托管控制器根视图的环境注入移进 `HostedEnvironment` 视图的 `body`（行为相同；原写法在 lazy 初始化闭包里产生 Swift 6 隔离一致性警告）。
 // - `updateProperties()` 是 tvOS 26 的 UIKit 观察回调，部署到 tvOS 18 改用 `ObservationToken` 在可见元素变化时同步补充面板的交互开关。
 // - 日志改用工程的 `Logger`；关闭确认（Swiftfin 设置项 `confirmClose`，默认关）换成常量 `VideoPlayerDefaults.confirmClose`。
-// - MoviePilot-TV 的 mpv 播放不提供画中画，收尾时不再判断 PiP，直接 `mediaSession.stop()`。
+// - MoviePilot-TV 的应用内播放不提供画中画，收尾时不再判断 PiP，直接 `mediaSession.stop()`。
 // - 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
+// - 去掉画面上的压暗层（打开面板时底部的黑色渐变、全屏面板的黑底）：面板和卡片自带玻璃底，压暗会挡住字幕。
+// - 播放/暂停键和触控板中央按系统播放器处理（判断见 VideoPlayer+RemoteCommands.swift）。
+// - 键盘才有的按键原样交给系统，由系统转成遥控器按键再送来（见 `isKeyboardOnlyPress`）。
+// - 大屏上标签区域的高度按标签和面板的实际尺寸算（`PlayerPanelLayout`）：标签和打开后的简介面板底边都落在底部安全区上。
+//   原版收起时固定露出 120（标签离屏幕底只剩约 30），打开时取屏幕高度的三分之一。
 //
 
 import SwiftUI
@@ -112,17 +117,20 @@ extension VideoPlayer {
             let content: Content
 
             var body: some View {
+                // 各层由独立的托管控制器显示，不继承外层的 `.colorScheme(.dark)`；玻璃材质要按深色画。
                 if let mediaSession {
                     content
                         .modifier(LayoutEnvironment())
                         .environment(viewState)
                         .environmentObject(viewState.focusCoordinator)
                         .environment(mediaSession)
+                        .colorScheme(.dark)
                 } else {
                     content
                         .modifier(LayoutEnvironment())
                         .environment(viewState)
                         .environmentObject(viewState.focusCoordinator)
+                        .colorScheme(.dark)
                 }
             }
         }
@@ -131,33 +139,12 @@ extension VideoPlayer {
 
         private struct PlayerContainerView: View {
 
-            @Environment(ViewState.self)
-            private var viewState
-
             let player: (VideoLayout) -> AnyView
             let videoSize: () -> CGSize
-
-            private var shouldPresentDimOverlay: Bool {
-                viewState.visibleElements.contains(.dimming)
-            }
 
             var body: some View {
                 VideoViewport(videoSize: videoSize) { videoLayout in
                     player(videoLayout)
-                }
-                .overlay {
-                    Group {
-                        if viewState.isPresentingFullScreenSupplement {
-                            Color.black.opacity(0.8)
-                        } else {
-                            EasedGradient(
-                                colors: [.clear, .black],
-                                startPoint: .center,
-                                endPoint: .bottom
-                            )
-                        }
-                    }
-                    .isVisible(shouldPresentDimOverlay)
                 }
                 .allowsHitTesting(false)
             }
@@ -294,20 +281,28 @@ extension VideoPlayer {
                 return availableHeight
             }
 
-            if !isCompact, !viewLayout.isLarge {
-                return min(availableHeight, 200 + viewLayout.edgePadding * 2)
+            if !isCompact {
+                // 大屏按标签和面板的实际尺寸定高（见 `PlayerPanelLayout`）。
+                let height = viewLayout.isLarge
+                    ? PlayerPanelLayout.expandedHeight(bottomInset: viewLayout.edgePadding)
+                    : 200 + viewLayout.edgePadding * 2
+                return min(availableHeight, height)
             }
 
             let bottomInset = min(view.safeAreaInsets.bottom, availableHeight)
             let contentHeight = availableHeight - bottomInset
-            let fraction: CGFloat = isCompact ? 0.6 : 1.0 / 3.0
-            let preferredHeight = contentHeight * fraction + bottomInset + viewLayout.edgePadding * 2
+            let preferredHeight = contentHeight * 0.6 + bottomInset + viewLayout.edgePadding * 2
 
             return min(availableHeight, max(dismissedSupplementContainerOffset, preferredHeight))
         }
 
         private var dismissedSupplementContainerOffset: CGFloat {
-            min(availableSupplementHeight, viewLayout.isLarge ? 120 : 50.0 + viewLayout.edgePadding * 2)
+            min(
+                availableSupplementHeight,
+                viewLayout.isLarge
+                    ? PlayerPanelLayout.collapsedHeight(bottomInset: viewLayout.edgePadding)
+                    : 50.0 + viewLayout.edgePadding * 2
+            )
         }
 
         private let compactMinimumTranslation: CGFloat = 100.0
@@ -918,6 +913,11 @@ extension VideoPlayer {
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesBegan([press], event: event)
+                    continue
+                }
+
                 switch press.type {
                 case .playPause, .select, .menu:
                     continue
@@ -941,6 +941,11 @@ extension VideoPlayer {
 
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesEnded([press], event: event)
+                    continue
+                }
+
                 switch press.type {
                 case .playPause:
                     handlePlayPauseEnded()
@@ -968,6 +973,11 @@ extension VideoPlayer {
 
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             for press in presses {
+                if Self.isKeyboardOnlyPress(press.type, hasKey: press.key != nil) {
+                    forwardPressesCancelled([press], event: event)
+                    continue
+                }
+
                 onPressEvent.send(
                     .init(type: press.type, phase: .cancelled) { [weak self] in
                         self?.forwardPressesCancelled([press], event: event)
@@ -981,58 +991,47 @@ extension VideoPlayer {
         }
 
         private func handlePlayPauseEnded() {
-            guard mediaSession.canControlPlayback else { return }
-
-            if viewState.isScrubbing {
-                viewState.cancelScrub()
-                return
-            }
-
-            if viewState.presentation == .hidden {
-                if mediaSession.playbackRequestStatus == .paused {
-                    mediaSession.setPlaybackRequestStatus(status: .playing)
-                }
-
-                viewState.showControls()
-            } else {
-                switch mediaSession.playbackRequestStatus {
-                case .playing:
-                    mediaSession.setPlaybackRequestStatus(status: .paused)
-                case .paused:
-                    mediaSession.setPlaybackRequestStatus(status: .playing)
-                }
-            }
-
-            viewState.refreshAutoDismiss()
+            handlePlaybackButton(.playPause)
         }
 
         private func handleSelectEnded(_ press: UIPress, event: UIPressesEvent?) {
-            if viewState.isOverlayActionFocused {
-                forwardPressesEnded([press], event: event)
-                return
+            handlePlaybackButton(.select) { [weak self] in
+                self?.forwardPressesEnded([press], event: event)
             }
+        }
 
-            if viewState.presentation == .hidden {
-                viewState.showControls()
+        /// 播放/暂停键和触控板中央，判断见 `ViewState.action(for:...)`。
+        private func handlePlaybackButton(_ button: ViewState.PlaybackButton, forward: () -> Void = {}) {
+            let action = ViewState.action(
+                for: button,
+                presentation: viewState.presentation,
+                isScrubbing: viewState.isScrubbing,
+                isProgressBarFocused: viewState.isProgressBarFocused,
+                isOverlayActionFocused: viewState.isOverlayActionFocused,
+                canControlPlayback: mediaSession.canControlPlayback,
+                isPaused: mediaSession.playbackRequestStatus == .paused
+            )
+
+            switch action {
+            case .forwardToFocusedControl:
+                forward()
                 return
-            }
-
-            if viewState.isScrubbing {
+            case .commitScrub:
                 viewState.commitScrub(resumePlayback: true)
-            } else if viewState.isProgressBarFocused {
-                guard mediaSession.canControlPlayback else { return }
-
-                switch mediaSession.playbackRequestStatus {
-                case .playing:
-                    mediaSession.setPlaybackRequestStatus(status: .paused)
-                case .paused:
-                    mediaSession.setPlaybackRequestStatus(status: .playing)
+            case .play:
+                mediaSession.setPlaybackRequestStatus(status: .playing)
+            case let .pause(showsControls):
+                mediaSession.setPlaybackRequestStatus(status: .paused)
+                if showsControls {
+                    viewState.showControls()
                 }
-
-                viewState.refreshAutoDismiss()
-            } else {
-                forwardPressesEnded([press], event: event)
+            case .showControls:
+                viewState.showControls()
+            case .ignore:
+                break
             }
+
+            viewState.refreshAutoDismiss()
         }
 
         @objc
@@ -1058,6 +1057,23 @@ extension VideoPlayer {
 // MARK: - tvOS PressEvent
 
 extension VideoPlayer.UIContainerViewController {
+
+    /// 只有键盘才有的按键（类型不是遥控器上的任何一个键），原样交给系统，不当成遥控器按键处理。
+    ///
+    /// 模拟器遥控器发的是键盘按键（播放/暂停是空格，方向是键盘方向键）。系统先把原始按键沿响应链送来，
+    /// 没人接才再转成遥控器的播放/暂停、方向键送一次。这里若先接住（比如「按任意键呼出控制条」），系统就不转了：
+    /// 控制条收起时按播放/暂停只会呼出控制条、不暂停，按左右键也不跳。
+    static func isKeyboardOnlyPress(_ type: UIPress.PressType, hasKey: Bool) -> Bool {
+        guard hasKey else { return false }
+
+        switch type {
+        case .upArrow, .downArrow, .leftArrow, .rightArrow, .select, .menu, .playPause,
+             .pageUp, .pageDown, .tvRemoteOneTwoThree, .tvRemoteFourColors:
+            return false
+        @unknown default:
+            return true
+        }
+    }
 
     struct PressEvent {
 

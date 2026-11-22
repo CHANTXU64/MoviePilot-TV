@@ -16,7 +16,43 @@ enum UIPreviewScenesTabs {
         .page(
           id: "home.dashboard",
           title: "首页 · 仪表盘（常规）",
-          note: "媒体服务器最新入库 + 我的订阅，标准全权限用户。"
+          note:
+            "「继续观看」+「最近添加」+「我的订阅」三行，标准全权限用户。继续观看卡片右上角是已播放百分比，剧集标题下是「S1:1 - 集名」。"
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.continueWatching.loading",
+          title: "首页 · 继续观看加载中",
+          note: "继续观看接口挂起、最近添加正常：本行显示加载占位卡，不影响其它行。",
+          behaviors: [UIPreviewBehaviorKey.homeMediaServerPlaying: .hang]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.continueWatching.empty",
+          title: "首页 · 继续观看为空",
+          note: "继续观看接口成功但没有条目：本行显示「该服务器暂无继续观看内容」，最近添加照常。",
+          behaviors: [UIPreviewBehaviorKey.homeMediaServerPlaying: .empty]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.continueWatching.failure",
+          title: "首页 · 继续观看失败",
+          note:
+            "继续观看接口失败：页面顶部出现「部分数据加载失败，当前显示的是旧数据」与「重试」；行内没有单独的失败卡，没有条目时只写「该服务器暂无继续观看内容」。最近添加不受影响。",
+          behaviors: [UIPreviewBehaviorKey.homeMediaServerPlaying: .failure]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.continueWatching.longList",
+          title: "首页 · 继续观看长列表",
+          note: "继续观看返回 12 条，验证横向长列表滚动、焦点移动与末尾项加载。",
+          environment: UIPreviewEnvironment.standard.with(context: [
+            UIPreviewContextKey.homeContinueWatchingLongList: "1"
+          ])
         ) {
           UIPreviewTabRootView(tab: .home)
         },
@@ -103,6 +139,51 @@ enum UIPreviewScenesTabs {
           environment: UIPreviewEnvironment.standard
         ) {
           UIPreviewHomeRefreshFailureScene()
+        },
+
+        // MARK: 订阅
+        .page(
+          id: "subscriptions.list",
+          title: "订阅页 · 电影与电视剧",
+          note:
+            "「订阅」Tab：电影订阅、电视剧订阅两行，卡片带海报与状态标记（阅/待/停）；按下编辑订阅，长按给详情、搜索、暂停/启用、重置和取消。",
+          environment: UIPreviewEnvironment.standard
+        ) {
+          UIPreviewTabRootView(tab: .subscriptions)
+        },
+        .page(
+          id: "subscriptions.loading",
+          title: "订阅页 · 首次加载",
+          note: "首轮加载未完成且没有可显示的订阅：整页居中转圈（pageLoadingOverlay）。",
+          behaviors: [UIPreviewBehaviorKey.detailSubscriptions: .hang]
+        ) {
+          UIPreviewTabRootView(tab: .subscriptions)
+        },
+        .page(
+          id: "subscriptions.empty",
+          title: "订阅页 · 空",
+          note: "读取成功但没有订阅：说明订阅从哪里来，不显示重试。",
+          behaviors: [UIPreviewBehaviorKey.detailSubscriptions: .empty]
+        ) {
+          UIPreviewTabRootView(tab: .subscriptions)
+        },
+        .page(
+          id: "subscriptions.failure",
+          title: "订阅页 · 加载失败",
+          note: "首轮读取失败且没有旧数据：整页显示「订阅加载失败，请重试」与重试按钮。",
+          behaviors: [UIPreviewBehaviorKey.detailSubscriptions: .failure]
+        ) {
+          UIPreviewTabRootView(tab: .subscriptions)
+        },
+        .page(
+          id: "subscriptions.longList",
+          title: "订阅页 · 长列表",
+          note: "共 12 条电影/电视剧订阅，验证两行横向滚动、焦点移动与末尾卡片。",
+          environment: UIPreviewEnvironment.standard.with(context: [
+            UIPreviewContextKey.subscriptionsLongList: "1"
+          ])
+        ) {
+          UIPreviewTabRootView(tab: .subscriptions)
         },
 
         // MARK: 推荐

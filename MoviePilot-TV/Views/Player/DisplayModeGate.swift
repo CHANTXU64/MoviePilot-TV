@@ -1,170 +1,112 @@
 import AVKit
-import CoreMedia
-import MPVUI
+import UIKit
 
 /// 电视显示模式（tvOS「匹配内容」）的状态；测试用替身实现。
 @MainActor
 protocol DisplayModeSwitching: AnyObject {
   var isDisplayCriteriaMatchingEnabled: Bool { get }
   var isDisplayModeSwitchInProgress: Bool { get }
-  var preferredDisplayCriteria: AVDisplayCriteria? { get set }
 }
 
 extension AVDisplayManager: DisplayModeSwitching {}
 
-/// 起播后等电视切好显示模式，期间播放界面整屏盖黑。
-/// 开了「匹配内容」时，MPVUI 读出视频格式后才向系统申请帧率和动态范围，电视随即切换 HDMI 模式并黑屏约 1 秒，
-/// 切换前露出的画面或控件就像闪了一下（Swiftfin 的系统播放器是先切模式再出画面）。这里只决定何时揭开遮挡，不控制播放。
+/// 起播遮挡的样子（见 `PlaybackLoadingScreen`）。
+enum StartupCover: Equatable {
+  /// 黑底正中转圈：还在准备。
+  case loading
+  /// 纯黑：电视正在切换显示模式。切换时 HDMI 本来就黑屏，切完很快就绪时直接出画面，中间不再闪一下转圈。
+  case blank
+}
+
+/// 起播时整屏盖住播放界面，首帧备好才揭开（Apple TV App 的做法）：准备期间黑底转圈，电视切换显示模式时纯黑，
+/// 切好直接出画面。
+/// 开了「匹配内容」时，播放器按读出的片源格式向电视申请帧率和动态范围，电视随即切换 HDMI 模式并黑屏约 1 秒，
+/// 切换前露出的画面或控件就像闪了一下。AetherEngine 在交给系统播放器之前申请、切换期间压住起播；
+/// 这里只决定遮挡的样子和何时揭开，不控制播放。
 @MainActor
 enum DisplayModeGate {
   struct Timing {
-    /// 播放器就绪后，留给 MPVUI 提交要求、系统开始切换的时间；这段时间里没开始切换，就当不用切。
-    var settle: Duration = .milliseconds(600)
-    /// 最长等待，从起播算起。超时就揭开：宁可闪一下，也不能一直黑屏。
-    var timeout: Duration = .seconds(8)
+    /// 播放器就绪后，留给电视开始切换的时间；这段时间里没开始切换，就当不用切。没开「匹配内容」时不等。
+    var settle: Duration = .milliseconds(200)
+    /// 切换结束后过了这么久还没就绪，纯黑换回转圈。切完通常马上就绪，这时直接揭开；远端慢时不让人对着纯黑干等。
+    var loadingResumeDelay: Duration = .seconds(1)
+    /// 一次切换最多等这么久。超时就揭开：宁可闪一下，也不能一直纯黑。
+    var switchTimeout: Duration = .seconds(8)
+    /// 播放器一直不就绪时最多盖这么久，之后交给播放器自己的界面。准备期间有转圈，正常的慢起播在这之前就绪或报错。
+    var loadingTimeout: Duration = .seconds(30)
     var poll: Duration = .milliseconds(50)
   }
 
-  /// MPVUI 会申请显示模式时才算就绪：文件已载入，且不在跳转或缓冲中。杜比视界片源还要等 MPVUI 判定能否原样输出，
-  /// 它据此决定向电视要杜比视界还是 HDR 模式。出错或已结束也算就绪，交给播放失败的流程处理。
-  static func isSettled(_ player: MPVPlayer) -> Bool {
-    switch player.state {
-    case .idle, .loading, .seeking, .buffering:
+  /// 前台窗口的显示管理器，播放器也是向它申请显示模式。
+  static var currentDisplay: (any DisplayModeSwitching)? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    return (scene?.keyWindow ?? scene?.windows.first)?.avDisplayManager
+  }
+
+  /// 可以揭开遮挡的播放器状态：首帧已备好，且起播不再等电视切换显示模式。
+  /// 出错或已结束也算，交给播放失败或播完的流程处理。
+  static func isSettled(status: AetherPlayer.Status, hasFirstFrame: Bool, isAwaitingDisplaySwitch: Bool) -> Bool {
+    switch status {
+    case .idle, .loading:
       return false
-    case .ended, .stopped, .failed:
+    case .ended, .failed:
       return true
-    case .ready, .playing, .paused:
-      let status = player.dolbyVisionStatus
-      return status.sourceProfile == nil || status.nativeValidation != .unknown
+    case .playing, .paused, .seeking:
+      return hasFirstFrame && !isAwaitingDisplaySwitch
     }
   }
 
-  /// 等到可以揭开遮挡：播放器就绪后一小段时间内没开始切换，或切换已结束，或超时，或任务被取消。
+  /// 等到可以揭开遮挡，期间遮挡样子有变就交给 `show`；调用方先按 `.loading` 盖上。
+  /// 播放器就绪后（开了「匹配内容」时再留一小段时间给电视开始切换）、切换结束、超时或任务被取消时返回。
   static func wait(
-    for display: any DisplayModeSwitching, timing: Timing = Timing(), isPlayerSettled: () -> Bool
+    for display: (any DisplayModeSwitching)?,
+    timing: Timing = Timing(),
+    show: (StartupCover) -> Void = { _ in },
+    isPlayerSettled: () -> Bool
   ) async {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timing.timeout)
+    let start = clock.now
+    let matchesContent = display?.isDisplayCriteriaMatchingEnabled == true
+    var cover = StartupCover.loading
+    /// 正在进行的切换从何时开始。
+    var switchStart: ContinuousClock.Instant?
+    /// 最近一次切换何时结束。
+    var lastSwitchEnd: ContinuousClock.Instant?
+    /// 播放器从何时起一直是就绪的。
+    var settledSince: ContinuousClock.Instant?
 
-    func pause() async -> Bool {
-      guard clock.now < deadline, (try? await Task.sleep(for: timing.poll)) != nil else { return false }
-      return clock.now < deadline
+    func present(_ next: StartupCover) {
+      guard next != cover else { return }
+      cover = next
+      show(next)
     }
 
-    while !isPlayerSettled() {
-      guard await pause() else { return }
+    while !Task.isCancelled {
+      let now = clock.now
+      if display?.isDisplayModeSwitchInProgress == true {
+        let began = switchStart ?? now
+        switchStart = began
+        present(.blank)
+        if began.duration(to: now) >= timing.switchTimeout { return }
+      } else {
+        if switchStart != nil {
+          switchStart = nil
+          lastSwitchEnd = now
+        }
+        if isPlayerSettled() {
+          let since = settledSince ?? now
+          settledSince = since
+          if !matchesContent || since.duration(to: now) >= timing.settle { return }
+        } else {
+          settledSince = nil
+          if start.duration(to: now) >= timing.loadingTimeout { return }
+        }
+        if let end = lastSwitchEnd, end.duration(to: now) >= timing.loadingResumeDelay {
+          present(.loading)
+        }
+      }
+      guard (try? await Task.sleep(for: timing.poll)) != nil else { return }
     }
-    let settleEnd = clock.now.advanced(by: timing.settle)
-    while !display.isDisplayModeSwitchInProgress, clock.now < settleEnd {
-      guard await pause() else { return }
-    }
-    while display.isDisplayModeSwitchInProgress {
-      guard await pause() else { return }
-    }
-  }
-}
-
-/// 按片源信息提前向电视申请的显示模式（帧率、动态范围）。各服务器适配器读出视频流参数后用 `init(width:height:...)` 建它，
-/// 见 `ServerMediaSource.displayModeHint`（Emby 的解析在 EmbyModels.swift）。
-/// MPVUI 要等开播、读出视频格式后才申请，电视这时切换会让已经出声的播放停一下。开播前先按这里申请，
-/// 等 MPVUI 再申请同一个模式时电视已经切好，不会再切。规则照 MPVUI `MPVDisplayMatchingContent`：
-/// 帧率按标准帧率族取（23.976 不当 24），杜比视界只认 MPVUI 能原样输出的 Profile 5、8.1、8.4。
-/// 认不准的片源（未知编码、杜比视界 Profile 7 等）返回 nil，交给 MPVUI 自己申请。
-nonisolated struct DisplayModeHint: Equatable {
-  enum DynamicRange: Equatable {
-    case sdr
-    case hdr10
-    case hlg
-    case dolbyVision(profile: Int, compatibilityID: Int)
-  }
-
-  let width: Int32
-  let height: Int32
-  let refreshRate: Float
-  let codec: CMVideoCodecType
-  let range: DynamicRange
-
-  /// 视频流的分辨率、帧率、编码名（如 `hevc`、`h264`）和适配器认出的动态范围；任一项缺失或认不准时为 nil。
-  init?(width: Int?, height: Int?, framesPerSecond: Double?, codec: String?, range: DynamicRange?) {
-    guard let width = width.flatMap({ Int32(exactly: $0) }), width > 0,
-      let height = height.flatMap({ Int32(exactly: $0) }), height > 0,
-      let refreshRate = Self.refreshRate(for: framesPerSecond),
-      let codec = Self.codecType(for: codec),
-      let range
-    else { return nil }
-    if case .dolbyVision = range, codec != kCMVideoCodecType_HEVC { return nil }
-    self.width = width
-    self.height = height
-    self.refreshRate = refreshRate
-    self.codec = codec
-    self.range = range
-  }
-
-  /// 标准帧率族（含 NTSC 的 1000/1001），与 MPVUI 相同：差不到 0.001 就取标准值。
-  static func refreshRate(for framesPerSecond: Double?) -> Float? {
-    guard let value = framesPerSecond, value.isFinite, value > 0, value <= 240 else { return nil }
-    let standard = [
-      24000.0 / 1001, 24, 25, 30000.0 / 1001, 30, 48000.0 / 1001, 48, 50, 60000.0 / 1001, 60, 100,
-      120_000.0 / 1001, 120,
-    ]
-    return Float(standard.first { abs($0 - value) < 0.001 } ?? value)
-  }
-
-  private static func codecType(for codec: String?) -> CMVideoCodecType? {
-    switch codec?.lowercased() {
-    case "h264", "avc", "avc1": kCMVideoCodecType_H264
-    case "hevc", "h265", "hev1", "hvc1", "dvh1", "dvhe": kCMVideoCodecType_HEVC
-    case "av1", "av01": kCMVideoCodecType_AV1
-    case "vp9", "vp09": kCMVideoCodecType_VP9
-    default: nil
-    }
-  }
-
-  /// 杜比视界等级：按每秒像素数取能容纳的最低等级（Dolby Vision Levels 表）。
-  private var dolbyVisionLevel: Int {
-    let pixelRate = Double(width) * Double(height) * Double(refreshRate)
-    let limits: [Double] = [
-      22_118_400, 27_648_000, 49_766_400, 62_208_000, 124_416_000, 199_065_600, 248_832_000,
-      398_131_200, 497_664_000, 995_328_000, 995_328_000, 1_990_656_000, 3_981_312_000,
-    ]
-    return (limits.firstIndex { pixelRate <= $0 + 1 } ?? limits.count - 1) + 1
-  }
-
-  func makeFormatDescription() -> CMVideoFormatDescription? {
-    var extensions: [String: Any] = [:]
-    var codecType = codec
-    switch range {
-    case .sdr:
-      extensions[kCMFormatDescriptionExtension_ColorPrimaries as String] = kCMFormatDescriptionColorPrimaries_ITU_R_709_2
-      extensions[kCMFormatDescriptionExtension_TransferFunction as String] =
-        kCMFormatDescriptionTransferFunction_ITU_R_709_2
-      extensions[kCMFormatDescriptionExtension_YCbCrMatrix as String] = kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2
-    case .hdr10, .hlg, .dolbyVision:
-      extensions[kCMFormatDescriptionExtension_ColorPrimaries as String] = kCMFormatDescriptionColorPrimaries_ITU_R_2020
-      extensions[kCMFormatDescriptionExtension_TransferFunction as String] =
-        range == .hlg
-        ? kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG : kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ
-      extensions[kCMFormatDescriptionExtension_YCbCrMatrix as String] = kCMFormatDescriptionYCbCrMatrix_ITU_R_2020
-      extensions[kCMFormatDescriptionExtension_BitsPerComponent as String] = 10
-    }
-    if case .dolbyVision(let profile, let compatibilityID) = range {
-      // 杜比视界配置记录 v1.0（与 MPVUI 相同：有 RPU 和基础层、无增强层）。
-      let flags = UInt16(profile << 9 | dolbyVisionLevel << 3 | 0b101)
-      let record = Data(
-        [1, 0, UInt8(flags >> 8), UInt8(flags & 0xFF), UInt8(compatibilityID << 4)] + Array(repeating: 0, count: 19))
-      extensions[kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms as String] = [
-        profile > 7 ? "dvvC" : "dvcC": record
-      ]
-      codecType = kCMVideoCodecType_DolbyVisionHEVC
-    }
-    var description: CMVideoFormatDescription?
-    let status = CMVideoFormatDescriptionCreate(
-      allocator: kCFAllocatorDefault, codecType: codecType, width: width, height: height,
-      extensions: extensions as CFDictionary, formatDescriptionOut: &description)
-    return status == noErr ? description : nil
-  }
-
-  func makeCriteria() -> AVDisplayCriteria? {
-    makeFormatDescription().map { AVDisplayCriteria(refreshRate: refreshRate, formatDescription: $0) }
   }
 }

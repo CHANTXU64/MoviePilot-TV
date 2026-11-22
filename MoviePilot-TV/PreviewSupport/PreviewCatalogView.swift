@@ -38,6 +38,7 @@ enum UIPreviewCatalog {
       UIPreviewScenesApp.section,
       UIPreviewScenesTabs.section,
       UIPreviewScenesDetail.section,
+      UIPreviewScenesEpisode.section,
       UIPreviewScenesSearch.section,
       UIPreviewScenesSubtitle.section,
       UIPreviewScenesSettings.section,

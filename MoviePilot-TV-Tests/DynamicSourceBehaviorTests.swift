@@ -132,7 +132,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(retentionSource.contains("static let duration = Duration.seconds(1)"))
     XCTAssertTrue(
       detailSource.contains(
-        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+        "isEntryLoading: !isReady"
       )
     )
   }
@@ -161,6 +161,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         "@EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator"
       )
     )
+    // 三个异步跳转入口：打开详情（最近添加与继续观看共用）、搜索资源、搜索字幕。
     XCTAssertEqual(
       homeSource.components(
         separatedBy: "let navigationSource = navigationCoordinator.sourceToken()"
@@ -172,9 +173,9 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         homeSource,
         [
           "let navigationSource = navigationCoordinator.sourceToken()",
-          "let loadingPosterURL = item.imageURLs.image",
+          "let loadingPosterURL = item.imageURLs().image",
           "Task {",
-          "Label(\"TMDB详情页\"",
+          "navigationCoordinator.push(target, loadingPosterURL: loadingPosterURL, ifCurrent: navigationSource)",
         ]
       )
     )
@@ -190,6 +191,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         ]
       )
     )
+    // 打开详情（两行共用）、搜索资源（识别成功与退回标题搜索两条）、搜索字幕。
     XCTAssertEqual(
       homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
       4
@@ -199,9 +201,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     // 订阅卡片跳详情必须携带订阅海报：navigationMediaInfo() 本身不含
     // poster_path，漏传会让详情页加载遮罩的海报区域空白。
+    let subscriptionsSource = try source("MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
     XCTAssertTrue(
       containsTokensInOrder(
-        homeSource,
+        subscriptionsSource,
         [
           "private func navigateToDetail(for subscribe: Subscribe)",
           "navigationCoordinator.push(",
@@ -210,33 +213,6 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         ]
       )
     )
-  }
-
-  func testHomeFocusWarmsLoadingPosterWithCancellableDownload() throws {
-    let homeSource = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
-    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
-    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
-
-    // 最近添加与订阅行在焦点稳定后预热；切到另一张卡片时，延迟任务和
-    // 已经开始的 Kingfisher 下载都必须取消。Push 当下不再重复启动无提前量的预热。
-    XCTAssertEqual(
-      homeSource.components(
-        separatedBy: "posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster("
-      ).count - 1,
-      2
-    )
-    XCTAssertEqual(
-      homeSource.components(separatedBy: "posterWarmDownloadTask?.cancel()").count - 1,
-      2
-    )
-    XCTAssertFalse(lifecycleSource.contains("mediaPreloader.warmLoadingPoster("))
-    XCTAssertTrue(
-      preloaderSource.contains("func warmLoadingPoster(_ url: URL?) -> DownloadTask?")
-    )
-    XCTAssertTrue(preloaderSource.contains("loadingPosterWarmDownloadTask?.cancel()"))
-    XCTAssertTrue(preloaderSource.contains("loadingPosterWarmDownloadTask = downloadTask"))
-    XCTAssertTrue(preloaderSource.contains("let downloadTask = KingfisherManager.shared.retrieveImage("))
-    XCTAssertTrue(preloaderSource.contains("MediaDetailLoadingPoster.processor"))
   }
 
   func testLoadingPosterIsScopedToNavigationEntryInsteadOfGlobalState() throws {
@@ -1020,6 +996,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
   func testAllRootMediaDestinationsRouteCollectionsDefensively() throws {
     for relativePath in [
       "MoviePilot-TV/Views/Pages/HomeView.swift",
+      "MoviePilot-TV/Views/Pages/SubscriptionsView.swift",
       "MoviePilot-TV/Views/Pages/ExploreView.swift",
       "MoviePilot-TV/Views/Pages/RecommendView.swift",
       "MoviePilot-TV/Views/Pages/SearchView.swift",

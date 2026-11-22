@@ -13,7 +13,7 @@ struct RecommendView: View {
         if allowsRequests {
           RecommendRootContent(isSelected: isSelected)
         } else {
-          Color(white: 0.1).ignoresSafeArea()
+          AppBackground()
         }
       }
       .navigationDestination(for: ImageNavigationEntry.self) { entry in
@@ -107,8 +107,7 @@ private struct RecommendRootContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         // 在 Paginator 初始化完成前显示加载指示器
-        ProgressView()
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        FirstLoadIndicator(minHeight: nil, maxHeight: .infinity)
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in

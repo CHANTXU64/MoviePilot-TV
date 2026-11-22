@@ -8,12 +8,11 @@
 // 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Components/TextSubtitleReporting.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：`partitioned(by:)` 来自 swift-algorithms（未引入），换成等价的两次过滤。
+// 修改：字幕来自 AetherEngine（`SubtitleSnapshot`），没有第二字幕，按显示顺序上报文字字幕；图片字幕没有文字，不上报。
 // 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import MediaAccessibilityKit
-import MPVUI
 import SwiftUI
 
 struct TextSubtitleReporting: ViewModifier {
@@ -32,7 +31,7 @@ struct TextSubtitleReporting: ViewModifier {
     @State
     private var report = CaptionReportState()
 
-    let snapshot: TextSubtitleSnapshot?
+    let snapshot: SubtitleSnapshot?
     let isVisible: Bool
     var reportCaptions: (@MainActor ([String]) -> Void)? = reportToSystem
 
@@ -45,11 +44,7 @@ struct TextSubtitleReporting: ViewModifier {
     }
 
     private var captionTexts: [String] {
-        // Secondary captions appear above primary captions. Preserve reading order.
-        let regions = snapshot?.regions ?? []
-        let (other, secondary) = (regions.filter { $0.role != .secondary }, regions.filter { $0.role == .secondary })
-
-        return (secondary + other)
+        (snapshot?.texts ?? [])
             .map(\.text)
             .compacted(using: \.nilIfBlank)
     }

@@ -71,13 +71,17 @@ struct ImageNavigationDestination: View {
       }
     }
     .environment(\.pageImageLifecycle, lifecycle)
+    // Top Shelf 交接在目标页呈现、并且焦点已经进了这一页时才算完成：只看呈现就结束的话，
+    // 页面补写焦点之前那几帧焦点还停在 Tab 栏，这时按 Menu 会直接退出 App。首个焦点由页面自己写。
     .background(PresentationReadyAction(
       isEnabled: topShelfPresentation.blocksInteraction
         && topShelfPresentation.routeID == entry.id
         && navigationCoordinator.topEntryID == entry.id
         && navigationCoordinator.isStackInteractive && scenePhase == .active,
       requiresNavigationTop: true,
-      action: { topShelfPresentation.didPresent(entry.id) }
+      contentFocusMatches: true,
+      onContentFocus: { topShelfPresentation.didPresent(entry.id) },
+      action: {}
     ))
     // 每次外部入口都有独立的详情状态与 appearance，重复同一卡片也重新交接焦点。
     .id(entry.id)

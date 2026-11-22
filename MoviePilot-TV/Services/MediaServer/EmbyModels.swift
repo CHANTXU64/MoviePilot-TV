@@ -71,6 +71,19 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let locationType: String?
   /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它；单集条目上的 `Tmdb` 是 TMDB 单集 ID。
   let providerIDs: [String: String]?
+  /// 服务器上的文件路径。列表接口要在 `Fields` 里点名才给。
+  let path: String?
+  let premiereDate: String?
+  /// 单集所属的剧。
+  let seriesID: String?
+  /// 以下是播放界面的展示信息，MoviePilot 没有时才用（见 `PlaybackMetadata`）。简介在列表接口里要点名才给。
+  let overview: String?
+  let communityRating: Double?
+  let officialRating: String?
+  /// 图片类型（`Primary`、`Thumb` 等）→ 图片版本标签。
+  let imageTags: [String: String]?
+  let backdropImageTags: [String]?
+  let seriesPrimaryImageTag: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
@@ -84,6 +97,15 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     case seriesName = "SeriesName"
     case locationType = "LocationType"
     case providerIDs = "ProviderIds"
+    case path = "Path"
+    case premiereDate = "PremiereDate"
+    case seriesID = "SeriesId"
+    case overview = "Overview"
+    case communityRating = "CommunityRating"
+    case officialRating = "OfficialRating"
+    case imageTags = "ImageTags"
+    case backdropImageTags = "BackdropImageTags"
+    case seriesPrimaryImageTag = "SeriesPrimaryImageTag"
   }
 
   init(from decoder: Decoder) throws {
@@ -99,6 +121,15 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
     locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
     providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
+    path = try? container.decodeIfPresent(String.self, forKey: .path)
+    premiereDate = try? container.decodeIfPresent(String.self, forKey: .premiereDate)
+    seriesID = try? container.decodeIfPresent(String.self, forKey: .seriesID)
+    overview = try? container.decodeIfPresent(String.self, forKey: .overview)
+    communityRating = try? container.decodeIfPresent(Double.self, forKey: .communityRating)
+    officialRating = try? container.decodeIfPresent(String.self, forKey: .officialRating)
+    imageTags = try? container.decodeIfPresent([String: String].self, forKey: .imageTags)
+    backdropImageTags = try? container.decodeIfPresent([String].self, forKey: .backdropImageTags)
+    seriesPrimaryImageTag = try? container.decodeIfPresent(String.self, forKey: .seriesPrimaryImageTag)
   }
 
   var playbackPositionTicks: Int64 {
@@ -109,8 +140,23 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     }
   }
 
+  /// 这个用户最后一次播放的时间（`UserData.LastPlayedDate`，如 `2025-01-05T12:34:56.1234567Z`）；没有或读不出时为 nil。
+  var lastPlayedAt: Date? {
+    guard case .string(let text) = userData?["LastPlayedDate"] else { return nil }
+    return EmbyDate.parse(text)
+  }
+
+  /// 这个用户已看完。读不到时当作没看完。
+  var isPlayed: Bool {
+    if case .bool(let value) = userData?["Played"] { return value }
+    return false
+  }
+
   /// 转成与服务器无关的条目。没有 `Type` 时按 `defaultKind`（剧集列表里的都是单集）。
-  func serverItem(defaultKind: ServerMediaItem.Kind = .other) -> ServerMediaItem {
+  /// `image` 按条目 ID、图片类型和版本标签给出图片地址；不传时条目不带图片。
+  func serverItem(
+    defaultKind: ServerMediaItem.Kind = .other, image: ((_ itemID: String, _ type: String, _ tag: String) -> URL?)? = nil
+  ) -> ServerMediaItem {
     let kind: ServerMediaItem.Kind
     switch type {
     case "Movie": kind = .movie
@@ -129,8 +175,42 @@ nonisolated struct EmbyItem: Decodable, Sendable {
       episodeNumberEnd: indexNumberEnd,
       runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
       resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
+      played: isPlayed,
+      lastPlayedAt: lastPlayedAt,
       hasFile: locationType?.lowercased() != "virtual",
-      externalIDs: ExternalMediaID.normalizedTable(providerIDs))
+      externalIDs: ExternalMediaID.normalizedTable(providerIDs),
+      path: path,
+      premiereDate: premiereDate,
+      seriesID: seriesID,
+      overview: overview,
+      communityRating: communityRating,
+      officialRating: officialRating,
+      posterURL: posterURL(kind: kind, image: image),
+      thumbnailURL: thumbnailURL(kind: kind, image: image))
+  }
+
+  /// 竖版海报：单集用所属剧的主图，其他用自己的主图。
+  private func posterURL(
+    kind: ServerMediaItem.Kind, image: ((String, String, String) -> URL?)?
+  ) -> URL? {
+    guard let image else { return nil }
+    if kind == .episode {
+      guard let seriesID, let tag = trimmedNonEmpty([seriesPrimaryImageTag]) else { return nil }
+      return image(seriesID, "Primary", tag)
+    }
+    return trimmedNonEmpty([imageTags?["Primary"]]).flatMap { image(id, "Primary", $0) }
+  }
+
+  /// 横版图：单集的主图就是这一集的截图；电影用横版缩略图，没有时用第一张背景图。
+  private func thumbnailURL(
+    kind: ServerMediaItem.Kind, image: ((String, String, String) -> URL?)?
+  ) -> URL? {
+    guard let image else { return nil }
+    if kind == .episode {
+      return trimmedNonEmpty([imageTags?["Primary"]]).flatMap { image(id, "Primary", $0) }
+    }
+    if let tag = trimmedNonEmpty([imageTags?["Thumb"]]) { return image(id, "Thumb", tag) }
+    return trimmedNonEmpty([backdropImageTags?.first]).flatMap { image(id, "Backdrop", $0) }
   }
 }
 
@@ -138,17 +218,6 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
-  /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
-  var width: Int?
-  var height: Int?
-  /// Emby 读到的帧率，如 23.976025。
-  var frameRate: Double?
-  /// `SDR`、`HDR 10`、`HLG`、`DolbyVision` 等。
-  var videoRange: String?
-  /// `Hdr10`、`Hdr10Plus`、`HyperLogGamma`、`DolbyVision` 等。
-  var extendedVideoType: String?
-  /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
-  var extendedVideoSubType: String?
 
   init(type: String?, codec: String?, isDefault: Bool? = nil) {
     self.type = type
@@ -160,13 +229,6 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     case type = "Type"
     case codec = "Codec"
     case isDefault = "IsDefault"
-    case width = "Width"
-    case height = "Height"
-    case realFrameRate = "RealFrameRate"
-    case averageFrameRate = "AverageFrameRate"
-    case videoRange = "VideoRange"
-    case extendedVideoType = "ExtendedVideoType"
-    case extendedVideoSubType = "ExtendedVideoSubType"
   }
 
   init(from decoder: Decoder) throws {
@@ -174,14 +236,6 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     type = try? container.decodeIfPresent(String.self, forKey: .type)
     codec = try? container.decodeIfPresent(String.self, forKey: .codec)
     isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
-    width = try? container.decodeIfPresent(Int.self, forKey: .width)
-    height = try? container.decodeIfPresent(Int.self, forKey: .height)
-    frameRate =
-      (try? container.decodeIfPresent(Double.self, forKey: .realFrameRate))
-      ?? (try? container.decodeIfPresent(Double.self, forKey: .averageFrameRate))
-    videoRange = try? container.decodeIfPresent(String.self, forKey: .videoRange)
-    extendedVideoType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoType)
-    extendedVideoSubType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoSubType)
   }
 }
 
@@ -192,14 +246,24 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
+  /// 这个版本的片长。条目上的 `RunTimeTicks` 只对应其中一个版本。
+  let runTimeTicks: Int64?
+  /// 这个版本对应的条目（多版本时各版本是不同条目），章节截图挂在它上面。
+  let itemID: String?
+  let chapters: [EmbyChapter]
+
   init(
-    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
+    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream],
+    runTimeTicks: Int64? = nil
   ) {
     self.id = id
     self.name = name
     self.container = container
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
+    self.runTimeTicks = runTimeTicks
+    itemID = nil
+    chapters = []
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -208,6 +272,9 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     case container = "Container"
     case `protocol` = "Protocol"
     case mediaStreams = "MediaStreams"
+    case runTimeTicks = "RunTimeTicks"
+    case itemID = "ItemId"
+    case chapters = "Chapters"
   }
 
   init(from decoder: Decoder) throws {
@@ -216,13 +283,27 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     name = try? container.decodeIfPresent(String.self, forKey: .name)
     self.container = try? container.decodeIfPresent(String.self, forKey: .container)
     self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
-    mediaStreams =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams))?
-      .compactMap(\.value) ?? []
+    let streams = try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams)
+    mediaStreams = streams?.compactMap(\.value) ?? []
+    runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
+    itemID = try? container.decodeIfPresent(String.self, forKey: .itemID)
+    // 没有 `ChapterIndex` 时截图序号按服务器列表里的位置，要在丢掉读不出的条目之前记下。
+    let chapters = try? container.decodeIfPresent([LossyDecodable<EmbyChapter>].self, forKey: .chapters)
+    self.chapters = (chapters ?? []).enumerated().compactMap { offset, entry in
+      entry.value.map { chapter in
+        var chapter = chapter
+        chapter.chapterIndex = chapter.chapterIndex ?? offset
+        return chapter
+      }
+    }
   }
 
-  /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
-  var serverSource: ServerMediaSource {
+  /// 转成与服务器无关的片源：能否直连在这里按 Emby 的数据算好。
+  /// `chapterImage` 按条目 ID、章节序号和版本标签给出章节截图地址；不传时章节不带截图。
+  /// 片源没给 `ItemId` 时截图挂在 `fallbackItemID` 上：只有一个版本时它就是正在播的条目。
+  func serverSource(
+    fallbackItemID: String? = nil, chapterImage: ((_ itemID: String, _ index: Int, _ tag: String) -> URL?)? = nil
+  ) -> ServerMediaSource {
     let unsupported: PlaybackUnsupported?
     switch EmbyDirectPlay.evaluate(self) {
     case .success: unsupported = nil
@@ -230,35 +311,54 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
     }
     return ServerMediaSource(
       id: id, name: name, container: container, unsupportedReason: unsupported,
-      displayModeHint: DisplayModeHint(source: self))
+      runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
+      chapters: serverChapters(itemID: trimmedNonEmpty([itemID, fallbackItemID]), image: chapterImage),
+      creditsStartSeconds: creditsStartSeconds)
+  }
+
+  /// Emby 4.8 起检测出的片尾字幕起点，放在章节列表里的 `CreditsStart` 标记；有多个时取最早的。
+  var creditsStartSeconds: Double? {
+    chapters.filter { $0.markerType == "CreditsStart" }.compactMap(\.startPositionTicks).min().map(EmbyTicks.seconds)
+  }
+
+  /// 只取普通章节。Emby 把片头、片尾检测的标记（`IntroStart`、`CreditsStart` 等）也放在章节列表里，它们不是章节。
+  private func serverChapters(itemID: String?, image: ((String, Int, String) -> URL?)?) -> [ServerChapter] {
+    chapters.compactMap { chapter in
+      guard chapter.markerType == nil || chapter.markerType == "Chapter", let ticks = chapter.startPositionTicks
+      else { return nil }
+      let imageURL = trimmedNonEmpty([chapter.imageTag]).flatMap { tag in
+        itemID.flatMap { id in chapter.chapterIndex.flatMap { image?(id, $0, tag) } }
+      }
+      return ServerChapter(name: chapter.name, startSeconds: EmbyTicks.seconds(ticks), imageURL: imageURL)
+    }
   }
 }
 
-nonisolated extension DisplayModeHint {
-  /// Emby 片源的第一条视频流。
-  init?(source: EmbyMediaSource) {
-    guard let video = source.mediaStreams.first(where: { $0.type?.lowercased() == "video" }) else { return nil }
-    self.init(
-      width: video.width, height: video.height, framesPerSecond: video.frameRate, codec: video.codec,
-      range: Self.dynamicRange(of: video))
+nonisolated struct EmbyChapter: Decodable, Sendable, Equatable {
+  let name: String?
+  let startPositionTicks: Int64?
+  /// `Chapter` 是普通章节；Emby 4.8 起片头片尾检测的结果也以 `IntroStart`、`IntroEnd`、`CreditsStart` 放在这里。
+  let markerType: String?
+  /// 章节截图的序号；老版本 Emby 不给，这时按在列表里的位置（解码片源时补上）。
+  var chapterIndex: Int?
+  /// 章节截图的版本标签；媒体库没开「提取章节图片」时没有。
+  let imageTag: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case name = "Name"
+    case startPositionTicks = "StartPositionTicks"
+    case markerType = "MarkerType"
+    case chapterIndex = "ChapterIndex"
+    case imageTag = "ImageTag"
   }
 
-  /// Emby 的 `VideoRange`、`ExtendedVideoType`、`ExtendedVideoSubType` 对应的动态范围；认不准时为 nil。
-  private static func dynamicRange(of video: EmbyMediaStream) -> DynamicRange? {
-    let extended = video.extendedVideoType?.lowercased() ?? ""
-    let range = video.videoRange?.lowercased() ?? ""
-    if extended == "dolbyvision" || range == "dolbyvision" {
-      switch video.extendedVideoSubType?.lowercased() {
-      case "doviprofile50": return .dolbyVision(profile: 5, compatibilityID: 0)
-      case "doviprofile81": return .dolbyVision(profile: 8, compatibilityID: 1)
-      case "doviprofile84": return .dolbyVision(profile: 8, compatibilityID: 4)
-      default: return nil
-      }
-    }
-    if extended.hasPrefix("hdr10") || range.contains("hdr 10") || range.contains("hdr10") { return .hdr10 }
-    if extended == "hyperloggamma" || extended == "hlg" || range.contains("hlg") { return .hlg }
-    if range == "sdr" || extended == "none" || (extended.isEmpty && range.isEmpty) { return .sdr }
-    return nil
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
+    startPositionTicks = try? container.decodeIfPresent(Int64.self, forKey: .startPositionTicks)
+    markerType = try? container.decodeIfPresent(String.self, forKey: .markerType)
+    chapterIndex = try? container.decodeIfPresent(Int.self, forKey: .chapterIndex)
+    imageTag = try? container.decodeIfPresent(String.self, forKey: .imageTag)
   }
 }
 
@@ -299,6 +399,139 @@ nonisolated struct EmbyItemsPage: Decodable, Sendable {
   }
 }
 
+/// `Library/SelectableMediaFolders` 里的一个媒体库：`Id` 用来刷新这个媒体库，`SubFolders` 的 `Path` 是 Emby 看到的文件夹。
+/// MoviePilot 叫 Emby 刷新时按这个接口找媒体库。
+nonisolated struct EmbyMediaFolder: Decodable, Sendable {
+  let id: String
+  let paths: [String]
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case subFolders = "SubFolders"
+  }
+
+  private struct SubFolder: Decodable, Sendable {
+    let path: String?
+    private enum CodingKeys: String, CodingKey { case path = "Path" }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    guard let id = trimmedNonEmpty([try container.decode(String.self, forKey: .id)]) else {
+      throw DecodingError.dataCorruptedError(forKey: .id, in: container, debugDescription: "媒体库没有 ID")
+    }
+    self.id = id
+    // 文件夹读不出时这个媒体库还能整库刷新，只是按路径找不到它。
+    let subFolders = (try? container.decodeIfPresent([LossyDecodable<SubFolder>].self, forKey: .subFolders)) ?? nil
+    paths = (subFolders ?? []).compactMap { $0.value?.path.flatMap { trimmedNonEmpty([$0]) } }
+  }
+
+  /// 整份列表：个别媒体库读不出时丢掉它，其余照常用。
+  static func list(from decoder: Decoder) throws -> [EmbyMediaFolder] {
+    var container = try decoder.unkeyedContainer()
+    var folders: [EmbyMediaFolder] = []
+    var count = 0
+    while !container.isAtEnd {
+      count += 1
+      if let folder = try container.decode(LossyDecodable<EmbyMediaFolder>.self).value { folders.append(folder) }
+    }
+    guard count == 0 || !folders.isEmpty else {
+      throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "媒体库全部无法解码"))
+    }
+    return folders
+  }
+}
+
+/// `Library/VirtualFolders` 里的一个媒体库：文件夹和单集的元数据来源（要管理员权限的密钥）。
+/// 单集对应据此判断服务器上的单集资料是不是从 TMDB 来的（见 `MediaLibraryProfile`）。
+nonisolated struct EmbyVirtualFolder: Decodable, Sendable {
+  let profile: MediaLibraryProfile
+
+  private enum CodingKeys: String, CodingKey {
+    case locations = "Locations"
+    case libraryOptions = "LibraryOptions"
+  }
+
+  private struct Options: Decodable, Sendable {
+    let paths: [String]
+    let episodeFetchers: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+      case pathInfos = "PathInfos"
+      case typeOptions = "TypeOptions"
+    }
+
+    private struct PathInfo: Decodable, Sendable {
+      let path: String?
+      private enum CodingKeys: String, CodingKey { case path = "Path" }
+    }
+
+    private struct TypeOption: Decodable, Sendable {
+      let type: String?
+      let fetchers: [String]?
+      private enum CodingKeys: String, CodingKey {
+        case type = "Type"
+        case fetchers = "MetadataFetchers"
+      }
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let infos = (try? container.decodeIfPresent([LossyDecodable<PathInfo>].self, forKey: .pathInfos)) ?? nil
+      paths = (infos ?? []).compactMap { $0.value?.path.flatMap { trimmedNonEmpty([$0]) } }
+      let types = (try? container.decodeIfPresent([LossyDecodable<TypeOption>].self, forKey: .typeOptions)) ?? nil
+      // 单集这一项读不出时按没有处理：服务器用默认来源，含 TMDB。
+      episodeFetchers = (types ?? []).compactMap(\.value).first { $0.type == "Episode" }?.fetchers
+    }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let locations = (try? container.decodeIfPresent([LossyDecodable<String>].self, forKey: .locations)) ?? nil
+    let options = (try? container.decodeIfPresent(Options.self, forKey: .libraryOptions)) ?? nil
+    var paths: [String] = []
+    for path in (locations ?? []).compactMap({ $0.value.flatMap { trimmedNonEmpty([$0]) } }) + (options?.paths ?? [])
+    where !paths.contains(path) {
+      paths.append(path)
+    }
+    profile = MediaLibraryProfile(paths: paths, episodeFetchers: options?.episodeFetchers)
+  }
+}
+
+/// `Library/VirtualFolders` 的回包（顶层是数组）。个别媒体库读不出时丢掉它：它的文件找不到所属的库，按来源不明处理。
+nonisolated struct EmbyVirtualFolderList: Decodable, Sendable {
+  let profiles: [MediaLibraryProfile]
+
+  private enum CodingKeys: String, CodingKey { case items = "Items" }
+
+  /// `Library/VirtualFolders/Query` 回 `{"Items": [...]}`，`Library/VirtualFolders` 回顶层数组，两种都认。
+  init(from decoder: Decoder) throws {
+    if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
+      try self.init(items: keyed.superDecoder(forKey: .items))
+    } else {
+      try self.init(items: decoder)
+    }
+  }
+
+  private init(items decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    var profiles: [MediaLibraryProfile] = []
+    while !container.isAtEnd {
+      if let folder = try container.decode(LossyDecodable<EmbyVirtualFolder>.self).value { profiles.append(folder.profile) }
+    }
+    self.profiles = profiles
+  }
+}
+
+/// `Library/SelectableMediaFolders` 的回包（顶层是数组）。
+nonisolated struct EmbyMediaFolderList: Decodable, Sendable {
+  let folders: [EmbyMediaFolder]
+
+  init(from decoder: Decoder) throws {
+    folders = try EmbyMediaFolder.list(from: decoder)
+  }
+}
+
 /// 数组里单个元素坏掉时只丢弃该元素。
 nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodable, Sendable {
   let value: Value?
@@ -319,7 +552,7 @@ nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodabl
 
 // MARK: - 直接播放判定
 
-/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由 mpv 播放。
+/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由应用内播放器（AetherEngine）播放。
 nonisolated enum EmbyDirectPlay {
   struct Selection: Equatable, Sendable {
     let source: EmbyMediaSource
@@ -374,4 +607,22 @@ nonisolated enum EmbyTicks {
 
   static func from(seconds: Double) -> Int { Int(seconds * perSecond) }
   static func seconds(_ ticks: Int64) -> Double { Double(ticks) / perSecond }
+}
+
+/// Emby/Jellyfin 的时间（ISO 8601，小数秒常有 7 位，系统的解析器认不了那么多位）：去掉小数秒再按 UTC 解析，小数秒另加上。
+/// 没写时区的按 UTC。
+nonisolated enum EmbyDate {
+  static func parse(_ text: String) -> Date? {
+    var value = text.trimmingCharacters(in: .whitespaces)
+    var fraction = 0.0
+    if let dot = value.firstIndex(of: ".") {
+      let digits = value[value.index(after: dot)...].prefix { $0.isNumber }
+      fraction = Double("0." + digits) ?? 0
+      value.removeSubrange(dot..<value.index(dot, offsetBy: digits.count + 1))
+    }
+    if value.count == 19 { value += "Z" }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value).map { $0.addingTimeInterval(fraction) }
+  }
 }

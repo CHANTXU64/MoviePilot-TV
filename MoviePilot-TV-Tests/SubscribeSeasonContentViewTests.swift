@@ -23,7 +23,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
     let deleteRequestCount =
@@ -66,7 +66,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
 
@@ -97,7 +97,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [101])
 
@@ -125,7 +125,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [102])
 
@@ -155,7 +155,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let staleRefresh = Task {
       await viewModel.refreshSubscriptions(forceRefresh: true)
     }
@@ -205,7 +205,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.subscribedSeasons, [2])
 
     await staleGate.open()
-    await staleRefresh.value
+    _ = await staleRefresh.value
 
     XCTAssertEqual(viewModel.subscribedSeasons, [2])
     XCTAssertEqual(viewModel.seasonSubscriptions[2]?.id, 402)
@@ -309,7 +309,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let success = try await viewModel.searchSubscribe(
       subscribe: Subscribe(id: 901, name: "搜索前订阅", type: "电视剧")
     )
@@ -351,7 +351,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = HomeViewModel(apiService: service)
+    let viewModel = SubscriptionsViewModel(apiService: service)
     let statusResult = try await viewModel.toggleSubscribeStatus(subscribe: subscriptions[0])
     XCTAssertTrue(statusResult.success)
     XCTAssertEqual(notifications.count(), 1)
@@ -704,6 +704,46 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(try viewModel.seasonAvailabilityMedia().episode_group, "")
   }
 
+  /// 豆瓣等来源的详情不带 season_info：详情页分季行和 Web 订阅弹窗一样向 `/media/seasons` 要季，
+  /// 不再显示「暂无分季信息」挡住订阅；详情自带分季时照旧直接用，不多发请求。
+  func testDetailSeasonsFallBackToSeasonsAPIOnlyWhenDetailHasNoSeasons() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    try await stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "douban-seasons")
+
+    let douban = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(douban_id: "36123456", source: "douban", media_id: "36123456", title: "豆瓣剧集", type: "电视剧"),
+      apiService: service
+    )
+    await douban.loadData(forceRefreshSubscriptions: false)
+
+    XCTAssertFalse(douban.hasSeasonLoadError)
+    XCTAssertEqual(douban.seasonInfos.compactMap(\.season_number), [1])
+    let doubanRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(doubanRequests, 1)
+
+    let tmdb = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_660, source: "themoviedb", media_id: "987660", title: "自带分季", type: "电视剧",
+        season_info: [try makeSeason(number: 1), try makeSeason(number: 2)]),
+      apiService: service
+    )
+    await tmdb.loadData(forceRefreshSubscriptions: false)
+
+    XCTAssertEqual(tmdb.seasonInfos.compactMap(\.season_number), [1, 2])
+    let totalRequests = await stub.requestCount(path: "/api/v1/media/seasons")
+    XCTAssertEqual(totalRequests, 1, "详情自带分季时不请求季接口")
+  }
+
   func testEpisodeGroupsRetryAutomaticallyWithoutBlockingDefaultSeasons() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
@@ -740,10 +780,12 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertFalse(viewModel.hasSeasonLoadError)
     XCTAssertEqual(viewModel.seasonInfos.compactMap(\.season_number), [1])
     XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+    XCTAssertFalse(viewModel.episodeGroupCatalog.hasOnlyDefaultOrder, "未加载完成时保留日期提示")
     await gate.open()
     try await catalog
 
     XCTAssertEqual(viewModel.episodeGroups.map(\.id), ["group-a"])
+    XCTAssertFalse(viewModel.episodeGroupCatalog.hasOnlyDefaultOrder, "有非空剧集组时保留日期提示")
     let groupRequests = await stub.requestCount(path: "/api/v1/media/groups/987654")
     XCTAssertEqual(groupRequests, 2)
     let seasonsRequests = await stub.requestCount(path: "/api/v1/media/seasons")
@@ -777,11 +819,20 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     configureSubscriptionSnapshotAccess(service, userName: "no-episode-groups")
 
     let catalog = EpisodeGroupCatalog(apiService: service)
+    XCTAssertFalse(catalog.hasOnlyDefaultOrder)
     try await catalog.load(tmdbID: 987_654, apiService: service)
 
     XCTAssertTrue(catalog.groups.isEmpty)
+    XCTAssertTrue(catalog.hasOnlyDefaultOrder)
     let requests = await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/media/groups/987654")
     XCTAssertEqual(requests, 1)
+
+    await SubscriptionSnapshotURLProtocol.stub.setEpisodeGroupsResponse(
+      #"[{"id":"empty","name":"空编排","group_count":1,"episode_count":0}]"#)
+    let withEmptyGroup = EpisodeGroupCatalog(apiService: service)
+    try await withEmptyGroup.load(tmdbID: 987_655, apiService: service)
+    XCTAssertEqual(withEmptyGroup.groups.map(\.id), ["empty"])
+    XCTAssertTrue(withEmptyGroup.hasOnlyDefaultOrder)
   }
 
   func testEpisodeGroupCatalogStopsAfterOneAutomaticRetry() async throws {
@@ -860,7 +911,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let seasons = try await MediaDetailEpisodeSeasons.fetch(
       media: media, forceRefresh: false, apiService: service
     )
-    XCTAssertEqual(seasons.compactMap(\.season_number), [0, 1, 2])
+    XCTAssertEqual(seasons.compactMap(\.season_number), [1, 2, 0])
     XCTAssertFalse(MediaDetailEpisodeSeasons.needsLookup(seasons, media: media))
     let scopedSeasons = try await service.getMediaSeasons(media: media)
     XCTAssertEqual(scopedSeasons.compactMap(\.season_number), [1])
@@ -1163,6 +1214,28 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(updated.compactMap(\.season_number), [2])
     let requests = await stub.requestCount(path: "/api/v1/media/group/seasons/group-retry")
     XCTAssertEqual(requests, 2)
+  }
+
+  func testStandaloneSeasonPageShowsLoadingBeforeTheFirstLoadStarts() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setUnfilteredSeasonsResponse("[]")
+    try await stub.setDefaultSubscriptions([])
+    let media = MediaInfo(tmdb_id: 987_663, title: "分季首帧", type: "电视剧")
+
+    let viewModel = SubscribeSeasonViewModel(mediaInfo: media, apiService: service)
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(viewModel.showsLoadingState, "加载任务还没跑时不能先显示「未查询到季集信息」")
+
+    await viewModel.loadSeasonManagementData()
+    XCTAssertTrue(viewModel.seasonInfos.isEmpty)
+    XCTAssertFalse(viewModel.showsLoadingState, "确实查不到季信息时才显示空状态")
   }
 
   func testSeasonManagementDoesNotRetryEmptyButRecoversOnReentry() async throws {
@@ -1767,6 +1840,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let viewModel = SubscribeSeasonViewModel(
       mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
@@ -1782,6 +1857,144 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.errorMessage, "该季订阅正在处理")
     XCTAssertNotNil(viewModel.seasonSubscriptions[3])
     XCTAssertTrue(viewModel.subscribedSeasons.contains(3))
+  }
+
+  func testEpisodeTrialSeasonIsMarkedButFormalSubscriptionWins() {
+    let media = MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧")
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: [
+        Subscribe(id: 71, name: "航海王", type: "电视剧", season: 1, state: "S", tmdbid: 12_345, filter: marker),
+        Subscribe(id: 72, name: "航海王", type: "电视剧", season: 1, tmdbid: 12_345, episode_group: "group-a"),
+        Subscribe(id: 73, name: "航海王", type: "电视剧", season: 2, state: "S", tmdbid: 12_345, filter: marker),
+      ],
+      matching: media) { $0.hasEpisodeTrialMarker ? .active : nil }
+
+    XCTAssertEqual(summaries[1]?.id, 72, "同一季有正式订阅时显示正式订阅")
+    XCTAssertEqual(summaries[1]?.isEpisodeTrial, false)
+    XCTAssertEqual(summaries[2]?.isEpisodeTrial, true)
+    XCTAssertEqual(summaries[2]?.statusDisplayText(episodeGroups: []), "试看中 · 默认剧集组")
+  }
+
+  func testEpisodeTrialSeasonIsNeverUnsubscribed() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    let preloader = APIService.shared.mediaPreloader
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
+      Subscribe(id: 63, name: "航海王", type: "电视剧", season: 3, state: "S", tmdbid: 12_345, start_episode: 5, filter: marker)
+    ])
+    await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(#"{"success":true}"#)
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    // 本机发起的试看才算试看中。
+    var credential = EpisodeTrialCredential(
+      marker: marker,
+      target: EpisodeTrialTarget(
+        identity: MediaIdentity(source: "themoviedb", mediaId: "12345"), season: 3, episodeGroup: nil,
+        seasonKey: "season-test", episodeKey: "season-test|5", episodeNumber: 5, title: "航海王"),
+      owner: "subscription-snapshot")
+    credential.subscriptionID = 63
+    let trials = service.sessionScope.episodeTrial
+    defer { trials.clearStoredStateForTesting() }
+    try trials.recordCredentialForTesting(credential)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
+      apiService: service
+    )
+    await viewModel.checkSubscriptionStatus(forceRefresh: true)
+    XCTAssertTrue(viewModel.isSeasonHeldByEpisodeTrial(3))
+
+    viewModel.requestUnsubscribe(season: 3)
+    XCTAssertNil(viewModel.showUnsubscribeConfirm, "试看中的季不进入取消确认")
+    XCTAssertEqual(viewModel.episodeTrialNoticeSeason, 3)
+
+    // 确认框打开后这一季才变成试看订阅，确认取消也不能删掉它。
+    viewModel.episodeTrialNoticeSeason = nil
+    viewModel.seasonSubscriptions = [3: SeasonSubscriptionSummary(id: 63, season: 3, episodeGroup: nil)]
+    viewModel.showUnsubscribeConfirm = 3
+    await viewModel.unsubscribeSeason(3)
+    let deletes = await SubscriptionSnapshotURLProtocol.stub.deleteRequestCount()
+    XCTAssertEqual(deletes, 0)
+    XCTAssertNil(viewModel.showUnsubscribeConfirm)
+    XCTAssertEqual(viewModel.episodeTrialNoticeSeason, 3)
+    XCTAssertTrue(viewModel.isSeasonHeldByEpisodeTrial(3))
+  }
+
+  func testSeasonPageFollowsLocalTrialChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    let preloader = APIService.shared.mediaPreloader
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
+      Subscribe(id: 64, name: "航海王", type: "电视剧", season: 3, state: "S", tmdbid: 12_345, start_episode: 5, filter: marker)
+    ])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let trials = service.sessionScope.episodeTrial
+    defer { trials.clearStoredStateForTesting() }
+    let target = EpisodeTrialTarget(
+      identity: MediaIdentity(source: "themoviedb", mediaId: "12345"), season: 3, episodeGroup: nil,
+      seasonKey: "season-follow-test", episodeKey: "season-follow-test|5", episodeNumber: 5, title: "航海王")
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧"),
+      apiService: service
+    )
+    await viewModel.checkSubscriptionStatus(forceRefresh: true)
+    XCTAssertFalse(viewModel.isSeasonHeldByEpisodeTrial(3), "还没有本机凭据时按普通订阅显示")
+
+    let following = Task { await viewModel.followEpisodeTrials() }
+    defer { following.cancel() }
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    var credential = EpisodeTrialCredential(marker: marker, target: target, owner: "subscription-snapshot")
+    credential.subscriptionID = 64
+    try trials.recordCredentialForTesting(credential)
+    try await waitUntil { viewModel.isSeasonHeldByEpisodeTrial(3) }
+    XCTAssertEqual(viewModel.subscriptionStatusText(for: 3), "试看中 · 默认剧集组")
+
+    credential.cancelRequested = true
+    try trials.recordCredentialForTesting(credential)
+    try await waitUntil { viewModel.isSeasonCancellingTrial(3) }
+
+    // 同一季换成另一条凭据，原来那条就不再是本机的试看（相当于收尾或放手后移除了凭据）。
+    let other = EpisodeTrialCredential(
+      marker: EpisodeTrialTemporarySubscription.makeMarker(at: Date()), target: target, owner: "subscription-snapshot")
+    try trials.recordCredentialForTesting(other)
+    try await waitUntil { !viewModel.isSeasonHeldByEpisodeTrial(3) }
+    XCTAssertEqual(viewModel.subscriptionStatusText(for: 3), "已订阅 · 默认剧集组")
+  }
+
+  func testEpisodeTrialSubscriptionCardNamesTheEpisode() {
+    let marker = EpisodeTrialTemporarySubscription.makeMarker(at: Date())
+    let trial = Subscribe(id: 1, name: "航海王", type: "电视剧", season: 2, state: "S", start_episode: 5, filter: marker)
+    XCTAssertTrue(trial.hasEpisodeTrialMarker)
+    XCTAssertEqual(trial.episodeTrialTargetText, "第 2 季第 5 集")
+    let formal = Subscribe(id: 2, name: "航海王", type: "电视剧", season: 2, start_episode: 5, filter: "手写过滤")
+    XCTAssertFalse(formal.hasEpisodeTrialMarker)
+    XCTAssertNil(formal.episodeTrialTargetText)
   }
 
   func testSingleSeasonDeletePublishesBeforeFollowUpRefreshFails() async throws {
@@ -1807,6 +2020,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
+    // 按媒体删除订阅要求已读到后端版本；版本未知时会被拒绝。
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.9")
 
     let notifications = SubscribeSeasonNotificationCounter()
     let observer = NotificationCenter.default.addObserver(
@@ -2313,9 +2528,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   private func configureSubscriptionSnapshotAccess(
     _ service: APIService,
     userName: String = "subscription-snapshot",
-    userId: Int = 1
+    userId: Int = 1,
+    superUser: Bool = false
   ) {
-    let user = subscriptionSnapshotToken(userName: userName, userId: userId)
+    let user = subscriptionSnapshotToken(userName: userName, userId: userId, superUser: superUser)
     service.replaceSessionForTesting(
       baseURL: service.baseURL,
       token: user.access_token,
@@ -2326,12 +2542,13 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   private func subscriptionSnapshotToken(
     userName: String,
     userId: Int,
-    accessToken: String = "subscription-snapshot-token"
+    accessToken: String = "subscription-snapshot-token",
+    superUser: Bool = false
   ) -> Token {
     Token(
       access_token: accessToken,
       token_type: "bearer",
-      super_user: FlexibleBool(false),
+      super_user: FlexibleBool(superUser),
       permissions: [
         UserPermissionKey.discovery.rawValue: true,
         UserPermissionKey.search.rawValue: true,
@@ -2482,6 +2699,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
   private var mediaDeleteResponseData: Data?
   private var subscriptionDeleteResponseData: Data?
   private var requestCounts: [String: Int] = [:]
+  private var deleteCount = 0
   private var episodeGroupFailuresRemaining = 0
   private var episodeGroupsData = Data("[]".utf8)
   private var episodeGroupsGate: SubscriptionSnapshotAsyncGate?
@@ -2499,6 +2717,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
     mediaDeleteResponseData = nil
     subscriptionDeleteResponseData = nil
     requestCounts.removeAll()
+    deleteCount = 0
     episodeGroupFailuresRemaining = 0
     episodeGroupsData = Data("[]".utf8)
     episodeGroupsGate = nil
@@ -2617,9 +2836,13 @@ private actor SubscriptionSnapshotURLProtocolStub {
     requestCounts[path, default: 0]
   }
 
+  /// 所有删除请求，不论按订阅 ID 还是按媒体身份。
+  func deleteRequestCount() -> Int { deleteCount }
+
   func response(for request: URLRequest) async throws -> SubscriptionSnapshotStubResponse {
     let path = request.url?.path ?? ""
     requestCounts[path, default: 0] += 1
+    if request.httpMethod == "DELETE" { deleteCount += 1 }
 
     if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/media/"),
       let mediaDeleteResponseData

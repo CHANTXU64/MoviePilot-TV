@@ -413,6 +413,19 @@ extension UIPreviewFixtures {
     return MediaServerItemRef(itemID: "preview-item-9001", server: "Emby · 客厅")
   }
 
+  /// `/mediaserver/play` 的链接：详情页「跳转媒体库」按钮靠它生成 Emby 深链。
+  /// 默认给一条 Emby 网页链接；`.empty` 返回没有链接、`.failure` 走失败，按钮都不出现。
+  static func mediaServerPlayLink(itemID: String) async throws -> MediaServerPlayLink {
+    try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.detailMediaServerPlayLink)
+    if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.detailMediaServerPlayLink) {
+      return MediaServerPlayLink(url: nil, item_id: nil, server_id: nil)
+    }
+    return MediaServerPlayLink(
+      url: "https://emby.preview.local/web/index.html#!/item?id=\(itemID)&serverId=preview-server-1",
+      item_id: FlexibleString(itemID),
+      server_id: FlexibleString("preview-server-1"))
+  }
+
   static func detailSubscriptionLookup(
     media: MediaInfo,
     season: Int?,
@@ -936,6 +949,7 @@ extension UIPreviewFixtures {
 extension UIPreviewBehaviorKey {
   static let detailMediaDetail = "detail.mediaDetail"
   static let detailMediaServerItemRef = "detail.mediaServerItemRef"
+  static let detailMediaServerPlayLink = "detail.mediaServerPlayLink"
   static let detailSubscriptionLookup = "detail.subscriptionLookup"
   static let detailSubscription = "detail.subscription"
   static let detailAddSubscription = "detail.addSubscription"

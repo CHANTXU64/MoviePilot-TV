@@ -40,12 +40,13 @@ struct ResourceResultView: View {
           if viewModel.searchProgress > 0 {
             ProgressView(value: viewModel.searchProgress, total: 100)
               .progressViewStyle(.linear)
-              .frame(width: 300)
+              .frame(width: 360)
           }
           Button("取消") {
             viewModel.cancelSearch()
             dismiss()
           }
+          .claimsInitialFocus()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -66,6 +67,8 @@ struct ResourceResultView: View {
     .background {
       SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
+    // 详情页搜索菜单直接打开本页时，焦点不能留在 Tab 栏上：由当前显示的「取消」「重新搜索」等认领首个焦点。
+    .providesInitialFocusClaim()
     .task {
       await viewModel.search()
     }

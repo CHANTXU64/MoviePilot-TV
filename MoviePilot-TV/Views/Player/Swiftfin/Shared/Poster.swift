@@ -7,6 +7,9 @@
 //
 // 本文件改自 Swiftfin：Shared/Objects/Poster/Poster.swift
 //
+// 修改：去掉 `ImageBody` 与 `transform(image:displayType:)`：海报图改由 `PageManagedImage` 显示，不再支持各类型自定义
+// 图片样式，只保留原版用到的一种：`fitsPosterImage` 为 true 时在黑底上按比例完整显示（见 PosterImage.swift）。
+//
 
 import Foundation
 import SwiftUI
@@ -17,12 +20,14 @@ typealias ImageSourceBuilder = ArrayBuilder<ImageSource>
 protocol Poster: Displayable, Hashable, Identifiable, SystemImageable {
 
     associatedtype Environment: WithDefaultValue = Empty
-    associatedtype ImageBody: View = Image
     associatedtype LabelBody: View = EmptyView
     associatedtype ContextMenuBody: View = EmptyView
     associatedtype OverlayBody: View = EmptyView
 
     var preferredPosterDisplayType: PosterDisplayType { get }
+
+    /// 图片在海报框里按比例完整显示、空出来的地方是黑底（章节截图）；默认按比例填满。
+    var fitsPosterImage: Bool { get }
 
     /// Optional subtitle when used as a poster
     var subtitle: String? { get }
@@ -39,10 +44,6 @@ protocol Poster: Displayable, Hashable, Identifiable, SystemImageable {
 
     @MainActor
     @ViewBuilder
-    func transform(image: Image, displayType: PosterDisplayType) -> ImageBody
-
-    @MainActor
-    @ViewBuilder
     var posterLabel: LabelBody { get }
 
     @MainActor
@@ -54,16 +55,9 @@ protocol Poster: Displayable, Hashable, Identifiable, SystemImageable {
     func posterOverlay(for displayType: PosterDisplayType) -> OverlayBody
 }
 
-@MainActor
-extension Poster where ImageBody == Image {
+extension Poster {
 
-    func transform(image: Image) -> Image {
-        image
-    }
-
-    func transform(image: Image, displayType: PosterDisplayType) -> ImageBody {
-        image
-    }
+    var fitsPosterImage: Bool { false }
 }
 
 @MainActor

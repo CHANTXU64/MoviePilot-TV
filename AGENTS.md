@@ -15,6 +15,8 @@
 
 如果任务涉及上游 Web 前端、后端接口或 TV 端逻辑对齐，必须优先确认相关目录存在且是合法 Git 仓库。
 
+播放界面（`MoviePilot-TV/Views/Player/`）最初改自 [Swiftfin](https://github.com/jellyfin/Swiftfin)，现由本项目独立维护，不再跟进或同步 Swiftfin 上游。修改播放界面以 Apple HIG 和 tvOS 系统播放器的行为为准，不要以“还原 Swiftfin 原版”为理由撤销本项目已做的改动。改自 Swiftfin 的文件必须保留头部的 MPL-2.0 许可声明。
+
 ## 通用执行约束
 
 1. 全程使用中文与用户沟通。
@@ -116,7 +118,7 @@ python3 scripts/test-tvos.py
 python3 scripts/test-tvos.py --full
 ```
 
-`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，最多两个版本同时进行：第三个版本等前两个中有一个跑完、删掉自己的模拟器后再开始。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本，排队的版本也不再开始；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本，排队的版本不再开始。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
+`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，**默认逐个版本串行运行**：一个版本跑完、删掉自己的模拟器后再开始下一个。这样消除并行资源争用——两套编译加两个模拟器会争用 CPU/GPU，导致离屏字幕渲染（`ImageRenderer`）画空或度量漂移、基于 `Task.yield` 的调度用例竞态、模拟器启动失败，矩阵长期无法干净跑完。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。多版本矩阵的依赖只解析一次（放在建任何模拟器之前），每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时停止后续版本；只有测试执行阶段的普通离线用例失败才跑完其余版本并汇总。取消会停掉本次已经启动的版本，后续版本不再开始。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。需要提速时加 `--parallel` 改回最多两个版本同时运行（接受上述抖动风险）；`--serial` 已是默认，保留以兼容旧命令。已知限制：18.5 模拟器上 `PositionedSubtitleLayoutTests.testLargeCaptionStyleKeepsPositionedSubtitlesInsideThePicture` 偶发失败——2 倍大字幕右对齐时实际绘制比 `sizeThatFits` 度量宽约 9px、悬出锚点，是该系统版本的文本渲染度量差异，与并行争用无关，串行也消除不了，按已知限制对待，不靠放宽容差掩盖。
 
 CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.2`；该镜像提供 Xcode 27 与 tvOS 27.0、27.2 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。Push 前完整验收使用三版本矩阵；日常构建、定向测试与提交（commit）使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
@@ -150,7 +152,7 @@ python3 -m unittest discover -s scripts/tests
 
 该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
 
-每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和多个 tvOS 版本同时跑是两件事：版本之间可以并行（最多两个），同一个版本里的用例仍然逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
+每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和多个 tvOS 版本同时跑是两件事：版本之间默认串行（加 `--parallel` 才最多两个同时跑），同一个版本里的用例始终逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
 
 模拟器构建和测试必须保留本地 ad-hoc 签名（`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`），不要使用 `CODE_SIGNING_ALLOWED=NO`。测试会覆盖安装主 App 和扩展；关闭签名会丢失 App Group 权限，让 Top Shelf 退回静态图片。宿主测试不启动正常 App 根视图的会话加载与 Top Shelf 同步，避免测试会话写入用户首页。修改签名、打包或共享组时，除测试通过外，还须核对测试结束后的实际共享容器访问和首页展示。
 
@@ -264,7 +266,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 维护该分支时：
 
 1. 预览入口与全部预览代码只允许放在 `#if DEBUG` 中，Debug 启动参数为 `-uiPreviewMode`，可选 `-uiPreviewScene <场景 ID>` 直接打开某个场景。
-2. 预览渲染的是线上真实 View/ViewModel，只通过 `APIService` 的 DEBUG fixture 钩子替换数据。修改生产 ViewModel/View 的加载链路、模型字段或页面入口后，要同步检查预览目录对应场景是否仍能正常渲染，并补充新增页面/状态。
+2. 预览渲染的是线上真实 View/ViewModel，只通过 `APIService` 的 DEBUG fixture 钩子替换数据。修改生产 ViewModel/View 的加载链路、模型字段或页面入口后，要同步检查预览目录对应场景是否仍能正常渲染，并补充新增页面/状态（如订阅 Tab、媒体库「继续观看」、单集操作面板、试看规则与进度）。
 3. 不要把 `.github/workflows/release-preview-guard.yml` 删掉或放宽；它负责确保 Release 产物不包含预览入口。
 4. 预览数据、订阅/下载等写操作都必须走模拟后端，不能在预览里访问真实 MoviePilot 后端或写入真实登录状态。
 5. 补充页面状态时优先用真实错误对象：`UIPreviewBackend.Behavior.error(UIPreviewErrorKind)` 覆盖超时、离线、4xx/5xx、解析失败、鉴权与业务错误；全局提示用 `UIPreviewBannerHost`，播放呈现代码用 `PlaybackCoordinator.installUIPreviewPresentation`（均只在 Debug 编译）。目录标题会显示总场景数，便于核对覆盖面。

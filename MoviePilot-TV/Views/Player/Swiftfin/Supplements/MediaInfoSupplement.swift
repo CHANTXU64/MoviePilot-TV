@@ -14,6 +14,13 @@
 //   原版只在直播或可录制条目上显示，Emby 直连播放的条目不会走到这些分支。
 // - Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
 // - 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// - 信息行加上评分（MoviePilot 的 TMDB/豆瓣评分，没有时用媒体服务器的）：MoviePilot 没有分级，原版只显示分级。
+// - 片长和结束时间读 `MediaSession.runtime`（所播文件的片长，起播后以播放器读到的为准），与进度条同一个值；原版读条目的片长。
+//   结束时间在播放位置、片长、倍速任一变化时重算（原版只跟播放位置），暂停时播放器读出片长或改了倍速也会更新。
+// - 「从头播放」用播放界面统一的玻璃胶囊按钮，未聚焦时不再常亮白底。
+// - 大屏布局照 Apple TV App 播放界面的简介面板：整块圆角玻璃（`PlayerGlassPanel`），海报贴着面板左边、四周留 20，
+//   文字在中间，按钮在右边；海报定高（`PlayerPanelLayout.infoPosterHeight`，横版 402×226），横版、竖版按各自比例定宽，
+//   圆角与面板同心。原版是海报离面板左边 60 的薄材质底。
 //
 
 import SwiftUI
@@ -41,9 +48,6 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
     }
 
     private struct InfoOverlay: PresentationView {
-
-        @AdaptiveLayout
-        private var viewLayout
 
         @Environment(VideoPlayer.ViewState.self)
         private var viewState
@@ -74,7 +78,7 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                         Text(premiereYear)
                     }
 
-                    if let runtime = item.runTimeLabel {
+                    if let runtime = mediaSession.runtime.flatMap({ BaseItemDto.runTimeLabel(seconds: $0.seconds) }) {
                         Text(runtime)
                     }
 
@@ -82,18 +86,18 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                         Text(officialRating)
                     }
 
+                    if let communityRating = item.communityRating {
+                        Label(communityRating.formatted(.number.precision(.fractionLength(1))), systemImage: AppSymbol.rating)
+                    }
+
                     if let endsAtLabel {
                         Text(endsAtLabel)
                     }
                 }
             }
-            .onChange(of: mediaSession.seconds, initial: true) { _, seconds in
-                let newLabel = makeEndsAtLabel(seconds: seconds)
-
-                if newLabel != endsAtLabel {
-                    endsAtLabel = newLabel
-                }
-            }
+            .onChange(of: mediaSession.seconds, initial: true) { updateEndsAtLabel() }
+            .onChange(of: mediaSession.runtime) { updateEndsAtLabel() }
+            .onChange(of: mediaSession.rate) { updateEndsAtLabel() }
         }
 
         private var fromBeginningButton: some View {
@@ -103,11 +107,9 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                 viewState.selectedSupplementID = nil
             } label: {
                 Label(L10n.fromBeginning, systemImage: AppSymbol.play)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
             }
-            .buttonStyle(.supplementAction)
-            .frame(height: viewLayout.supplementLogoHeight)
+            .buttonStyle(.playerGlass)
+            .fixedSize()
         }
 
         // TODO: may need to be a layout for correct overview frame
@@ -153,7 +155,6 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                 if !item.isLiveStream {
                     fromBeginningButton
                         .frame(maxWidth: .infinity)
-                        .frame(height: 40)
                         .padding(.vertical)
                 }
             }
@@ -161,19 +162,30 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
             .edgePadding()
         }
 
+        /// 按钮离面板右边比海报离左边多出的距离（面板内边距另算）。
+        private static let buttonTrailingInset: CGFloat = 32
+
+        private var posterSize: CGSize {
+            let height = PlayerPanelLayout.infoPosterHeight
+            return switch item.preferredPosterDisplayType {
+            case .landscape: CGSize(width: (height * 16 / 9).rounded(), height: height)
+            case .portrait: CGSize(width: (height * 2 / 3).rounded(), height: height)
+            case .square: CGSize(width: height, height: height)
+            }
+        }
+
         private var regularContent: some View {
-            HStack(alignment: .bottom, spacing: viewLayout.edgePadding) {
-                // TODO: determine what to do with non-portrait (channel, home video) images
-                //       - use aspect ratio?
+            HStack(alignment: .center, spacing: 40) {
                 PosterImage(
                     item: item,
                     type: item.preferredPosterDisplayType,
                     contentMode: .fit
                 )
-                .posterCornerRadius(item.preferredPosterDisplayType)
+                .frame(width: posterSize.width, height: posterSize.height)
+                .clipShape(RoundedRectangle(cornerRadius: PlayerPanelLayout.contentCornerRadius, style: .continuous))
                 .withViewContext(.isOverComplexContent)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(item.displayTitle)
                         .font(.callout)
                         .fontWeight(.semibold)
@@ -193,48 +205,47 @@ extension MediaInfoSupplement: @MainActor VideoPlayerSupplement {
                         Text(overview)
                             .font(.subheadline)
                             .fontWeight(.regular)
-                            .lineLimit(4)
+                            // 标题两行、简介三行加信息行正好放进海报的高度，面板不被撑高。
+                            .lineLimit(3)
                     }
 
                     accessoryView
                         .font(.caption)
+                        .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
+                        .padding(.top, 6)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 if !item.isLiveStream {
-                    AlternateLayoutView {
-                        Label(L10n.fromBeginning, systemImage: AppSymbol.play)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .padding()
-                            .edgePadding(.horizontal)
-                            .frame(height: viewLayout.supplementRowHeight)
-                    } content: {
-                        fromBeginningButton
-                    }
+                    fromBeginningButton
+                        .padding(.trailing, Self.buttonTrailingInset)
                 }
             }
         }
 
         var largeView: some View {
-            regularContent
-                .edgePadding(.horizontal)
-                .padding(.vertical, viewLayout.edgePadding / 2)
-                .background {
-                    RoundedRectangle(cornerRadius: 32)
-                        .fill(Material.thin)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 32))
-                .edgePadding()
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .focusSection()
+            PlayerGlassPanel {
+                regularContent
+            }
+            .padding(.top, PlayerPanelLayout.tabGap)
+            .edgePadding(.horizontal)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .focusSection()
+        }
+
+        private func updateEndsAtLabel() {
+            let newLabel = makeEndsAtLabel(seconds: mediaSession.seconds)
+
+            if newLabel != endsAtLabel {
+                endsAtLabel = newLabel
+            }
         }
 
         private func makeEndsAtLabel(seconds: Duration) -> String? {
             guard !item.isLiveStream,
                   item.type != .recording,
-                  let runtime = item.runtime,
+                  let runtime = mediaSession.runtime,
                   runtime > .zero,
                   mediaSession.rate > 0
             else { return nil }

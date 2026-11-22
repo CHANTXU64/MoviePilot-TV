@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Queue/MediaQueueView.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：选集卡用 App 的剧照卡（`StillCard`）：第几季第几集写在剧照左下角，下面是集名；不显示片长。
 //
 
 import SwiftUI
@@ -13,11 +16,7 @@ import SwiftUI
 @MainActor
 struct MediaQueueView: @MainActor VideoPlayerSupplement {
 
-    @Environment(VideoPlayer.ViewState.self)
-    private var viewState
-
     let queue: any MediaPlayerQueue
-    var displayType: PosterDisplayType = .landscape
 
     var id: String {
         "Queue-\(ObjectIdentifier(queue))"
@@ -33,31 +32,10 @@ struct MediaQueueView: @MainActor VideoPlayerSupplement {
             VideoPlayer.PosterCollectionView(
                 data: queue.items,
                 currentElementID: queue.currentEntryID,
-                isCompact: viewState.isCompact,
-                displayType: displayType,
+                badge: \.subtitle,
+                title: \.displayTitle,
                 action: queue.select
-            ) { item in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.displayTitle)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-
-                    DotHStack {
-                        if let subtitle = item.subtitle {
-                            Text(subtitle)
-                        }
-
-                        if let runtime = item.snapshot.runTimeLabel {
-                            Text(runtime)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
+            )
         }
     }
 

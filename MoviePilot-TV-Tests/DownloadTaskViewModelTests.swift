@@ -530,6 +530,199 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testFirstLoadShowsLoadingThenPersistentFailureUntilTheFirstTaskListArrives() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    XCTAssertEqual(viewModel.pendingLoadState, .loading, "还没请求时不能先显示「暂无下载任务」")
+
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.pendingLoadState, .failed, "第一次结果前请求失败：显示失败文字，轮询继续重试")
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent", statusCode: 500)
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.pendingLoadState, .failed, "重试仍失败时失败文字一直保留，不会退回转圈")
+
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent")
+    await viewModel.loadDownloads()
+    XCTAssertNil(viewModel.pendingLoadState)
+    XCTAssertTrue(viewModel.downloads.isEmpty, "真拿到空列表后才显示「暂无下载任务」")
+  }
+
+  func testFirstLoadFailureBelongsToTheDownloaderThatFailed() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "a", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.selectedClient, "a")
+    XCTAssertEqual(viewModel.pendingLoadState, .failed)
+
+    viewModel.selectedClient = "b"
+    XCTAssertEqual(viewModel.pendingLoadState, .loading, "切到别的下载器后不沿用上一个下载器的失败文字")
+  }
+
+  func testStaleFailureFromPreviousDownloaderDoesNotShowWhileNewDownloaderLoads() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let aGate = DownloadTaskAsyncGate()
+    let bGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "a", statusCode: 500, waitFor: aGate)
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "b", waitFor: bGate)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    let aTask = Task { @MainActor in await viewModel.initialLoad() }
+    defer { aTask.cancel() }
+    try await withTimeout("a request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "a")
+    }
+
+    viewModel.selectedClient = "b"
+    let bTask = Task { @MainActor in await viewModel.loadDownloads() }
+    defer { bTask.cancel() }
+    try await withTimeout("b request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "b")
+    }
+
+    await aGate.open()
+    try await withTimeout("stale a load to finish") { await aTask.value }
+    XCTAssertEqual(viewModel.pendingLoadState, .loading, "旧下载器晚到的失败不能显示到正在加载的新下载器上")
+
+    await bGate.open()
+    try await withTimeout("b load to finish") { await bTask.value }
+    XCTAssertNil(viewModel.pendingLoadState)
+  }
+
+  func testSwitchingAfterASuccessfulLoadShowsPendingStateUntilTheNewDownloaderLoads() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(hash: "a-hash", title: "A Task", username: "user", progress: 10),
+      forClient: "a"
+    )
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "b", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+    XCTAssertNil(viewModel.pendingLoadState)
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["a-hash"])
+
+    viewModel.selectedClient = "b"
+    XCTAssertEqual(
+      viewModel.pendingLoadState, .loading,
+      "b 还没拿到结果：转圈，不能显示「暂无下载任务」或 a 的任务")
+
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.pendingLoadState, .failed, "b 读取失败时显示失败文字")
+
+    viewModel.selectedClient = "a"
+    XCTAssertNil(viewModel.pendingLoadState, "切回已有结果的 a，照常显示 a 的列表")
+  }
+
+  func testStaleFailureFromPreviousDownloaderDoesNotCountTowardFailureNotice() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let aGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["a", "b"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "a", statusCode: 500, waitFor: aGate)
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "b", statusCode: 500)
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    let aTask = Task { @MainActor in await viewModel.initialLoad() }
+    defer { aTask.cancel() }
+    try await withTimeout("a request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "a")
+    }
+
+    // b 连续失败 5 次：还差 1 次才弹提示。
+    viewModel.selectedClient = "b"
+    for _ in 0..<5 {
+      await viewModel.loadDownloads()
+    }
+    XCTAssertNil(viewModel.errorMessage)
+
+    await aGate.open()
+    try await withTimeout("stale a load to finish") { await aTask.value }
+    XCTAssertNil(viewModel.errorMessage, "旧下载器晚到的失败不能计入当前下载器的连续失败次数")
+    XCTAssertEqual(viewModel.pendingLoadState, .failed)
+  }
+
+  func testFirstLoadStateIsNilWithoutDownloadersOrWhenDownloaderListFails() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON("[]")
+    let noDownloaders = DownloadTaskViewModel(apiService: service)
+    await noDownloaders.initialLoad()
+    XCTAssertNil(noDownloaders.pendingLoadState, "没有下载器时不会再请求任务列表，不能一直转圈")
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON("[]", statusCode: 500)
+    let clientsFailed = DownloadTaskViewModel(apiService: service)
+    await clientsFailed.initialLoad()
+    XCTAssertTrue(clientsFailed.clientsLoadFailed)
+    XCTAssertNil(clientsFailed.pendingLoadState, "下载器列表失败沿用原有的失败文字")
+  }
+
   func testPollingFailuresNotifyOncePerSixConsecutiveFailuresAndResetOnSuccess() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
@@ -698,6 +891,43 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(refreshedRow.media?.image, "/new-backdrop.jpg")
     XCTAssertEqual(refreshedRow.season_episode, "S01E02")
     XCTAssertEqual(refreshedRow.progress, 80)
+  }
+
+  /// 下载卡片的季集一律中文：优先 media 的季、集，两项都缺时退回 season_episode；
+  /// 电影或读不出季集时整段不显示。
+  func testDownloadCardSeasonEpisodeIsChinese() throws {
+    let cases: [(json: String, expected: String?)] = [
+      // media 的季集优先于 season_episode。
+      (
+        #"{"hash":"h1","season_episode":"S09E09","media":{"season":"S01","episode":"E02"}}"#,
+        "1季 2集"
+      ),
+      // 一个文件多集。
+      (
+        #"{"hash":"h2","season_episode":"S02E05-E07","media":{"season":"S02","episode":"E05-E07"}}"#,
+        "2季 5-7集"
+      ),
+      // 订阅补齐缺失集：后端 format_ranges 的顿号并列多区间，media 与 season_episode 两条入口都要中文化。
+      (
+        #"{"hash":"h9","season_episode":"S01E01","media":{"season":"S01","episode":"E01-E03、E05"}}"#,
+        "1季 1-3、5集"
+      ),
+      (#"{"hash":"h10","season_episode":"S01 E01、E03","media":{"title":"某剧"}}"#, "1季 1、3集"),
+      // media 没有季集时退回 season_episode。
+      (#"{"hash":"h3","season_episode":"S03E04","media":{"title":"某剧"}}"#, "3季 4集"),
+      (#"{"hash":"h4","season_episode":"S03E04"}"#, "3季 4集"),
+      // 只有季。
+      (#"{"hash":"h5","media":{"season":"S01","episode":""}}"#, "1季"),
+      // 电影：季集都是空串，不能显示成空白或英文。
+      (#"{"hash":"h6","season_episode":"","media":{"season":"","episode":""}}"#, nil),
+      (#"{"hash":"h7","season_episode":"  ","media":{"season":" ","episode":" "}}"#, nil),
+      (#"{"hash":"h8"}"#, nil),
+    ]
+
+    for (json, expected) in cases {
+      let row = try XCTUnwrap(decodeDownloads("[\(json)]").first, json)
+      XCTAssertEqual(row.seasonEpisodeDisplay, expected, json)
+    }
   }
 
   func testOldRowsCannotSendActionsAfterDownloaderSelectionChanges() async throws {

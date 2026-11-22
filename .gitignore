@@ -19,3 +19,4 @@ __pycache__/
 .env.*
 !.env.example
 !.env.compatibility.example
+/.claude

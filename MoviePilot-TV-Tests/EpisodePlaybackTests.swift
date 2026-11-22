@@ -51,8 +51,9 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(list.map(\.index), [0, 1, 2])
     XCTAssertNil(list[2].name)
     XCTAssertEqual(list[2].overview, "名称类型不对也只丢这个字段")
-    XCTAssertEqual(list[0].playerTitles(seriesName: "长风渡").primary, "第 1 季 第 10 集 · 重逢")
-    XCTAssertEqual(list[0].playerTitles(seriesName: "长风渡").secondary, "长风渡")
+    let titles = list[0].playbackMetadata(seriesName: "长风渡", stillURL: nil).playerTitles(isEpisode: true)
+    XCTAssertEqual(titles.primary, "第 1 季 第 10 集 · 重逢")
+    XCTAssertEqual(titles.secondary, "长风渡")
   }
 
   func testEmbyEpisodeKeepsTMDBEpisodeIDAndFileRange() throws {
@@ -147,6 +148,117 @@ final class EpisodePlaybackModelTests: XCTestCase {
     .loaded(ServerEpisodeIndex(serverName: server, hasSeries: hasSeries, episodes: episodes))
   }
 
+  private func multiFile(_ id: String, tmdb: Int, season: Int = 1, from first: Int, to last: Int) -> ServerMediaItem {
+    ServerMediaItem(
+      id: id, kind: .episode, seasonNumber: season, episodeNumber: first, episodeNumberEnd: last,
+      externalIDs: ["tmdb": String(tmdb)])
+  }
+
+  /// MoviePilot 默认顺序的一季：TMDB 单集 ID 从 `firstID` 起连续，集号从 1 起。
+  private func defaultSeason(_ season: Int = 1, count: Int, firstID: Int) -> [TmdbEpisode] {
+    (0..<count).map { TmdbEpisode(id: firstID + $0, episodeNumber: $0 + 1, seasonNumber: season) }
+  }
+
+  /// 第 1 季默认顺序列表：第 1–12 集是 TMDB 101–112。
+  private var defaultLists: [EpisodeListKey: [TmdbEpisode]] {
+    [EpisodeListKey(episodeGroup: nil, season: 1): defaultSeason(count: 12, firstID: 101)]
+  }
+
+  func testMultiEpisodeFileCoversTheLaterEpisodesWhenNumberingMatches() {
+    // S01E09-E10 只记了 E09 的 TMDB 单集 ID（109）；按默认顺序列表核对后，E10（110）也在这个文件里。
+    let file = multiFile("e9-10", tmdb: 109, from: 9, to: 10)
+    let index = ServerEpisodeIndex(
+      serverName: "emby", hasSeries: true, episodes: [serverEpisode("e8", tmdb: 108), file], lists: defaultLists)
+    XCTAssertEqual(index.availability(of: 110), .playable(server: "emby"))
+    XCTAssertEqual(index.playableEpisode(tmdbEpisodeID: 110)?.id, "e9-10")
+    XCTAssertEqual(index.availability(of: 111), .notOnServer, "文件之外的集照常按没有")
+    XCTAssertEqual(index.summary.byEpisodeID, 2, "一个文件只算一次")
+    XCTAssertEqual(
+      ServerEpisodeIndex.requiredLists(for: [serverEpisode("e8", tmdb: 108), file], records: []),
+      [EpisodeListKey(episodeGroup: nil, season: 1)])
+  }
+
+  func testMultiEpisodeFileIsNotStretchedWhenNumberingDisagrees() {
+    // 文件的 TMDB 单集 ID 在默认顺序里是第 8 集，和文件名的 E09 对不上：不知道文件按哪套编号，不推算。
+    let file = multiFile("e9-10", tmdb: 108, from: 9, to: 10)
+    let index = ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: [file], lists: defaultLists)
+    XCTAssertEqual(index.availability(of: 110), .notOnServer)
+    XCTAssertEqual(index.availability(of: 109), .notOnServer)
+    let unread = ServerEpisodeIndex(serverName: "emby", hasSeries: true, episodes: [multiFile("f", tmdb: 109, from: 9, to: 10)])
+    XCTAssertEqual(unread.availability(of: 110), .notOnServer, "没给默认顺序列表时不推算")
+  }
+
+  func testRereadMultiEpisodeFileIsAcceptedOnlyIfItIsUnchanged() {
+    let recorded = multiFile("e9-10", tmdb: 109, from: 9, to: 10)
+    XCTAssertEqual(ServerEpisodeIndex.recheck(recorded, recorded: recorded, tmdbEpisodeID: 110), .same)
+    XCTAssertEqual(ServerEpisodeIndex.recheck(recorded, recorded: recorded, tmdbEpisodeID: 109), .same)
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(multiFile("e9-10", tmdb: 109, from: 9, to: 9), recorded: recorded, tmdbEpisodeID: 110),
+      .changed, "重新刮削后不再包含第 10 集")
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(multiFile("e9-10", tmdb: 120, from: 9, to: 10), recorded: recorded, tmdbEpisodeID: 110),
+      .changed, "编号变了")
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(recorded, recorded: serverEpisode("e9-10", tmdb: 109), tmdbEpisodeID: 110),
+      .changed, "集索引没记它包含多集")
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(recorded, recorded: nil, tmdbEpisodeID: 110), .changed,
+      "播放中换集时只知道条目 ID：编号不是要的这一集，要重读集索引")
+    XCTAssertEqual(
+      ServerEpisodeIndex.recheck(serverEpisode("e9-10", tmdb: nil), recorded: recorded, tmdbEpisodeID: 110),
+      .lostEpisodeID)
+  }
+
+  func testEpisodeWithItsOwnFileKeepsItBeforeTheMultiEpisodeFile() {
+    let index = ServerEpisodeIndex(
+      serverName: "emby", hasSeries: true,
+      episodes: [multiFile("e9-10", tmdb: 109, from: 9, to: 10), serverEpisode("e10", tmdb: 110)], lists: defaultLists)
+    XCTAssertEqual(index.playableEpisodes(tmdbEpisodeID: 110).map(\.id), ["e10", "e9-10"], "先播这一集自己的文件")
+  }
+
+  func testServerRuntimeComesFromTheFileThatWouldPlay() {
+    let lookups: [ServerEpisodeLookup] = [
+      .failed(server: "坏的", message: "读取失败"),
+      index("a", [
+        ServerMediaItem(id: "a1", kind: .episode, runtimeSeconds: 1450, externalIDs: ["tmdb": "1"]),
+        ServerMediaItem(id: "a2", kind: .episode, externalIDs: ["tmdb": "2"]),
+      ]),
+      index("b", [ServerMediaItem(id: "b2", kind: .episode, runtimeSeconds: 1500, externalIDs: ["tmdb": "2"])]),
+    ]
+    XCTAssertEqual(EpisodeAvailability.serverRuntimeSeconds(episode(1), lookups: lookups), 1450)
+    XCTAssertNil(
+      EpisodeAvailability.serverRuntimeSeconds(episode(2), lookups: lookups),
+      "和能不能播选同一台：第一台有这一集但没给时长时不拿别台的")
+    XCTAssertNil(EpisodeAvailability.serverRuntimeSeconds(episode(3), lookups: lookups), "服务器上没有这一集")
+    XCTAssertNil(EpisodeAvailability.serverRuntimeSeconds(episode(nil), lookups: lookups))
+  }
+
+  func testWatchProgressComesFromTheFileThatWouldPlay() {
+    let lookups: [ServerEpisodeLookup] = [
+      index("a", [
+        ServerMediaItem(id: "a1", kind: .episode, runtimeSeconds: 2400, resumePositionSeconds: 600, externalIDs: ["tmdb": "1"]),
+        ServerMediaItem(id: "a2", kind: .episode, runtimeSeconds: 2400, externalIDs: ["tmdb": "2"]),
+      ]),
+      index("b", [
+        ServerMediaItem(id: "b2", kind: .episode, runtimeSeconds: 2400, resumePositionSeconds: 1200, externalIDs: ["tmdb": "2"])
+      ]),
+    ]
+    XCTAssertEqual(EpisodeAvailability.watchProgress(episode(1), lookups: lookups), 0.25)
+    XCTAssertNil(EpisodeAvailability.watchProgress(episode(2), lookups: lookups), "和能不能播选同一台：第一台的这份没看过")
+    XCTAssertNil(EpisodeAvailability.watchProgress(episode(3), lookups: lookups), "服务器上没有这一集")
+  }
+
+  func testServerRuntimeOnlyFillsWhenTMDBHasNone() {
+    let withoutTMDB = MoviePilotEpisode(TmdbEpisode(id: 42, episodeNumber: 42), season: 1, index: 41)
+    XCTAssertEqual(withoutTMDB.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 24)
+    XCTAssertNil(withoutTMDB.fillingRuntime(serverSeconds: nil).runtimeMinutes)
+    XCTAssertNil(withoutTMDB.fillingRuntime(serverSeconds: 5).runtimeMinutes, "不到半分钟的时长不可信")
+    let zero = MoviePilotEpisode(TmdbEpisode(id: 43, episodeNumber: 43, runtime: 0), season: 1, index: 42)
+    XCTAssertEqual(zero.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 24, "TMDB 填 0 等于没给")
+    let withTMDB = MoviePilotEpisode(TmdbEpisode(id: 1, episodeNumber: 1, runtime: 23), season: 1, index: 0)
+    XCTAssertEqual(withTMDB.fillingRuntime(serverSeconds: 1450).runtimeMinutes, 23, "TMDB 有时长时以 TMDB 为准")
+  }
+
   func testAvailabilityMatchesOnlyByTMDBEpisodeID() {
     let lookups = [
       index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("a3", tmdb: 3, hasFile: false)]),
@@ -171,7 +283,7 @@ final class EpisodePlaybackModelTests: XCTestCase {
       SystemViewModel.playbackSettingRows(backendVersion: nil, inAppPlaybackEnabled: true), [.versionRequirement])
     XCTAssertEqual(
       SystemViewModel.playbackSettingRows(backendVersion: "v3.2.6", inAppPlaybackEnabled: true),
-      [.inAppPlayback, .homeMediaTap, .autoPlayNextEpisode])
+      [.inAppPlayback, .homeMediaTap])
     XCTAssertEqual(
       SystemViewModel.playbackSettingRows(backendVersion: "v3.2.6", inAppPlaybackEnabled: false), [.inAppPlayback],
       "关掉后只在应用内播放才有意义的两项不显示")
@@ -187,16 +299,29 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertTrue(BackendVersionGate.mayHaveSideEffect(since: "v3.2.0", backendVersion: "v3.2.0"))
   }
 
-  func testServerEpisodesWithoutTMDBIDsAreNotMatchedByNumbers() {
-    // 服务器上第 1 季第 1 集就在那里，但没有 TMDB 单集 ID：不能按季集号认，可能是另一套编号的另一集。
+  func testServerEpisodeWithoutTMDBIDIsMatchedByNumbersAsUncertain() {
+    // 服务器上第 1 季第 1 集没有 TMDB 单集 ID（只用 TVDB 刮削）：按季号集号对上默认顺序的第 1 集，可以播，但不确定。
     let noIDs = ServerMediaItem(id: "x", kind: .episode, seasonNumber: 1, episodeNumber: 1, externalIDs: ["tvdb": "9"])
-    let availability = EpisodeAvailability.resolve(episode(1, number: 1), lookups: [index("a", [noIDs])])
-    XCTAssertEqual(availability, .unidentifiable(.serverHasNoEpisodeIDs(server: "a")))
-    XCTAssertEqual(availability.message, "媒体服务器“a”上这部剧的文件都没有 TMDB 编号，无法确认对应哪一集，可刷新元数据后重试")
+    let lookup = ServerEpisodeLookup.loaded(
+      ServerEpisodeIndex(serverName: "a", hasSeries: true, episodes: [noIDs], lists: defaultLists))
+    let availability = EpisodeAvailability.resolve(episode(101, number: 1), lookups: [lookup])
+    let match = UncertainEpisodeMatch(season: 1, episode: 1, episodeGroup: nil, airDate: .unknown)
+    XCTAssertEqual(availability, .uncertain(server: "a", match: match))
+    XCTAssertFalse(availability.isPlayable, "不确定的不算确定能播")
+    XCTAssertEqual(
+      availability.message,
+      "可能不是这一集。按第 1 季第 1 集找到，无法核对播出日期")
+    XCTAssertEqual(
+      EpisodeQueueStatus.resolve(episode(101, number: 1), current: lookup, others: []), .playable(noIDs),
+      "接着播时照样用，不打断")
+    XCTAssertEqual(
+      EpisodeAvailability.resolve(episode(102, number: 2), lookups: [lookup]), .notOnServer,
+      "文件都对上了，没有第 2 集")
   }
 
   func testAFileWithoutTMDBIDIsTreatedAsUnmatchedAndExplained() {
-    // 第 1、3 集有 TMDB 单集 ID，第 2 集的文件刚入库还没刮削到：第 2 集按没有处理，队列照常往后找；说明里提示可以刷新元数据。
+    // 第 1、3 集有 TMDB 单集 ID，第 2 集的文件刚入库还没刮削到（也没有季号集号）：第 2 集按没有处理，队列照常往后找；
+    // 说明里提示这一集可能就在认不出的文件里，可以刷新元数据。
     let lookup = index(
       "a",
       [
@@ -206,7 +331,7 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(EpisodeAvailability.resolve(episode(1), lookups: [lookup]), .playable(server: "a"))
     let unmatched = EpisodeAvailability.resolve(episode(2), lookups: [lookup])
     XCTAssertEqual(unmatched, .unmatched(server: "a"))
-    XCTAssertEqual(unmatched.message, "未匹配到这一集，媒体服务器“a”上部分文件缺少 TMDB 编号，可刷新元数据后重试")
+    XCTAssertEqual(unmatched.message, "这一集可能已经入库。有文件认不出是哪一集，刷新元数据后再检查")
     XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), current: lookup, others: []), .unmatched(server: "a"))
     XCTAssertEqual(
       EpisodeAvailability.resolve(episode(4), lookups: [index("a", [serverEpisode("a1", tmdb: 1)])]), .notOnServer,
@@ -228,7 +353,7 @@ final class EpisodePlaybackModelTests: XCTestCase {
       "媒体服务器“b”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试", "读取失败在前：稍后重试可能就有")
     XCTAssertEqual(
       EpisodeAvailability.resolve(episode(2), lookups: [unmatched]).message,
-      "未匹配到这一集，媒体服务器“a”上部分文件缺少 TMDB 编号，可刷新元数据后重试")
+      "这一集可能已经入库。有文件认不出是哪一集，刷新元数据后再检查")
   }
 
   func testIncompleteServerIndexIsNotTreatedAsMissing() {

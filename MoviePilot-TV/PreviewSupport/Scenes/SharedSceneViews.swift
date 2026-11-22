@@ -81,6 +81,15 @@ extension UIPreviewEnvironment {
     }
     return copy
   }
+
+  /// 在当前环境上写入 fixture 上下文开关（长列表、只显示失败记录等）。
+  func with(context: [String: String]) -> UIPreviewEnvironment {
+    var copy = self
+    for (key, value) in context {
+      copy.context[key] = value
+    }
+    return copy
+  }
 }
 
 extension UIPreviewScene {

@@ -15,7 +15,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.subscribe])),
-      [.home, .system]
+      [.home, .subscriptions, .system]
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.manage])),
@@ -45,14 +45,17 @@ final class PermissionVisibleEntryTests: XCTestCase {
 
   func testHomeRecentMediaSearchEntryRequiresSearchPermissionInSource() throws {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Pages/HomeView.swift")
-    let contextMenuRange = try XCTUnwrap(source.range(of: ".contextMenu {"))
-    let searchResourceRange = try XCTUnwrap(source.range(of: "Label(\"搜索资源\"", range: contextMenuRange.upperBound..<source.endIndex))
-    let guardedSearchRange = source.range(
-      of: "canAccess(.search)",
-      range: contextMenuRange.upperBound..<searchResourceRange.lowerBound
+    // 「最近添加」和「继续观看」共用这个菜单组件。门必须紧贴按钮：只查「按钮之前某处出现过
+    // canAccess(.search)」会被组件自己的计算属性定义满足，删掉门也照样通过。
+    XCTAssertTrue(
+      source.contains(
+        "private var canSearchResources: Bool {\n    APIService.shared.canAccess(.search)\n  }"),
+      "首页媒体卡菜单的搜索门必须来自 search 权限。"
     )
-
-    XCTAssertNotNil(guardedSearchRange, "首页最近添加长按菜单显示“搜索资源”前应检查 search 权限。")
+    XCTAssertTrue(
+      source.contains("if canSearchResources {\n      Button"),
+      "首页最近添加/继续观看长按菜单显示“搜索资源”前必须在 search 权限门之后。"
+    )
   }
 
   func testMediaDetailHeaderSubscribeAndSearchEntriesArePermissionGuardedInSource() throws {
@@ -70,9 +73,13 @@ final class PermissionVisibleEntryTests: XCTestCase {
       source.contains("if canSearchResources {"),
       "详情页 Header 的搜索资源按钮必须在 search 权限门之后。"
     )
+    // 站点选择在搜索菜单的二级菜单里，整个菜单在 search 权限门之后。
     XCTAssertTrue(
-      source.contains("if canSearchResources && shouldShowSiteFilter"),
-      "详情页站点筛选按钮必须跟随 search 权限。"
+      containsTokensInOrder(source, [
+        "if canSearchResources {\n              // 搜索资源、搜索字幕收进一个圆形按钮的菜单",
+        "SearchSiteSelectionMenuItems(viewModel: viewModel.siteFilter)",
+      ]) && source.components(separatedBy: "SearchSiteSelectionMenuItems(").count == 3,
+      "详情页站点筛选必须跟随 search 权限。"
     )
   }
 

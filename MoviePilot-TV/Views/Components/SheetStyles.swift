@@ -25,9 +25,6 @@ struct SheetActionButton: View {
   @Environment(\.dismiss) private var dismiss
   @FocusState private var ownFocus: Bool
 
-  /// 系统转圈图标约 40pt，同字号的图标约 34pt。
-  static let spinnerScale: CGFloat = 0.85
-
   var body: some View {
     // 换成「关闭」时仍是同一个按钮，焦点不跳。
     let icon = closesSheet ? nil : systemImage
@@ -45,16 +42,8 @@ struct SheetActionButton: View {
     }) {
       HStack(spacing: 8) {
         if showsSpinner || icon != nil {
-          // 图标位的尺寸始终由同字号的图标决定：系统转圈图标（40pt）比一行文字高，
-          // 直接放进来会把按钮撑高，加载结束又缩回。转圈图标叠在上面、缩到和图标一样大。
-          Image(systemName: icon ?? AppSymbol.unselected)
-            .opacity(showsSpinner ? 0 : 1)
-            .overlay {
-              if showsSpinner {
-                ProgressView()
-                  .scaleEffect(Self.spinnerScale)
-              }
-            }
+          // 图标位尺寸始终由同字号图标决定，转圈叠在图标位上，加载前后按钮高度不变。
+          LoadingIcon(systemImage: icon ?? AppSymbol.unselected, isLoading: showsSpinner)
         }
         Text(closesSheet ? "关闭" : showsSpinner ? loadingTitle : title)
       }

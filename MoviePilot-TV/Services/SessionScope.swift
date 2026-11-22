@@ -1,5 +1,11 @@
 import Foundation
 
+/// 缓存里同时表示命中和未命中；不能直接用 `MediaMapping?`，否则未命中会被当成缓存缺失。
+nonisolated enum MediaMappingCacheEntry: Equatable, Sendable {
+  case mapping(MediaMapping)
+  case miss
+}
+
 /// 一次会话（服务器 + 账号 + 权限指纹）内共享的协作对象。
 ///
 /// 由 `APIService` 按 `uiIdentity` 持有：同账号刷新沿用同一个作用域，换账号或登出时整体拆除并重建。
@@ -13,13 +19,14 @@ final class SessionScope {
   let mediaPreloader: MediaPreloader
   let imageWarmer: MPImageWarmer
   let playbackCoordinator: PlaybackCoordinator
+  let episodeTrial: EpisodeTrialService
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
   let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
   let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
-  /// 详情页集列表与播放队列共用的季集列表。
-  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 20)
+  /// 详情页集列表、播放队列与「继续播放」对集共用的季集列表。「继续播放」每次读一部剧的全部季，季多的剧也要放得下。
+  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 64)
   let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
   let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
     ttl: 30,
@@ -30,12 +37,36 @@ final class SessionScope {
   /// 媒体服务器配置含密钥，只在内存里保存；读取不续期，到期后重新读取。播放失败时另行强制核对。
   let mediaServerConfigCache = CoalescingCache<String, [MediaServerConf]>(
     ttl: 300, capacity: 1, renewsTTLOnAccess: false)
+  /// TMDB 的 key、接口地址和代理（单集对应补查用），同样只在内存里，读取不续期。
+  let tmdbAccessCache = CoalescingCache<String, TmdbAccessSettings>(ttl: 300, capacity: 1, renewsTTLOnAccess: false)
+  /// 媒体库条目按标题、年份识别出的 TMDB 编号（认不出的记为 nil），首页「最近添加」每次刷新不再重新识别。
+  let libraryRecognitionCache = CoalescingCache<String, Int?>(
+    ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
+  /// TMDB 条目的海报路径（没有海报的记为 nil），首页海报读不出来时替用。
+  let tmdbPosterPathCache = CoalescingCache<String, String?>(ttl: 12 * 3600, capacity: 4096, renewsTTLOnAccess: false)
+  /// 非 TMDB 来源到 TMDB 的共享映射；命中与未命中都短暂记住，避免每次打开详情都走后端查询。
+  let mediaMappingCache = CoalescingCache<String, MediaMappingCacheEntry>(
+    ttl: 600, capacity: 1024, renewsTTLOnAccess: false)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
     imageWarmer = MPImageWarmer(apiService: apiService)
     mediaPreloader = MediaPreloader(apiService: apiService)
-    playbackCoordinator = PlaybackCoordinator(apiService: apiService)
+    #if TESTING
+      let playback = apiService.makePlaybackCoordinatorForTesting?(apiService) ?? PlaybackCoordinator(apiService: apiService)
+    #else
+      let playback = PlaybackCoordinator(apiService: apiService)
+    #endif
+    playbackCoordinator = playback
+    episodeTrial = EpisodeTrialService(
+      api: apiService,
+      libraryScan: { [weak playback] context, scope in
+        await playback?.requestLibraryScan(context: context, scope: scope)
+      }
+    ) { [weak playback] request, fresh in
+      await playback?.episodeAvailability(
+        for: [request.episode], context: request.playbackContext, forceRefresh: fresh)?.first
+    }
   }
 
   /// 订阅相关 mutation 后失效：订阅状态与订阅列表快照。
@@ -53,6 +84,10 @@ final class SessionScope {
     tmdbEpisodesCache.invalidateAll()
     mediaSourceCatalogCache.invalidateAll()
     mediaServerConfigCache.invalidateAll()
+    tmdbAccessCache.invalidateAll()
+    libraryRecognitionCache.invalidateAll()
+    tmdbPosterPathCache.invalidateAll()
+    mediaMappingCache.invalidateAll()
   }
 
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。
@@ -61,5 +96,6 @@ final class SessionScope {
     imageWarmer.tearDown()
     mediaPreloader.tearDown()
     playbackCoordinator.tearDown()
+    episodeTrial.tearDown()
   }
 }

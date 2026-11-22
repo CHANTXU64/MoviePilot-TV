@@ -2,8 +2,10 @@ import SwiftUI
 
 struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
+  @Environment(\.isPresented) private var isPresented
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
+  @State private var costlyToken = CostlyModalToken()
   @State private var isSaveAttemptInFlight = false
   @State private var showingIdentityResetConfirmation = false
 
@@ -56,6 +58,19 @@ struct SubscribeSheet: View {
     } message: {
       Text(SubscribeIdentityResetConfirmation.message)
     }
+    .episodeTrialNotice(
+      isPresented: Binding(
+        get: { viewModel.isHeldByEpisodeTrial },
+        set: { isPresented in
+          guard !isPresented, viewModel.isHeldByEpisodeTrial else { return }
+          viewModel.acknowledgeEpisodeTrialHold()
+          dismiss()
+        }
+      ),
+      context: .subscribe, isCancelling: viewModel.isHeldTrialCancelling, canCancel: viewModel.canCancelEpisodeTrial
+    ) {
+      viewModel.cancelEpisodeTrialAndContinue()
+    }
     .onAppear {
       guard !hasAppeared else { return }
       hasAppeared = true
@@ -64,6 +79,15 @@ struct SubscribeSheet: View {
       }
     }
     .cancelOnExternalNavigation()
+    // 用 isPresented 注册贵弹窗令牌：退后台不变；令牌由 @State 持有，视图销毁即释放、
+    // 登记自动失效，即使注销回调未触发也不残留。
+    .onChange(of: isPresented, initial: true) { _, presented in
+      if presented {
+        CostlyModalPresentation.register(costlyToken)
+      } else {
+        CostlyModalPresentation.unregister(costlyToken)
+      }
+    }
     .onDisappear {
       let wasSaving = viewModel.isSaving
       Task {

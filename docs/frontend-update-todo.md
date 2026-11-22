@@ -74,12 +74,13 @@
 
 ### 资源搜索诊断面板
 
-- 来源：MoviePilot Backend `v3.2.4` 的搜索诊断：`app/schemas/search.py` 新增 `SearchDiagnostics` 等模型，SSE `done` 事件携带可选 `diagnostics`（各来源 outcome/`raw_count`、被过滤规则拒绝的原因、规则组是否适用、警告），`/search/last/context` 返回可选 `diagnostics` 并把上次搜索上下文改为按登录用户保存/读取。配套 Web `v3.2.4` 已实现诊断面板：`c1341f5d feat(resource): 显示搜索原因和规则未适用提示`（#901），随后 `4963ab48` 调整了诊断条的视觉权重。
+- 来源：MoviePilot Backend `v3.2.4` 的搜索诊断：`app/schemas/search.py` 新增 `SearchDiagnostics` 等模型，SSE `done` 事件携带可选 `diagnostics`（各来源 outcome/`raw_count`、被过滤规则拒绝的原因、规则组是否适用、警告），`/search/last/context` 返回可选 `diagnostics` 并把上次搜索上下文改为按登录用户保存/读取。配套 Web `v3.2.4` 已实现诊断面板：`c1341f5d feat(resource): 显示搜索原因和规则未适用提示`（#901），随后 `4963ab48` 调整了诊断条的视觉权重。`v3.2.6` 的 `bbc779523 fix(filter): migrate legacy rule IDs and diagnose invalid groups` 又给 `SearchDiagnosticWarning` 增加可选 `rule_ids`（规则配置错误涉及的完整 ID，默认空列表、空值不序列化），并把现有解析器无法解析的旧自定义规则 ID 迁移为稳定新 ID。Web `v3.2.7` 的 `390bfd33 fix(search): hide inapplicable rule notices`（#942）进一步隐藏不适用的规则提示；未来 TV 做诊断面板时，不适用的规则组不应显示为可操作规则，也不要渲染规则级跳转。
 - 当前判断：不属于兼容必修。TV 的 `MoviePilot-TV/Models/Models.swift` 中 `SearchStreamEvent` 未声明 `diagnostics`，SSE 解码时安全忽略新增字段，`/search/last/context` 也没有调用。TV 资源搜索的空状态（`PagedResourceResultsView` 的「未找到相关资源」）只能通过 `ResourceSearchSession.emptyDescription` 区分「本次尚未找到资源」「已收到的资源均被 TV 本地过滤规则排除」「没有符合当前筛选条件的资源」三种客户端原因，无法解释站点级别或后端过滤规则级别的「为什么没有」。
 - 可评估方向：
   - 在资源搜索结果页的空状态里展示后端诊断摘要：各来源是否返回、原始条数，被后端过滤规则拒绝的数量与原因分布，未适用的规则组，以及警告；有结果时是否展示按实际高频问题再定，避免占用大屏首屏空间。
   - 这是 `v3.2.4` 起才成立的新行为，必须按后端版本做 `>= v3.2.4` 门禁：低于该版本、版本读不出或无法解析时不展示诊断区，沿用现有 `emptyDescription` 文案；已解析且 `>= v3.2.4`（含热修复和未登记的更新版本）才展示。
   - 诊断是纯展示信息，不得改变资源列表的过滤、排序、「没有更多」判定和重试逻辑；`done` 事件缺失 `diagnostics` 时按「暂无诊断信息」降级，不能当成搜索失败或触发错误提示。
+  - 规则级提示可用 `rule_ids` 指到具体的自定义过滤规则：该字段 `v3.2.6` 起才有，展示规则 ID 或「去规则组查看」这类跳转提示时按 `>= v3.2.6` 门禁，低于该版本或字段缺失时只显示 `rule_group` 与原因文本，不能把空数组当成「规则不存在」。
   - 若同时评估「继续上次搜索」：`/search/last/context` 现在按登录用户隔离，TV 必须同时处理登录身份切换后的上下文隔离，不能跨账号复用同一份上次搜索结果。
 
 ### 订阅执行状态与最近搜索状态
@@ -99,6 +100,14 @@
   - 是否增加 TV 端订阅日历视图。
   - 是否改进第 0 季、特别篇、特殊季标签显示。
   - 是否在订阅卡片上展示更细的入库/缺失进度说明。
+
+### 媒体服务器流式播放与搜索
+
+- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）。
+- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest` 路径没有受影响；在真实后端与上游 Web 的调用方式稳定前，不做大屏入口或播放器改造。
+- 可评估方向：
+  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。`episode-metadata` 只有在未来出现「媒体库搜索直接选集」的大屏入口时再评估，不单独立项。
+  - `/stream-info`/`/stream` 等原生流端点属于 `v3.2.7` 起的新行为，若未来接入必须按 `>= v3.2.7` 门禁并保留现有路径回退；`/mediaserver/episode-metadata` 属于 `v3.2.8` 起的新行为，若未来接入必须单独按 `>= v3.2.8` 门禁。不要在本轮把它们写成 TV 已支持。
 
 ## 暂不作为 TV 功能待办
 

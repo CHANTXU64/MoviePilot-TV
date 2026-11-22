@@ -441,6 +441,118 @@ final class ImageProxyEncodingTests: XCTestCase {
     )
   }
 
+  // MARK: - 媒体服务器图片缩略（>= v3.2.6）
+
+  func testMediaServerCardPosterThumbnailFollowsBackendVersionGate() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+
+    let item = MediaServerPlayItem(
+      id: "abc", title: "剧集", image: "http://emby.local/Items/abc/Images/Primary?tag=main",
+      server_type: .emby)
+    // 请求宽度与卡片降采样后保留的像素一致，不下载会被 Kingfisher 扔掉的像素。
+    let cardWidth = MediaCard.posterThumbnailMaxWidth(for: MediaCard.defaultPosterSize)
+    XCTAssertEqual(cardWidth, 384)
+
+    // 新行为版本限制：低于起始版本、读不出或无法解析时不追加参数，继续取原图。
+    for version in [nil, "custom", "v3.2.5", "v3.2.5-1", "v3.0.10"] as [String?] {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      let url = try XCTUnwrap(item.imageURLs(cardPosterPixelWidth: cardWidth).image)
+      XCTAssertNil(thumbnailQuery(url)["maxWidth"], "\(version ?? "nil") 不该请求缩略图")
+    }
+
+    for version in ["v3.2.6", "v3.2.6-1", "v3.2.7", "v4.0.0"] {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      let url = try XCTUnwrap(item.imageURLs(cardPosterPixelWidth: cardWidth).image)
+      let query = thumbnailQuery(url)
+      XCTAssertEqual(query["maxWidth"], "384", version)
+      XCTAssertEqual(query["imgurl"], item.image, "缩略参数不能改写原始地址")
+    }
+  }
+
+  func testMediaServerCardPosterClampsThumbnailWidthToBackendRange() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+    let rawImage = "http://emby.local/Items/abc/Images/Primary"
+
+    for (pixelWidth, expected) in [(5000, "2048"), (2048, "2048"), (1, "1")] {
+      let url = try XCTUnwrap(
+        service.getMediaServerPosterImageURL(
+          image: rawImage, useCookies: true, cardPosterPixelWidth: pixelWidth))
+      let query = thumbnailQuery(url)
+      XCTAssertEqual(query["maxWidth"], expected)
+      XCTAssertEqual(query["use_cookies"], "true", "缩略参数不能挤掉媒体服务器 cookie 标记")
+    }
+
+    for pixelWidth in [0, -1] {
+      let url = try XCTUnwrap(
+        service.getMediaServerPosterImageURL(
+          image: rawImage, useCookies: nil, cardPosterPixelWidth: pixelWidth))
+      XCTAssertNil(thumbnailQuery(url)["maxWidth"])
+    }
+  }
+
+  func testMediaServerDetailEntryPosterKeepsOriginalAndDistinctCacheKey() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+
+    let item = MediaServerPlayItem(
+      id: "abc", title: "剧集", image: "http://emby.local/Items/abc/Images/Primary",
+      server_type: .emby)
+    // 详情入口把同一个 URL 当冷加载全屏背景兜底，默认不传像素宽度就必须是原图。
+    let entry = try XCTUnwrap(item.imageURLs().image)
+    let card = try XCTUnwrap(item.imageURLs(cardPosterPixelWidth: 384).image)
+
+    XCTAssertNil(thumbnailQuery(entry)["maxWidth"])
+    XCTAssertEqual(thumbnailQuery(card)["maxWidth"], "384")
+    XCTAssertNotEqual(entry, card, "原图与缩略图必须是不同缓存键，避免旧原图被当成缩略图复用")
+  }
+
+  func testImageConfigurationIdentityTracksThumbnailGate() throws {
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://images.local"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.5")
+    let unsupported = service.imageConfigurationIdentity
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+    let supported = service.imageConfigurationIdentity
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.7")
+    let newer = service.imageConfigurationIdentity
+
+    XCTAssertNotEqual(unsupported, supported, "跨过缩略门禁要让已建卡片重算图片 URL")
+    XCTAssertEqual(supported, newer, "同样支持缩略的版本之间不该无谓刷新图片")
+  }
+
+  func testThumbnailParametersNeverReachNonMediaServerImagePaths() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+
+    // 缩略参数只作用于经代理的 Emby/Jellyfin 图片；豆瓣、TMDB 外链不该被追加。
+    let douban = try XCTUnwrap(
+      service.getPosterImageUrl(posterPath: "https://img1.doubanio.com/view/photo/p123.jpg"))
+    let tmdb = try XCTUnwrap(
+      service.getPosterImageUrl(posterPath: "https://image.tmdb.org/t/p/original/poster.jpg"))
+    XCTAssertNil(thumbnailQuery(douban)["maxWidth"])
+    XCTAssertNil(thumbnailQuery(tmdb)["maxWidth"])
+  }
+
+  private func thumbnailQuery(_ url: URL) -> [String: String] {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return [:] }
+    return queryItemMap(from: components)
+  }
+
   private func assertProxyURL(
     _ url: URL,
     path: String,

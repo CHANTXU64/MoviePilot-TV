@@ -41,9 +41,8 @@ struct LoginView: View {
             }
           }) {
             HStack(spacing: 8) {
-              if viewModel.isLoading {
-                ProgressView()
-              }
+              // 图标位常驻，加载时转圈就地替换图标，文字不左右挪。
+              LoadingIcon(systemImage: AppSymbol.account, isLoading: viewModel.isLoading)
               Text(viewModel.isLoading ? "登录中" : "登录")
             }
             .frame(maxWidth: .infinity)

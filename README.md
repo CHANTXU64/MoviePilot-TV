@@ -1,8 +1,8 @@
 # MoviePilot-TV
 
 <p align="center">
-  <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.4.2-blue?style=flat-square" alt="release"></a>
-  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.5-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
+  <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v1.0.0--beta-blue?style=flat-square" alt="release"></a>
+  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.9-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
@@ -41,7 +41,7 @@
 ## ⚠️ 兼容性与已知问题
 
 - **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
-- **MoviePilot 版本**: 自 MoviePilot-TV **v0.4.0** 起支持向后兼容，最低兼容 MoviePilot **v3.0.4**。具体见[已验证的兼容版本](docs/backend-version-compatibility.md#已登记版本)。
+- **MoviePilot 版本**: 最低兼容 MoviePilot **v2.15.6**，具体见[已验证的兼容版本](docs/backend-version-compatibility.md#已登记版本)。
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准，通常不会额外兜底修复。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
 - **密码安全**: 请勿将 MoviePilot 密码与其他服务的密码设为相同值。Apple 钥匙串不可用时，本 App 会自动降级为**明文持久化密码**；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。
@@ -89,8 +89,8 @@ https://testflight.apple.com/join/UK3qEnVU
    ```sh
    git clone --filter=blob:none https://github.com/CHANTXU64/MoviePilot-TV.git
 
-   # 切到最新 tag (例如 v0.4.2)
-   git checkout tags/v0.4.2
+   # 切到最新 tag (例如 v1.0.0-beta)
+   git checkout tags/v1.0.0-beta
    ```
 2. 使用 Xcode 打开 `MoviePilot-TV.xcodeproj`。
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
@@ -130,7 +130,7 @@ UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并�
 
    场景 ID 见预览目录中各分组的列表；不加 `-uiPreviewScene` 时显示完整目录。
 
-预览目录按「应用启动与全局 / 主框架与一级页面 / 媒体详情 / 搜索与资源 / 字幕搜索 / 设置、登录与日志 / 播放器 / 播放流程 / 核心组件」等分组，覆盖加载中、空数据、部分失败、全失败、无权限、低权限、提交中、下载中、续播询问、播放解析中等状态；超时、离线、401/403/404、5xx、响应解析失败、后端业务错误等请求错误类型都有对应场景，可按类型逐个核对页面反馈。预览代码只在 Debug 编译，Release 产物不包含任何预览入口（由 `Release Preview Guard` 工作流校验）。
+预览目录按「应用启动与全局 / 主框架与一级页面 / 媒体详情 / 单集与试看 / 搜索与资源 / 字幕搜索 / 设置、登录与日志 / 播放器 / 播放流程 / 核心组件」等分组，覆盖加载中、空数据、部分失败、全失败、无权限、低权限、提交中、下载中、续播询问、播放解析中、试看搜索/下载/整理/入库、媒体库「继续观看」等状态；超时、离线、401/403/404、5xx、响应解析失败、后端业务错误等请求错误类型都有对应场景，可按类型逐个核对页面反馈。预览代码只在 Debug 编译，Release 产物不包含任何预览入口（由 `Release Preview Guard` 工作流校验）。
 
 预览模式仅用于界面走查，其中的订阅、下载、整理等按钮点击结果都是模拟结果，不会改动真实 MoviePilot 数据。
 
@@ -143,6 +143,8 @@ UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并�
 ## 协议声明
 
 本项目原创代码基于 **[CC0 1.0 Universal](LICENSE)** 协议发布（公有领域）。可自由复制、修改、发布和商业使用。
+
+播放界面的部分代码改自 [Swiftfin](https://github.com/jellyfin/Swiftfin)，这些文件按 MPL-2.0 提供。应用还内置了播放内核 [AetherEngine](https://github.com/superuser404notfound/AetherEngine)、FFmpeg 等第三方组件，各自遵循原有许可，完整列表和许可原文见应用内「设置 → 第三方软件许可」。
 
 ## 鸣谢
 

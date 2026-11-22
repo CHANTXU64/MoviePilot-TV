@@ -71,16 +71,98 @@ enum UIPreviewScenesComponents {
           id: "component.errorStatusCard",
           title: "错误卡片",
           note:
-            "详情页豆瓣讨论区复用的 DoubanDiscussionStatusCard：加载失败、加载中、空内容三种同尺寸状态卡，失败卡下方的“重试”由所在行提供。"
+            "详情页豆瓣讨论区与剧集货架共用的 ShelfStatusCard：加载失败、加载中、空内容三种同尺寸状态卡；失败卡下方的“重试”由所在行提供。"
         ) {
           VStack(spacing: 36) {
             HStack(spacing: 24) {
-              DoubanDiscussionStatusCard(kind: .comment, status: .failed)
-              DoubanDiscussionStatusCard(kind: .review, status: .loading)
-              DoubanDiscussionStatusCard(kind: .comment, status: .empty)
+              ShelfStatusCard(
+                status: .failed("短评加载失败"),
+                size: CGSize(
+                  width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight),
+                emptyIcon: AppSymbol.noComments, failedEmphasis: true, focusStyle: .button)
+              ShelfStatusCard(
+                status: .loading("正在加载短评…"),
+                size: CGSize(
+                  width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight),
+                emptyIcon: AppSymbol.noComments, failedEmphasis: true, focusStyle: .button)
+              ShelfStatusCard(
+                status: .empty("暂无短评"),
+                size: CGSize(
+                  width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight),
+                emptyIcon: AppSymbol.noComments, failedEmphasis: true, focusStyle: .button)
             }
             Button("重试") {}
               .buttonStyle(.borderedProminent)
+          }
+          .padding(60)
+        },
+        .page(
+          id: "component.continueWatchingCard",
+          title: "继续观看卡片",
+          note:
+            "媒体库「继续观看」剧照卡：16:9 剧照、左下角播放图标与已播放进度条、季集角标，标题只有一行；对比有进度 / 无进度 / 长标题 / 无剧照。"
+        ) {
+          HStack(alignment: .top, spacing: 40) {
+            ContinueWatchingCard(
+              title: "边境信号", stillURL: nil, icon: AppSymbol.play, episodeText: "第 1 季第 7 集",
+              progress: 0.62, loadsImage: false, action: {})
+            ContinueWatchingCard(
+              title: "荒原长路", stillURL: nil, icon: AppSymbol.play, progress: nil, loadsImage: false,
+              action: {})
+            ContinueWatchingCard(
+              title: "这是一部标题很长很长、需要缩字号才能放下的剧集名称",
+              stillURL: nil, icon: AppSymbol.play, episodeText: "第 12 季第 24 集", progress: 0.05,
+              loadsImage: false, action: {})
+            ContinueWatchingCard(
+              title: "轨道边界", stillURL: nil, icon: nil, episodeText: "第 3 季第 2 集", loadsImage: false,
+              action: {})
+          }
+          .padding(60)
+        },
+        .page(
+          id: "component.loadingIndicators",
+          title: "加载指示",
+          note:
+            "LoadingIndicators 的三种用法：LoadingIcon（图标位转圈，不改变按钮尺寸）、RowLoadingTail（货架行尾加载更多，占一张海报高度）、FirstLoadIndicator（页面/区块首次加载的居中裸转圈）。"
+        ) {
+          VStack(spacing: 48) {
+            HStack(spacing: 40) {
+              Button {} label: {
+                Label("保存", systemImage: AppSymbol.save)
+                  .labelStyle(.iconOnly)
+              }
+              Button {} label: {
+                LoadingIcon(systemImage: AppSymbol.save, isLoading: true)
+              }
+              .accessibilityLabel("保存中")
+              HStack(spacing: 12) {
+                LoadingIcon(systemImage: AppSymbol.save, isLoading: true)
+                Text("保存中")
+              }
+              .foregroundStyle(.secondary)
+            }
+            HStack(alignment: .top, spacing: 60) {
+              RowLoadingTail(height: 200)
+              FirstLoadIndicator(minHeight: 200, maxHeight: nil)
+            }
+          }
+          .padding(60)
+        },
+        .page(
+          id: "component.playbackProgressBar",
+          title: "已播放进度条",
+          note: "试看与继续观看共用的细进度条：0%、35%、100% 三种取值，长度由所在文字槽决定。"
+        ) {
+          VStack(alignment: .leading, spacing: 40) {
+            ForEach([0.0, 0.35, 1.0], id: \.self) { fraction in
+              VStack(alignment: .leading, spacing: 10) {
+                PlaybackProgressBar(fraction: fraction)
+                  .frame(width: 320)
+                Text("\(Int(fraction * 100))%")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            }
           }
           .padding(60)
         },

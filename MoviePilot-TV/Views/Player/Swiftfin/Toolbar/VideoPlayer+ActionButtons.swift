@@ -63,7 +63,6 @@ extension VideoPlayer.PlaybackControls.Toolbar {
             }
 
             if mediaSession.queue == nil {
-                filteredButtons.removeAll { $0 == .autoPlay }
                 filteredButtons.removeAll { $0 == .playNextItem }
                 filteredButtons.removeAll { $0 == .playPreviousItem }
             }
@@ -80,7 +79,6 @@ extension VideoPlayer.PlaybackControls.Toolbar {
             }
 
             if mediaSession.item.isLiveStream {
-                filteredButtons.removeAll { $0 == .autoPlay }
                 filteredButtons.removeAll { $0 == .playbackSpeed }
                 filteredButtons.removeAll { $0 == .playbackSettings }
             }
@@ -109,8 +107,6 @@ extension VideoPlayer.PlaybackControls.Toolbar {
                 Audio()
             case .audioOffset:
                 AudioOffset()
-            case .autoPlay:
-                AutoPlay()
             case .pictureInPicture:
                 PictureInPicture()
             case .playbackSpeed:

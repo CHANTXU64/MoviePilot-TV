@@ -56,17 +56,95 @@ extension UIPreviewFixtures {
     ]
   }
 
+  /// 「继续观看」：条目带 `percent`，剧集副标题是「S1:1 - 集名」。
+  /// `homeContinueWatchingLongList` 为 "1" 时返回 12 条，用来验证长列表滚动。
+  static func homeMediaServerPlaying(server: String, count: Int) async throws -> [MediaServerPlayItem] {
+    try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.homeMediaServerPlaying)
+    if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.homeMediaServerPlaying) {
+      return []
+    }
+    let longList =
+      UIPreviewBackend.shared.context(UIPreviewContextKey.homeContinueWatchingLongList) == "1"
+    var items = [
+      MediaServerPlayItem(
+        id: "\(server)-cw-1",
+        title: "边境信号",
+        subtitle: "S1:1 - 失联的补给船",
+        type: "电视剧",
+        image: "https://image.tmdb.org/t/p/w500/8cdWjvZQUExUUTzyp4t6EDMubfO.jpg",
+        link: "emby://items/cw-1",
+        server_type: .emby,
+        percent: 62
+      ),
+      MediaServerPlayItem(
+        id: "\(server)-cw-2",
+        title: "荒原长路",
+        subtitle: "2025",
+        type: "电影",
+        image: nil,
+        link: "emby://items/cw-2",
+        server_type: .emby,
+        percent: 23
+      ),
+      MediaServerPlayItem(
+        id: "\(server)-cw-3",
+        title: "星门回声",
+        subtitle: "S2:4 - 静默的抉择",
+        type: "电视剧",
+        image: "https://image.tmdb.org/t/p/w500/8cdWjvZQUExUUTzyp4t6EDMubfO.jpg",
+        link: "emby://items/cw-3",
+        server_type: .emby,
+        percent: 88
+      ),
+      MediaServerPlayItem(
+        id: "\(server)-cw-4",
+        title: "轨道边界",
+        subtitle: "S1:7 - 返航窗口",
+        type: "电视剧",
+        image: nil,
+        link: "emby://items/cw-4",
+        server_type: .emby,
+        percent: 5
+      ),
+    ]
+    if longList {
+      let extra = (5...12).map { number in
+        MediaServerPlayItem(
+          id: "\(server)-cw-\(number)",
+          title: "长列表剧集 \(number)",
+          subtitle: "S3:\(number) - 第 \(number) 集",
+          type: "电视剧",
+          image: nil,
+          link: "emby://items/cw-\(number)",
+          server_type: .emby,
+          percent: Double(number * 7 % 100)
+        )
+      }
+      items.append(contentsOf: extra)
+    }
+    return Array(items.prefix(count))
+  }
+
   static func homeSubscriptions() async throws -> [Subscribe] {
     try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.homeSubscriptions)
     if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.homeSubscriptions) {
       return []
     }
-    return [
+    var items = [
       subscribe(id: 46_101, name: "边境信号", type: "电视剧", state: "R", lack: 3),
       subscribe(id: 46_102, name: "荒原长路", type: "电影", state: "R", lack: nil),
       subscribe(id: 46_103, name: "星门回声", type: "电视剧", state: "P", lack: 1),
       subscribe(id: 46_104, name: "轨道边界", type: "电视剧", state: "S", lack: 12),
     ]
+    if UIPreviewBackend.shared.context(UIPreviewContextKey.subscriptionsLongList) == "1" {
+      items.append(contentsOf: (1...8).map { number in
+        subscribe(
+          id: 46_200 + number, name: "订阅长列表 \(number)",
+          type: number.isMultiple(of: 2) ? "电影" : "电视剧",
+          state: number.isMultiple(of: 3) ? "S" : "R", lack: number)
+      })
+    }
+    return items
   }
 
   // MARK: - 推荐
@@ -283,6 +361,7 @@ private extension [MediaInfo] {
 extension UIPreviewBehaviorKey {
   static let homeMediaServers = "home.mediaServers"
   static let homeMediaServerLatest = "home.mediaServerLatest"
+  static let homeMediaServerPlaying = "home.mediaServerPlaying"
   static let homeSubscriptions = "home.subscriptions"
   static let recommendSources = "recommend.sources"
   static let recommendMedia = "recommend.media"
@@ -308,5 +387,9 @@ extension UIPreviewContextKey {
   static let transferHistoryLongList = "transfer.historyLongList"
   /// 为 "1" 时整理历史只返回失败记录，用于隔离失败原因样式。
   static let transferHistoryOnlyFailed = "transfer.historyOnlyFailed"
+  /// 为 "1" 时「继续观看」返回 12 条，用于长列表滚动。
+  static let homeContinueWatchingLongList = "home.continueWatchingLongList"
+  /// 为 "1" 时订阅页返回 12 条（电影/电视剧各 6 条），用于长列表滚动。
+  static let subscriptionsLongList = "subscriptions.longList"
 }
 #endif

@@ -12,6 +12,8 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var downloads: [DownloadingInfo] = []
   @Published private(set) var loadedClient: String = ""
   @Published private(set) var clientsLoadFailed = false
+  /// 第一次结果之前任务列表请求失败的下载器。绑定下载器：切到别的下载器后不沿用失败文字。
+  @Published private(set) var downloadsLoadFailedClient: String?
   @Published var errorMessage: String?
 
   var canOperateDownloads: Bool {
@@ -30,6 +32,22 @@ class DownloadTaskViewModel: ObservableObject {
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
+  }
+
+  /// 当前选中的下载器还没拿到任务列表时（首次进入或刚切换下载器），列表区域显示什么。
+  /// 拿到后为 nil，按实际列表显示；下载器列表失败、没有下载器或无权限时也为 nil，沿用各自原有的文字。
+  enum PendingLoadState: Equatable {
+    /// 还在等这个下载器的第一次结果：转圈，不能先说「暂无下载任务」，也不显示上一个下载器的任务。
+    case loading
+    /// 这个下载器在拿到结果前请求失败：轮询继续自动重试，同时一直显示失败文字。
+    case failed
+  }
+
+  var pendingLoadState: PendingLoadState? {
+    guard apiService.canAccess(.manage), !clientsLoadFailed else { return nil }
+    if hasLoadedClients && selectedClient.isEmpty { return nil }
+    guard !canOperateDownloads else { return nil }
+    return downloadsLoadFailedClient == selectedClient ? .failed : .loading
   }
 
   /// 主 Tab 生命周期门禁。generation 让“切走后又快速切回”的旧独立 Task 也无法写回。
@@ -152,14 +170,20 @@ class DownloadTaskViewModel: ObservableObject {
       if loadedClient != clientName {
         loadedClient = clientName
       }
+      downloadsLoadFailedClient = nil
       consecutiveDownloadsFailures = 0
     } catch is CancellationError {
       return
     } catch {
+      // 和成功路径同一套校验：切换下载器或有更新的请求后，旧请求的失败既不显示到当前下载器上，
+      // 也不计入连续失败次数。
       guard isPresentationActive,
         currentPresentationGeneration == presentationGeneration,
-        !Task.isCancelled
+        !Task.isCancelled,
+        selectedClient == clientName,
+        currentGeneration == downloadLoadGeneration
       else { return }
+      downloadsLoadFailedClient = clientName
       consecutiveDownloadsFailures += 1
       reportPollingFailureIfNeeded(
         &consecutiveDownloadsFailures,
@@ -173,6 +197,7 @@ class DownloadTaskViewModel: ObservableObject {
     downloadLoadGeneration += 1
     hasLoadedClients = false
     clientsLoadFailed = false
+    downloadsLoadFailedClient = nil
     clients = []
     selectedClient = ""
     downloads = []

@@ -96,6 +96,16 @@ struct EmbyClient {
     return url
   }
 
+  /// 条目图片地址。Emby 的图片接口不需要登录，地址里不带密钥；`tag` 是图片版本，换图后地址跟着变，缓存不会用到旧图。
+  func imageURL(itemID: String, type: String, tag: String) -> URL? {
+    try? url(["Items", itemID, "Images", type], query: ["tag": tag, "maxWidth": "1280", "quality": "90"])
+  }
+
+  /// 章节截图地址，规则同 `imageURL`。
+  func chapterImageURL(itemID: String, index: Int, tag: String) -> URL? {
+    try? url(["Items", itemID, "Images", "Chapter", String(index)], query: ["tag": tag, "maxWidth": "640", "quality": "90"])
+  }
+
   /// 直接播放原文件的流地址。密钥放在 query 里，此地址不得写入日志。
   func directStreamURL(
     itemID: String, selection: EmbyDirectPlay.Selection, playSessionID: String?
@@ -135,8 +145,17 @@ struct EmbyClient {
     }
   }
 
+  /// 一次读多个条目（首页「最近添加」看哪些刮到了外部编号）。不在这台服务器上的不返回。
+  func items(ids: [String], userID: String, timeout: TimeInterval? = nil) async throws -> [EmbyItem] {
+    let data = try await send(
+      url(["Users", userID, "Items"], query: ["Ids": ids.joined(separator: ","), "Fields": "ProviderIds"]),
+      timeout: timeout)
+    return try await Self.decode(EmbyItemsPage.self, from: data).items
+  }
+
   /// 按外部编号找条目（`AnyProviderIdEquals`，如 `tmdb.12345`），返回的是这台服务器自己的条目 ID。
   /// 不认识这个参数的服务器会返回不相干的条目，调用方须再核对返回条目的类型和编号。
+  /// 详情页起播时找到的条目直接拿去播，所以和单条读取一样带上简介、首播日期，MoviePilot 缺这些时播放界面用它们。
   func items(
     withAnyProviderID keys: [String], type: String?, userID: String, timeout: TimeInterval? = nil
   ) async throws -> [EmbyItem] {
@@ -147,24 +166,29 @@ struct EmbyClient {
           "Recursive": "true",
           "AnyProviderIdEquals": keys.joined(separator: ","),
           "IncludeItemTypes": type,
-          "Fields": "ProviderIds",
+          "Fields": "ProviderIds,Overview,PremiereDate",
           "Limit": "20",
         ]),
       timeout: timeout)
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 剧集的全部集（按 Emby 顺序，带用户观看数据和外部编号），不含缺失的集。
-  /// 单集条目的 `ProviderIds.Tmdb` 是 TMDB 单集 ID，按集播放靠它对应 MoviePilot 集列表里的集。
+  /// 剧集的全部集（按 Emby 顺序，带用户观看数据、外部编号、文件路径和首播日期），不含缺失的集。
+  /// 单集对应（见 `EpisodeMatching.swift`）先看 `ProviderIds.Tmdb`（TMDB 单集 ID），没有时拿路径对整理记录、按季号集号和首播日期对。
+  /// 列表里的用户数据默认没有最后播放时间，要在 `Fields` 里点名 `UserDataLastPlayedDate` 才给：同一集一份看完、
+  /// 一份看到一半时靠它分辨是不是重新在看（见 `PlaybackEpisodeProgress`），不为此逐集另发请求。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds"]))
+        query: [
+          "UserId": userID, "IsMissing": "false",
+          "Fields": "ProviderIds,Path,PremiereDate,Overview,UserDataLastPlayedDate",
+        ]))
     return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，
+  /// 声明任何视频都可以直接播放（播放器直连原文件），并关闭重新封装和转码，
   /// Emby 不会为此启动转码任务。
   func playbackInfo(itemID: String, userID: String) async throws -> EmbyPlaybackInfo {
     let bitrate = "200000000"
@@ -222,6 +246,34 @@ struct EmbyClient {
   func updateUserData(userID: String, itemID: String, userData: [String: JSONValue]) async throws {
     _ = try await send(
       url(["Users", userID, "Items", itemID, "UserData"]), method: "POST", body: .object(userData))
+  }
+
+  /// 可选的媒体库和各自的文件夹（MoviePilot 叫 Emby 刷新时也按它找媒体库）。
+  func mediaFolders() async throws -> [EmbyMediaFolder] {
+    let data = try await send(url(["Library", "SelectableMediaFolders"]))
+    return try await Self.decode(EmbyMediaFolderList.self, from: data).folders
+  }
+
+  /// 各媒体库的文件夹和元数据来源配置（要管理员权限的密钥）。和 MoviePilot 一样读 `Library/VirtualFolders/Query`
+  /// （回包的 `Items`）；没有这个接口（404）的旧版 Emby 退回 `Library/VirtualFolders`（顶层数组）。
+  func virtualFolders() async throws -> [MediaLibraryProfile] {
+    let data: Data
+    do {
+      data = try await send(url(["Library", "VirtualFolders", "Query"]))
+    } catch EmbyClientError.http(404) {
+      data = try await send(url(["Library", "VirtualFolders"]))
+    }
+    return try await Self.decode(EmbyVirtualFolderList.self, from: data).profiles
+  }
+
+  /// 重新扫描一个条目（一部剧或一个媒体库）下面的文件，参数同 MoviePilot。Emby 受理后在后台扫描。
+  func refreshItem(id: String) async throws {
+    _ = try await send(url(["Items", id, "Refresh"], query: ["Recursive": "true"]), method: "POST")
+  }
+
+  /// 扫描整个库（所有媒体库）。
+  func refreshAllLibraries() async throws {
+    _ = try await send(url(["Library", "Refresh"]), method: "POST")
   }
 
   // MARK: - 传输

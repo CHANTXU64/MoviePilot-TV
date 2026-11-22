@@ -8,6 +8,8 @@ extension Notification.Name {
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
   /// 用户在保存订阅期间返回，保存最终成功后显示一次成功提示
   static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
+  /// 试看的一集入库可以播放了，且当时没有页面在显示它；object 是所属的 APIService
+  static let episodeTrialDidBecomeReady = Notification.Name("episodeTrialDidBecomeReady")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
   /// 同一会话反复遇到无法明确归类的认证挑战，提示用户前往设置手动刷新凭据
@@ -480,6 +482,11 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   let category: String?
   /// 关联的原始订阅分享对象（如果适用）
   let subscribeShare: SubscribeShare?
+  /// 从首页「最近添加」打开时，那张卡在媒体服务器上的条目（只在本机导航时带着，不编码、不参与身份比较）。
+  /// MoviePilot 还没同步到这个条目时（入库查询查不到），详情页用它找到这份文件播放，起播前照常按编号核对。
+  var libraryItemHint: MediaServerItemRef? = nil
+  /// 共享映射指定的 TMDB 季号，交给目标详情的剧集行选季。只在本机导航时携带。
+  var tmdbSeasonHint: Int? = nil
   /// Web 会把插件媒体对象直接作为 `media_in` 回传；保留未建模字段以免丢失插件契约。
   private let rawPayload: [String: JSONValue]?
 
@@ -1110,6 +1117,16 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     if upspeed != other.upspeed { upspeed = other.upspeed }
     if left_time != other.left_time { left_time = other.left_time }
   }
+
+  /// 卡片上的季集显示，如「1季 2集」。取值顺序与 Web 一致：先用 media 的季、集，
+  /// 两项都缺时退回 season_episode；电影或读不出季集时为 nil，调用方据此整段不显示。
+  var seasonEpisodeDisplay: String? {
+    let fromMedia = [media?.season, media?.episode]
+      .compactMap { MediaIdentifier.normalizedString($0) }
+      .joined(separator: " ")
+    let raw = MediaIdentifier.normalizedString(fromMedia.isEmpty ? season_episode : fromMedia)
+    return raw?.formattedSeasonEpisode()
+  }
 }
 
 /// 种子/资源搜索结果详情
@@ -1393,17 +1410,21 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   let use_cookies: FlexibleBool?
   /// 媒体服务器类型
   let server_type: MediaServerType?
+  /// 已播放百分比（0…100），只有「继续观看」接口给；「最近添加」没有这个键。
+  let percent: Double?
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
-  @MainActor var imageURLs: ImageURLs {
+  /// `cardPosterPixelWidth` 只给卡片用；详情入口拿同一个 URL 当全屏背景兜底，不传，保持原图。
+  @MainActor func imageURLs(cardPosterPixelWidth: Int? = nil) -> ImageURLs {
     ImageURLs(
       image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
+        image: image, useCookies: use_cookies?.value,
+        cardPosterPixelWidth: cardPosterPixelWidth))
   }
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
-    case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type
+    case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type, percent
   }
 
   private static func stableID(
@@ -1446,6 +1467,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     link = try container.decodeIfPresent(String.self, forKey: .link)
     use_cookies = try container.decodeIfPresent(FlexibleBool.self, forKey: .use_cookies)
     server_type = try container.decodeIfPresent(MediaServerType.self, forKey: .server_type)
+    // 进度只用来画角标：个别条目给不出数字时这一项不画，不拖垮整批条目。
+    percent = try? container.decodeIfPresent(Double.self, forKey: .percent)
 
     self.id = Self.stableID(
       rawID: raw_id?.value,
@@ -1459,7 +1482,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
   init(
     id: String, title: String, subtitle: String? = nil, type: String? = nil, image: String? = nil,
-    link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil
+    link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil,
+    percent: Double? = nil
   ) {
     self.raw_id = FlexibleString(id)
     self.item_id = nil
@@ -1473,6 +1497,7 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.link = link
     self.use_cookies = use_cookies
     self.server_type = server_type
+    self.percent = percent
   }
 }
 
@@ -1572,6 +1597,12 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
+/// 订阅最近一次搜索的执行状态：来源（新增、手动等）和搜索批次。只解码 TV 用到的字段。
+nonisolated struct SubscribeExecutionStatus: Decodable, Hashable {
+  let source: String?
+  let batch_id: String?
+}
+
 nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
@@ -1666,6 +1697,8 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   var mediaid: String?
   /// 洗版订阅的剧集优先级状态；公共写入 DTO 不发送。
   var episode_priority: [String: Int]?
+  /// 订阅列表附带的最近一次搜索状态（订阅详情不带）。搜索已被后端受理但 TV 丢失回执时，可从这里恢复批次。
+  var execution_status: SubscribeExecutionStatus? = nil
 
   /// 定时搜索间隔（小时），nil 跟随系统设置
   var search_interval: Int?
@@ -1699,7 +1732,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
       episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date,
       search_interval, music_type, total_tracks, audio_quality, audio_format, min_bitrate,
-      min_bit_depth, min_sample_rate, media_category_id
+      min_bit_depth, min_sample_rate, media_category_id, execution_status
   }
 
   init(from decoder: Decoder) throws {
@@ -1755,6 +1788,7 @@ nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
+    execution_status = try? container.decodeIfPresent(SubscribeExecutionStatus.self, forKey: .execution_status)
     search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
     music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
     total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)
@@ -2455,6 +2489,10 @@ struct MediaEpisodeGridRequest: Hashable, Codable {
   let initialSeason: Int?
   let initialEpisodeGroup: String?
   let initialEpisodeOffset: Int?
+  /// 详情页打开展开页时的按集播放和试看；没有应用内播放时为 nil。
+  var playback: EpisodePlaybackSource? = nil
+  /// 详情页的默认顺序季目录（见 `MediaDetailEpisodesView.defaultSeasons`），展开页和详情页的集列表行看到的季一样。
+  var defaultSeasons: [TmdbSeason]? = nil
 }
 
 // MARK: - Transfer History Models
@@ -2544,6 +2582,16 @@ extension TransferHistory {
       && src_fileitem == other.src_fileitem
       && dest_fileitem == other.dest_fileitem
       && date == other.date
+  }
+
+  /// 列表卡片、详情标题与重新整理面板共用的季集显示，如「1季 2集」「1季 2-5集」。
+  /// 非电视剧、或季集都读不出时为 nil，调用方据此整段不显示。
+  var seasonEpisodeDisplay: String? {
+    guard type == "电视剧" else { return nil }
+    let text = [seasons, episodes]
+      .compactMap { MediaIdentifier.normalizedString($0) }
+      .joined(separator: " ")
+    return text.isEmpty ? nil : text.formattedSeasonEpisode()
   }
 
   /// 失败记录的后端失败原因：仅失败记录且 trim 后非空白才返回；成功记录与空白原因一律返回 nil。

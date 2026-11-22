@@ -47,7 +47,10 @@ struct SubscribeSeasonContentView: View {
 
   @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
+  /// 打开着季面板的那一季：按下季卡片打开，订阅、取消订阅都在面板里。
   @State private var selectedSeasonDetail: TmdbSeason?
+  /// 季面板关掉后要做的事：订阅表单、取消确认不能叠在面板上弹出，先关面板再弹。
+  @State private var afterSeasonSheetDismiss: (() -> Void)?
   @State private var seasonPageOffset = 0
   @FocusState private var focusedSeasonId: Int?
 
@@ -61,7 +64,7 @@ struct SubscribeSeasonContentView: View {
           guard refreshed, navigationCoordinator.isCurrent(source) else { return nil }
           return viewModel.isSeasonSubscribed(seasonNumber)
         },
-        showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+        showUnsubscribeConfirm: { viewModel.requestUnsubscribe(season: $0) },
         prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) })
     }
   }
@@ -118,6 +121,11 @@ struct SubscribeSeasonContentView: View {
     }
   }
 
+  /// 提示框对应的那一季已经在取消试看：只说明，不再提供取消。
+  private var noticeIsCancelling: Bool {
+    viewModel.episodeTrialNoticeSeason.map(viewModel.isSeasonCancellingTrial) == true
+  }
+
   var body: some View {
     let session = apiService.sessionSnapshot()
     Group {
@@ -131,6 +139,7 @@ struct SubscribeSeasonContentView: View {
             shelf
           }
         }
+        .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
       case .grid(let imageLifecycle):
         expandedGrid(imageLifecycle: imageLifecycle)
       }
@@ -140,12 +149,16 @@ struct SubscribeSeasonContentView: View {
       try? await viewModel.loadEpisodeGroups()
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      afterSeasonSheetDismiss = nil
       selectedSeasonDetail = nil
       viewModel.sheetSubscribe = nil
       viewModel.showUnsubscribeConfirm = nil
+      viewModel.episodeTrialNoticeSeason = nil
     }
-    .sheet(item: $selectedSeasonDetail) { season in
-      SeasonDetailSheet(season: season, mediaInfo: viewModel.mediaInfo)
+    .sheet(item: $selectedSeasonDetail, onDismiss: runAfterSeasonSheetDismiss) { season in
+      SeasonDetailSheet(season: season, mediaInfo: viewModel.mediaInfo, panel: seasonPanel(for: season)) { action in
+        performPanelAction(action, on: season)
+      }
     }
     .sheet(item: $viewModel.sheetSubscribe) { subscribe in
       SubscribeSheet(subscribe: subscribe, isNewSubscription: true) {
@@ -173,6 +186,16 @@ struct SubscribeSeasonContentView: View {
         Text(viewModel.unsubscribeConfirmationMessage(for: season))
       }
     }
+    .episodeTrialNotice(
+      isPresented: Binding(
+        get: { viewModel.episodeTrialNoticeSeason != nil },
+        set: { if !$0 { viewModel.episodeTrialNoticeSeason = nil } }
+      ),
+      context: .manage, isCancelling: noticeIsCancelling, canCancel: viewModel.canCancelEpisodeTrial
+    ) {
+      guard let season = viewModel.episodeTrialNoticeSeason else { return }
+      Task { await viewModel.cancelEpisodeTrial(season: season) }
+    }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
       Task {
@@ -187,6 +210,7 @@ struct SubscribeSeasonContentView: View {
         await viewModel.checkSubscriptionStatus(forceRefresh: true)
       }
     }
+    .task { await viewModel.followEpisodeTrials() }
     .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)
@@ -225,12 +249,16 @@ struct SubscribeSeasonContentView: View {
         }
       }
     } status: {
-      status
+      // 独立的季订阅页是整页：加载转圈改由外层 pageLoadingOverlay 居中；详情页里的分季区块仍原位转圈。
+      if !viewModel.showsLoadingState {
+        status
+      }
     } card: { index, onFocus in
       let season = seasons[page.lowerBound + index]
       seasonCard(season, onFocus: onFocus)
         .focused($focusedSeasonId, equals: season.season_number)
     }
+    .pageLoadingOverlay(viewModel.showsLoadingState)
   }
 
   private func seasonPagePicker(_ seasons: [TmdbSeason], page: Range<Int>) -> some View {
@@ -238,13 +266,22 @@ struct SubscribeSeasonContentView: View {
       title: "季数范围",
       selection: Binding(get: { page.lowerBound }, set: { seasonPageOffset = $0 }),
       options: DetailPageRanges.ranges(count: seasons.count, size: Self.seasonPageSize).map { range in
-        PickerOption(
-          title: DetailPageRanges.title(for: range, numbers: seasons[range].map(\.season_number), unit: "季"),
-          value: range.lowerBound
-        )
+        PickerOption(title: Self.seasonPageTitle(range, numbers: seasons[range].map(\.season_number)), value: range.lowerBound)
       }
     )
     .fixedSize(horizontal: true, vertical: false)
+  }
+
+  /// 季数范围的名字。特别篇排在最后（见 `SeasonDisplayOrder`），不计入季号范围，单独写在后面。
+  /// 正片季号对不上（不递增、缺季号）时按位置写「第 x–y 项」。
+  static func seasonPageTitle(_ range: Range<Int>, numbers: [Int?]) -> String {
+    let regular = numbers.filter { $0 != 0 }
+    guard regular.count < numbers.count, !regular.isEmpty else {
+      return DetailPageRanges.title(for: range, numbers: numbers, unit: "季")
+    }
+    let regularRange = range.lowerBound..<(range.lowerBound + regular.count)
+    let title = DetailPageRanges.title(for: regularRange, numbers: regular, unit: "季")
+    return title.hasPrefix("第 ") ? DetailPageRanges.title(for: range, numbers: [], unit: "季") : "\(title) · 特别篇"
   }
 
   private var episodeGroupMenu: EpisodeGroupMenu {
@@ -268,6 +305,7 @@ struct SubscribeSeasonContentView: View {
           .font(.callout)
           .bold()
           .foregroundStyle(.secondary)
+          .focusLiftHeaderPart()
 
         Spacer()
 
@@ -277,6 +315,7 @@ struct SubscribeSeasonContentView: View {
             Button("展开") { onMoreTapped?() }
           }
         }
+        .focusLiftHeaderPart()
       }
       .padding(.horizontal, 89)
 
@@ -290,9 +329,8 @@ struct SubscribeSeasonContentView: View {
 
   @ViewBuilder
   private var status: some View {
-    if viewModel.isLoading {
-      ProgressView("加载中...")
-        .frame(maxWidth: .infinity, minHeight: 200)
+    if viewModel.showsLoadingState {
+      FirstLoadIndicator()
     } else if viewModel.hasSeasonLoadError {
       VStack(spacing: 16) {
         Image(systemName: AppSymbol.warning)
@@ -351,6 +389,8 @@ struct SubscribeSeasonContentView: View {
   ) -> some View {
     let seasonNumber = season.season_number ?? 0
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
+    let isHeldByTrial = viewModel.isSeasonHeldByEpisodeTrial(seasonNumber)
+    let isCancellingTrial = viewModel.isSeasonCancellingTrial(seasonNumber)
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
     let title = SeasonDisplayFormatter.cardTitle(
@@ -361,11 +401,8 @@ struct SubscribeSeasonContentView: View {
     let statusText = viewModel.getStatusText(season: seasonNumber)
     let episodeCount = season.episode_count ?? 0
     let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
-    let footerText =
-      isProcessing
-        ? "取消订阅中"
-        : (isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅")
 
+    // 卡片只显示状态，不写「订阅」这类操作提示：按下打开季面板，在面板里订阅或取消。
     MediaCard(
       title: title,
       posterUrl: APIService.shared.getSeasonPosterURL(
@@ -376,23 +413,27 @@ struct SubscribeSeasonContentView: View {
       ratingText: (season.vote_average ?? 0) > 0
         ? String(format: "%.1f", season.vote_average!) : nil,
       bottomLeftText: bottomLeft,
-      bottomLeftSecondaryText: nil,
+      bottomLeftSecondaryText: subscriptionBadge(
+        seasonNumber, isSubscribed: isSubscribed, isHeldByTrial: isHeldByTrial,
+        isBusy: isProcessing || isCancellingTrial),
       source: nil,
       showBadges: showBadges,
       loadsImage: loadsImages,
-      footerLabel: (
-        icon: isSubscribed ? AppSymbol.unsubscribe : AppSymbol.subscribe,
-        text: footerText
-      ),
-      action: {
-        guard !isProcessing else { return }
-        performSeasonAction(season, isSubscribed: isSubscribed)
-      },
+      action: { selectedSeasonDetail = season },
       onFocus: onFocus
     )
     .compositingGroup()
     .contextMenu {
-      if isSubscribed {
+      if isHeldByTrial {
+        if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
+          Button(role: .destructive) {
+            guard !isProcessing else { return }
+            viewModel.episodeTrialNoticeSeason = seasonNumber
+          } label: {
+            Label(EpisodeTrialHoldNotice.cancelTitle, systemImage: AppSymbol.unsubscribe)
+          }
+        }
+      } else if isSubscribed {
         Button(role: .destructive) {
           guard !isProcessing else { return }
           performSeasonAction(season, isSubscribed: true)
@@ -406,13 +447,57 @@ struct SubscribeSeasonContentView: View {
           Label("订阅", systemImage: AppSymbol.subscribe)
         }
       }
-
-      Button {
-        selectedSeasonDetail = season
-      } label: {
-        Label("详情", systemImage: AppSymbol.details)
-      }
     }
+  }
+
+  /// 海报下沿的订阅状态（与入库状态并排）。没订阅时不显示。
+  private func subscriptionBadge(
+    _ seasonNumber: Int, isSubscribed: Bool, isHeldByTrial: Bool, isBusy: Bool
+  ) -> String? {
+    if isBusy { return isHeldByTrial ? "取消试看中" : "处理中" }
+    if isHeldByTrial { return "试看中" }
+    return isSubscribed ? "已订阅" : nil
+  }
+
+  /// 季面板显示的订阅状态和操作，与长按菜单同一套判断。
+  private func seasonPanel(for season: TmdbSeason) -> SeasonDetailSheet.Panel {
+    let seasonNumber = season.season_number ?? 0
+    let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
+    let isHeldByTrial = viewModel.isSeasonHeldByEpisodeTrial(seasonNumber)
+    let isCancellingTrial = viewModel.isSeasonCancellingTrial(seasonNumber)
+    let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
+    var panel = SeasonDetailSheet.Panel(libraryStatus: viewModel.getStatusText(season: seasonNumber))
+    if isHeldByTrial {
+      panel.subscriptionStatus = isCancellingTrial ? "正在取消试看" : "试看中"
+      if viewModel.canCancelEpisodeTrial, !isCancellingTrial { panel.action = .cancelTrial }
+    } else if isSubscribed {
+      panel.subscriptionStatus = viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅"
+      panel.action = .unsubscribe
+    } else {
+      panel.action = .subscribe
+    }
+    panel.isProcessing = isProcessing
+    return panel
+  }
+
+  /// 面板里的操作：先关面板，关掉后再弹订阅表单或取消确认。按下时的意图原样交出，状态变了由下游拒绝。
+  private func performPanelAction(_ action: SeasonDetailSheet.Action, on season: TmdbSeason) {
+    let seasonNumber = season.season_number ?? 0
+    switch action {
+    case .subscribe:
+      afterSeasonSheetDismiss = { performSeasonAction(season, isSubscribed: false) }
+    case .unsubscribe:
+      afterSeasonSheetDismiss = { performSeasonAction(season, isSubscribed: true) }
+    case .cancelTrial:
+      afterSeasonSheetDismiss = { viewModel.episodeTrialNoticeSeason = seasonNumber }
+    }
+    selectedSeasonDetail = nil
+  }
+
+  private func runAfterSeasonSheetDismiss() {
+    let action = afterSeasonSheetDismiss
+    afterSeasonSheetDismiss = nil
+    action?()
   }
 
   @ViewBuilder
@@ -431,21 +516,43 @@ struct SubscribeSeasonContentView: View {
   }
 }
 
-/// 季详情：统一阅读 Sheet 的两栏形式（与豆瓣短评详情一致）。
+/// 季面板：统一阅读 Sheet 的两栏形式（与单集面板一致）。按下季卡片打开。
 ///
-/// 左栏是这一季的固定信息：剧名、首播日期、集数、评分；右栏是季简介，长简介可以往下翻。
-/// 不放海报：只会从季卡片的长按菜单进来，卡片上已经有这一季的海报。
+/// 左栏是这一季的固定信息（剧名、首播日期、集数、评分）、入库和订阅状态，最下面是订阅或取消的按钮；
+/// 右栏是季简介，长简介可以往下翻。不放海报：卡片上已经有这一季的海报。
 struct SeasonDetailSheet: View {
+  enum Action: Equatable {
+    case subscribe
+    case unsubscribe
+    case cancelTrial
+  }
+
+  struct Panel: Equatable {
+    var libraryStatus: String?
+    var subscriptionStatus: String?
+    /// nil 表示只能看（比如试看中但当前账号不能取消）。
+    var action: Action?
+    var isProcessing = false
+  }
+
   let season: TmdbSeason
   let mediaInfo: MediaInfo
+  var panel = Panel()
+  var onAction: (Action) -> Void = { _ in }
+
+  @FocusState private var focusesAction: Bool
 
   var body: some View {
     ReadingSheet(
       title: SeasonDisplayFormatter.name(seasonNumber: season.season_number, rawName: season.name),
-      blocks: Self.blocks(for: season)
+      blocks: Self.blocks(for: season),
+      focusesBodyByDefault: panel.action == nil,
+      size: .compact
     ) {
       sidebar
     }
+    // 挂在整个面板上：只挂在左栏时，打开面板的默认焦点仍会落到右上的正文。
+    .defaultFocus($focusesAction, panel.action != nil)
   }
 
   /// 正文是季简介；没有简介时写明，不留空白页。
@@ -457,6 +564,42 @@ struct SeasonDetailSheet: View {
   }
 
   private var sidebar: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      info
+      Spacer(minLength: 24)
+      if let action = panel.action {
+        actionButton(action)
+      }
+    }
+  }
+
+  private func actionButton(_ action: Action) -> some View {
+    let title: String
+    let systemImage: String
+    let loadingTitle: String
+    switch action {
+    case .subscribe:
+      title = "订阅"
+      systemImage = AppSymbol.subscribe
+      loadingTitle = "订阅中"
+    case .unsubscribe:
+      title = "取消订阅"
+      systemImage = AppSymbol.unsubscribe
+      loadingTitle = "取消订阅中"
+    case .cancelTrial:
+      title = EpisodeTrialHoldNotice.cancelTitle
+      systemImage = AppSymbol.unsubscribe
+      loadingTitle = "取消试看中"
+    }
+    return SheetActionButton(
+      title: title, systemImage: systemImage, loadingTitle: loadingTitle, isLoading: panel.isProcessing,
+      focus: $focusesAction
+    ) {
+      onAction(action)
+    }
+  }
+
+  private var info: some View {
     VStack(alignment: .leading, spacing: 0) {
       if let title = SeasonDisplayFormatter.nonEmpty(mediaInfo.title) {
         Text(title)
@@ -475,6 +618,12 @@ struct SeasonDetailSheet: View {
         }
         if let vote = season.vote_average, vote > 0 {
           SheetInfoTag(systemImage: AppSymbol.rating, text: String(format: "%.1f", vote))
+        }
+        if let status = SeasonDisplayFormatter.nonEmpty(panel.libraryStatus) {
+          SheetInfoTag(systemImage: AppSymbol.libraryStatus, text: status)
+        }
+        if let status = SeasonDisplayFormatter.nonEmpty(panel.subscriptionStatus) {
+          SheetInfoTag(systemImage: AppSymbol.subscribed, text: status)
         }
       }
       .font(.caption)

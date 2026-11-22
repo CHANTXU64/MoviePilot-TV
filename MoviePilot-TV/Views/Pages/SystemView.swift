@@ -30,6 +30,7 @@ struct SystemView: View {
   @State private var selectedDetail: SystemSettingsDetailItem?
   @State private var updateNotice: AppChangelogEntry?
   @State private var showLogoutConfirmation = false
+  @State private var showsEpisodeTrialRule = false
   @State private var route: [SystemSettingsPage] = []
   @State private var displayedRoute: [SystemSettingsPage] = []
   @State private var pageOffsetDepth = 0
@@ -69,6 +70,14 @@ struct SystemView: View {
 
   private var canConfigureCustomFilters: Bool {
     apiService.canRequestSuperUserEndpoints
+  }
+
+  /// 试看订阅规则只在试看可用时显示：管理员，且后端版本支持（见 `EpisodeTrialAvailability`）。
+  private var canConfigureEpisodeTrial: Bool {
+    canConfigureSubscriptions
+      && EpisodeTrialAvailability.isAvailable(
+        canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+        backendVersion: apiService.settings?.BACKEND_VERSION)
   }
 
   private var selectedLogRecordBinding: Binding<LogRecord?> {
@@ -143,6 +152,7 @@ struct SystemView: View {
       selectedDetail = nil
       updateNotice = nil
       showLogoutConfirmation = false
+      showsEpisodeTrialRule = false
     }
     .onChange(of: isSelected) { _, selected in
       guard selected else { return }
@@ -156,11 +166,16 @@ struct SystemView: View {
     .sheet(isPresented: $showAppInfo) {
       appInfoSheet
     }
+    .sheet(isPresented: $showsEpisodeTrialRule) {
+      EpisodeTrialRuleSheet(service: apiService.sessionScope.episodeTrial, apiService: apiService)
+    }
     .sheet(item: $selectedDetail) { detail in
       // 更新历史和日志详情共用这一个 item sheet，写法与版本更新历史相同。
       switch detail {
       case .changelog(let entry):
         changelogDetailSheet(entry)
+      case .license(let notice):
+        ThirdPartyLicenseSheet(notice: notice).equatable()
       case .log(let record):
         LogRecordDetailSheet(record: record)
       }
@@ -280,6 +295,8 @@ struct SystemView: View {
                 }
               case .changelog:
                 changelogPage
+              case .licenses:
+                licensesPage
               case .logs:
                 EmptyView()
               }
@@ -297,7 +314,7 @@ struct SystemView: View {
           // 会同时触发 scrollTo(top)，随后焦点恢复又滚回原行，形成"先上滑再下滑"。
           isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root
             && !showAppInfo && updateNotice == nil && selectedDetail == nil
-            && !showLogoutConfirmation,
+            && !showLogoutConfirmation && !showsEpisodeTrialRule,
           onExitPress: {
             focusedItem = nil
             withAnimation(.easeInOut(duration: 0.24)) {
@@ -311,7 +328,7 @@ struct SystemView: View {
 
   private var rootPage: some View {
     VStack(spacing: 38) {
-      if canConfigureRecommendations {
+      if canConfigureRecommendations && topShelfManager.isAvailableForCurrentBackend {
         topShelfSettings
       }
 
@@ -326,6 +343,17 @@ struct SystemView: View {
           )
           .font(.body.bold())
           .focused($focusedItem, equals: .autoSearch)
+
+          if canConfigureEpisodeTrial {
+            Button {
+              showsEpisodeTrialRule = true
+            } label: {
+              EpisodeTrialRuleSummary(service: apiService.sessionScope.episodeTrial) {
+                row("试看订阅规则", value: $0)
+              }
+            }
+            .focused($focusedItem, equals: .episodeTrialRule)
+          }
         }
       }
 
@@ -423,7 +451,7 @@ struct SystemView: View {
             .focused($focusedItem, equals: .softFilter)
 
             if viewModel.isLoadingRules {
-              row("规则状态", value: "正在加载")
+              row("规则状态", value: "正在加载…")
                 .foregroundStyle(.secondary)
             } else if viewModel.rulesLoadFailed {
               Button {
@@ -474,6 +502,13 @@ struct SystemView: View {
         .focused($focusedItem, equals: .changelog)
 
         Button {
+          push(.licenses)
+        } label: {
+          row("第三方软件许可", showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .licenses)
+
+        Button {
           push(.logs)
         } label: {
           row("查看日志", showsDisclosure: true)
@@ -493,7 +528,7 @@ struct SystemView: View {
         } label: {
           row(
             "刷新登录凭据",
-            value: viewModel.isRefreshing ? "刷新中" : nil,
+            value: viewModel.isRefreshing ? "正在刷新…" : nil,
             showsProgress: viewModel.isRefreshing
           )
         }
@@ -587,6 +622,35 @@ struct SystemView: View {
         .focused($focusedItem, equals: .changelogVersion(entry.version))
       }
     }
+  }
+
+  private var licensesPage: some View {
+    section(nil) {
+      ForEach(ThirdPartyNotices.all) { notice in
+        Button {
+          selectedDetail = .license(notice)
+        } label: {
+          row(notice.name, value: notice.license, showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .license(notice.id))
+      }
+    }
+  }
+
+  /// 第三方许可详情的正文：说明在前，许可原文按原样分段接在后面，一个组件有多份原文时各带标题。
+  static func licenseBlocks(_ notice: ThirdPartyNotice, bundle: Bundle = .main) -> [ReadingBlock] {
+    var blocks = [ReadingBlock("许可：\(notice.license)", style: .secondary)]
+    blocks += notice.details.map { ReadingBlock($0) }
+    for text in notice.texts {
+      blocks.append(.divider)
+      if let title = text.title { blocks.append(ReadingBlock(title, style: .heading)) }
+      guard let content = ThirdPartyNotices.text(text.resource, in: bundle) else {
+        blocks.append(ReadingBlock("许可原文读取失败", style: .secondary))
+        continue
+      }
+      blocks += ReadingSheetLayout.paragraphs(content).map { ReadingBlock($0, style: .secondary) }
+    }
+    return blocks
   }
 
   private func changelogDetailSheet(_ entry: AppChangelogEntry) -> some View {
@@ -805,7 +869,7 @@ struct SystemView: View {
       .focused($focusedItem, equals: allFocus)
 
       if viewModel.isLoadingSites {
-        row("站点状态", value: "正在加载")
+        row("站点状态", value: "正在加载…")
           .foregroundStyle(.secondary)
       } else if let siteLoadError = viewModel.siteLoadError {
         Button {
@@ -905,7 +969,7 @@ struct SystemView: View {
           .focused($focusedItem, equals: .inAppPlayback)
         case .homeMediaTap:
           Toggle(
-            "点击首页媒体直接播放",
+            "首页媒体在应用内打开",
             isOn: Binding(
               get: { viewModel.homeMediaTapPlaysInApp },
               set: { viewModel.homeMediaTapPlaysInApp = $0 }
@@ -913,16 +977,6 @@ struct SystemView: View {
           )
           .font(.body.bold())
           .focused($focusedItem, equals: .homeMediaTapPlaysInApp)
-        case .autoPlayNextEpisode:
-          Toggle(
-            "自动播放下一集",
-            isOn: Binding(
-              get: { viewModel.autoPlayNextEpisode },
-              set: { viewModel.autoPlayNextEpisode = $0 }
-            )
-          )
-          .font(.body.bold())
-          .focused($focusedItem, equals: .autoPlayNextEpisode)
         }
       }
     }
@@ -951,7 +1005,7 @@ struct SystemView: View {
   }
 
   private var versionRequirementValue: String {
-    if viewModel.isCheckingBackendVersion { return "正在检查" }
+    if viewModel.isCheckingBackendVersion { return "正在检查…" }
     if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
     return "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)"
   }
@@ -997,7 +1051,7 @@ struct SystemView: View {
 
       HStack(spacing: 8) {
         if showsProgress {
-          ProgressView()
+          LoadingIcon(systemImage: AppSymbol.loading, isLoading: true)
         }
 
         if let value {
@@ -1081,6 +1135,8 @@ struct SystemView: View {
       target = .connection
     case .changelog:
       target = .changelog
+    case .licenses:
+      target = .licenses
     case .mediaSourceSelection:
       target = .mediaSourceSelection
     case .memoryOptimization:
@@ -1118,6 +1174,8 @@ struct SystemView: View {
       target = .relogin
     case .changelog:
       target = AppChangelog.latest.map { .changelogVersion($0.version) } ?? .changelog
+    case .licenses:
+      target = ThirdPartyNotices.all.first.map { .license($0.id) } ?? .licenses
     case .mediaSourceSelection:
       target = .defaultMediaSource
     case .memoryOptimization:
@@ -1161,8 +1219,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
-      .subtitleSiteSelection, .hardFilter, .playback,
+    case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
+      .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
@@ -1173,8 +1231,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
-      .subtitleSiteSelection, .hardFilter, .playback,
+    case .root, .connection, .changelog, .licenses, .logs, .mediaSourceSelection, .memoryOptimization,
+      .siteSelection, .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
@@ -1244,10 +1302,12 @@ struct SystemView: View {
       switch focusedItem {
       case .autoSearch:
         return "新增订阅后立即开始搜索，无需等待 MoviePilot 稍后自动处理。（只影响 TV 端）"
+      case .episodeTrialRule:
+        return "试看一集时，临时订阅使用的站点、质量、规则组和下载设置。按当前账号保存在这台 Apple TV 上。"
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .playbackSettings:
-        return "设置应用内播放、首页点击行为和自动播放下一集。（只影响 TV 端）"
+        return "设置应用内播放和首页点击行为。（只影响 TV 端）"
       case .memoryOptimization:
         return memoryOptimizationDescription
       case .preloadTMDBDetails:
@@ -1272,16 +1332,18 @@ struct SystemView: View {
         return nil
       case .changelog:
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+      case .licenses:
+        return Self.licensesDescription
       case .logs:
         return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
       case .allSites, .site, .allSubtitleSites, .subtitleSite, .defaultMediaSource, .mediaSource,
         .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion,
+        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion, .license,
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
-        .homeMediaTapPlaysInApp, .inAppPlayback, .autoPlayNextEpisode, .memoryOptimizationMode,
+        .homeMediaTapPlaysInApp, .inAppPlayback, .memoryOptimizationMode,
         .logTimeFilter:
         break
       }
@@ -1296,6 +1358,8 @@ struct SystemView: View {
       return "不对资源搜索结果应用软过滤。（只影响 TV 端）"
     case (.logs, .logRecording):
       return "关闭后不再把新日志写入本机，已保存的记录仍可查看。"
+    case (.licenses, .license(let id)):
+      return ThirdPartyNotices.all.first { $0.id == id }?.details.first
     case (.playback, .inAppPlayback):
       guard viewModel.backendSupportsInAppPlayback else {
         let version = apiService.settings?.BACKEND_VERSION ?? "未读取到"
@@ -1306,8 +1370,6 @@ struct SystemView: View {
       return "开启后，首页“最近添加”中的电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
     case (.memoryOptimization, .memoryOptimizationMode(let mode)):
       return memoryOptimizationModeDescription(for: mode)
-    case (.playback, .autoPlayNextEpisode):
-      return "从详情页按集播放时，播完一集自动接着播下一集；播放期间刚入库的下一集也能接上。播放界面里的“自动播放”按钮是同一个设置。（只影响 TV 端）"
     default:
       break
     }
@@ -1319,6 +1381,8 @@ struct SystemView: View {
       return "查看当前登录状态、服务器地址和后端连接状态。"
     case .changelog:
       return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+    case .licenses:
+      return Self.licensesDescription
     case .logs:
       return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
     case .mediaSourceSelection:
@@ -1343,6 +1407,8 @@ struct SystemView: View {
       return "设置应用内播放。（只影响 TV 端）"
     }
   }
+
+  private static let licensesDescription = "查看本应用使用的开源软件和它们的许可。"
 
   private var memoryOptimizationDescription: String {
     "开启后，及时释放暂时看不到的图片，减少内存占用。往回滚动或返回页面时，图片可能需要重新加载。（只影响 TV 端）"
@@ -1409,12 +1475,15 @@ struct SystemView: View {
 
 private enum SystemSettingsDetailItem: Identifiable {
   case changelog(AppChangelogEntry)
+  case license(ThirdPartyNotice)
   case log(LogRecord)
 
   var id: String {
     switch self {
     case .changelog(let entry):
       return "changelog-\(entry.id)"
+    case .license(let notice):
+      return "license-\(notice.id)"
     case .log(let record):
       return "log-\(record.id.uuidString)"
     }
@@ -1425,6 +1494,7 @@ enum SystemSettingsPage: Hashable {
   case root
   case connection
   case changelog
+  case licenses
   case logs
   case mediaSourceSelection
   case memoryOptimization
@@ -1445,6 +1515,8 @@ enum SystemSettingsFocus: Hashable {
   case connection
   case changelog
   case changelogVersion(String)
+  case licenses
+  case license(String)
   case logs
   case logRecording
   case logDownRedirector
@@ -1463,10 +1535,10 @@ enum SystemSettingsFocus: Hashable {
   case subtitleSite(Int)
   case appInfo
   case autoSearch
+  case episodeTrialRule
   case homeMediaTapPlaysInApp
   case playbackSettings
   case inAppPlayback
-  case autoPlayNextEpisode
   case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter
@@ -1490,6 +1562,16 @@ enum SystemSettingsFocus: Hashable {
   case topShelfExploreReset
   case topShelfSource(String)
   case recommendationShelf(String)
+}
+
+/// 一个第三方组件的许可详情。单独成一个视图并按组件比较：系统页重绘时组件没变就不重算正文，
+/// 许可原文很长（GPL v3 约 35 KB），不必每次都重新读文件、拆焦点块。
+private struct ThirdPartyLicenseSheet: View, Equatable {
+  let notice: ThirdPartyNotice
+
+  var body: some View {
+    ReadingSheet(title: notice.name, blocks: SystemView.licenseBlocks(notice))
+  }
 }
 
 private extension View {
@@ -1643,5 +1725,15 @@ enum SystemFilterRulePreview {
       return nil
     }
     return trimmed
+  }
+}
+
+/// 「试看订阅规则」一行的摘要，跟着当前账号保存的规则变化。
+private struct EpisodeTrialRuleSummary<Label: View>: View {
+  @ObservedObject var service: EpisodeTrialService
+  @ViewBuilder let label: (String) -> Label
+
+  var body: some View {
+    label(service.rule.isDefault ? "默认" : "已自定义")
   }
 }

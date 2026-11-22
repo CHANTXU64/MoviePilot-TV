@@ -54,7 +54,7 @@ nonisolated enum ReadingSheetLayout {
   /// `.body` 中文字宽约等于字号。
   static let bodyCharacterWidth: CGFloat = 29
 
-  static func charactersPerLine(hasSidebar: Bool) -> Int {
+  static func charactersPerLine(hasSidebar: Bool, sheetWidth: CGFloat = sheetWidth) -> Int {
     var width = sheetWidth - horizontalPadding * 2 - scrollTrailingPadding
     if hasSidebar { width -= sidebarWidth + columnSpacing }
     return max(1, Int(width / bodyCharacterWidth))
@@ -278,17 +278,31 @@ nonisolated enum ReadingSheetLayout {
   }
 }
 
-/// 统一的阅读型 Sheet：1500×900，内边距 72/64，标题 `.title3` 不限行数，正文 `.body` 默认行距。
+/// 阅读型 Sheet 的尺寸。
+nonisolated struct ReadingSheetSize: Equatable, Sendable {
+  let width: CGFloat
+  let height: CGFloat
+
+  /// 统一尺寸 1500×900。
+  static let standard = ReadingSheetSize(width: ReadingSheetLayout.sheetWidth, height: ReadingSheetLayout.sheetHeight)
+  /// 内容少的两栏面板（单集面板：简介通常就几行），小一号，不在屏幕中间留一大片空。
+  static let compact = ReadingSheetSize(width: 1200, height: 720)
+}
+
+/// 统一的阅读型 Sheet：默认 1500×900（内容少的可以用 `ReadingSheetSize.compact`），内边距 72/64，
+/// 标题 `.title3` 不限行数，正文 `.body` 默认行距。
 ///
 /// 单栏是「标题 + 正文」；传入左栏时变成两栏，标题与正文在右栏。正文按
-/// `ReadingSheetLayout.chunks` 分成焦点停靠块（关闭焦点高亮），默认焦点在第一块，
-/// 遥控器返回键关闭。
+/// `ReadingSheetLayout.chunks` 分成焦点停靠块（关闭焦点高亮），默认焦点在第一块；左栏有主操作按钮时
+/// 传 `focusesBodyByDefault: false`，由左栏自己指定默认焦点。遥控器返回键关闭。
 struct ReadingSheet<Sidebar: View>: View {
   let title: String?
   var titleColor: Color = .primary
   /// 正文焦点块。只在初始化时拆一次：焦点在块之间移动会重算 body，不能每次都对全文重新拆块。
   private let chunks: [[ReadingBlock]]
   let sidebar: Sidebar?
+  private var focusesBodyByDefault = true
+  private var size = ReadingSheetSize.standard
 
   @FocusState private var focusedChunkIndex: Int?
 
@@ -296,32 +310,41 @@ struct ReadingSheet<Sidebar: View>: View {
     title: String?,
     titleColor: Color = .primary,
     blocks: [ReadingBlock],
+    focusesBodyByDefault: Bool = true,
+    size: ReadingSheetSize = .standard,
     @ViewBuilder sidebar: () -> Sidebar
   ) {
     self.title = title
     self.titleColor = titleColor
-    self.chunks = Self.chunks(for: blocks, hasSidebar: true)
+    self.chunks = Self.chunks(for: blocks, hasSidebar: true, sheetWidth: size.width)
+    self.focusesBodyByDefault = focusesBodyByDefault
+    self.size = size
     self.sidebar = sidebar()
   }
 
   var body: some View {
     HStack(alignment: .top, spacing: ReadingSheetLayout.columnSpacing) {
+      // 两栏各是一个焦点区：左栏的按钮在底部、正文焦点块在右上，不分区时从正文往左按找不到按钮。
       if let sidebar {
         sidebar
           .frame(width: ReadingSheetLayout.sidebarWidth, alignment: .topLeading)
           .frame(maxHeight: .infinity, alignment: .topLeading)
+          .focusSection()
       }
 
       reading
+        .focusSection()
     }
     .padding(.horizontal, ReadingSheetLayout.horizontalPadding)
     .padding(.vertical, ReadingSheetLayout.verticalPadding)
     .frame(
-      width: ReadingSheetLayout.sheetWidth,
-      height: ReadingSheetLayout.sheetHeight,
+      width: size.width,
+      height: size.height,
       alignment: .topLeading
     )
-    .defaultFocus($focusedChunkIndex, 0)
+    // 修饰符一直挂着、只换默认值：左栏按钮在面板开着时出现或消失，内容不重建，正在读的滚动位置和焦点不丢。
+    // 不由正文接默认焦点时给 nil（不偏向任何一块），交给左栏自己指定。
+    .defaultFocus($focusedChunkIndex, focusesBodyByDefault ? 0 : nil)
   }
 
   private var reading: some View {
@@ -360,10 +383,12 @@ struct ReadingSheet<Sidebar: View>: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
-  private static func chunks(for blocks: [ReadingBlock], hasSidebar: Bool) -> [[ReadingBlock]] {
+  private static func chunks(
+    for blocks: [ReadingBlock], hasSidebar: Bool, sheetWidth: CGFloat = ReadingSheetLayout.sheetWidth
+  ) -> [[ReadingBlock]] {
     ReadingSheetLayout.chunks(
       blocks.isEmpty ? [ReadingBlock("（暂无内容）", style: .secondary)] : blocks,
-      charactersPerLine: ReadingSheetLayout.charactersPerLine(hasSidebar: hasSidebar)
+      charactersPerLine: ReadingSheetLayout.charactersPerLine(hasSidebar: hasSidebar, sheetWidth: sheetWidth)
     )
   }
 

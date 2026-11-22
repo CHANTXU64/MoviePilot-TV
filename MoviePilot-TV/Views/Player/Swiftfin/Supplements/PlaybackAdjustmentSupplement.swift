@@ -9,6 +9,8 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
+// 偏移的调节范围按播放器能做到的：音频 ±2 秒（AetherEngine 的上限），字幕 ±5 秒（原版都是 ±5 秒）。
+// 滑杆放在玻璃面板里（`PlayerGlassPanel`）：播放界面不再压暗画面。
 //
 
 import SwiftUI
@@ -50,16 +52,20 @@ extension PlaybackAdjustmentSupplement: @MainActor VideoPlayerSupplement {
         let supplement: PlaybackAdjustmentSupplement
 
         private var content: some View {
-            PlaybackAdjustmentSlider(
-                value: supplement.value(mediaSession),
-                title: supplement.displayTitle,
-                range: supplement.range,
-                step: supplement.step,
-                presets: supplement.presets,
-                resetValue: supplement.resetValue,
-                formatValue: supplement.formatValue,
-                focusID: supplement.preferredFocusID
-            )
+            // 画面不压暗：滑杆连同两端的刻度字垫一块和简介面板相同的玻璃。
+            PlayerGlassPanel {
+                PlaybackAdjustmentSlider(
+                    value: supplement.value(mediaSession),
+                    title: supplement.displayTitle,
+                    range: supplement.range,
+                    step: supplement.step,
+                    presets: supplement.presets,
+                    resetValue: supplement.resetValue,
+                    formatValue: supplement.formatValue,
+                    focusID: supplement.preferredFocusID
+                )
+                .padding(.horizontal, 20)
+            }
             .frame(maxWidth: viewLayout.isLarge ? 1200 : 700)
             .frame(maxWidth: .infinity)
             .edgePadding(.horizontal)
@@ -87,7 +93,8 @@ extension PlaybackAdjustmentSupplement {
         offset(
             id: "PlaybackAdjustment-audioOffset",
             title: L10n.audioOffset,
-            keyPath: \.audioOffset
+            keyPath: \.audioOffset,
+            limit: AetherPlayer.audioOffsetLimit
         )
     }
 
@@ -95,7 +102,8 @@ extension PlaybackAdjustmentSupplement {
         offset(
             id: "PlaybackAdjustment-subtitleOffset",
             title: L10n.subtitleOffset,
-            keyPath: \.subtitleOffset
+            keyPath: \.subtitleOffset,
+            limit: AetherPlayer.subtitleOffsetLimit
         )
     }
 
@@ -103,7 +111,8 @@ extension PlaybackAdjustmentSupplement {
         offset(
             id: "PlaybackAdjustment-secondarySubtitleOffset",
             title: L10n.secondarySubtitleOffset,
-            keyPath: \.secondarySubtitleOffset
+            keyPath: \.secondarySubtitleOffset,
+            limit: AetherPlayer.subtitleOffsetLimit
         )
     }
 
@@ -125,7 +134,8 @@ extension PlaybackAdjustmentSupplement {
     private static func offset(
         id: String,
         title: String,
-        keyPath: ReferenceWritableKeyPath<MediaPlayerItem, Duration>
+        keyPath: ReferenceWritableKeyPath<MediaPlayerItem, Duration>,
+        limit: Double
     ) -> Self {
         Self(
             id: id,
@@ -136,7 +146,7 @@ extension PlaybackAdjustmentSupplement {
                     set: { mediaSession.playbackItem?[keyPath: keyPath] = .milliseconds(Int64($0.rounded())) }
                 )
             },
-            range: -5000 ... 5000,
+            range: -limit * 1000 ... limit * 1000,
             step: 50,
             presets: [-1000, -500, 0, 500, 1000],
             resetValue: 0,

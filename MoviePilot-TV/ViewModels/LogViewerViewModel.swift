@@ -82,6 +82,8 @@ final class LogViewerViewModel: ObservableObject {
   @Published private(set) var records: [LogRecord] = []
   @Published private(set) var isTruncated = false
   @Published private(set) var isLoading = false
+  /// 第一次读取已有结果。页面刚打开、读取还没开始时不能先显示「没有符合条件的日志」。
+  @Published private(set) var hasLoadedRecords = false
   @Published private(set) var storageIssues: Set<LogStorageIssue> = []
 
   private let store: PersistentLogStore
@@ -113,7 +115,12 @@ final class LogViewerViewModel: ObservableObject {
   }
 
   var showsEmptyState: Bool {
-    records.isEmpty && !isLoading && !storageIssues.contains(.readFailed)
+    hasLoadedRecords && records.isEmpty && !isLoading && !storageIssues.contains(.readFailed)
+  }
+
+  /// 整页转圈：读取中，或页面刚打开、第一次读取还没开始。
+  var showsLoadingState: Bool {
+    isLoading || (!hasLoadedRecords && records.isEmpty)
   }
 
   func makeQuery() -> LogQuery {
@@ -150,6 +157,7 @@ final class LogViewerViewModel: ObservableObject {
     records = result.records
     isTruncated = result.isTruncated
     storageIssues = result.storageIssues
+    hasLoadedRecords = true
     isLoading = false
   }
 }

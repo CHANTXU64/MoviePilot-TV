@@ -8,7 +8,8 @@
 // 本文件改自 Swiftfin：Swiftfin tvOS/Views/VideoPlayer/PlaybackControls/PlaybackControls.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：快进快退间隔由 Swiftfin 设置项换成常量（保持 Swiftfin 默认 15 秒）；补 `import Combine`（MemberImportVisibility）。
+// 修改：补 `import Combine`（MemberImportVisibility）；左右键按系统播放器处理：点一下跳 10 秒，按住快退、快进
+// （见 PlaybackControls+PressHandling.swift），跳转不再弹顶部提示。
 //
 
 import Combine
@@ -20,9 +21,6 @@ extension VideoPlayer {
 
         typealias ViewState = VideoPlayer.ViewState
 
-        let jumpBackwardInterval = VideoPlayerDefaults.jumpBackwardInterval
-        let jumpForwardInterval = VideoPlayerDefaults.jumpForwardInterval
-
         @Environment(ViewState.self)
         var viewState
         @Environment(MediaSession.self)
@@ -31,15 +29,15 @@ extension VideoPlayer {
         @EnvironmentObject
         private var focusCoordinator: FocusCoordinator
 
+        /// 正在处理的左右键（按下到松开之间）。
         @State
         var seekingPress: UIPress.PressType?
+        /// 等待长按的计时；按满 `VideoPlayerDefaults.scanHoldDelay` 开始快退、快进。
         @State
-        var speedBoostTimer: Timer?
+        var scanHoldTask: Task<Void, Never>?
+        /// 这次按键已经靠按住开始了快退快进：松开时不再当成点一下。
         @State
-        var isSpeedBoosting: Bool = false
-
-        @Toaster
-        var toaster: ToastProxy
+        var didBeginScanByHolding = false
 
         var body: some View {
             @Bindable
@@ -77,13 +75,11 @@ extension VideoPlayer {
                 handlePressEvent(press)
             }
             .onDisappear {
-                stopSpeedBoost()
-                viewState.cancelScrub()
+                resetSeekingPress()
+                viewState.discardScrub()
             }
             .onChange(of: mediaSession.playbackItem.map(ObjectIdentifier.init), initial: true) { _, _ in
-                stopSpeedBoost()
-                seekingPress = nil
-                viewState.jumpProgressObserver.reset()
+                resetSeekingPress()
             }
             .onReceive(
                 focusCoordinator.$focusedIDs
@@ -94,9 +90,7 @@ extension VideoPlayer {
                 guard !isFocused else { return }
 
                 viewState.cancelScrub()
-
-                stopSpeedBoost()
-                seekingPress = nil
+                resetSeekingPress()
             }
         }
     }

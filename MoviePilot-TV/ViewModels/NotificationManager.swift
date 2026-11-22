@@ -69,6 +69,15 @@ class NotificationManager: ObservableObject {
       }
       .store(in: &cancellables)
 
+    // 只接当前登录的试看服务发来的；用户可能在别的页面，停留久一点。
+    NotificationCenter.default.publisher(for: .episodeTrialDidBecomeReady, object: APIService.shared)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] notification in
+        guard let message = notification.userInfo?[EpisodeTrialReadyNotice.messageKey] as? String else { return }
+        self?.show(message: message, type: .success, duration: 8)
+      }
+      .store(in: &cancellables)
+
     NotificationCenter.default.publisher(for: .paginatorDidReachErrorLimit)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in

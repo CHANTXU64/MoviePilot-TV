@@ -56,8 +56,8 @@ enum UIPreviewScenesPlayer {
         ),
         scene(
           id: "player.scrubbing",
-          title: "拖动进度 · 预览缩略图",
-          note: "正在拖动进度条：显示章节刻度和本地生成的预览缩略图（PreviewImageProvider 的章节来源），没有网络图片请求。",
+          title: "拖动进度",
+          note: "正在拖动进度条：只显示时间与进度，当前版本已去掉拖动进度时的预览缩略图（见 PlaybackProgress 头部说明）。",
           configuration: .scrubbing,
           behaviors: [UIPreviewBehaviorKey.playerPlayback: .data]
         ),
@@ -133,7 +133,8 @@ enum UIPreviewScenesPlayer {
         scene(
           id: "player.chapters",
           title: "章节面板",
-          note: "章节面板（真实 MediaChaptersSupplement）：五个章节，当前 16:08 落在「第二幕：轨道上的回声」。章节图未接真实地址，显示占位。",
+          note:
+            "章节面板（真实 MediaChaptersSupplement）：五个章节，当前 16:08 落在「第二幕：轨道上的回声」。章节图未接真实地址，显示占位。预览是程序化选中面板，顶部标签行的焦点仍停在第一项（简介），属预览限制。",
           configuration: {
             var value = UIPlayerPreviewConfiguration.playing
             value.supplement = .chapters
@@ -144,7 +145,8 @@ enum UIPreviewScenesPlayer {
         scene(
           id: "player.queue",
           title: "队列 · 下一集",
-          note: "队列面板（真实 MediaQueueView）：本季五集，当前第七集；工具栏上一集/下一集按钮由队列提供。海报地址未接真实图片，显示占位。",
+          note:
+            "队列面板（真实 MediaQueueView）：本季五集，当前第七集；工具栏上一集/下一集按钮由队列提供。海报地址未接真实图片，显示占位。预览是程序化选中面板，顶部标签行的焦点仍停在第一项（简介），属预览限制。",
           configuration: {
             var value = UIPlayerPreviewConfiguration.playing
             value.supplement = .queue
@@ -596,6 +598,7 @@ private struct UIPlayerPreviewHost: View {
       try? await Task.sleep(for: .milliseconds(700))
       guard !Task.isCancelled else { return }
       box.applyAfterAppear()
+      await box.applySupplementAfterLoad()
 
       // 走真实 `VideoPlayer` 的 commandError 观察链路；每 1.4 秒重放一次，
       // 避免 toast 默认 2 秒后消失而截不到。先置 nil 再赋值，确保 onChange 每次都触发。
@@ -647,20 +650,6 @@ final class UIPlayerPreviewBox {
       }
     }
 
-    if let supplement = configuration.supplement {
-      switch supplement {
-      case .info:
-        viewState.selectedSupplementID = viewState.supplements
-          .first(where: { $0.id.hasPrefix("MediaInfo-") })?.id
-      case .chapters:
-        viewState.selectedSupplementID = viewState.supplements
-          .first(where: { $0.id.hasPrefix("Chapters-") })?.id
-      case .queue:
-        viewState.selectedSupplementID = viewState.supplements
-          .first(where: { $0.id.hasPrefix("Queue-") })?.id
-      }
-    }
-
     if let guest = configuration.guest {
       switch guest {
       case .subtitleOffset:
@@ -679,6 +668,29 @@ final class UIPlayerPreviewBox {
 
     if let action = configuration.focusAction {
       viewState.focusCoordinator.focus(VideoPlayer.ViewState.Focus.action(action))
+    }
+  }
+
+  /// 面板列表要等起播准备完成（`mediaSession.playbackItem` 有值）才构建，
+  /// 出现后固定延时再选面板会落空；这里轮询到目标面板出现再选中。
+  func applySupplementAfterLoad() async {
+    guard let supplement = configuration.supplement else { return }
+    let prefix: String
+    switch supplement {
+    case .info: prefix = "MediaInfo-"
+    case .chapters: prefix = "Chapters-"
+    case .queue: prefix = "Queue-"
+    }
+
+    // 标签行拿到默认焦点后会把选中的面板改回第一个（简介），这里持续按住目标面板；
+    // 焦点本身没有移动，所以按住几秒后不会被再次改掉。
+    for _ in 0..<40 {
+      if let id = viewState.supplements.first(where: { $0.id.hasPrefix(prefix) })?.id,
+         viewState.selectedSupplementID != id
+      {
+        viewState.selectedSupplementID = id
+      }
+      try? await Task.sleep(for: .milliseconds(100))
     }
   }
 }

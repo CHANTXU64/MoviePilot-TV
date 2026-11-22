@@ -44,18 +44,25 @@ struct DownloadTaskView: View {
       .focusSection()
 
       if isExpanded {
-        if viewModel.downloads.isEmpty {
-          if viewModel.clientsLoadFailed {
-            Text("下载器加载失败，正在自动重试")
-              .foregroundColor(.secondary)
-              .padding()
-              .frame(maxWidth: .infinity, alignment: .center)
-          } else {
-            Text("暂无下载任务")
-              .foregroundColor(.secondary)
-              .padding()
-              .frame(maxWidth: .infinity, alignment: .center)
-          }
+        if viewModel.downloads.isEmpty && viewModel.clientsLoadFailed {
+          Text("下载器加载失败，正在自动重试")
+            .foregroundColor(.secondary)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else if viewModel.pendingLoadState == .loading {
+          // 当前下载器还没拿到结果：不显示上一个下载器的任务。
+          FirstLoadIndicator(minHeight: nil)
+            .padding()
+        } else if viewModel.pendingLoadState == .failed {
+          Text("下载任务加载失败，正在自动重试")
+            .foregroundColor(.secondary)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else if viewModel.downloads.isEmpty {
+          Text("暂无下载任务")
+            .foregroundColor(.secondary)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .center)
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
@@ -183,14 +190,14 @@ private struct DownloadTaskRow: View {
       VStack(alignment: .leading, spacing: 10) {
         // 标题对齐 Vue: media.title || name
         let title = item.media?.title ?? item.name ?? "未知任务"
-        // 季集对齐 Vue: (media.season media.episode) || season_episode
-        let epInfo = [item.media?.season, item.media?.episode].compactMap { $0 }.joined(separator: " ")
 
         HStack(spacing: 20) {
           Text(title)
             .foregroundColor(isFocused ? .primary : .primary.opacity(0.6))
-          Text("\(epInfo.isEmpty ? (item.season_episode ?? "") : epInfo)")
-            .foregroundColor(.secondary)
+          if let seasonEpisode = item.seasonEpisodeDisplay {
+            Text(seasonEpisode)
+              .foregroundColor(.secondary)
+          }
         }
         .font(.headline)
         .lineLimit(1)

@@ -14,6 +14,8 @@ protocol MediaServerConnection: Sendable {
 
   /// 条目不在这台服务器上时返回 nil。
   func item(id: String, timeout: TimeInterval?) async throws -> ServerMediaItem?
+  /// 一次读多个条目，不在这台服务器上的不返回。
+  func items(ids: [String]) async throws -> [ServerMediaItem]
   /// 按外部编号搜索的候选条目，调用方须再用 `LibraryItemExpectation.accepts` 核对。没有能搜的编号时返回空。
   /// 服务器报错、连不上等照常抛出，不能当作搜不到：调用方据此区分“这台上没有”和“无法确认”。
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem]
@@ -28,6 +30,12 @@ protocol MediaServerConnection: Sendable {
   func saveWatchProgress(_ progress: WatchProgress) async throws
   /// 拖动预览图的图集地址（如 Jellyfin trickplay）；服务器没有时为 nil。
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL?
+  /// 服务器上的媒体库和各自的文件夹：叫服务器入库时按整理后的路径找该刷新哪个媒体库。
+  func libraryFolders() async throws -> [MediaLibraryFolder]
+  /// 各媒体库的文件夹和单集元数据来源：单集对应据此判断服务器上的单集资料是不是从 TMDB 来的。
+  func libraryProfiles() async throws -> [MediaLibraryProfile]
+  /// 叫服务器重新扫描，新整理进来的文件不用等它自己发现。只等服务器受理，不等扫描完成。
+  func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws
 }
 
 /// 按 MoviePilot 的服务器配置建立连接：探测地址、选用户。
@@ -65,6 +73,7 @@ enum MediaServerAdapters {
 nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
   enum Operation: Equatable, Sendable {
     case connect, listUsers, search, readItem, readEpisodes, readPlaybackInfo, report, saveProgress
+    case readLibraries, refreshLibrary
 
     var text: String {
       switch self {
@@ -76,6 +85,8 @@ nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
       case .readPlaybackInfo: "读取播放信息"
       case .report: "上报播放状态"
       case .saveProgress: "保存观看进度"
+      case .readLibraries: "读取媒体库"
+      case .refreshLibrary: "刷新媒体库"
       }
     }
   }

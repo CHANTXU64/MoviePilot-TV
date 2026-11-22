@@ -490,7 +490,7 @@ private extension Error {
           || message.localizedCaseInsensitiveContains("unauthorized")
       case .unknown, .gatewayStatus:
         return false
-      case .invalidURL, .networkError, .decodingError:
+      case .invalidURL, .networkError, .decodingError, .backendVersionUnavailable:
         return false
       }
     }
@@ -910,10 +910,10 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       )
 
     case .subscribe:
-      let home = HomeViewModel(apiService: service)
-      let loaded = await home.refreshSubscriptions(forceRefresh: true)
+      let subscriptions = SubscriptionsViewModel(apiService: service)
+      let loaded = await subscriptions.refreshSubscriptions(forceRefresh: true)
       XCTAssertTrue(loaded, "\(account.account.username) subscription surface failed to load.")
-      XCTAssertFalse(home.subscriptionsLoadFailed)
+      XCTAssertFalse(subscriptions.subscriptionsLoadFailed)
 
     case .manage:
       let reorganize = ReorganizeViewModel(fileItem: nil, apiService: service)
@@ -941,7 +941,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
     case .search:
       return [.home, .search, .system]
     case .subscribe:
-      return [.home, .system]
+      return [.home, .subscriptions, .system]
     case .manage:
       return [.home, .status, .system]
     }
@@ -1327,7 +1327,7 @@ private struct BackendCompatibilityCollector {
   mutating func addLatestMedia(_ items: [MediaServerPlayItem], surface: String) {
     for item in items {
       addImage(
-        url: item.imageURLs.image,
+        url: item.imageURLs().image,
         rawURLString: item.image,
         surface: surface,
         record: item.title,

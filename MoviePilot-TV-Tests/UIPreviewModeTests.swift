@@ -243,6 +243,7 @@ final class UIPreviewModeTests: XCTestCase {
       "search.",
       "resource.",
       "detail.",
+      "episode.",
       "season.",
       "status.",
       "settings.",
@@ -259,11 +260,11 @@ final class UIPreviewModeTests: XCTestCase {
         "缺少 \(prefix) 前缀的预览场景。"
       )
     }
-    // 当前分组：应用启动与全局、主框架与一级页面、详情、搜索、字幕搜索、设置/登录/日志、播放器、播放流程、核心组件。
-    XCTAssertGreaterThanOrEqual(UIPreviewCatalog.sections.count, 9)
+    // 当前分组：应用启动与全局、主框架与一级页面、详情、单集与试看、搜索、字幕搜索、设置/登录/日志、播放器、播放流程、核心组件。
+    XCTAssertGreaterThanOrEqual(UIPreviewCatalog.sections.count, 10)
     // 旧分支目录有 163 个场景，重建后不允许明显缩水。
     print("UI_PREVIEW_SCENE_COUNT=\(sceneIDs.count)")
-    XCTAssertGreaterThanOrEqual(sceneIDs.count, 380)
+    XCTAssertGreaterThanOrEqual(sceneIDs.count, 400)
   }
 
   @MainActor

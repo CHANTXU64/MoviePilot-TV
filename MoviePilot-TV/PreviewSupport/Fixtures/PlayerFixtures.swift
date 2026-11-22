@@ -64,7 +64,6 @@ struct UIPlayerPreviewSession {
   var baseItem: BaseItemDto
   var tracks: UIPlayerPreviewTracks
   var queue: (any MediaPlayerQueue)?
-  var previewImageProvider: PreviewImageProvider?
 }
 
 /// 假轨道表。选中项由菜单直接写入这里，代替 MPVPlayer 的轨道状态。
@@ -284,11 +283,24 @@ enum UIPlayerPreviewFixtures {
   static let sourceFourKID = "ui-preview-source-4k"
   static let sourceHDID = "ui-preview-source-1080p"
 
-  static func sources() -> [ServerMediaSource] {
-    [
-      ServerMediaSource(id: sourceFourKID, name: "4K HDR · HEVC", container: "mkv"),
-      ServerMediaSource(id: sourceHDID, name: "1080p · H.264", container: "mp4"),
+  static func sources(includeChapters: Bool = false) -> [ServerMediaSource] {
+    let chapters = includeChapters ? serverChapters() : []
+    return [
+      ServerMediaSource(id: sourceFourKID, name: "4K HDR · HEVC", container: "mkv", chapters: chapters),
+      ServerMediaSource(id: sourceHDID, name: "1080p · H.264", container: "mp4", chapters: chapters),
     ]
+  }
+
+  /// 服务端章节：播放界面的「章节」面板和进度条刻度从这里来（`ServerMediaSource.chapters`）。
+  static func serverChapters() -> [ServerChapter] {
+    let points: [(String, Int)] = [
+      ("开场：深空信号", 0),
+      ("第一幕：失联的补给船", 6 * 60),
+      ("第二幕：轨道上的回声", 15 * 60),
+      ("第三幕：静默的抉择", 27 * 60),
+      ("片尾", 38 * 60),
+    ]
+    return points.map { ServerChapter(name: $0.0, startSeconds: Double($0.1)) }
   }
 
   static func item(_ content: UIPlayerPreviewContent = .episode) -> ServerMediaItem {
@@ -326,23 +338,6 @@ enum UIPlayerPreviewFixtures {
     }
   }
 
-  static func chapters(includeImages: Bool = false) -> [ChapterInfo] {
-    let points: [(String, Int)] = [
-      ("开场：深空信号", 0),
-      ("第一幕：失联的补给船", 6 * 60),
-      ("第二幕：轨道上的回声", 15 * 60),
-      ("第三幕：静默的抉择", 27 * 60),
-      ("片尾", 38 * 60),
-    ]
-    return points.enumerated().map { index, point in
-      ChapterInfo(
-        name: point.0,
-        startPositionTicks: point.1 * 10_000_000,
-        imageTag: nil,
-        imageURL: includeImages ? URL(string: "ui-preview://chapter/\(index)") : nil
-      )
-    }
-  }
 
   static func mediaSources(includeVersions: Bool) -> [PlaybackMediaSourceInfo] {
     let playable = includeVersions ? sources() : Array(sources().prefix(1))
@@ -351,9 +346,7 @@ enum UIPlayerPreviewFixtures {
 
   static func baseItem(
     content: UIPlayerPreviewContent = .episode,
-    includeChapters: Bool = true,
-    includeVersions: Bool = true,
-    chapterImages: Bool = false
+    includeVersions: Bool = true
   ) -> BaseItemDto {
     var item = BaseItemDto(id: content.isEpisode ? itemID : movieID)
     item.overview = """
@@ -367,7 +360,6 @@ enum UIPlayerPreviewFixtures {
     item.genres = content.isEpisode ? ["科幻", "悬疑", "剧情"] : ["科幻", "冒险", "悬疑"]
     item.premiereDate = Date(timeIntervalSince1970: 1_752_000_000)
     item.mediaSources = mediaSources(includeVersions: includeVersions)
-    item.chapters = includeChapters ? chapters(includeImages: chapterImages) : nil
     item.people = [
       BaseItemPerson(id: "person-1", name: "林澈", role: "顾维", type: .actor),
       BaseItemPerson(id: "person-2", name: "周遥", role: "林岸", type: .actor),
@@ -456,29 +448,6 @@ enum UIPlayerPreviewFixtures {
     )
   }
 
-  static func previewImageProvider(content: UIPlayerPreviewContent = .episode) -> PreviewImageProvider? {
-    let item = baseItem(
-      content: content,
-      includeChapters: true,
-      includeVersions: true,
-      chapterImages: true
-    )
-    return PreviewImageProvider(
-      option: .chapters,
-      item: item,
-      mediaSourceID: sourceFourKID,
-      chapters: item.fullChapterInfo,
-      client: JellyfinClient(
-        connection: UIPlayerPreviewConnection(
-          item: UIPlayerPreviewFixtures.item(content),
-          sources: UIPlayerPreviewFixtures.sources()
-        )
-      ),
-      resolveImage: { index in
-        await MainActor.run { UIPlayerPreviewFixtures.thumbnail(chapter: index) }
-      }
-    )
-  }
 
   /// 拖动预览用的本地图片，不下载任何远程地址。
   static func thumbnail(chapter: Int) -> UIImage {
@@ -522,7 +491,10 @@ enum UIPlayerPreviewFixtures {
 
   static func makeSession(configuration: UIPlayerPreviewConfiguration) -> MediaSession {
     let item = self.item(configuration.content)
-    let (stream, prepared) = preparedPlayback(item: item, sources: sources(), includeVersions: configuration.includeVersions)
+    let (stream, prepared) = preparedPlayback(
+      item: item,
+      sources: sources(includeChapters: configuration.includeChapters),
+      includeVersions: configuration.includeVersions)
     let playbackSession = PlaybackSession(
       prepared: prepared,
       startPosition: 0,
@@ -556,12 +528,10 @@ enum UIPlayerPreviewFixtures {
       videoSize: .init(width: 3_840, height: 2_160),
       baseItem: baseItem(
         content: configuration.content,
-        includeChapters: configuration.includeChapters,
         includeVersions: configuration.includeVersions
       ),
       tracks: tracks,
-      queue: previewQueue,
-      previewImageProvider: previewImageProvider(content: configuration.content)
+      queue: previewQueue
     )
 
     session.start()
@@ -655,6 +625,10 @@ struct UIPlayerPreviewConnection: MediaServerConnection {
     id == item.id ? item : nil
   }
 
+  func items(ids: [String]) async throws -> [ServerMediaItem] {
+    ids.compactMap { $0 == item.id ? item : nil }
+  }
+
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem] {
     []
   }
@@ -686,5 +660,11 @@ struct UIPlayerPreviewConnection: MediaServerConnection {
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL? {
     nil
   }
+
+  func libraryFolders() async throws -> [MediaLibraryFolder] { [] }
+
+  func libraryProfiles() async throws -> [MediaLibraryProfile] { [] }
+
+  func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws {}
 }
 #endif

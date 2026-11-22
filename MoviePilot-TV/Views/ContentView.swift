@@ -55,33 +55,18 @@ struct RealAppContentView: View {
         MainContentView(viewModel: viewModel)
           .id(viewModel.sessionUIIdentity)
       } else if viewModel.isPreparingStartupSession {
-        ProgressView("正在准备会话...")
+        ProgressView("正在准备会话…")
       } else {
         LoginView()
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Color(white: 0.1).ignoresSafeArea())
-    .disabled(viewModel.isOpeningTopShelf)
-    .accessibilityHidden(viewModel.isOpeningTopShelf)
+    .background(AppBackground())
     .environment(\.topShelfPresentation, TopShelfOpeningContext(
       routeID: viewModel.topShelfRoute?.id,
       blocksInteraction: viewModel.isOpeningTopShelf,
       didPresent: { viewModel.finishTopShelfOpening(id: $0) }
     ))
-    .overlay {
-      if viewModel.isOpeningTopShelf {
-        ZStack {
-          Color(white: 0.1).ignoresSafeArea()
-          VStack(spacing: 32) {
-            ProgressView("正在打开详情…")
-            Button("取消", action: cancelTopShelfOpening)
-          }
-        }
-        .accessibilityIdentifier("top-shelf-opening")
-        .onExitCommand(perform: cancelTopShelfOpening)
-      }
-    }
     .task {
       updateTopShelfPriority()
       #if DEBUG
@@ -96,21 +81,29 @@ struct RealAppContentView: View {
     }
     .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in
       KingfisherCachePolicy.apply(memoryOptimizationEnabled: enabled)
+      DetailBackdropReturnPolicy.waitsForRemovedPageBackdrop = enabled
     }
     .onOpenURL { url in
-      if topShelfNavigationRouter.handle(url), let route = topShelfNavigationRouter.pendingRoute {
-        viewModel.prepareTopShelfRoute(route)
-      }
+      // 深链常在 App 尚未激活时到达；立即交接，让 TabView 首次挂载即停在目标 Tab，避免弹回媒体库。
+      viewModel.handleTopShelfURL(url, router: topShelfNavigationRouter)
+      updateTopShelfPriority()
     }
     .onChange(of: topShelfNavigationRouter.pendingRoute?.id, initial: true) { _, _ in
       if let route = topShelfNavigationRouter.pendingRoute { viewModel.prepareTopShelfRoute(route) }
       updateTopShelfPriority()
     }
-    .onChange(of: viewModel.isPreparingStartupSession) { _, _ in
+    .onChange(of: viewModel.isPreparingStartupSession) { _, newValue in
       updateTopShelfPriority()
+      if !newValue {
+        // 启动准备期间只能 preview/wait；准备结束后补一次交接，避免先露出首页。
+        reconcileTopShelfRoute()
+      }
     }
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
-    .onChange(of: scenePhase) { _, _ in updateTopShelfPriority() }
+    .onChange(of: scenePhase, initial: true) { _, phase in
+      viewModel.scenePhaseDidChange(phase)
+      updateTopShelfPriority()
+    }
     .background(PresentationReadyAction(
       isEnabled: scenePhase == .active && (
         topShelfNavigationRouter.pendingRoute != nil
@@ -163,28 +156,10 @@ struct RealAppContentView: View {
     )
   }
 
-  private func cancelTopShelfOpening() {
-    if let route = topShelfNavigationRouter.pendingRoute {
-      topShelfNavigationRouter.consume(id: route.id)
-    }
-    viewModel.cancelTopShelfOpening()
-    updateTopShelfPriority()
-  }
-
   private func reconcileTopShelfRoute() {
-    // 后台的 Tab 容器仍会恢复上次选择；等前台激活后再交接外部导航。
-    guard scenePhase == .active else { return }
-    guard let route = topShelfNavigationRouter.pendingRoute else { return }
-    var transaction = Transaction()
-    transaction.disablesAnimations = true
-    let disposition = withTransaction(transaction) { viewModel.acceptTopShelfRoute(route) }
-    switch disposition {
-    case .wait:
-      break
-    case .preview, .open, .discard:
-      topShelfNavigationRouter.consume(id: route.id)
-      updateTopShelfPriority()
-    }
+    // 深链可能未激活时到达；此时就交接，让 TabView 首次挂载即停在目标 Tab，避免弹回媒体库。
+    viewModel.reconcileTopShelfRoute(router: topShelfNavigationRouter)
+    updateTopShelfPriority()
   }
 }
 
@@ -202,6 +177,12 @@ struct MainContentView: View {
     TabView(selection: $viewModel.selectedTab) {
       Tab("媒体库", systemImage: AppSymbol.tabHome, value: ContentViewModel.Tab.home) {
         if allowsRequests { HomeView(isSelected: selectedTab == .home) }
+      }
+
+      if viewModel.visibleTabs.contains(.subscriptions) {
+        Tab("订阅", systemImage: AppSymbol.tabSubscriptions, value: ContentViewModel.Tab.subscriptions) {
+          if allowsRequests { SubscriptionsView(isSelected: selectedTab == .subscriptions) }
+        }
       }
 
       if viewModel.visibleTabs.contains(.recommend) {
@@ -245,9 +226,7 @@ struct MainContentView: View {
       }
     }
     .onChange(of: selectedTab) { _, tab in
-      if let route = initialTopShelfRoute, tab != route.targetTab {
-        viewModel.endTopShelfPresentation()
-      }
+      viewModel.topShelfTabSelectionDidChange(to: tab)
       checkTask?.cancel()
       checkTask = Task {
         try? await Task.sleep(for: .seconds(5))

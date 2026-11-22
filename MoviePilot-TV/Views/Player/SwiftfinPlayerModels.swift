@@ -4,7 +4,7 @@ import SwiftUI
 
 // 移植自 Swiftfin 的播放界面读取的是 Jellyfin SDK 的数据类型（BaseItemDto、ChapterInfo、BaseItemPerson、MediaStream…）。
 // 这里按同名提供只含界面用到成员的适配类型，移植文件不用改类型名；数据来自与服务器无关的 `ServerMediaItem`、`ServerMediaSource`。
-// 目前只填播放本身已有的数据（标题、季集号、片长、mpv 的音轨字幕、可选的版本）。简介、章节、演职员、海报、片源详情、
+// 目前只填播放本身已有的数据（标题、季集号、片长、章节、播放器读到的音轨字幕、可选的版本）。演职员、片源详情、
 // 片头片尾等元数据暂不接入，保持为空，界面大多按 Swiftfin 原逻辑自然隐藏。
 // 从详情页按集播放时，标题、季集号用 MoviePilot 集列表的，上一集/下一集和同季列表也按它走（见 `UserSession`）；
 // 其他入口（首页“最近添加”、整剧从第一集播）没有集列表，队列为空。
@@ -76,7 +76,6 @@ nonisolated struct BaseItemDto: Identifiable {
   var mediaType: MediaType?
   var mediaSources: [PlaybackMediaSourceInfo]?
   var people: [BaseItemPerson]?
-  var chapters: [ChapterInfo]?
   /// 竖版海报、横版缩略图地址（不带密钥）。
   var portraitImageURL: URL?
   var landscapeImageURL: URL?
@@ -97,27 +96,64 @@ nonisolated struct BaseItemDto: Identifiable {
     self.id = id
   }
 
-  /// 只取播放本身已有的基本字段；其余元数据（简介、海报、演职员、章节、片源详情）暂不接入，保持为空。
-  /// 按集播放时，集名和季集号用 MoviePilot 集列表的（与详情页一致），并带上队列用的剧集、季标识；
-  /// 其他条目不带这两个标识，播放界面的队列为空。
-  init(item: ServerMediaItem, episode: QueuedEpisode? = nil) {
+  /// 播放界面的条目：标题、季集号、简介、日期、评分和图片都取 `metadata`（MoviePilot 为准，缺的项用媒体服务器的，
+  /// 见 `PlaybackMetadata`），与播放界面标题同一份来源。演职员暂不接入；章节不在条目上，见 `MediaSession.chapters`。
+  /// 按集播放时带上队列用的剧集、季标识；其他条目不带，播放界面的队列为空。
+  init(item: ServerMediaItem, metadata: PlaybackMetadata, episode: QueuedEpisode? = nil) {
     id = item.id
     type = BaseItemKind(item.kind)
-    runTimeTicks = item.runtimeSeconds.map { Int($0 * 10_000_000) }
+    runTimeTicks = item.runtimeSeconds.map(Self.ticks(seconds:))
+    // 「第 1 集」这类集名没有信息量：信息面板的标题改显示季集号，与播放界面的标题一致。
+    if item.kind == .episode, let title = metadata.title,
+      PlaybackTitles.isPlaceholderEpisodeName(title, episodeNumber: metadata.episodeNumber)
+    {
+      name = metadata.playerTitles(isEpisode: true).primary
+    } else {
+      name = metadata.title
+    }
+    indexNumber = metadata.episodeNumber
+    parentIndexNumber = metadata.seasonNumber
+    seriesName = metadata.seriesName
+    overview = metadata.overview
+    premiereDate = Self.day(metadata.premiereDate)
+    communityRating = metadata.communityRating
+    officialRating = metadata.officialRating
+    portraitImageURL = metadata.posterURL
+    landscapeImageURL = metadata.thumbnailURL
     if let episode {
-      name = episode.episode.name
-      indexNumber = episode.episode.episodeNumber
-      parentIndexNumber = episode.episode.seasonNumber
-      seriesName = episode.context.seriesName ?? item.seriesName
       queuedEpisode = episode
       seriesID = String(episode.context.tmdbID)
       seasonID = UserSession.queueSeasonID(episode.episode.seasonNumber)
-    } else {
-      name = item.name
-      indexNumber = item.episodeNumber
-      parentIndexNumber = item.seasonNumber
-      seriesName = item.seriesName
     }
+  }
+
+  /// 正在播的条目。片长按所播文件（所选片源的，见 `PlaybackDuration`），信息面板、选集里的当前一集都读这份；
+  /// 起播后播放器读出的时长由 `MediaSession.runtime` 给出。
+  @MainActor
+  static func playback(_ prepared: PreparedPlayback) -> BaseItemDto {
+    var dto = BaseItemDto(item: prepared.item, metadata: prepared.metadata, episode: prepared.episode)
+    dto.runTimeTicks = prepared.durationSeconds(playerSeconds: nil).map(Self.ticks(seconds:))
+    return dto
+  }
+
+  nonisolated static func ticks(seconds: Double) -> Int { Int(seconds * 10_000_000) }
+
+  /// 选集列表、上一集和下一集里的一集：信息来自集列表，缺的项用服务器条目的。剧照地址按当前的图片设置生成
+  /// （开了图片缓存时走 MoviePilot 的图片代理，要带会话加载，见 `PosterImage`）。
+  @MainActor
+  static func playback(_ item: ServerMediaItem, episode: QueuedEpisode) -> BaseItemDto {
+    BaseItemDto(
+      item: item, metadata: PlaybackMetadataLookup.metadata(for: episode).filling(item.metadata), episode: episode)
+  }
+
+  /// `yyyy-MM-dd` 开头的日期（服务器的带时间，只取日期部分），按本地日历的那一天。
+  static func day(_ value: String?) -> Date? {
+    guard let value, value.count >= 10 else { return nil }
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: String(value.prefix(10)))
   }
 
   // MARK: 与 Swiftfin 的 BaseItemDto 扩展相同的派生值
@@ -148,14 +184,12 @@ nonisolated struct BaseItemDto: Identifiable {
     }
   }
 
-  var runTimeLabel: String? {
+  /// 片长文字（如「2小时 5分钟」）。
+  static func runTimeLabel(seconds: Double) -> String? {
     let formatter = DateComponentsFormatter()
     formatter.unitsStyle = .abbreviated
     formatter.allowedUnits = [.hour, .minute]
-    guard let runTimeTicks, let text = formatter.string(from: Double(runTimeTicks / 10_000_000)) else {
-      return nil
-    }
-    return text
+    return formatter.string(from: seconds)
   }
 
   var premiereDateLabel: String? {
@@ -168,7 +202,7 @@ nonisolated struct BaseItemDto: Identifiable {
   var premiereDateYear: String? {
     guard let premiereDate else { return nil }
     let formatter = DateFormatter()
-    formatter.dateFormat = "YYYY"
+    formatter.dateFormat = "yyyy"
     return formatter.string(from: premiereDate)
   }
 
@@ -228,10 +262,6 @@ extension BaseItemDto: Poster {
 
   var posterLabel: some View {
     BaseItemDtoPosterLabel(item: self)
-  }
-
-  func posterOverlay(for displayType: PosterDisplayType) -> some View {
-    PosterSelectionOverlay()
   }
 
   func imageSources(for displayType: PosterDisplayType, environment: Empty) -> [ImageSource] {
@@ -318,19 +348,50 @@ extension BaseItemPerson: Poster {
 nonisolated struct ChapterInfo: Hashable {
   var name: String?
   var startPositionTicks: Int?
-  var imageTag: String?
   var imageURL: URL?
+
+  init(name: String?, startPositionTicks: Int?, imageURL: URL? = nil) {
+    self.name = name
+    self.startPositionTicks = startPositionTicks
+    self.imageURL = imageURL
+  }
+
+  init(_ chapter: ServerChapter) {
+    self.init(
+      name: chapter.name, startPositionTicks: BaseItemDto.ticks(seconds: chapter.startSeconds),
+      imageURL: chapter.imageURL)
+  }
+
+  /// 与 Swiftfin `fullChapterInfo(using:)` 相同：按起点排序，附上章节图。没有截图的章节卡片显示 `placeholderSymbol`。
+  static func fullInfo(_ chapters: [ServerChapter], placeholderSymbol: String) -> [ChapterInfo.FullInfo] {
+    chapters
+      .sorted { $0.startSeconds < $1.startSeconds }
+      .map(ChapterInfo.init)
+      .map {
+        ChapterInfo.FullInfo(
+          chapterInfo: $0, imageSource: $0.imageURL.map { ImageSource(url: $0) }, systemImage: placeholderSymbol)
+      }
+  }
 }
 
-extension BaseItemDto {
+/// 播放界面当前的章节（见 `MediaSession.chapters`）。
+enum PlaybackChapterList {
+  /// 服务器没有章节，播放器还在读文件：「章节」照样显示，先转圈，让用户知道会有章节可跳。
+  case loading
+  /// 空表示不显示「章节」。
+  case chapters([ChapterInfo.FullInfo])
 
-  /// 与 Swiftfin `fullChapterInfo(using:)` 相同：去掉没有起点的章节、按起点排序，附上章节图。
-  var fullChapterInfo: [ChapterInfo.FullInfo] {
-    (chapters ?? [])
-      .filter { $0.startPositionTicks != nil }
-      .sorted { ($0.startPositionTicks ?? 0) < ($1.startPositionTicks ?? 0) }
-      .map { ChapterInfo.FullInfo(chapterInfo: $0, imageSource: $0.imageURL.map { ImageSource(url: $0) }) }
+  var loaded: [ChapterInfo.FullInfo] {
+    if case .chapters(let chapters) = self { return chapters }
+    return []
   }
+
+  var isLoading: Bool {
+    if case .loading = self { return true }
+    return false
+  }
+
+  var isShown: Bool { isLoading || !loaded.isEmpty }
 }
 
 // MARK: - 片源与流
@@ -353,8 +414,8 @@ nonisolated enum MediaStreamType {
   case video, audio, subtitle, other
 }
 
-/// 与 Jellyfin `MediaStream` 同名的轨道适配。`index` 是 mpv 的轨道编号（播放器用它切换）；
-/// 编码取 mpv 报告的值，码率、声道、分辨率等详情暂不接入。
+/// 与 Jellyfin `MediaStream` 同名的轨道适配。`index` 是播放器的轨道编号（文件里的流序号，播放器用它切换）；
+/// 编码取播放器报告的值，码率、声道、分辨率等详情暂不接入。
 nonisolated struct MediaStream: Hashable {
   var index: Int?
   var type: MediaStreamType = .other
@@ -457,10 +518,6 @@ extension ItemEntry: Poster {
   }
 
   var posterLabel: some View { snapshot.posterLabel }
-
-  func posterOverlay(for displayType: PosterDisplayType) -> some View {
-    snapshot.posterOverlay(for: displayType)
-  }
 }
 
 /// 与 Swiftfin `MediaPlaybackConfiguration` 同名的播放配置（只含界面用到的字段）。
@@ -525,14 +582,9 @@ final class UserSession {
 
   /// 播放界面持有会话，这里不延长它的生命周期。
   @ObservationIgnored private weak var session: PlaybackSession?
-  /// 播完自动播下一集。Swiftfin 读写服务器上的用户配置；这里存在本机，与设置页「播放」的开关是同一个。
-  var isAutoPlayEnabled: Bool {
-    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(isAutoPlayEnabled) }
-  }
 
   init(session: PlaybackSession) {
     self.session = session
-    isAutoPlayEnabled = PlaybackPreferences.autoPlaysNextEpisode
   }
 
   /// 接入点：片头/片尾片段。
@@ -544,9 +596,8 @@ final class UserSession {
       let season = Self.season(fromQueueSeasonID: seasonID)
     else { return [] }
     return try await queue.playableEpisodes(inSeason: season, from: session.playback).map {
-      BaseItemDto(
-        item: $0.item,
-        episode: QueuedEpisode(context: context, episode: $0.episode, seasonEpisodes: $0.seasonEpisodes))
+      BaseItemDto.playback(
+        $0.item, episode: QueuedEpisode(context: context, episode: $0.episode, seasonEpisodes: $0.seasonEpisodes))
     }
   }
 
@@ -561,8 +612,8 @@ final class UserSession {
     switch try await queue.adjacentEpisode(direction, from: session.playback, refresh: refresh) {
     case .play(let entry, let skippedMissing):
       return .episode(
-        BaseItemDto(
-          item: entry.item,
+        BaseItemDto.playback(
+          entry.item,
           episode: QueuedEpisode(context: context, episode: entry.episode, seasonEpisodes: entry.seasonEpisodes)),
         skippedMissing: skippedMissing)
     case .stop(let reason):

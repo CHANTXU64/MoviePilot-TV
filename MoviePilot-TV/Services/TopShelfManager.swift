@@ -33,6 +33,8 @@ final class TopShelfManager: ObservableObject {
   @Published private(set) var selection: TopShelfSelection?
   @Published private(set) var status: TopShelfSyncStatus
   @Published private(set) var shelves = RecommendViewModel.allShelves
+  /// v2 后端没有成对媒体身份，货架详情取不到，不开放主屏货架；设置页据此隐藏入口。
+  @Published private(set) var isAvailableForCurrentBackend = true
 
   var savedExploration: ExploreConfiguration? {
     if let exploration = selection?.exploration { return exploration }
@@ -61,6 +63,18 @@ final class TopShelfManager: ObservableObject {
   private var isSynchronizationDeferred = false
   private var refreshPending = false
   private var sourceSessionID: String?
+  /// 当前 `apiService.settings` 属于哪个账号；切服后旧设置不能拿来判断新账号的后端版本。
+  private var settingsProfileKey: String?
+
+  /// 只返回属于当前会话的设置。切服时 `$session` 先发布、`settings` 随后才清空，
+  /// 这段时间直接读 `apiService.settings` 会拿到旧账号的版本和凭据配置。
+  ///
+  /// 注意：`$settings` 的 sink 在 willSet 阶段执行，`handleSettingsChange` 内不要同步读这个属性，
+  /// 此时 `apiService.settings` 仍是旧值；需要版本时直接用回调参数。
+  private var currentSessionSettings: GlobalSettings? {
+    guard settingsProfileKey == apiService.session.profileKey else { return nil }
+    return apiService.settings
+  }
 
   init(
     apiService: APIService = .shared,
@@ -130,6 +144,8 @@ final class TopShelfManager: ObservableObject {
         shelves: RecommendViewModel.allShelves
       )
     self.isExplicitlyDisabled = isExplicitlyDisabled
+    // 未调用 `start()` 的调用方也可能直接 `refreshNow()`；实例化时已有的设置就属于当前会话。
+    settingsProfileKey = apiService.settings == nil ? nil : apiService.session.profileKey
     selection = initialSelection
     status =
       store == nil
@@ -143,6 +159,9 @@ final class TopShelfManager: ObservableObject {
   func start(refreshImmediately: Bool = true) {
     guard !started else { return }
     started = true
+    if apiService.settings != nil {
+      settingsProfileKey = apiService.session.profileKey
+    }
 
     apiService.$session
       .dropFirst()
@@ -229,7 +248,7 @@ final class TopShelfManager: ObservableObject {
       status = selection == nil ? .disabled : .waitingForSession
       return
     }
-    guard let settings = apiService.settings else {
+    guard let settings = currentSessionSettings else {
       status = selection == nil ? .disabled : .waitingForConfiguration
       return
     }
@@ -238,6 +257,12 @@ final class TopShelfManager: ObservableObject {
     updateRefreshConfiguration(for: apiService.session)
     guard await refreshSources() else { return }
     guard let store else {
+      status = .unavailable
+      return
+    }
+    updateBackendAvailability(backendVersion: currentSessionSettings?.BACKEND_VERSION)
+    guard isAvailableForCurrentBackend else {
+      _ = stronglyInvalidate(for: apiService.session)
       status = .unavailable
       return
     }
@@ -415,6 +440,11 @@ final class TopShelfManager: ObservableObject {
     _ state: APIServiceSessionState,
     scheduleRefresh shouldRefresh: Bool
   ) {
+    // 切服时 session 先发布、settings 随后才置 nil；这里读到的 settings 可能还属于旧账号，
+    // 只有它确实属于当前账号时才用来判断后端版本。权限变化不换 profileKey，仍可复用。
+    let backendVersion =
+      settingsProfileKey == state.profileKey ? apiService.settings?.BACKEND_VERSION : nil
+    updateBackendAvailability(backendVersion: backendVersion)
     refreshTask?.cancel()
     refreshTask = nil
     if sourceSessionID != state.imageNamespace {
@@ -428,7 +458,7 @@ final class TopShelfManager: ObservableObject {
   }
 
   private func publishedScopeMatches(_ state: APIServiceSessionState) -> Bool {
-    guard let store, let selection,
+    guard isAvailableForCurrentBackend, let store, let selection,
       state.token != nil,
       isSelectionPermitted(in: state),
       let published = try? store.loadState()
@@ -451,11 +481,13 @@ final class TopShelfManager: ObservableObject {
     if let previous = (try? store.loadState())?.refreshConfiguration,
       previous.sessionID != state.imageNamespace || state.token == nil
         || !isSelectionPermitted(in: state) || selection == nil
+        || !isAvailableForCurrentBackend
     {
       TopShelfCredentials.delete(previous.sessionID)
     }
     let canDisplay =
-      state.token != nil
+      isAvailableForCurrentBackend
+      && state.token != nil
       && isSelectionPermitted(in: state)
       && selection != nil
     let emptyState = TopShelfSharedState(
@@ -498,6 +530,13 @@ final class TopShelfManager: ObservableObject {
 
   private func handleSettingsChange(_ settings: GlobalSettings?) {
     guard let settings else { return }
+    settingsProfileKey = apiService.session.profileKey
+    updateBackendAvailability(backendVersion: settings.BACKEND_VERSION)
+    guard isAvailableForCurrentBackend else {
+      _ = stronglyInvalidate(for: apiService.session)
+      status = .unavailable
+      return
+    }
     guard let selection else {
       if case .failed = status { _ = stronglyInvalidate(for: apiService.session) }
       return
@@ -511,6 +550,16 @@ final class TopShelfManager: ObservableObject {
     if state?.refreshConfiguration != configuration || (refreshTask == nil && !preparedMatches) {
       scheduleRefresh()
     }
+  }
+
+  /// v2 后端没有成对媒体身份，货架详情取不到，不开放主屏货架。
+  /// 删除 v2 支持时连同 `isAvailableForCurrentBackend` 和这几个 guard 一并删掉。
+  /// 必须用调用方手上的版本判断：`@Published` 的 sink 在 willSet 阶段收到新设置，
+  /// 此时 `apiService.settings` 还是旧值，重新读取会把 v2/v3 切换判反。
+  private func updateBackendAvailability(backendVersion: String?) {
+    let available = !MoviePilotV2Support.isLegacy(backendVersion: backendVersion)
+    guard available != isAvailableForCurrentBackend else { return }
+    isAvailableForCurrentBackend = available
   }
 
   private func refreshConfiguration(
@@ -584,8 +633,8 @@ final class TopShelfManager: ObservableObject {
   private func updateRefreshConfiguration(for state: APIServiceSessionState) {
     guard let store else { return }
     let previous = (try? store.loadState())?.refreshConfiguration
-    guard let token = state.token, isSelectionPermitted(in: state),
-      selection != nil, let settings = apiService.settings
+    guard isAvailableForCurrentBackend, let token = state.token,
+      isSelectionPermitted(in: state), selection != nil, let settings = currentSessionSettings
     else {
       if let previous { TopShelfCredentials.delete(previous.sessionID) }
       try? store.setRefreshConfiguration(nil)

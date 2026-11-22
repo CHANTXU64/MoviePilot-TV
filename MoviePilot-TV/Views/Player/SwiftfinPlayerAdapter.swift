@@ -1,17 +1,15 @@
-import AVKit
 import Combine
-import MPVUI
 import SwiftUI
 import UIKit
 
 // 把移植自 Swiftfin 的 tvOS 播放界面（Views/Player/Swiftfin）接到 MoviePilot-TV 的播放会话上。
 // Swiftfin 界面读写的是它自己的 `MediaSession`（依赖 Jellyfin），这里按同名提供只实现界面用到成员的适配对象，
-// 底层是 `PlaybackSession` 与它创建的 `MPVPlayer`；条目、章节等数据类型见 SwiftfinPlayerModels.swift。
+// 底层是 `PlaybackSession` 与它创建的 `AetherPlayer`；条目、章节等数据类型见 SwiftfinPlayerModels.swift。
 
-/// mpv 内核的全屏播放界面。播放中换集、换版本只替换会话里的条目，界面不重建。
+/// 应用内的全屏播放界面。播放中换集、换版本只替换会话里的条目，界面不重建。
 /// `MediaSession` 在界面出现时创建一次：外层状态变化会让 SwiftUI 反复执行本视图的 init，
 /// 在 init 里创建会每次多建一套再丢掉。
-struct MPVPlaybackScreen: View {
+struct InAppPlaybackScreen: View {
   let session: PlaybackSession
   let onExit: MediaSession.Exit
   let onSwitchItem: MediaSession.SwitchItem
@@ -27,12 +25,22 @@ struct MPVPlaybackScreen: View {
     self.onSwitchItem = onSwitchItem
   }
 
+  /// 起播遮挡；会话建好前也算在准备。
+  private var startupCover: StartupCover? {
+    guard let mediaSession else { return .loading }
+    return mediaSession.startupCover
+  }
+
   var body: some View {
-    Group {
+    ZStack {
       if let mediaSession {
         VideoPlayer(mediaSession: mediaSession)
-      } else {
-        Color.black.ignoresSafeArea()
+      }
+      // 和外层起播前的黑屏是同一个样子，播放器盖上来时看不出换了一层；从第一帧起就在，中途不换视图。
+      // 揭开不带过渡，直接出画面。
+      if let startupCover {
+        PlaybackLoadingScreen(showsIndicator: startupCover == .loading)
+          .transition(.asymmetric(insertion: .opacity, removal: .identity))
       }
     }
     .onAppear {
@@ -42,25 +50,24 @@ struct MPVPlaybackScreen: View {
   }
 }
 
-/// Swiftfin 播放器设置项的固定取值（均为 Swiftfin 默认值）。
+/// 播放器设置项的固定取值；平台能力的差异在使用处说明。
 enum VideoPlayerDefaults {
-  static let jumpBackwardInterval: Duration = .seconds(15)
-  static let jumpForwardInterval: Duration = .seconds(15)
-  /// 长按右键加速的倍率。
-  static let longPressSpeedMultiplier: Double = 2
+  /// 遥控器左右键点一下跳多远，与系统播放器相同。
+  static let jumpInterval: Duration = .seconds(10)
+  /// 左右键按住多久算长按，开始快退、快进。
+  static let scanHoldDelay: Duration = .milliseconds(500)
+  /// 控制条显示多久后自动收起；只显示进度条（跳转、轻触触控板）时更短。
+  static let controlsAutoHideInterval: TimeInterval = 5
+  static let progressAutoHideInterval: TimeInterval = 2
   static let playbackRates: [Double] = [0.5, 1.0, 1.25, 1.5, 2.0]
   /// 控制条收起后再按 Menu 是否先确认再退出。
   static let confirmClose = false
-  /// 进度条上显示章节刻度。
-  static let chapterSlider = true
   static let appMaximumBitrate: PlaybackBitrate = .auto
-  /// 拖动预览图来源：Swiftfin 默认只用 trickplay、不回退到章节图。
-  static let previewImageScrubbing: PreviewImageScrubbingOption = .trickplay(fallbackToChapters: false)
   static let supplements: [VideoPlayerSupplementType] = VideoPlayerSupplementType.supportedCases
-  /// 工具栏按钮。Swiftfin 默认还有「填充」（`.aspectFill`），这里不放。
-  static let barActionButtons: [VideoPlayerActionButton] = [.autoPlay, .playPreviousItem, .playNextItem]
+  /// 工具栏按钮。Swiftfin 默认还有「填充」（`.aspectFill`），这里不放；字幕选择直接放工具栏，不进「…」菜单。
+  static let barActionButtons: [VideoPlayerActionButton] = [.playPreviousItem, .playNextItem, .subtitles]
   static let menuActionButtons: [VideoPlayerActionButton] = [
-    .audio, .audioOffset, .subtitles, .subtitleOffset, .playbackSpeed, .pictureInPicture, .playbackSettings,
+    .audio, .audioOffset, .subtitleOffset, .playbackSpeed, .pictureInPicture, .playbackSettings,
   ].filter { VideoPlayerActionButton.supportedCases.contains($0) }
 }
 
@@ -92,32 +99,32 @@ struct VideoPlaybackState: Equatable {
   var videoSize: CGSize = .zero
 }
 
-/// `MediaSession.player` 指向的 mpv 播放器描述。
+/// `MediaSession.player` 指向的播放器描述。
 @MainActor
-final class MPVPlayerAdapter: VideoMediaPlayer, MediaPlayerOffsetProviding {
+final class AetherPlayerAdapter: VideoMediaPlayer, MediaPlayerOffsetProviding {
   nonisolated deinit {}
 
-  private let player: MPVPlayer
+  private let player: AetherPlayer
 
-  init(player: MPVPlayer) {
+  init(player: AetherPlayer) {
     self.player = player
   }
 
-  let displayTitle = "MPV"
-  var supportedRates: ClosedRange<Double> { 0.1...5 }
+  let displayTitle = "AetherEngine"
+  /// 引擎视频播放最快 2 倍速，不支持倒放。
+  var supportedRates: ClosedRange<Double> { 0.5...2 }
 
   var videoState: VideoPlaybackState {
-    guard let dimensions = player.mediaInformation.presentationDimensions else { return .init() }
-    return VideoPlaybackState(videoSize: CGSize(width: dimensions.width, height: dimensions.height))
+    VideoPlaybackState(videoSize: player.videoSize)
   }
 }
 
 // MARK: - MediaSession
 
-/// 播放界面读到的会话状态。播放位置、就绪、缓冲由 mpv 的时间流和事件流写入，值不变时不发布，
-/// 与 Swiftfin `MPVMediaPlayer.updateTiming` 相同：mpv 每帧都会刷新位置和缓存状态，界面若直接读 `MPVPlayer`
-/// 的这些属性，整个控制层（含菜单）会跟着每帧重建。
-/// 跳转在这里合并连续请求，界面立即显示目标位置，mpv 完成后再回到真实位置。
+/// 播放界面读到的会话状态。播放位置、就绪、缓冲由播放器的位置和事件写入，值不变时不发布，
+/// 与 Swiftfin `MPVMediaPlayer.updateTiming` 相同：播放位置每秒刷新多次，界面若直接跟着它，
+/// 整个控制层（含菜单）会跟着反复重建。
+/// 跳转在这里合并连续请求，界面立即显示目标位置，播放器完成后再回到真实位置。
 @MainActor
 @Observable
 final class MediaSession {
@@ -167,8 +174,7 @@ final class MediaSession {
     func error(_ message: String) { Logger.error("[Playback] \(PlaybackLog.redacted(message))") }
   }
 
-  let mpvPlayer: MPVPlayer
-  let textSubtitles = TextSubtitlePresentation()
+  let enginePlayer: AetherPlayer
   let logger = SessionLogger()
   let session: PlaybackSession
   private(set) var playbackItem: MediaPlayerItem?
@@ -186,31 +192,35 @@ final class MediaSession {
       #if DEBUG
         if previewSession != nil { return }
       #endif
-      mpvPlayer.setPlaybackRate(effectiveRate)
+      enginePlayer.setRate(effectiveRate)
     }
   }
 
   /// 就绪、可跳转、缓冲与时长，值变化时才更新。
   private(set) var playbackState = PlaybackState()
-  /// mpv 报告的播放位置，变化满 `positionPublishStep` 才更新（见 `publishPosition`）。只有进度条和时间读它。
+  /// 播放器读到的当前条目内嵌章节，随播放器更新；播放器还不知道时为 nil。
+  private var embeddedChapters: [ServerChapter]?
+  /// 播放器报告的播放位置，变化满 `positionPublishStep` 才更新（见 `publishPosition`）。只有进度条和时间读它。
   private var observedPosition: Duration = .zero
-  /// 界面显示的跳转目标；mpv 完成跳转后清空。
+  /// 界面显示的跳转目标；播放器完成跳转后清空。
   private var pendingSeek: Duration?
   private(set) var isStopped = false
-  /// 播放界面出现后才起播；起播前 `MPVPlayer` 可能还留着上一集的就绪状态。
+  /// 播放界面出现后才起播。
   private var hasStarted = false
   /// 正在为换集、换版本解析新条目。
   private var isSwitchingItem = false
-  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑（见 `coverUntilDisplaySettles`）。只是遮挡，不影响播放。
-  private(set) var isCoveringForDisplay: Bool
+  /// 起播遮挡：从起播到首帧备好整屏盖住（见 `coverUntilStartupSettles`），nil 是已揭开。只是遮挡，不影响播放。
+  private(set) var startupCover: StartupCover? = .loading
 
-  @ObservationIgnored private let playerAdapter: MPVPlayerAdapter
+  @ObservationIgnored private let playerAdapter: AetherPlayerAdapter
   @ObservationIgnored private let onExit: Exit
   @ObservationIgnored private let onSwitchItem: SwitchItem
   @ObservationIgnored private var pendingPlaybackStatus: PlaybackRequestStatus?
+  /// 暂停时跳转还没落定就要求播放（确认或取消快退快进、选章节）：等跳到最后一个目标再播，见 `performPendingSeeks`。
+  @ObservationIgnored private var playsAfterSeek = false
   @ObservationIgnored private var seekTask: Task<Void, Never>?
-  @ObservationIgnored private var eventTask: Task<Void, Never>?
-  @ObservationIgnored private var timingTask: Task<Void, Never>?
+  @ObservationIgnored private var eventObservation: AnyCancellable?
+  @ObservationIgnored private var positionObservation: AnyCancellable?
   @ObservationIgnored private var itemObservations: [AnyCancellable] = []
   @ObservationIgnored private var queueObservation: AnyCancellable?
   @ObservationIgnored private var displayTask: Task<Void, Never>?
@@ -218,8 +228,6 @@ final class MediaSession {
   @ObservationIgnored private var nextLookupTask: Task<Void, Never>?
   /// 当前条目已经播完（之后要么接着播下一集，要么退出）。这时换集失败，就没有画面可以留在原处。
   @ObservationIgnored private var currentItemEnded = false
-  /// 已按片源信息向电视申请过显示模式，退出时要还原。
-  @ObservationIgnored private var hasRequestedDisplayMode = false
 
   init(
     session: PlaybackSession,
@@ -229,29 +237,44 @@ final class MediaSession {
     self.session = session
     self.onExit = onExit
     self.onSwitchItem = onSwitchItem
-    let player = session.makeMPVPlayer()
-    mpvPlayer = player
-    playerAdapter = MPVPlayerAdapter(player: player)
+    let player = session.makePlayer()
+    enginePlayer = player
+    playerAdapter = AetherPlayerAdapter(player: player)
     userSession = UserSession(session: session)
-    isCoveringForDisplay = Self.displayManager?.isDisplayCriteriaMatchingEnabled == true
   }
 
   var player: (any MediaPlayer)? { playerAdapter }
-
-  var titles: (primary: String, secondary: String?) { session.titles }
 
   var effectiveRate: Double {
     let range = playerAdapter.supportedRates
     return min(max(rate, range.lowerBound), range.upperBound)
   }
 
-  /// 当前条目。片长以服务器记录为准，服务器没有时用 mpv 读到的时长。
+  /// 所播文件的片长（见 `PlaybackDuration`）：起播后以播放器读到的为准，之前用所选片源的。
+  /// 进度条、跳转上限、跳过片头片尾、信息面板的片长和结束时间都读这里，与看完判定同一个值。
+  var runtime: Duration? {
+    session.playback.durationSeconds(playerSeconds: playbackState.duration?.seconds).map { .seconds($0) }
+  }
+
+  /// 当前条目，片长换成 `runtime`。
   var item: BaseItemDto {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
-    if item.runtime == nil, let duration = playbackState.duration {
-      item.runTimeTicks = Int(duration.microseconds * 10)
-    }
+    item.runTimeTicks = runtime.map { BaseItemDto.ticks(seconds: $0.seconds) }
     return item
+  }
+
+  /// 「章节」面板和进度条刻度用的章节（取法见 `PlaybackChapters`），随片长和播放器读到的章节变化。
+  var chapters: PlaybackChapterList {
+    guard let playbackItem else { return .chapters([]) }
+    switch PlaybackChapters.resolve(
+      server: playbackItem.serverChapters, embedded: embeddedChapters, durationSeconds: runtime?.seconds)
+    {
+    case .waitingForPlayer:
+      return .loading
+    case .chapters(let chapters):
+      return .chapters(
+        ChapterInfo.fullInfo(chapters, placeholderSymbol: playbackItem.chapterPlaceholderSymbol))
+    }
   }
 
   var state: State {
@@ -303,7 +326,7 @@ final class MediaSession {
     case .error, .stopped: return nil
     case .preparing, .playback: break
     }
-    if pendingSeek != nil || mpvPlayer.state == .seeking { return .seeking }
+    if pendingSeek != nil || enginePlayer.isSeeking { return .seeking }
     return playbackState.isBuffering ? .buffering : nil
   }
 
@@ -321,7 +344,7 @@ final class MediaSession {
 
   // MARK: 生命周期
 
-  /// 界面出现时调用：先打开文字字幕拦截（SRT 等由界面用系统字体绘制），再交给 `PlaybackSession` 起播。
+  /// 界面出现时调用：开始收播放器事件，再交给 `PlaybackSession` 起播。
   func start() {
     guard !hasStarted, !isStopped else { return }
     hasStarted = true
@@ -331,13 +354,8 @@ final class MediaSession {
         return
       }
     #endif
-    prepareItem()
-    textSubtitles.start(mpvPlayer)
     observeEvents()
-    let requested = requestDisplayMode()
-    session.start()
-    coverUntilDisplaySettles(afterRequest: requested)
-    refreshPlaybackState()
+    loadCurrentItem()
   }
 
   /// 会话已换成新条目（播放中换集、换版本后），上一条目已由会话上报停止：重建条目状态并起播。
@@ -348,57 +366,49 @@ final class MediaSession {
     seekTask = nil
     pendingSeek = nil
     pendingPlaybackStatus = nil
+    playsAfterSeek = false
     playbackRequestStatus = .playing
     guard hasStarted else { return }
+    loadCurrentItem()
+  }
+
+  /// 起播会话里的当前条目，首次起播和换集、换版本共用。倍速在载入后由播放器重新设上（引擎每次载入回到 1 倍速）。
+  private func loadCurrentItem() {
     prepareItem()
-    textSubtitles.start(mpvPlayer)
-    mpvPlayer.setPlaybackRate(effectiveRate)
-    let requested = requestDisplayMode()
+    enginePlayer.setRate(effectiveRate)
     session.start()
-    coverUntilDisplaySettles(afterRequest: requested)
+    coverUntilStartupSettles()
     refreshPlaybackState()
   }
 
-  /// 开了「匹配内容」时，按片源信息在起播前向电视申请显示模式（见 `DisplayModeHint`），切换与载入同时进行；
-  /// 切换期间 MPVUI 会暂停时钟。认不准格式时不申请，交给 MPVUI 开播后自己申请。返回是否已申请。
-  private func requestDisplayMode() -> Bool {
-    guard let display = Self.displayManager, display.isDisplayCriteriaMatchingEnabled,
-      let criteria = session.mediaSource.displayModeHint?.makeCriteria()
-    else { return false }
-    display.preferredDisplayCriteria = criteria
-    hasRequestedDisplayMode = true
-    return true
-  }
-
-  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑：切换时 HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下。
-  /// 只是遮挡，播放照常进行。已提前申请过模式时，MPVUI 再申请同一模式不会再切，就绪后只留很短的时间确认。
-  private func coverUntilDisplaySettles(afterRequest requested: Bool) {
+  /// 从起播到首帧备好整屏盖住（Apple TV App 的做法）：准备期间黑底转圈；开了「匹配内容」时电视切换显示模式期间纯黑
+  /// （HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下），切好直接揭开。只是遮挡，播放照常进行。
+  /// 播放中换集、换版本不盖：保留当前画面和控制条，加载状态由控制条上的转圈表示。
+  /// 边界：原位交接保留旧画面只对原生解码（`VideoRoute.loopback`/`.remoteBypass`）成立；软件解码（`.software`）
+  /// 不支持原位交接，引擎会释放软件播放器露出黑帧。换到不同格式（如 SDR↔HDR）时显示模式切换的约 1 秒 HDMI 黑屏也会露出。
+  /// 这两种黑帧因这里不盖遮挡而直接可见（已知取舍，暂不处理）。
+  private func coverUntilStartupSettles() {
     displayTask?.cancel()
-    guard let display = Self.displayManager, display.isDisplayCriteriaMatchingEnabled else {
-      isCoveringForDisplay = false
-      return
-    }
-    isCoveringForDisplay = true
-    var timing = DisplayModeGate.Timing()
-    if requested { timing.settle = .milliseconds(200) }
+    // 遮挡揭开后换集：不再整屏盖住，否则控制条和进度条会一起被盖没。
+    guard startupCover != nil else { return }
+    startupCover = .loading
+    let display = DisplayModeGate.currentDisplay
     displayTask = Task { [weak self] in
-      await DisplayModeGate.wait(for: display, timing: timing) { [weak self] in
-        guard let self else { return true }
-        return DisplayModeGate.isSettled(self.mpvPlayer)
-      }
+      await DisplayModeGate.wait(
+        for: display,
+        show: { [weak self] cover in self?.startupCover = cover },
+        isPlayerSettled: { [weak self] in
+          guard let self else { return true }
+          return DisplayModeGate.isSettled(
+            status: self.enginePlayer.status, hasFirstFrame: self.enginePlayer.hasFirstFrame,
+            isAwaitingDisplaySwitch: self.enginePlayer.isAwaitingDisplaySwitch)
+        })
       guard let self, !Task.isCancelled else { return }
-      self.isCoveringForDisplay = false
+      self.startupCover = nil
     }
   }
 
-  /// 前台窗口的显示管理器。MPVUI 也是向播放画面所在窗口的这个对象申请显示模式。
-  private static var displayManager: (any DisplayModeSwitching)? {
-    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-    let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-    return (scene?.keyWindow ?? scene?.windows.first)?.avDisplayManager
-  }
-
-  /// 退出播放。可重复调用；实际停止和进度上报由外部的退出闭包（结束 `PlaybackSession`）完成。
+  /// 退出播放。可重复调用；实际停止、显示模式还原和进度上报由外部的退出闭包（结束 `PlaybackSession`）完成。
   func stop() {
     #if DEBUG
       if previewSession != nil {
@@ -417,19 +427,15 @@ final class MediaSession {
     nextLookupTask = nil
     displayTask?.cancel()
     displayTask = nil
-    if hasRequestedDisplayMode {
-      Self.displayManager?.preferredDisplayCriteria = nil
-    }
     seekTask?.cancel()
     seekTask = nil
     pendingSeek = nil
-    eventTask?.cancel()
-    eventTask = nil
-    timingTask?.cancel()
-    timingTask = nil
+    eventObservation = nil
+    positionObservation = nil
     itemObservations.removeAll()
     queueObservation = nil
-    textSubtitles.clear()
+    // 起播遮挡还在时退出：播放器收起期间只留纯黑，不再转圈。
+    if startupCover != nil { startupCover = .blank }
     onExit(notice)
   }
 
@@ -441,20 +447,22 @@ final class MediaSession {
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
-    var baseItem = BaseItemDto(item: session.item, episode: session.episode)
+    embeddedChapters = nil
+    var baseItem = BaseItemDto.playback(session.playback)
     baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
       baseItem: baseItem,
       source: session.mediaSource,
-      player: mpvPlayer,
-      connection: session.connection,
+      player: enginePlayer,
       startSeconds: session.startSeconds)
     playbackItem = item
     if let segments = item.segments {
       itemObservations.append(segments.observe(self))
     }
 
-    if baseItem.type == .episode {
+    // 只有带剧集上下文起播（详情页集列表、认出这一集的「继续观看」）才有选集和上一集/下一集。
+    // 没有上下文时取集列表恒为空，挂上面板只会是个空面板，所以不挂。
+    if baseItem.type == .episode, session.episode != nil {
       if queue == nil {
         let queue = MoviePilotEpisodeQueue()
         self.queue = queue
@@ -467,17 +475,15 @@ final class MediaSession {
   }
 
   #if DEBUG
-    /// UI 预览：用 fixture 条目替换真实片源解析，轨道、队列和预览图都来自假会话。
+    /// UI 预览：用 fixture 条目替换真实片源解析，轨道与队列都来自假会话。
     private func preparePreviewItem() {
       guard let previewSession else { return }
       let item = MediaPlayerItem(
         baseItem: previewSession.baseItem,
         source: session.mediaSource,
-        player: mpvPlayer,
-        connection: session.connection,
+        player: enginePlayer,
         startSeconds: 0)
       item.installPreviewTracks(previewSession.tracks)
-      item.installPreviewImageProvider(previewSession.previewImageProvider)
       playbackItem = item
       queue = previewSession.queue
       playbackState = PlaybackState(
@@ -486,8 +492,8 @@ final class MediaSession {
         isBuffering: previewSession.isBuffering,
         duration: previewSession.duration)
       playbackRequestStatus = previewSession.isPaused ? .paused : .playing
-      // 预览没有真实的显示模式切换，避免「切换显示模式」的黑屏遮住整个界面。
-      isCoveringForDisplay = false
+      // 预览没有真实的显示模式切换，直接收起起播遮挡，避免黑屏遮住整个界面。
+      startupCover = nil
     }
   #endif
 
@@ -495,21 +501,21 @@ final class MediaSession {
     /// 正在换集，上一集刚好播完：等切换完成。
     case waitForSwitch
     case playNext(PlaybackIntent)
-    /// 开着自动播放、按集播放，但还不知道下一集，或已知的下一集是跳过还没入库的集找到的：重新查一次再决定。
+    /// 按集播放，但还不知道下一集，或已知的下一集是跳过还没入库的集找到的：重新查一次再决定。
     case lookUpNext
     case exit
   }
 
-  /// 播完后怎么做：开了自动播放且有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
+  /// 播完后怎么做：有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
   /// 按集播放时，还不知道下一集（开播时没找到、或查询还没回来），或已知的下一集跳过了当时还没入库的集，
   /// 先重新查一次：播放期间那几集可能刚入库，应按顺序接上。
-  /// 不看“能否控制播放”：mpv 先报告就绪变为否、再报告播完，到这里时它总是否。
+  /// 不看“能否控制播放”：播完时播放器可能已经报告不再就绪。
   static func endAction(
-    isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool, isAutoPlayEnabled: Bool,
+    isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool,
     nextItem: PlaybackIntent?, canLookUpNext: Bool = false, nextNeedsRecheck: Bool = false
   ) -> EndAction {
     if isSwitchingItem { return .waitForSwitch }
-    guard !isSeeking, !isLiveStream, isAutoPlayEnabled else { return .exit }
+    guard !isSeeking, !isLiveStream else { return .exit }
     if canLookUpNext, nextItem == nil || nextNeedsRecheck { return .lookUpNext }
     if let nextItem { return .playNext(nextItem) }
     return .exit
@@ -520,7 +526,7 @@ final class MediaSession {
     let episodeQueue = queue as? MoviePilotEpisodeQueue
     switch Self.endAction(
       isSwitchingItem: isSwitchingItem, isSeeking: isSeeking, isLiveStream: item.isLiveStream,
-      isAutoPlayEnabled: userSession.isAutoPlayEnabled, nextItem: queue?.nextItem,
+      nextItem: queue?.nextItem,
       canLookUpNext: episodeQueue?.canLookUpNext == true, nextNeedsRecheck: episodeQueue?.nextNeedsRecheck == true)
     {
     case .waitForSwitch: break
@@ -532,15 +538,8 @@ final class MediaSession {
     }
   }
 
-  /// 片尾重新查下一集的结果怎么用：查询期间从工具栏关掉了自动播放，就和平常播完一样退出，不起播、也不说明原因。
-  static func resultAfterLookUp(
-    _ result: MoviePilotEpisodeQueue.NextLookup, isAutoPlayEnabled: Bool
-  ) -> MoviePilotEpisodeQueue.NextLookup {
-    isAutoPlayEnabled ? result : .unavailable(nil)
-  }
-
   /// 重新查下一集，查询期间显示加载中；查到就接着播，查不到就退出并说明原因（已是最后一集时不说明）。
-  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃；关掉了自动播放见 `resultAfterLookUp`。
+  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃。
   private func lookUpNextAfterEnd(_ episodeQueue: MoviePilotEpisodeQueue) {
     isSwitchingItem = true
     nextLookupTask?.cancel()
@@ -550,7 +549,7 @@ final class MediaSession {
       guard let self, !Task.isCancelled, !self.isStopped, self.session.item.id == endedItemID else { return }
       self.nextLookupTask = nil
       self.isSwitchingItem = false
-      switch Self.resultAfterLookUp(result, isAutoPlayEnabled: self.userSession.isAutoPlayEnabled) {
+      switch result {
       case .play(let intent): self.playNewItem(intent: intent)
       case .unavailable(let reason): self.finish(notice: reason)
       }
@@ -559,8 +558,12 @@ final class MediaSession {
 
   // MARK: 播放控制
 
+  /// 暂停中、跳转还没落定时要求播放，先不让播放器播：否则先从跳转前的画面播一会儿再跳，跳转失败就从错的位置接着播。
+  /// 界面先显示为播放，跳到最后一个目标后再播（见 `performPendingSeeks`）；其间暂停就不再播。正在播放时照常边播边跳。
   func setPlaybackRequestStatus(status: PlaybackRequestStatus) {
     guard state != .stopped, state != .error else { return }
+    let waitsForSeek =
+      status == .playing && pendingSeek != nil && (playbackRequestStatus == .paused || playsAfterSeek)
     playbackRequestStatus = status
     #if DEBUG
       if previewSession != nil {
@@ -568,11 +571,16 @@ final class MediaSession {
         return
       }
     #endif
+    playsAfterSeek = false
     guard hasStarted else { return }
     pendingPlaybackStatus = status
+    if waitsForSeek {
+      playsAfterSeek = true
+      return
+    }
     switch status {
-    case .playing: mpvPlayer.play()
-    case .paused: mpvPlayer.pause()
+    case .playing: enginePlayer.play()
+    case .paused: enginePlayer.pause()
     }
   }
 
@@ -584,7 +592,7 @@ final class MediaSession {
   @discardableResult
   func seek(to position: Duration) -> Bool {
     guard canSeek else { return false }
-    let limit = playbackState.duration ?? item.runtime
+    let limit = runtime
     let target = max(.zero, limit.map { min(position, $0) } ?? position)
     commandError = nil
     #if DEBUG
@@ -607,6 +615,7 @@ final class MediaSession {
   }
 
   /// 一次只发一个跳转；进行中又有新目标时，完成后接着跳到最新目标。
+  /// 跳完最后一个目标再处理等着的播放（见 `setPlaybackRequestStatus`）：跳转失败就停在暂停，不从没确认的位置播。
   private func performPendingSeeks() async {
     defer { seekTask = nil }
     while pendingSeek != nil {
@@ -614,23 +623,30 @@ final class MediaSession {
       try? await Task.sleep(for: .milliseconds(80))
       guard !Task.isCancelled, !isStopped, let target = pendingSeek else { return }
       guard canSeek else {
+        // 重新载入、换集等：没跳，播放照原来的要求。
         pendingSeek = nil
+        resumeAfterSeek(landed: true)
         return
       }
-      let succeeded: Bool
-      do {
-        _ = try await mpvPlayer.seekAndWait(to: target)
-        succeeded = true
-      } catch is CancellationError {
-        return
-      } catch {
-        succeeded = false
-      }
+      let succeeded = await enginePlayer.seek(to: target.seconds)
       guard !Task.isCancelled, !isStopped else { return }
       if pendingSeek == target {
         pendingSeek = nil
         if !succeeded { commandError = L10n.unableToSeek }
+        // 跳转中播放器重新载入（换音轨、回前台）会让这次跳转算作失败。已经知道不能跳转时，与上面没跳一样，照原来的要求播放；
+        // 播放器事件还没到、仍显示可跳转时，按失败处理：停在暂停、提示无法跳转，再按一次播放即可。
+        resumeAfterSeek(landed: succeeded || !canSeek)
       }
+    }
+  }
+
+  private func resumeAfterSeek(landed: Bool) {
+    guard playsAfterSeek else { return }
+    playsAfterSeek = false
+    if landed {
+      enginePlayer.play()
+    } else {
+      setPlaybackRequestStatus(status: .paused)
     }
   }
 
@@ -684,65 +700,76 @@ final class MediaSession {
 
   func stopPictureInPicture() {}
 
-  // MARK: mpv 事件
+  // MARK: 播放器事件
 
-  /// 用户发出的播放/暂停在 mpv 确认前保持；之后跟随 mpv 的实际暂停状态（与 Swiftfin MPVMediaPlayer 相同）。
+  /// 用户发出的播放/暂停在播放器确认前保持；之后跟随播放器的实际暂停状态（与 Swiftfin MPVMediaPlayer 相同）。
   private func observeEvents() {
-    let events = mpvPlayer.makeEventStream()
-    eventTask = Task { [weak self] in
-      for await event in events {
-        guard let self, !Task.isCancelled, !self.isStopped else { return }
-        switch event.change {
-        case .stateChanged(.ended):
-          self.ended()
-          guard !self.isStopped else { return }
-          self.refreshPlaybackState()
-          self.syncPlaybackRequestStatus()
-        case .snapshot, .pauseChanged, .readinessChanged, .stateChanged:
-          self.refreshPlaybackState()
-          self.syncPlaybackRequestStatus()
-        default:
-          break
-        }
-      }
+    eventObservation = enginePlayer.observe { [weak self] event, generation in
+      guard let self, !self.isStopped else { return }
+      self.handlePlayerEvent(event, generation: generation)
     }
-    let timing = mpvPlayer.makeTimingStream()
-    timingTask = Task { [weak self] in
-      for await value in timing {
-        guard let self, !Task.isCancelled, !self.isStopped else { return }
-        self.publishPosition(value.position)
-        self.refreshPlaybackState()
-      }
+    positionObservation = enginePlayer.observePosition { [weak self] position in
+      guard let self, !self.isStopped, position.isFinite else { return }
+      self.publishPosition(.milliseconds(Int64(max(0, position) * 1000)))
+    }
+  }
+
+  /// 处理一条播放器事件（测试也直接调用它模拟播放器）。`generation` 是事件所属的那次载入（`AetherPlayer.generation`）：
+  /// 换条目后才处理到的上一条目的事件（比如播完）不能算到新条目头上，直接丢弃。失败由 `PlaybackSession` 处理。
+  func handlePlayerEvent(_ event: AetherPlayer.Event, generation: UInt64) {
+    guard !isStopped, generation == enginePlayer.generation else { return }
+    switch event {
+    case .statusChanged(.ended):
+      ended()
+      guard !isStopped else { return }
+      refreshPlaybackState()
+      syncPlaybackRequestStatus()
+    case .statusChanged, .updated:
+      refreshPlaybackState()
+      syncPlaybackRequestStatus()
+    case .failed, .seekStarted, .positionConfirmed:
+      break
     }
   }
 
   /// 界面上播放位置的最小刷新步长。
   static let positionPublishStep: Duration = .milliseconds(250)
 
-  /// mpv 几乎每帧报一次位置；控制条显示时进度条和时间若跟着每帧重算，真机上主线程占用明显。
+  /// 播放器每秒报约 10 次位置；控制条显示时进度条和时间若跟着每次重算，真机上主线程占用明显。
   /// 进度条一像素就是好几秒，时间文字按秒显示，因此位置变化满 0.25 秒才更新界面（Swiftfin 原版每帧更新）。
-  /// 跳转目标仍立即显示（见 `seconds`）；向 Emby 上报的进度直接读 mpv，不受影响。
+  /// 跳转目标仍立即显示（见 `seconds`）；向 Emby 上报的进度直接读播放器，不受影响。
   private func publishPosition(_ position: Duration) {
     let delta = position > observedPosition ? position - observedPosition : observedPosition - position
     guard delta >= Self.positionPublishStep || (position == .zero && observedPosition != .zero) else { return }
     observedPosition = position
   }
 
-  /// 从 mpv 读一次就绪、可跳转、缓冲与时长；没变就不写，避免界面重建。
+  /// 从播放器读一次就绪、可跳转、缓冲与时长；没变就不写，避免界面重建。
   private func refreshPlaybackState() {
+    let duration = enginePlayer.duration
     let next = PlaybackState(
-      isReady: hasStarted && mpvPlayer.isPlaybackReady,
-      isSeekable: mpvPlayer.isSeekable || mpvPlayer.state == .ended,
-      isBuffering: mpvPlayer.bufferStatus.isBuffering,
-      duration: mpvPlayer.duration > .zero ? mpvPlayer.duration : nil)
+      isReady: hasStarted && enginePlayer.isPlaybackReady,
+      isSeekable: enginePlayer.isSeekable || enginePlayer.status == .ended,
+      isBuffering: enginePlayer.isBuffering,
+      duration: duration.isFinite && duration > 0 ? .milliseconds(Int64(duration * 1000)) : nil)
     if playbackState != next {
       playbackState = next
+    }
+    // 播放器知道章节时每次都跟上（之后还可能换算到新的时间轴，见 `AetherPlayer.chapters`）；
+    // 还不知道时（载入、换音轨或回前台重建中）保留上次的，不闪成按片长分段。换条目时由 `prepareItem` 清空。
+    if let chapters = enginePlayer.chapters, embeddedChapters != chapters {
+      embeddedChapters = chapters
     }
   }
 
   private func syncPlaybackRequestStatus() {
-    guard mpvPlayer.isPlaybackReady, canControlPlayback else { return }
-    let observed: PlaybackRequestStatus = mpvPlayer.isPaused ? .paused : .playing
+    guard enginePlayer.isPlaybackReady, canControlPlayback else { return }
+    let observed: PlaybackRequestStatus
+    switch enginePlayer.status {
+    case .paused: observed = .paused
+    case .playing: observed = .playing
+    default: return
+    }
     guard pendingPlaybackStatus == nil || pendingPlaybackStatus == observed else { return }
     pendingPlaybackStatus = nil
     if playbackRequestStatus != observed {
@@ -764,7 +791,7 @@ extension UserSession: EpisodeQueueSource {}
 
 // MARK: - MediaPlayerItem
 
-/// 与 Swiftfin `MediaPlayerItem` 同名：当前条目、片源、轨道选择、偏移与预览图。轨道选择直接读写 `MPVPlayer`。
+/// 与 Swiftfin `MediaPlayerItem` 同名：当前条目、片源、轨道选择、偏移与预览图。轨道选择直接读写 `AetherPlayer`。
 /// 字幕关闭时记住所选轨道，再打开时恢复。
 @MainActor
 @Observable
@@ -773,12 +800,15 @@ final class MediaPlayerItem {
 
   let baseItem: BaseItemDto
   let mediaSource: PlaybackMediaSourceInfo
-  let chapters: [ChapterInfo.FullInfo]
+  /// 服务器给所播片源的章节。播放界面显示的章节由 `MediaSession.chapters` 按片长和播放器读到的章节算出。
+  let serverChapters: [ServerChapter]
+  /// 没有截图的章节卡片显示的图标：电影、剧集各用自己的。其他类型现在不会起播（见 `PlaybackError.unsupportedItemType`），
+  /// 万一有也用中性的图片图标，不装成电影。
+  let chapterPlaceholderSymbol: String
   let segments: MediaSegmentObserver? = MediaSegmentObserver()
-  @ObservationIgnored private(set) var previewImageProvider: PreviewImageProvider?
   var configuration = MediaPlaybackConfiguration()
 
-  @ObservationIgnored private let player: MPVPlayer
+  @ObservationIgnored private let player: AetherPlayer
   /// 字幕关闭时记住的轨道；nil 表示还没选过，打开时用默认轨道。
   private var disabledSubtitleTrackIndex: Int?
 
@@ -789,10 +819,6 @@ final class MediaPlayerItem {
     func installPreviewTracks(_ tracks: UIPlayerPreviewTracks) {
       previewTracks = tracks
     }
-
-    func installPreviewImageProvider(_ provider: PreviewImageProvider?) {
-      previewImageProvider = provider
-    }
   #endif
 
   var audioOffset: Duration = .zero {
@@ -800,7 +826,7 @@ final class MediaPlayerItem {
       #if DEBUG
         if previewTracks != nil { return }
       #endif
-      player.setAudioDelay(audioOffset)
+      player.setAudioDelay(audioOffset.seconds)
     }
   }
 
@@ -809,7 +835,7 @@ final class MediaPlayerItem {
       #if DEBUG
         if previewTracks != nil { return }
       #endif
-      player.setSubtitleDelay(subtitleOffset, for: .primary)
+      player.setSubtitleDelay(subtitleOffset.seconds)
     }
   }
 
@@ -817,26 +843,23 @@ final class MediaPlayerItem {
   var secondarySubtitleOffset: Duration = .zero
 
   init(
-    baseItem: BaseItemDto, source: ServerMediaSource, player: MPVPlayer, connection: any MediaServerConnection,
-    startSeconds: Double
+    baseItem: BaseItemDto, source: ServerMediaSource, player: AetherPlayer, startSeconds: Double
   ) {
     self.baseItem = baseItem
     mediaSource = PlaybackMediaSourceInfo(source: source)
     self.player = player
-    chapters = baseItem.fullChapterInfo
+    serverChapters = source.chapters
+    let placeholderSymbol: String
+    switch baseItem.type {
+    case .movie: placeholderSymbol = AppSymbol.movie
+    case .episode: placeholderSymbol = AppSymbol.tv
+    default: placeholderSymbol = AppSymbol.imagePlaceholder
+    }
+    chapterPlaceholderSymbol = placeholderSymbol
     var configuration = MediaPlaybackConfiguration()
     configuration.startSeconds = .milliseconds(Int64(startSeconds * 1000))
     configuration.selectMediaSource(id: source.id)
-    let images = PreviewImageCache(session: MediaServerHTTP.sharedSession)
-    previewImageProvider = PreviewImageProvider(
-      option: VideoPlayerDefaults.previewImageScrubbing,
-      item: baseItem,
-      mediaSourceID: source.id,
-      chapters: chapters,
-      client: JellyfinClient(connection: connection),
-      resolveImage: { await images.image(for: $0) })
     self.configuration = configuration
-    images.provider = previewImageProvider
   }
 
   private var canSelectTracks: Bool {
@@ -846,11 +869,11 @@ final class MediaPlayerItem {
     return player.isPlaybackReady
   }
 
-  private func stream(for track: MPVMediaTrack, offset: Int, type: MediaStreamType) -> MediaStream {
+  private func stream(for track: PlayerTrack, offset: Int, type: MediaStreamType) -> MediaStream {
     MediaStream(
-      index: track.mpvID,
+      index: track.id,
       type: type,
-      displayTitle: MPVTrackLabel.text(for: track, index: offset),
+      displayTitle: PlayerTrackLabel.text(for: track, index: offset),
       codec: track.codec)
   }
 
@@ -878,12 +901,13 @@ final class MediaPlayerItem {
   /// MoviePilot-TV 不提供“向后跳转时临时显示字幕”。
   var isShowingSubtitlesOnSkipBack: Bool { false }
 
+  /// 换音轨时引擎在原位置重建这一条目，画面会停顿一下。
   var selectedAudioStreamIndex: Int? {
     get {
       #if DEBUG
         if let previewTracks { return previewTracks.selectedAudioIndex }
       #endif
-      return player.audioTracks.first(where: \.isSelected)?.mpvID
+      return player.selectedAudioTrackID
     }
     set {
       #if DEBUG
@@ -892,10 +916,10 @@ final class MediaPlayerItem {
           return
         }
       #endif
-      guard canSelectTracks, let newValue,
-        let track = player.audioTracks.first(where: { $0.mpvID == newValue }), !track.isSelected
+      guard canSelectTracks, let newValue, newValue != player.selectedAudioTrackID,
+        player.audioTracks.contains(where: { $0.id == newValue })
       else { return }
-      player.selectTrack(track.id)
+      player.selectAudioTrack(newValue)
     }
   }
 
@@ -903,7 +927,7 @@ final class MediaPlayerItem {
     #if DEBUG
       if let previewTracks { return previewTracks.selectedSubtitleIndex }
     #endif
-    return player.selectedSubtitle(for: .primary)?.mpvID
+    return player.selectedSubtitleTrackID
   }
 
   var selectedSecondarySubtitleStreamIndex: Int? { nil }
@@ -912,7 +936,7 @@ final class MediaPlayerItem {
     #if DEBUG
       if let previewTracks { return previewTracks.subtitlesEnabled }
     #endif
-    return player.selectedSubtitle(for: .primary) != nil
+    return player.selectedSubtitleTrackID != nil
   }
 
   func subtitleTrackIndex(secondary: Bool) -> Int {
@@ -927,11 +951,11 @@ final class MediaPlayerItem {
     #endif
     let index: Int =
       if subtitlesEnabled {
-        player.selectedSubtitle(for: .primary)?.mpvID ?? -1
+        player.selectedSubtitleTrackID ?? -1
       } else {
         disabledSubtitleTrackIndex ?? defaultSubtitleTrackIndex
       }
-    guard player.subtitleTracks.contains(where: { $0.mpvID == index }) else { return -1 }
+    guard player.subtitleTracks.contains(where: { $0.id == index }) else { return -1 }
     return index
   }
 
@@ -939,7 +963,7 @@ final class MediaPlayerItem {
     #if DEBUG
       if let previewTracks { return previewTracks.defaultSubtitleIndex ?? -1 }
     #endif
-    return player.subtitleTracks.first(where: \.isDefault)?.mpvID ?? player.subtitleTracks.first?.mpvID ?? -1
+    return player.subtitleTracks.first(where: \.isDefault)?.id ?? player.subtitleTracks.first?.id ?? -1
   }
 
   /// 字幕开着时切换轨道（选“无”即关闭）；关着时只记住，下次打开用它。
@@ -960,7 +984,7 @@ final class MediaPlayerItem {
       }
     #endif
     guard !secondary, canSelectTracks,
-      index == -1 || player.subtitleTracks.contains(where: { $0.mpvID == index })
+      index == -1 || player.subtitleTracks.contains(where: { $0.id == index })
     else { return }
     let wasEnabled = subtitlesEnabled
     disabledSubtitleTrackIndex = index
@@ -992,9 +1016,9 @@ final class MediaPlayerItem {
   }
 
   private func selectSubtitle(_ index: Int) {
-    let track = player.subtitleTracks.first { $0.mpvID == index }
-    if player.selectedSubtitle(for: .primary)?.id != track?.id {
-      player.selectSubtitle(track?.id, for: .primary)
+    let track = player.subtitleTracks.first { $0.id == index }
+    if player.selectedSubtitleTrackID != track?.id {
+      player.selectSubtitleTrack(track?.id)
     }
   }
 
@@ -1006,52 +1030,19 @@ final class MediaPlayerItem {
   }
 }
 
-/// 拖动预览图的下载缓存（对应 Swiftfin 的 `PlaybackTemporaryFiles.image(for:)`，这里只放内存）。
-@MainActor
-final class PreviewImageCache {
-  nonisolated deinit {}
-
-  weak var provider: PreviewImageProvider?
-  private let session: URLSession
-  private var images: [Int: UIImage] = [:]
-  private var tasks: [Int: Task<UIImage?, Never>] = [:]
-
-  init(session: URLSession) {
-    self.session = session
-  }
-
-  func image(for id: Int) async -> UIImage? {
-    if let image = images[id] { return image }
-    if let task = tasks[id] { return await task.value }
-    guard let url = provider?.downloadURL(for: id) else { return nil }
-    let session = session
-    let task = Task<UIImage?, Never> {
-      guard let (data, _) = try? await session.data(from: url) else { return nil }
-      return UIImage(data: data)
-    }
-    tasks[id] = task
-    let image = await task.value
-    tasks[id] = nil
-    images[id] = image
-    return image
-  }
-}
-
 /// 轨道显示名：片源写了标题就只用标题，否则用语言加编码。
-enum MPVTrackLabel {
-  static func text(for track: MPVMediaTrack, index: Int) -> String {
+enum PlayerTrackLabel {
+  static func text(for track: PlayerTrack, index: Int) -> String {
     var parts: [String] = []
-    if let title = trimmedNonEmpty([track.title]) {
+    if let title = track.title {
       parts.append(title)
     } else {
-      if let language = track.language.map({ code in
-        Locale.current.localizedString(forLanguageCode: code) ?? code
-      }) {
-        parts.append(language)
+      if let language = track.language.flatMap({ trimmedNonEmpty([$0]) }) {
+        parts.append(Locale.current.localizedString(forLanguageCode: language) ?? language)
       } else {
         parts.append("轨道 \(index + 1)")
       }
-      if let codec = track.codec, !codec.isEmpty { parts.append(codec.uppercased()) }
+      if !track.codec.isEmpty, track.codec != "unknown" { parts.append(track.codec.uppercased()) }
     }
     if track.isForced { parts.append("强制") }
     if track.isExternal { parts.append("外挂") }

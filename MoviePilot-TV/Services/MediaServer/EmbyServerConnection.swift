@@ -67,7 +67,15 @@ struct EmbyServerConnection: MediaServerConnection {
   }
 
   func item(id: String, timeout: TimeInterval?) async throws -> ServerMediaItem? {
-    try await perform(.readItem) { try await client.item(id: id, userID: userID, timeout: timeout) }?.serverItem()
+    try await perform(.readItem) { try await client.item(id: id, userID: userID, timeout: timeout) }?
+      .serverItem(image: imageURL)
+  }
+
+  func items(ids: [String]) async throws -> [ServerMediaItem] {
+    guard !ids.isEmpty else { return [] }
+    return try await perform(.readItem) {
+      try await client.items(ids: ids, userID: userID, timeout: EmbyClient.quickTimeout)
+    }.map { $0.serverItem(image: imageURL) }
   }
 
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem] {
@@ -76,20 +84,28 @@ struct EmbyServerConnection: MediaServerConnection {
     return try await perform(.search) {
       try await client.items(
         withAnyProviderID: keys, type: Self.itemType(expected.kind), userID: userID, timeout: EmbyClient.quickTimeout)
-    }.map { $0.serverItem() }
+    }.map { $0.serverItem(image: imageURL) }
   }
 
   /// 这一份剧已经删了（HTTP 404）时当作没有集；其他错误照常抛出。
   func episodes(seriesID: String) async throws -> [ServerMediaItem] {
     do {
       return try await perform(.readEpisodes) { try await client.episodes(seriesID: seriesID, userID: userID) }
-        .map { $0.serverItem(defaultKind: .episode) }
+        .map { $0.serverItem(defaultKind: .episode, image: imageURL) }
     } catch let error as MediaServerError where error.reason == .notFound {
       return []
     }
   }
 
-  /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。
+  private var imageURL: (String, String, String) -> URL? {
+    { [client] itemID, type, tag in client.imageURL(itemID: itemID, type: type, tag: tag) }
+  }
+
+  private var chapterImageURL: (String, Int, String) -> URL? {
+    { [client] itemID, index, tag in client.chapterImageURL(itemID: itemID, index: index, tag: tag) }
+  }
+
+  /// 声明任何视频都可以直接播放（播放器直连原文件），并关闭重新封装和转码，Emby 不会为此启动转码任务。
   func prepareStream(for item: ServerMediaItem, preferredSourceID: String?) async throws -> PreparedStream {
     let info = try await perform(.readPlaybackInfo) { try await client.playbackInfo(itemID: item.id, userID: userID) }
     if let code = info.errorCode, !code.isEmpty, info.mediaSources.isEmpty {
@@ -104,8 +120,10 @@ struct EmbyServerConnection: MediaServerConnection {
     let streamURL = try await perform(.readPlaybackInfo) {
       try client.directStreamURL(itemID: item.id, selection: selection, playSessionID: info.playSessionID)
     }
+    let fallbackItemID = info.mediaSources.count == 1 ? item.id : nil
     return PreparedStream(
-      item: item, source: selection.source.serverSource, sources: info.mediaSources.map(\.serverSource),
+      item: item, source: selection.source.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL),
+      sources: info.mediaSources.map { $0.serverSource(fallbackItemID: fallbackItemID, chapterImage: chapterImageURL) },
       playSessionID: info.playSessionID, streamURL: streamURL)
   }
 
@@ -138,7 +156,7 @@ struct EmbyServerConnection: MediaServerConnection {
   }
 
   /// 写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：开播时的条目可能来自剧集列表，
-  /// Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0。
+  /// Emby 列表里的 `PlayCount` 恒为 0（最后播放时间也要点名才给），整份写回会把真实播放次数改成 0。
   /// 读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
   func saveWatchProgress(_ progress: WatchProgress) async throws {
     try await perform(.saveProgress) {
@@ -159,6 +177,25 @@ struct EmbyServerConnection: MediaServerConnection {
   /// Emby 没有 Jellyfin 的 trickplay 图集；若日后接入 Emby 的 BIF 缩略图，在这里返回图集地址。
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL? {
     nil
+  }
+
+  func libraryFolders() async throws -> [MediaLibraryFolder] {
+    try await perform(.readLibraries) { try await client.mediaFolders() }
+      .map { MediaLibraryFolder(id: $0.id, paths: $0.paths) }
+  }
+
+  func libraryProfiles() async throws -> [MediaLibraryProfile] {
+    try await perform(.readLibraries) { try await client.virtualFolders() }
+  }
+
+  /// 一部剧和一个媒体库在 Emby 上都是条目，按条目重新扫描；整个库另有接口。
+  func refreshLibrary(_ scope: MediaLibraryRefreshScope) async throws {
+    try await perform(.refreshLibrary) {
+      switch scope {
+      case .series(let id), .library(let id): try await client.refreshItem(id: id)
+      case .all: try await client.refreshAllLibraries()
+      }
+    }
   }
 
   /// 按外部编号搜索用的参数（Emby `AnyProviderIdEquals`，如 `tmdb.12345`），只取 Emby 自带刮削器会写的来源。

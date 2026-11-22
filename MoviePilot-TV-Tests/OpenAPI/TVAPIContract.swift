@@ -359,6 +359,7 @@ enum TVAPIContractCatalog {
     items.append(contentsOf: systemOperations)
     items.append(contentsOf: dashboardOperations)
     items.append(contentsOf: mediaOperations)
+    items.append(contentsOf: mediaMappingOperations(backendVersion: backendVersion))
     items.append(contentsOf: discoverOperations(backendVersion: backendVersion))
     items.append(contentsOf: personOperations)
     items.append(contentsOf: searchOperations(backendVersion: backendVersion))
@@ -573,6 +574,15 @@ enum TVAPIContractCatalog {
         coverage: read
       ),
       TVAPIOperationBuilder.get(
+        "/mediaserver/playing",
+        query: [
+          TVAPIParam.query("server", alwaysSent: true),
+          TVAPIParam.query("count", alwaysSent: true, type: .integer),
+        ],
+        dependedResponse: [TVAPIFields.field("percent", .number)],
+        coverage: read
+      ),
+      TVAPIOperationBuilder.get(
         "/mediaserver/exists",
         query: [
           TVAPIParam.query("media_source"),
@@ -585,6 +595,12 @@ enum TVAPIContractCatalog {
         dependedResponse: [TVAPIFields.field("item", .object)],
         coverage: read
       ),
+      TVAPIOperationBuilder.get(
+        "/mediaserver/play/{itemid}",
+        pathParams: [TVAPIParam.path("itemid")],
+        dependedResponse: [TVAPIFields.field("url", .string)],
+        coverage: [.urlProtocol, .unitDecoding]
+      ),
       TVAPIOperationBuilder.mutation(
         "POST",
         "/mediaserver/notexists",
@@ -592,6 +608,52 @@ enum TVAPIContractCatalog {
         coverage: read
       ),
     ]
+  }
+
+  private static func mediaMappingOperations(backendVersion: String?) -> [TVAPIOperation] {
+    guard BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: backendVersion) else {
+      return []
+    }
+    let mappingResponse = [
+      TVAPIFields.field("media_source", .string),
+      TVAPIFields.field("media_id", .string),
+      TVAPIFields.field("type", .string),
+      TVAPIFields.field("tmdb_id", .integer),
+      TVAPIFields.field("tmdb_type", .string),
+      TVAPIFields.field("tmdb_season", .integer),
+    ]
+    var operations = [
+      TVAPIOperationBuilder.get(
+        "/media/mapping",
+        query: [
+          TVAPIParam.query("media_source", alwaysSent: true),
+          TVAPIParam.query("media_id", alwaysSent: true),
+          TVAPIParam.query("type", alwaysSent: true),
+          TVAPIParam.query("season", type: .integer),
+        ],
+        dependedResponse: mappingResponse,
+        coverage: readDecode,
+        notes: ">= v3.2.7；非 TMDB 来源到 TMDB 的共享映射，未命中返回 data: null"
+      )
+    ]
+    if BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: backendVersion) {
+      operations.append(
+        TVAPIOperationBuilder.mutation(
+          "POST",
+          "/media/mapping/match",
+          body: [
+            TVAPIFields.field("media_source", .string, required: true),
+            TVAPIFields.field("media_id", .string, required: true),
+            TVAPIFields.field("type", .string, required: true),
+            TVAPIFields.field("season", .integer),
+          ],
+          dependedResponse: mappingResponse,
+          coverage: readDecode,
+          notes: ">= v3.2.9；共享映射未命中后按需查找，未命中返回 data: null；TV 只在 GET 未命中或失败时调用"
+        )
+      )
+    }
+    return operations
   }
 
   private static func discoverOperations(backendVersion: String?) -> [TVAPIOperation] {
@@ -944,6 +1006,22 @@ enum TVAPIContractCatalog {
 
   private static var transferOperations: [TVAPIOperation] {
     [
+      // 发起单集试看要求 v3.2.10。下载历史和整理队列用于跟踪目标集，登记方式同搜索批次。
+      TVAPIOperationBuilder.get(
+        "/history/download",
+        query: [
+          TVAPIParam.query("page", alwaysSent: true, type: .integer),
+          TVAPIParam.query("count", alwaysSent: true, type: .integer),
+        ],
+        coverage: mutationUnit
+      ),
+      TVAPIOperationBuilder.get("/transfer/queue", coverage: mutationUnit),
+      // 发起试看要求 v3.2.10。本机试看可催 MoviePilot 整理（`jobid=transfer`，同 Web 服务页的「执行」）。
+      TVAPIOperationBuilder.get(
+        "/system/runscheduler",
+        query: [TVAPIParam.query("jobid", alwaysSent: true)],
+        coverage: mutationUnit
+      ),
       TVAPIOperationBuilder.get(
         "/history/transfer",
         query: [
@@ -1110,6 +1188,21 @@ enum TVAPIContractCatalog {
         "/subscribe/search/{subscribe_id}",
         pathParams: [TVAPIParam.path("subscribe_id", type: .integer)],
         coverage: sideEffect
+      ),
+      // 单集试看跟踪搜索批次。发起受 EpisodeTrialAvailability（>= v3.2.10）限制，但收尾（推进、取消、删除已有
+      // 试看）走 managingAPI()，只要求管理员、不查版本：版本读不出或后端降级时照样调用。所以两个批次端点都对
+      // 所有版本登记，按试看门禁登记会漏掉收尾路径。
+      TVAPIOperationBuilder.get(
+        "/subscribe/execution/batches/{batch_id}",
+        pathParams: [TVAPIParam.path("batch_id")],
+        coverage: mutationUnit
+      ),
+      // 取消试看时停掉它的搜索；只要求管理员，不受试看版本门禁限制。
+      TVAPIOperationBuilder.mutation(
+        "PUT",
+        "/subscribe/execution/batches/{batch_id}/cancel",
+        pathParams: [TVAPIParam.path("batch_id")],
+        coverage: mutationUnit
       ),
       TVAPIOperationBuilder.mutation(
         "POST",

@@ -63,6 +63,12 @@ struct StatusView: View {
 
       }
     }
+    // 挂在 ScrollView 外：整理历史很长时，加载框也居中在当前可视区域，不会随列表滚出屏幕。
+    .overlay {
+      if transferHistoryViewModel.isMutatingHistory {
+        BlockingProgressOverlay(text: transferHistoryViewModel.mutationProgressText)
+      }
+    }
     .task(id: isSelected) {
       guard isSelected else { return }
       /// 核心异步刷新逻辑：

@@ -56,152 +56,166 @@ enum MediaTypePresentation {
   }
 }
 
+/// 图片上徽标的托底：有徽标的上沿或下沿铺一条由深到透明的浅渐变，不给每个徽标单独垫底座。
+/// 只轻轻压一点，白色粗体徽标在亮图上也能分出来，不让图片边缘发黑。海报和单集剧照共用。
+enum ImageBadgeScrim {
+  /// 徽标离图片边缘的距离；卡片圆角 20pt，内容内收后与圆角协调。
+  static let inset: CGFloat = 14
+  /// 由边缘向内的渐变，`location` 0 在图片边缘。
+  static let gradient = Gradient(stops: [
+    .init(color: .black.opacity(0.35), location: 0),
+    .init(color: .black.opacity(0.15), location: 0.45),
+    .init(color: .black.opacity(0), location: 1),
+  ])
+
+  /// 渐变的高度：80pt，最多占图片高度的三成。
+  static func height(forImageHeight imageHeight: CGFloat) -> CGFloat {
+    min(80, imageHeight * 0.3)
+  }
+
+  /// 下沿有状态文字（还差几集、已订阅等）时用的深一档渐变：只压文字后面那一窄条。
+  /// 文字是要读清楚的整句，在颜色杂的海报上浅渐变压不住；图标类徽标仍用浅的。
+  static let textGradient = Gradient(stops: [
+    .init(color: .black.opacity(0.65), location: 0),
+    .init(color: .black.opacity(0.5), location: 0.55),
+    .init(color: .black.opacity(0), location: 1),
+  ])
+
+  /// 深一档渐变的高度：70pt，盖住一行状态文字后很快淡完，最多占图片高度的三成。
+  static func textHeight(forImageHeight imageHeight: CGFloat) -> CGFloat {
+    min(70, imageHeight * 0.3)
+  }
+
+  /// 铺在图片下沿的渐变，作为图片上的一层放进 ZStack。
+  static func bottomLayer(imageHeight: CGFloat) -> some View {
+    LinearGradient(gradient: gradient, startPoint: .bottom, endPoint: .top)
+      .frame(height: height(forImageHeight: imageHeight))
+      .frame(maxHeight: .infinity, alignment: .bottom)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+  }
+}
+
+/// 海报四角的徽标：图标和文字直接压在图上，有徽标的那一边铺 `ImageBadgeScrim` 托底。
+/// 全部画在一个 Canvas 里，不依赖聚焦状态，滚动和聚焦时不重画，也不用模糊、材质或阴影。
 private struct BadgeOverlay: View, Equatable {
   let typeText: String?
   let ratingText: String?
   let bottomLeftText: String?
   let bottomLeftSecondaryText: String?
   let source: MediaSource?
+  /// 左下角最前面的图标（如按下会跳到媒体服务器 App 的跳转图标）。
+  var bottomLeftIcon: String? = nil
+
+  private var hasRating: Bool {
+    guard let ratingText, !ratingText.isEmpty, let score = Double(ratingText) else { return false }
+    return score > 0
+  }
 
   var body: some View {
     Canvas { context, size in
-      let badgeBg = Color.black.opacity(0.4)
-      let cornerRadius: CGFloat = 8
-      let padding: CGFloat = 10
-      // 注意：UIFont 属于 UIKit，不直接用于 SwiftUI Canvas 的文本绘制。
-      // Canvas 中的文本绘制使用 SwiftUI 的 Text 或 context.draw(Text(...))。
-      // 这里的字体变量仅用于说明，并未直接应用在下方的 Canvas 绘制逻辑中。
-      // 对于实际的文本样式，由 symbols 块中的 Text 视图处理。
-      // let font = UIFont.systemFont(ofSize: 14, weight: .bold)
-      // let smallFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+      let inset = ImageBadgeScrim.inset
+      let scrimHeight = ImageBadgeScrim.height(forImageHeight: size.height)
 
-      // 左上：媒体类型徽章
-      // 媒体类型图标从 symbols 中解析，symbols 已经配置了正确的字体和前景色。
-      if let symbol = context.resolveSymbol(id: "typeIcon") {
-        // 根据 symbol 大小和所需边距计算徽章大小
-        let badgeContentWidth = symbol.size.width
-        let badgeContentHeight = symbol.size.height
-        let horizontalPadding: CGFloat = 16  // 每侧 8px
-        let verticalPadding: CGFloat = 16  // 每侧 8px
-        let badgeSize = CGSize(
-          width: badgeContentWidth + horizontalPadding,
-          height: badgeContentHeight + verticalPadding
-        )
-        let badgeRect = CGRect(
-          origin: CGPoint(x: padding, y: padding), size: badgeSize)
+      let typeSymbol = context.resolveSymbol(id: "typeIcon")
+      let starSymbol = context.resolveSymbol(id: "ratingStar")
+      let ratingLabel = context.resolveSymbol(id: "ratingText")
+      let statusLabel = context.resolveSymbol(id: "statusText")
+      let secondaryLabel = context.resolveSymbol(id: "secondaryText")
+      let sourceIcon = context.resolveSymbol(id: "sourceIcon")
+      let leadingIcon = context.resolveSymbol(id: "bottomLeftIcon")
+
+      let hasTop = typeSymbol != nil || (starSymbol != nil && ratingLabel != nil)
+      let hasBottom = statusLabel != nil || secondaryLabel != nil || sourceIcon != nil || leadingIcon != nil
+
+      // 渐变托底：只画有徽标的那一边。
+      if hasTop {
         context.fill(
-          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-          with: .color(badgeBg))
-        context.draw(
-          symbol,
-          at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+          Path(CGRect(x: 0, y: 0, width: size.width, height: scrimHeight)),
+          with: .linearGradient(
+            ImageBadgeScrim.gradient,
+            startPoint: .zero,
+            endPoint: CGPoint(x: 0, y: scrimHeight)
+          )
+        )
+      }
+      if hasBottom {
+        // 有状态文字时压深一档，只有来源图标时用浅的。
+        let hasBottomText = statusLabel != nil || secondaryLabel != nil
+        let bottomHeight = hasBottomText ? ImageBadgeScrim.textHeight(forImageHeight: size.height) : scrimHeight
+        context.fill(
+          Path(CGRect(x: 0, y: size.height - bottomHeight, width: size.width, height: bottomHeight)),
+          with: .linearGradient(
+            hasBottomText ? ImageBadgeScrim.textGradient : ImageBadgeScrim.gradient,
+            startPoint: CGPoint(x: 0, y: size.height),
+            endPoint: CGPoint(x: 0, y: size.height - bottomHeight)
+          )
+        )
       }
 
-      // 右上：评分徽章
-      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0,
-        let starSymbol = context.resolveSymbol(id: "ratingStar"),
-        let ratingLabel = context.resolveSymbol(id: "ratingText")
-      {
-        let starWidth = starSymbol.size.width
-        let ratingTextWidth = ratingLabel.size.width
-        let contentSpacing: CGFloat = 4
-        let horizontalPadding: CGFloat = 20  // 每侧 10px
-        let verticalPadding: CGFloat = 12  // 每侧 6px
+      // 左上：媒体类型（图标或文字）。
+      if let typeSymbol {
+        context.draw(typeSymbol, at: CGPoint(x: inset, y: inset), anchor: .topLeading)
+      }
 
-        let contentWidth = starWidth + contentSpacing + ratingTextWidth
-        let contentHeight = max(starSymbol.size.height, ratingLabel.size.height)
-
-        let badgeSize = CGSize(
-          width: contentWidth + horizontalPadding, height: contentHeight + verticalPadding)
-        let badgeRect = CGRect(
-          origin: CGPoint(x: size.width - padding - badgeSize.width, y: padding),
-          size: badgeSize)
-        context.fill(
-          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-          with: .color(badgeBg))
-
-        // 在徽章内居中绘制星星和文本
-        let startX = badgeRect.minX + horizontalPadding / 2
+      // 右上：评分，星星在左、分数在右。
+      if let starSymbol, let ratingLabel {
+        let spacing: CGFloat = 6
+        let rowHeight = max(starSymbol.size.height, ratingLabel.size.height)
+        let midY = inset + rowHeight / 2
+        let labelMaxX = size.width - inset
+        context.draw(ratingLabel, at: CGPoint(x: labelMaxX, y: midY), anchor: .trailing)
         context.draw(
           starSymbol,
-          at: CGPoint(
-            x: startX + starWidth / 2,
-            y: badgeRect.midY))
-        context.draw(
-          ratingLabel,
-          at: CGPoint(
-            x: startX + starWidth + contentSpacing + ratingTextWidth / 2,
-            y: badgeRect.midY))
+          at: CGPoint(x: labelMaxX - ratingLabel.size.width - spacing, y: midY),
+          anchor: .trailing
+        )
       }
 
-      // 底部区域
-      if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
-        var xOffset: CGFloat = padding
+      // 底部一行：左边主要、次要状态，右边来源图标，按同一条中线对齐。
+      if hasBottom {
+        let rowHeight = max(
+          statusLabel?.size.height ?? 0,
+          secondaryLabel?.size.height ?? 0,
+          sourceIcon?.size.height ?? 0,
+          leadingIcon?.size.height ?? 0
+        )
+        let midY = size.height - inset - rowHeight / 2
+        var x = inset
 
-        // 左下：状态徽章
-        if let statusLabel = context.resolveSymbol(id: "statusText") {
-          let horizontalPadding: CGFloat = 20  // 每侧 10px
-          let verticalPadding: CGFloat = 12  // 每侧 6px
-          let badgeSize = CGSize(
-            width: statusLabel.size.width + horizontalPadding,
-            height: statusLabel.size.height + verticalPadding
-          )
-          let badgeRect = CGRect(
-            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
-            size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
-          context.draw(statusLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
-          xOffset = badgeRect.maxX + 6
+        if let leadingIcon {
+          context.draw(leadingIcon, at: CGPoint(x: x, y: midY), anchor: .leading)
+          x += leadingIcon.size.width + 10
         }
-
-        // 左下次要状态
-        if let secondaryLabel = context.resolveSymbol(id: "secondaryText") {
-          let horizontalPadding: CGFloat = 20  // 每侧 10px
-          let verticalPadding: CGFloat = 12  // 每侧 6px
-          let badgeSize = CGSize(
-            width: secondaryLabel.size.width + horizontalPadding,
-            height: secondaryLabel.size.height + verticalPadding
-          )
-          let badgeRect = CGRect(
-            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
-            size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
-          context.draw(secondaryLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+        if let statusLabel {
+          context.draw(statusLabel, at: CGPoint(x: x, y: midY), anchor: .leading)
+          x += statusLabel.size.width + 12
         }
-
-        // 右下：来源图标
-        if let sourceIcon = context.resolveSymbol(id: "sourceIcon") {
-          // 绘制图标前应用阴影
-          context.addFilter(.shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1))
-          context.draw(
-            sourceIcon,
-            at: CGPoint(
-              x: size.width - padding - sourceIcon.size.width / 2 - 6,  // 考虑了边距和图标自身的内部间距
-              y: size.height - padding - sourceIcon.size.height / 2 - 2))  // 考虑了边距和图标自身的内部间距
+        if let secondaryLabel {
+          context.draw(secondaryLabel, at: CGPoint(x: x, y: midY), anchor: .leading)
+        }
+        if let sourceIcon {
+          context.draw(sourceIcon, at: CGPoint(x: size.width - inset, y: midY), anchor: .trailing)
         }
       }
     } symbols: {
-      // 通过 symbols 提供需要的 SwiftUI 内容（仅创建一次，不参与 view tree diffing）
-      Group {
-        if let type = typeText, !type.isEmpty {
+      // 徽标内容直接压在渐变上，统一用粗体提高可读性。
+      if let type = typeText, !type.isEmpty {
+        Group {
           if let typeIcon = MediaTypePresentation.badgeIconName(for: type) {
             Image(systemName: typeIcon)
           } else {
             Text(type)
           }
         }
+        .font(.caption2.bold())
+        .foregroundStyle(.white)
+        .tag("typeIcon")
       }
-      .font(.caption2.bold())
-      .foregroundStyle(.white)
-      .tag("typeIcon")
 
-      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0 {
+      if hasRating, let rating = ratingText {
         Image(systemName: AppSymbol.rating)
-          .font(.caption2)
+          .font(.caption2.bold())
           .foregroundStyle(.yellow)
           .tag("ratingStar")
 
@@ -213,35 +227,44 @@ private struct BadgeOverlay: View, Equatable {
 
       if let status = bottomLeftText, !status.isEmpty {
         Text(status)
-          .font(.caption2)
+          .font(.caption2.bold())
           .foregroundStyle(.white)
+          .lineLimit(1)
           .tag("statusText")
       }
 
       if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
         Text(secondary)
-          .font(.caption2)
-          .foregroundStyle(.white)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.white.opacity(0.8))
+          .lineLimit(1)
           .tag("secondaryText")
       }
 
-      if let source = source {
+      if let bottomLeftIcon {
+        Image(systemName: bottomLeftIcon)
+          .font(.caption.bold())
+          .foregroundStyle(.white)
+          .tag("bottomLeftIcon")
+      }
+
+      if let source {
         Image(source.assetName)
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 36, height: 36)
-          .padding(.horizontal, 2)
-          .padding(.vertical, 2)
           .tag("sourceIcon")
       }
     }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 
   static func == (lhs: BadgeOverlay, rhs: BadgeOverlay) -> Bool {
     lhs.typeText == rhs.typeText && lhs.ratingText == rhs.ratingText
       && lhs.bottomLeftText == rhs.bottomLeftText
       && lhs.bottomLeftSecondaryText == rhs.bottomLeftSecondaryText
-      && lhs.source == rhs.source
+      && lhs.source == rhs.source && lhs.bottomLeftIcon == rhs.bottomLeftIcon
   }
 }
 
@@ -251,6 +274,12 @@ struct MediaCard: View {
   static func posterProcessor(for downsamplingSize: CGSize) -> any ImageProcessor {
     DownsamplingImageProcessor(size: downsamplingSize)
       |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
+  }
+
+  /// 服务端缩略该请求的 `maxWidth`：降采样取卡片点数的长边，`posterContent` 没传 `.scaleFactor`，
+  /// Kingfisher 默认 1.0。请求比这更大的像素会被客户端降采样扔掉，只多花下载和解码。
+  static func posterThumbnailMaxWidth(for downsamplingSize: CGSize) -> Int {
+    Int(ceil(max(downsamplingSize.width, downsamplingSize.height)))
   }
 
   static let defaultGridColumns = DetailExpansionGridLayout.columns(width: defaultPosterSize.width, count: 6)
@@ -266,6 +295,8 @@ struct MediaCard: View {
   let bottomLeftText: String?  // 左下角：主要状态 (例如 "已订阅")
   let bottomLeftSecondaryText: String?  // 左下角：次要状态 (例如 "更新至 10 集")
   let source: MediaSource?  // 右下角：数据源图标
+  /// 左下角最前面的图标：按下会离开本 App（跳到媒体服务器 App）时显示跳转图标。
+  var bottomLeftIcon: String? = nil
 
   var showBadges: Bool = true
   var loadsImage: Bool = true
@@ -283,13 +314,11 @@ struct MediaCard: View {
   /// 是否对背景图片应用模糊效果。主要用于类似“查看全部”等特殊展示。
   var isBackgroundBlurred: Bool = false
 
-  /// 聚焦时显示的标签，通常用于“点击订阅”等操作。
-  /// 如果提供，则始终保留空间以防止布局抖动。
-  var footerLabel: (icon: String, text: String)? = nil
-
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
   var onFocus: ((Bool) -> Void)? = nil
+  /// 海报读不出来（没有地址或加载失败）时调用一次，调用方可以找一张替代的海报，从 `posterFallbackUrl` 传进来。
+  var onPosterUnavailable: (() -> Void)? = nil
 
   init(
     title: String = "",
@@ -300,15 +329,16 @@ struct MediaCard: View {
     bottomLeftText: String? = nil,
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
+    bottomLeftIcon: String? = nil,
     showBadges: Bool = true,
     loadsImage: Bool = true,
     width: CGFloat = defaultPosterSize.width,
     height: CGFloat = defaultPosterSize.height,
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
-    footerLabel: (icon: String, text: String)? = nil,
     action: (() -> Void)? = nil,
-    onFocus: ((Bool) -> Void)? = nil
+    onFocus: ((Bool) -> Void)? = nil,
+    onPosterUnavailable: (() -> Void)? = nil
   ) {
     self.title = title
     self.posterUrl = posterUrl
@@ -318,39 +348,38 @@ struct MediaCard: View {
     self.bottomLeftText = bottomLeftText
     self.bottomLeftSecondaryText = bottomLeftSecondaryText
     self.source = source
+    self.bottomLeftIcon = bottomLeftIcon
     self.showBadges = showBadges
     self.loadsImage = loadsImage
     self.width = width
     self.height = height
     self.subTitleBelow = subTitleBelow
     self.isBackgroundBlurred = isBackgroundBlurred
-    self.footerLabel = footerLabel
     self.action = action
     self.onFocus = onFocus
+    self.onPosterUnavailable = onPosterUnavailable
   }
 
   var body: some View {
     VStack(spacing: 10) {
-      // 海报图片
-      posterContent
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(
-          color: .black.opacity(isFocused ? 0.5 : 0),
-          radius: 20,
-          y: 10
-        )
-        .scaleEffect(isFocused ? 1.1 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
-        .focusable(true)
-        .focused($isFocused)
-        .onTapGesture {
-          action?()
-        }
+      Button {
+        action?()
+      } label: {
+        posterContent
+          .frame(width: width, height: height)
+          .posterCardFocusLift(isFocused: isFocused, width: width)
+      }
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
+      .focused($isFocused)
+      .accessibilityLabel(title)
 
       // 标题和副标题 - 在按钮外部，清晰分离
       textInfoView
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
     .onChange(of: isFocused) { _, newValue in
       onFocus?(newValue)
     }
@@ -358,38 +387,22 @@ struct MediaCard: View {
 
   // 提取文本内容以实现统一动画
   private var textInfoView: some View {
-    VStack(spacing: 4) {
-      VStack {
-        Text(title)
-          .font(.caption)
-          .foregroundStyle(isFocused ? .primary : .secondary)
+    VStack {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(isFocused ? .primary : .secondary)
 
-        // 仅在明确提供 subTitleBelow 时显示
-        if let subTitleBelow = subTitleBelow, !subTitleBelow.isEmpty {
-          Text(subTitleBelow)
-            .font(.caption2)
-            .foregroundStyle(isFocused ? .secondary : .tertiary)
-        }
-
-        // 页脚标签 (保留空间以避免布局抖动)
-        if let footer = footerLabel {
-          HStack(spacing: 4) {
-            Image(systemName: footer.icon)
-            Text(footer.text)
-          }
-          .font(.caption)
-          .foregroundStyle(.primary)
-          .opacity(isFocused ? 1 : 0)
-        }
+      // 仅在明确提供 subTitleBelow 时显示
+      if let subTitleBelow = subTitleBelow, !subTitleBelow.isEmpty {
+        Text(subTitleBelow)
+          .font(.caption2)
+          .foregroundStyle(isFocused ? .secondary : .tertiary)
       }
-      .lineLimit(1)
-      .compositingGroup()
-      .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
     }
-    .frame(width: width + 30)
-    .padding(.horizontal, -15)
-    .offset(y: isFocused ? 18 : 0)
-    .animation(.easeInOut(duration: 0.2), value: isFocused)
+    .lineLimit(1)
+    .compositingGroup()
+    .posterCardTitleLayout(
+      isFocused: isFocused, width: width, imageSize: CGSize(width: width, height: height))
   }
 
   // 提取的海报内容 - Apple TV 风格设计
@@ -406,14 +419,16 @@ struct MediaCard: View {
         )
 
       PageManagedImage(
-        url: posterLoadFailed ? posterFallbackUrl : posterUrl,
+        url: posterLoadFailed || posterUrl == nil ? posterFallbackUrl : posterUrl,
         processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
         isEnabled: loadsImage,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
         onFailure: {
           // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+          guard !posterLoadFailed, posterUrl != nil else { return }
           posterLoadFailed = true
+          onPosterUnavailable?()
         }
       )
     }
@@ -421,15 +436,22 @@ struct MediaCard: View {
     .onChange(of: posterUrl) { _, _ in
       posterLoadFailed = false
     }
+    .onAppear {
+      if posterUrl == nil, loadsImage { onPosterUnavailable?() }
+    }
+    .onChange(of: loadsImage) { _, loads in
+      if posterUrl == nil, loads { onPosterUnavailable?() }
+    }
     .overlay {
       if showBadges {
-        // 覆盖徽章 - 纯色浅黑风格
+        // 四角徽标：渐变托底，不垫底座
         BadgeOverlay(
           typeText: typeText,
           ratingText: ratingText,
           bottomLeftText: bottomLeftText,
           bottomLeftSecondaryText: bottomLeftSecondaryText,
-          source: source
+          source: source,
+          bottomLeftIcon: bottomLeftIcon
         )
         .equatable()
       }

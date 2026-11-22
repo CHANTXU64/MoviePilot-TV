@@ -182,9 +182,15 @@ struct SearchView: View {
                 if viewModel.searchProgress > 0 {
                   ProgressView(value: viewModel.searchProgress, total: 100)
                     .progressViewStyle(.linear)
-                    .frame(width: 300)
+                    .frame(width: 360)
+                }
+                Button("取消") {
+                  viewModel.cancelResourceSearch()
                 }
               }
+              // 与分页搜索一致：搜索类型按钮不在中线，单独成焦点区，往下按才能落到居中的「取消」。
+              .frame(maxWidth: .infinity)
+              .focusSection()
             } else {
               ProgressView()
             }
@@ -436,6 +442,7 @@ private struct ResultRow: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -478,7 +485,7 @@ private struct ResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(height: 384)
+            RowLoadingTail(height: 384)
           }
         }
         .padding(.top, 25)
@@ -510,15 +517,7 @@ private struct ResultRow: View {
       .scrollClipDisabled()
       .focusSection()
     }
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
-    }
+    .focusLiftRow(cardImageSize: MediaCard.defaultPosterSize)
   }
 }
 
@@ -543,6 +542,7 @@ private struct PersonResultRow: View {
         .font(.callout)
         .bold()
         .foregroundStyle(.secondary)
+        .focusLiftHeaderPart()
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
@@ -577,7 +577,7 @@ private struct PersonResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(height: 315)
+            RowLoadingTail(height: 315)
           }
         }
         .padding(.top, 25)
@@ -597,15 +597,7 @@ private struct PersonResultRow: View {
       .scrollClipDisabled()
       .focusSection()
     }
-  }
-
-  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
-    VStack(spacing: 10) {
-      ProgressView()
-        .frame(width: 100, height: height)
-      Color.clear
-        .frame(width: 100, height: 44)
-    }
+    .focusLiftRow(cardImageSize: PersonCard.imageSize)
   }
 }
 

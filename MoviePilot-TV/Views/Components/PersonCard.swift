@@ -38,49 +38,43 @@ struct PersonCard: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      posterContent
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(
-          color: .black.opacity(isFocused ? 0.5 : 0),
-          radius: 20,
-          y: 10
-        )
-        .scaleEffect(isFocused ? 1.1 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
-        .focusable(true)
-        .focused($isFocused)
-        .onTapGesture {
-          action?()
-        }
+      Button {
+        action?()
+      } label: {
+        posterContent
+          .frame(width: width, height: height)
+          .posterCardFocusLift(isFocused: isFocused, width: width)
+      }
+      .buttonStyle(PosterCardButtonStyle())
+      .focusEffectDisabled()
+      .focused($isFocused)
+      .accessibilityLabel(person.name ?? "未知")
 
       textInfoView
     }
+    .posterCardFocusAnimation(isFocused: isFocused)
+    // 放进页头上移的横排时自动参与，见 `FocusLiftRowHeader`。
+    .focusLiftCard(isFocused: isFocused)
   }
 
   private var textInfoView: some View {
-    VStack(spacing: 4) {
-      VStack {
-        Text(person.name ?? "未知")
-          .font(.caption)
-          .foregroundStyle(isFocused ? .primary : .secondary)
+    VStack {
+      Text(person.name ?? "未知")
+        .font(.caption)
+        .foregroundStyle(isFocused ? .primary : .secondary)
 
-        if let subtitle = (person.job != nil && !person.job!.isEmpty)
-          ? person.job : person.character, !subtitle.isEmpty
-        {
-          Text(subtitle)
-            .font(.caption2)
-            .foregroundStyle(isFocused ? .secondary : .tertiary)
-        }
+      if let subtitle = (person.job != nil && !person.job!.isEmpty)
+        ? person.job : person.character, !subtitle.isEmpty
+      {
+        Text(subtitle)
+          .font(.caption2)
+          .foregroundStyle(isFocused ? .secondary : .tertiary)
       }
-      .lineLimit(1)
-      .compositingGroup()
-      .frame(maxWidth: isFocused ? width + 20 : width, alignment: .center)
     }
-    .frame(width: width + 20)
-    .padding(.horizontal, -10)
-    .offset(y: isFocused ? 16 : 0)
-    .animation(.easeInOut(duration: 0.2), value: isFocused)
+    .lineLimit(1)
+    .compositingGroup()
+    .posterCardTitleLayout(
+      isFocused: isFocused, width: width, imageSize: CGSize(width: width, height: height))
   }
 
   private var posterContent: some View {

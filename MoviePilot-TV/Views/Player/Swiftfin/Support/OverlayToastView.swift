@@ -8,7 +8,7 @@
 // 本文件改自 Swiftfin：Shared/Components/OverlayToastView.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：工程开启 MemberImportVisibility，补 `import Combine`。
+// 修改：工程开启 MemberImportVisibility，补 `import Combine`；底换成播放界面统一的玻璃底（`PlayerGlassBackground`），各系统版本同一套。
 //
 
 import Combine
@@ -112,11 +112,7 @@ struct OverlayToastContent: View {
         }
         .padding(contentPadding)
         .frame(minHeight: minHeight)
-        .backport
-        .glassEffect(
-            .regular.interactive(!viewLayout.isLarge),
-            in: .capsule
-        )
+        .background { PlayerGlassBackground(shape: Capsule()) }
     }
 
     private var contentPadding: EdgeInsets {

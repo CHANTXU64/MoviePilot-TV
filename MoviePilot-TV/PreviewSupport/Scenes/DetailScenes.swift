@@ -55,11 +55,25 @@ enum UIPreviewScenesDetail {
         .page(
           id: "detail.movieInLibrary",
           title: "详情 · 电影已订阅且入库",
-          note: "订阅状态命中且媒体服务器存在条目，头部显示「已订阅（已入库）」。",
+          note:
+            "订阅状态命中且媒体服务器存在条目：头部显示「已订阅」，TMDB 后面多一个圆形「跳转媒体库」按钮（Emby 深链由 `/mediaserver/play` 返回的网页地址换算）。",
           environment: detailEnvironment(context: [
             UIPreviewDetailContext.subscription: "subscribed",
             UIPreviewDetailContext.libraryItem: "1",
           ])
+        ) {
+          UIPreviewDetailSceneRoot(media: movie)
+        },
+        .page(
+          id: "detail.libraryJumpFailure",
+          title: "详情 · 跳转媒体库地址读取失败",
+          note:
+            "已入库但 `/mediaserver/play` 失败：拿不到 App 深链，圆形「跳转媒体库」按钮不出现，订阅与 TMDB 按钮照常可用。",
+          environment: detailEnvironment(context: [
+            UIPreviewDetailContext.subscription: "subscribed",
+            UIPreviewDetailContext.libraryItem: "1",
+          ]),
+          behaviors: [UIPreviewBehaviorKey.detailMediaServerPlayLink: .failure]
         ) {
           UIPreviewDetailSceneRoot(media: movie)
         },

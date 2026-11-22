@@ -1,9 +1,9 @@
 #if DEBUG
 import SwiftUI
 
-/// 播放呈现流程场景：起播解析遮罩与续播询问。
+/// 播放呈现流程场景：起播解析遮罩。
 ///
-/// 复用真实 `PlaybackPresentationModifier`（遮罩、禁用底层页面、确认弹窗），
+/// 复用真实 `PlaybackPresentationModifier`（黑屏、转圈、禁用底层页面、Menu 取消），
 /// 只通过 `PlaybackCoordinator` 的 DEBUG seam 安装呈现状态，不发起真实起播。
 @MainActor
 enum UIPreviewScenesPlaybackFlow {
@@ -15,36 +15,18 @@ enum UIPreviewScenesPlaybackFlow {
         .page(
           id: "player.resolve.loading",
           title: "起播解析中",
-          note: "点击播放后的“正在准备播放…”遮罩与取消按钮，底层页面被禁用，按 Menu 也可取消。",
+          note: "按下播放后的准备态：页面淡出为黑屏，正中一个放大的转圈，不带文字；底层页面被禁用，按 Menu 取消准备。预览用守护任务保持这一帧，按 Menu 也会真的取消回首页。",
           environment: .playback
         ) {
-          UIPreviewPlaybackFlowScene(presentation: .resolving)
-        },
-        .page(
-          id: "player.resume.prompt",
-          title: "续播询问",
-          note: "媒体有观看进度时的“从 12:34 继续播放 / 从头播放 / 取消”确认弹窗。",
-          environment: .playback
-        ) {
-          UIPreviewPlaybackFlowScene(presentation: .resumePrompt)
-        },
+          UIPreviewPlaybackFlowScene()
+        }
       ]
     )
   }
 }
 
 private struct UIPreviewPlaybackFlowScene: View {
-  enum Presentation {
-    case resolving
-    case resumePrompt
-  }
-
-  private let presentation: Presentation
   @State private var coordinator: PlaybackCoordinator?
-
-  init(presentation: Presentation) {
-    self.presentation = presentation
-  }
 
   var body: some View {
     Group {
@@ -58,15 +40,11 @@ private struct UIPreviewPlaybackFlowScene: View {
     .onAppear {
       guard coordinator == nil else { return }
       let coordinator = PlaybackCoordinator(apiService: APIService.shared)
-      switch presentation {
-      case .resolving:
-        coordinator.installUIPreviewPresentation(isResolving: true)
-      case .resumePrompt:
-        coordinator.installUIPreviewPresentation(
-          resumePrompt: UIPreviewPlaybackFlowFixtures.resumePrompt()
-        )
-      }
+      coordinator.installUIPreviewResolving()
       self.coordinator = coordinator
+    }
+    .onDisappear {
+      coordinator?.clearUIPreviewResolving()
     }
   }
 }
