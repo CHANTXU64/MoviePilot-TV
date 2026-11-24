@@ -167,6 +167,15 @@ private struct PlaceholderShimmer: ViewModifier {
   }
 }
 
+private nonisolated struct MediaDetailEntryScrollTarget: ScrollTargetBehavior {
+  let holdsHeroAtTop: Bool
+
+  func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+    guard holdsHeroAtTop, context.axes.contains(.vertical) else { return }
+    target.rect.origin.y = 0
+  }
+}
+
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @State private var subscriptionHandler = SubscriptionHandler()
@@ -210,6 +219,7 @@ struct MediaDetailView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
   @State private var showContentPage = false
+  @State private var didReceiveInitialFocus = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
   /// TMDB 按钮按下后的识别与跳转；离开页面时取消。
@@ -636,6 +646,7 @@ struct MediaDetailView: View {
             .animation(Self.pageTransitionAnimation, value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
               guard focused else { return }
+              didReceiveInitialFocus = true
               imageLifecycle.setDetailBackdropVisible(true)
               withAnimation(Self.pageTransitionAnimation) {
                 showContentPage = false
@@ -644,6 +655,7 @@ struct MediaDetailView: View {
             }
             .onChange(of: isContentFocused) { _, focused in
               guard focused, !showContentPage else { return }
+              didReceiveInitialFocus = true
               withAnimation(Self.pageTransitionAnimation) {
                 showContentPage = true
               }
@@ -662,6 +674,10 @@ struct MediaDetailView: View {
               .frame(height: UIScreen.main.bounds.height)
           }
         }
+        // 首个焦点进入详情前，让滚动目标停在 Hero 顶部。之后由正常焦点移动驱动翻页。
+        .scrollTargetBehavior(MediaDetailEntryScrollTarget(
+          holdsHeroAtTop: presentationStyle == .standard && !didReceiveInitialFocus
+        ))
       }
     }
     .disabled(!allowsRequests && presentationStyle == .standard)
