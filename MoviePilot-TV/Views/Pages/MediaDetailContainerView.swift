@@ -24,7 +24,8 @@ nonisolated enum MediaDetailLoadingCover {
 
 /// 媒体详情的容器视图。
 /// 入口采用渐进渲染：立即渲染 MediaDetailView（完整详情未到先用卡片媒体），
-/// 标题 move-in、固定按钮胶囊在但文案透明不可按、可变槽位就地占位；就绪后仅可变内容淡入。
+/// 标题原地显示、固定按钮胶囊在但文案透明不可按、可变槽位就地占位；就绪后仅可变内容淡入，
+/// 标题的位置变化只来自真实文本撑高。
 /// 不再用整块交叉淡入的遮罩盖住文字。
 struct MediaDetailContainerView: View {
   let media: MediaInfo
