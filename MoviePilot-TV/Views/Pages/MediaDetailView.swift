@@ -261,6 +261,15 @@ struct MediaDetailView: View {
     case play, subscribe, search, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
+  /// Hero 里另外两个可聚焦按钮：TMDB、跳转媒体库。
+  ///
+  /// 它们不进 `ButtonField`：那个枚举是「首选焦点 / 播放后焦点恢复」的目标集合，TMDB 识别期与
+  /// 播放返回都不该把焦点写到这两个按钮上。但判断「焦点是否还在头部按钮上」时必须算上它们，
+  /// 否则焦点停在这两个按钮上时第二页会被误锁。
+  enum AuxiliaryHeaderField {
+    case tmdb, library
+  }
+  @FocusState private var focusedAuxiliaryHeader: AuxiliaryHeaderField?
   @Environment(\.playbackFocusHandoff) private var playbackFocusHandoff
   /// 播放结束后等着把焦点补写回「播放」（见 `playbackFocusReturn`）。
   @State private var playButtonRestore = PlaybackFocusRestore<ButtonField>()
@@ -328,6 +337,18 @@ struct MediaDetailView: View {
   }
 
   private static let pageTransitionAnimation = Animation.easeInOut(duration: 0.6)
+
+  /// 第一页显示、焦点又不在头部按钮上（例如停在顶部 Tab 栏）时，第二页的行要退出焦点树。
+  ///
+  /// 从 Tab 栏下移时，落点是按几何在正下方找最近的可聚焦项：第二页的行横贯整宽，任何 x 都有东西接；
+  /// Hero 的按钮只占左侧一串。不挡住的话，Tab 停在这串按钮之外时下移会越过 Hero 直接落到第二页首行，
+  /// 再被 `isContentFocused` 当成「要翻页」把整页翻走。挡住后下移只剩头部按钮可落。
+  /// 头部按钮有两个焦点来源：`focusedButton` 和 `focusedAuxiliaryHeader`（TMDB、跳转媒体库），两个都要算，
+  /// 漏一个就会让焦点停在那两个按钮上时下移进不了第二页。
+  /// 不用 `isHeroFocused` 判：它挂在不可聚焦的容器上，焦点离开后是否回落没有源码保证。
+  private var locksContentPage: Bool {
+    !showContentPage && focusedButton == nil && focusedAuxiliaryHeader == nil
+  }
 
   /// 第一页 ⇄ 第二页的滚动放到下一轮主线程再开始。
   ///
@@ -634,8 +655,8 @@ struct MediaDetailView: View {
                   similarSection
                     .focused($focusedContentRow, equals: "similar")
                 }
-                .disabled(isEntryLoading)
-                .accessibilityHidden(isEntryLoading)
+                .disabled(isEntryLoading || locksContentPage)
+                .accessibilityHidden(isEntryLoading || locksContentPage)
               }
             }
             .id("contentTop")
@@ -1393,6 +1414,7 @@ struct MediaDetailView: View {
               }
               .transition(.opacity)
               .accessibilityValue(isEntryStillLoading || isButtonLoading ? "加载中" : "")
+              .focused($focusedAuxiliaryHeader, equals: .tmdb)
             }
 
             if let libraryAppURL = viewModel.libraryAppURL {
@@ -1413,6 +1435,7 @@ struct MediaDetailView: View {
               .buttonBorderShape(.circle)
               .accessibilityLabel("跳转媒体库")
               .transition(.opacity)
+              .focused($focusedAuxiliaryHeader, equals: .library)
             }
 
             if canSearchResources {
