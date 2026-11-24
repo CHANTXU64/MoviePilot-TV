@@ -201,7 +201,7 @@ struct MediaDetailView: View {
     return (nil, viewModel.isUsingPosterAsBackdrop)
   }
   let allowsRequests: Bool
-  /// 入口渐进渲染：true 时标题已 move-in、按钮胶囊在但文案透明且不可按、可变槽位就地占位；
+  /// 入口渐进渲染：true 时按钮胶囊在但文案透明且不可按、可变槽位就地占位；
   /// 就绪后仅文案/可变内容淡入，标题与按钮形状位置不变。
   let isEntryLoading: Bool
   /// 无障碍值用：详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），但画面已显示失败，不能再读「加载中」。
@@ -209,7 +209,6 @@ struct MediaDetailView: View {
   let entryStatusMessage: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
-  @State private var entryTitleOffset: CGFloat = 28
   @State private var showContentPage = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
@@ -458,10 +457,6 @@ struct MediaDetailView: View {
     self.presentationStyle = presentationStyle
     self.isEntryLoading = isEntryLoading
     self.entryStatusMessage = entryStatusMessage
-    // 已就绪（预载命中）首帧直接显示，标题不做 move-in；仅冷加载才移动进位。
-    _entryTitleOffset = State(
-      initialValue: isEntryLoading && presentationStyle == .standard ? 28 : 0
-    )
     self.allowsRequests = allowsRequests
   }
 
@@ -1159,15 +1154,6 @@ struct MediaDetailView: View {
             .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 740, alignment: .leading)
-            .offset(y: entryTitleOffset)
-            .onAppear {
-              // 标题用移动进位，不淡入；Reduce Motion 时直接落位，不做轴位移动画。
-              guard isEntryLoading, presentationStyle == .standard, !reduceMotion else {
-                entryTitleOffset = 0
-                return
-              }
-              withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }
-            }
 
           // 第一行元数据组装见 `MediaMetadataText.primaryLine`：
           // 空串/畸形类型不再拼出悬空分隔符（F-038/F-043/F-046）。
@@ -1510,7 +1496,6 @@ struct MediaDetailView: View {
           if isEntryLoading {
             VStack(alignment: .leading, spacing: 12) {
               placeholderLine(width: 360)
-              placeholderLine(width: 300)
               placeholderLine(width: 320)
             }
             .modifier(PlaceholderShimmer(isActive: !preloadTask.isDetailFailed))
