@@ -210,8 +210,8 @@ struct MediaDetailView: View {
     return (nil, viewModel.isUsingPosterAsBackdrop)
   }
   let allowsRequests: Bool
-  /// 入口渐进渲染：true 时按钮胶囊在但文案透明且不可按、可变槽位就地占位；
-  /// 就绪后仅文案/可变内容淡入，标题与按钮形状位置不变。
+  /// 加载时保留可聚焦的按钮胶囊和内容占位，按钮操作等内容就绪后开放。
+  /// 就绪后按钮文案和可变内容淡入，标题位置随实际简介和元数据的高度调整。
   let isEntryLoading: Bool
   /// 无障碍值用：详情加载失败后 isEntryLoading 仍为 true（没拿到完整详情），但画面已显示失败，不能再读「加载中」。
   private var isEntryStillLoading: Bool { isEntryLoading && !preloadTask.isDetailFailed }
@@ -219,6 +219,7 @@ struct MediaDetailView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
   @State private var showContentPage = false
+  // 跟随当前导航条目的身份。返回同一条目时保留当前翻页行为。
   @State private var didReceiveInitialFocus = false
   private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
@@ -674,7 +675,8 @@ struct MediaDetailView: View {
               .frame(height: UIScreen.main.bounds.height)
           }
         }
-        // 首个焦点进入详情前，让滚动目标停在 Hero 顶部。之后由正常焦点移动驱动翻页。
+        // 首次获焦前，系统可能提出离开 Hero 顶部的滚动目标，预载命中时也一样。
+        // 在滚动开始前约束目标，避免 Hero 和 Tab 栏一起上移。焦点进入详情后恢复正常翻页。
         .scrollTargetBehavior(MediaDetailEntryScrollTarget(
           holdsHeroAtTop: presentationStyle == .standard && !didReceiveInitialFocus
         ))
@@ -731,7 +733,7 @@ struct MediaDetailView: View {
       guard allowsRequests else { return }
       if presentationStyle == .standard, !hasAppeared {
         hasAppeared = true
-        // 按钮加载期仍可聚焦，初始焦点直接进详情页，避免焦点留在 Tab 栏导致 Menu 退出 App。
+        // 普通 push 在加载期就请求首焦点，缩短焦点停在 Tab 栏的窗口，避免按 Menu 时退出 App。
         if let preferredHeaderFocus {
           focusedButton = preferredHeaderFocus
         }
@@ -881,9 +883,9 @@ struct MediaDetailView: View {
       guard eligible, allowsRequests else { return }
       viewModel.loadDoubanDiscussionIfNeeded()
     }
-    // 外部入口（Top Shelf）直达详情的首个焦点：转场结束、详情在栈顶后写到首选按钮；栈不可交互时写 FocusState
-    // 会被丢弃并让 ScrollView 滚动。焦点落进头部或内容区（含用户主动移动）就停，返回详情页不再抢焦点。
-    // Top Shelf 交接等焦点进了详情才结束（见 `ImageNavigationDestination`），这里在交接期间也要写。
+    // Top Shelf 直达等转场结束且详情位于栈顶再补写焦点，转场中的写入可能被丢弃并触发滚动。
+    // 焦点首次进入头部或内容区就停止补写，返回同一详情时沿用正常的焦点恢复。
+    // Top Shelf 交接等焦点进入详情才完成（见 `ImageNavigationDestination`），补写需要在交接期间运行。
     .background(PresentationReadyAction(
       isEnabled: presentationStyle == .direct && !hasAppeared && scenePhase == .active
         && navigationCoordinator.isStackInteractive && navigationCoordinator.topEntryID == routeID,
