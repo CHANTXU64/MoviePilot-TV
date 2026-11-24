@@ -900,11 +900,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(container.contains("isEntryLoading: !isReady"))
     XCTAssertTrue(container.contains("MediaDetailLoadingCover.isReady("))
     XCTAssertFalse(container.contains("MediaLoadingView("))
-    // 标题移动进位，不淡入。
-    XCTAssertTrue(view.contains("entryTitleOffset"))
-    XCTAssertTrue(view.contains("initialValue: isEntryLoading && presentationStyle == .standard ? 28 : 0"))
-    XCTAssertTrue(view.contains("guard isEntryLoading, presentationStyle == .standard, !reduceMotion else"))
-    XCTAssertTrue(view.contains("withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }"))
+    // 加载期标题不额外上移：只保留内容就绪后真实文本撑高带来的那一次位移。
+    XCTAssertFalse(view.contains("entryTitleOffset"))
+    XCTAssertFalse(view.contains("withAnimation(.easeOut(duration: 0.45)) { entryTitleOffset = 0 }"))
     // 按钮加载期胶囊在、文案透明、action 门禁不可按（但仍可聚焦保返回导航）；就绪后文案淡入。
     XCTAssertTrue(view.contains(".opacity(isEntryLoading ? 0.35 : 1)"))
     XCTAssertTrue(view.contains("guard allowsRequests, !isEntryLoading else { return }"))
