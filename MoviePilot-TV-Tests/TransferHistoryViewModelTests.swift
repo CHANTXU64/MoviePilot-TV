@@ -540,7 +540,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
     XCTAssertEqual(deleteRequestCount, 0)
-    XCTAssertEqual(historyRequestCounts, [-1, 20])
+    XCTAssertEqual(historyRequestCounts, [100, 20])
     XCTAssertEqual(viewModel.items.first?.status.value, true)
     XCTAssertNil(viewModel.items.first?.errmsg)
     XCTAssertEqual(
@@ -581,7 +581,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
 
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
-    XCTAssertEqual(historyRequestCounts, [-1, 20])
+    XCTAssertEqual(historyRequestCounts, [100, 20])
     XCTAssertEqual(
       message,
       "服务器记录有未知变化，请重试。"
@@ -641,11 +641,62 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
     XCTAssertEqual(deleteRequestCount, 0)
-    XCTAssertEqual(historyRequestCounts, [-1, 20])
+    XCTAssertEqual(historyRequestCounts, [100, 20])
     XCTAssertEqual(
       viewModel.mutationRetryMessage,
       "服务器记录有未知变化，请重试。"
     )
+  }
+
+  func testMutationValidationPaginatesUntilTargetFoundOnLaterPage() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+      2: Data(
+        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":2}"#
+          .utf8
+      ),
+    ])
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    await viewModel.deleteHistory(
+      item: target,
+      deleteSource: true,
+      deleteDest: true,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertEqual(historyRequestCounts, [100, 100])
+    XCTAssertNil(viewModel.mutationRetryMessage)
   }
 
   func testBatchDeleteDoesNotPreflightWhenSessionChangesBeforeTaskStarts() async throws {
@@ -1050,7 +1101,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertFalse(viewModel.isAiRedoing)
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
-    XCTAssertEqual(historyRequestCounts, [-1, 20, -1])
+    XCTAssertEqual(historyRequestCounts, [100, 20, 100])
 
     await TransferHistoryURLProtocol.stub.reset()
     let guardedViewModel = TransferHistoryViewModel(apiService: service)
@@ -1261,7 +1312,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let paths = await TransferHistoryURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/history/transfer/10/ai-redo"))
     let historyRequestCounts = await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
-    XCTAssertEqual(historyRequestCounts, [-1])
+    XCTAssertEqual(historyRequestCounts, [100])
   }
 
   func testAIRedoClearsPendingStateWhenSameProfileRefreshCancelsStream() async throws {
@@ -1340,7 +1391,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let paths = await TransferHistoryURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/system/setting/public/Storages"))
     let historyRequestCounts = await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
-    XCTAssertEqual(historyRequestCounts, [-1])
+    XCTAssertEqual(historyRequestCounts, [100])
   }
 
   func testAIRedoDoesNotRefreshWhenSessionChangesAfterFinalProgressEvent() async throws {
@@ -1419,7 +1470,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let paths = await TransferHistoryURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/system/setting/public/Storages"))
     let historyRequestCounts = await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
-    XCTAssertEqual(historyRequestCounts, [-1])
+    XCTAssertEqual(historyRequestCounts, [100])
   }
 
   private func configureManageUser(_ service: APIService) {
