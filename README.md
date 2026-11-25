@@ -17,15 +17,15 @@
 <p align="center">
   <img src="screenshots/TopShelf.png" alt="Apple TV 首屏" width="32%"/>
   <img src="screenshots/HomePage.png" alt="首页" width="32%"/>
+  <img src="screenshots/SubscriptionsPage.png" alt="订阅页" width="32%"/>
   <img src="screenshots/RecommendPage.png" alt="推荐页" width="32%"/>
   <img src="screenshots/ExplorePage.png" alt="探索页" width="32%"/>
   <img src="screenshots/MediaDetailPage.png" alt="详情页" width="32%"/>
   <img src="screenshots/MediaDetailPage2.png" alt="详情页2" width="32%"/>
+  <img src="screenshots/PlayerPage.png" alt="播放页" width="32%"/>
   <img src="screenshots/PersonDetailPage.png" alt="演职员详情页" width="32%"/>
-  <img src="screenshots/SubscribeSeason.png" alt="订阅设置" width="32%"/>
   <img src="screenshots/SearchPage.png" alt="搜索页" width="32%"/>
   <img src="screenshots/TorrentsResultPage.png" alt="种子结果" width="32%"/>
-  <img src="screenshots/AddDownloadSheet.png" alt="添加下载" width="32%"/>
   <img src="screenshots/StatusPage.png" alt="状态页" width="32%"/>
 </p>
 

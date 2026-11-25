@@ -411,7 +411,16 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     // 渐进渲染：加载期头部按钮仍可聚焦（保证焦点进详情页、Menu 能 pop 而非退出 App），
     // 但 action 门禁忽略按下；只有第二页内容用 disabled 挡焦点。
     XCTAssertTrue(source.contains("guard allowsRequests, !isEntryLoading else { return }"))
-    XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading)").count - 1, 1)
+    // 第二页内容在加载期、以及第一页显示时焦点不在头部按钮上（例如停在 Tab 栏）时退出焦点树。
+    // 头部按钮有两个焦点来源，TMDB 和跳转媒体库走 `focusedAuxiliaryHeader`，漏一个就会锁死第二页。
+    XCTAssertTrue(source.contains("private var locksContentPage: Bool"))
+    XCTAssertTrue(source.contains("!showContentPage && focusedButton == nil && focusedAuxiliaryHeader == nil"))
+    XCTAssertTrue(source.contains(".focused($focusedAuxiliaryHeader, equals: .tmdb)"))
+    XCTAssertTrue(source.contains(".focused($focusedAuxiliaryHeader, equals: .library)"))
+    XCTAssertEqual(
+      source.components(separatedBy: ".disabled(isEntryLoading || locksContentPage)").count - 1, 1)
+    // 加载期只有第二页内容被 disabled：头部按钮必须保持可聚焦（防将来给某个头部按钮加回 disabled）。
+    XCTAssertEqual(source.components(separatedBy: ".disabled(isEntryLoading").count - 1, 1)
     XCTAssertTrue(containerSource.contains("isEntryLoading: !isReady"))
     XCTAssertFalse(containerSource.contains(".allowsHitTesting(!isReady)"))
     XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
@@ -908,8 +917,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(view.contains("guard allowsRequests, !isEntryLoading else { return }"))
     XCTAssertTrue(view.contains(".transition(.opacity)"))
     XCTAssertTrue(view.contains("if viewModel.hasAppliedFullDetail {"))
-    XCTAssertTrue(view.contains(".disabled(isEntryLoading)"))
-    XCTAssertTrue(view.contains(".accessibilityHidden(isEntryLoading)"))
+    XCTAssertTrue(view.contains(".disabled(isEntryLoading || locksContentPage)"))
+    XCTAssertTrue(view.contains(".accessibilityHidden(isEntryLoading || locksContentPage)"))
     XCTAssertTrue(view.contains("guard allowsRequests, presentationStyle == .direct, let detail else { return }"))
     XCTAssertTrue(view.contains("viewModel.applyFullDetail(detail)"))
     // 可变槽位就地占位，行高对齐真实 caption；加载感用占位上的斜向高光扫过，不用加载图标。
