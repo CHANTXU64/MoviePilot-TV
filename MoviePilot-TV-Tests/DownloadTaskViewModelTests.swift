@@ -1212,6 +1212,54 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(requestCountAfterReentry, 2)
   }
 
+  func testAmbiguousAuthenticationProbeForbiddenKeepsRetryBehavior() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let previousSettings = service.settings
+    defer { service.settings = previousSettings }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      "[]",
+      forClient: "qbittorrent",
+      statusCode: 403
+    )
+    await DownloadTaskURLProtocol.stub.setCurrentUserResponse(
+      statusCode: 403,
+      json: #"{"detail":"无法识别的认证响应"}"#
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    service.tokenForTesting = "download-task-tests"
+    configureManageUser(service, userId: 0)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.11")
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertFalse(
+      viewModel.downloadsPermissionDenied,
+      "认证状态无法确认时不能进入无下载管理权限状态"
+    )
+    XCTAssertEqual(viewModel.downloadsLoadFailedClient, "qbittorrent")
+    XCTAssertEqual(viewModel.pendingLoadState, .failed)
+
+    let requestCountAfterForbidden = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterForbidden, 1)
+
+    await viewModel.loadDownloads()
+    let requestCountAfterRetry = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterRetry, 2, "无法确认认证状态时 403 仍按原有失败路径重试")
+    XCTAssertFalse(viewModel.downloadsPermissionDenied)
+  }
+
   func testForbiddenDownloadListOnOlderBackendKeepsRetryBehavior() async throws {
     try await assertForbiddenDownloadFallsBackToRetry(backendVersion: "v3.2.10")
   }
@@ -1397,12 +1445,36 @@ private actor DownloadTaskURLProtocolStub {
   private var clientsResponses: [DownloadTaskHTTPStubResponse] = []
   private var requestedClients: [String] = []
   private var requestedClientsLoads = 0
+  private var currentUserResponse = DownloadTaskHTTPStubResponse(
+    statusCode: 200,
+    data: Data(
+      #"{"id":0,"name":"download-manager","is_superuser":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":true},"features":{"manage.downloading":false}}"#
+        .utf8
+    ),
+    gate: nil
+  )
 
   func reset() {
     responsesByClient.removeAll()
     clientsResponses.removeAll()
     requestedClients.removeAll()
     requestedClientsLoads = 0
+    currentUserResponse = DownloadTaskHTTPStubResponse(
+      statusCode: 200,
+      data: Data(
+        #"{"id":0,"name":"download-manager","is_superuser":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":true},"features":{"manage.downloading":false}}"#
+          .utf8
+      ),
+      gate: nil
+    )
+  }
+
+  func setCurrentUserResponse(statusCode: Int = 200, json: String) {
+    currentUserResponse = DownloadTaskHTTPStubResponse(
+      statusCode: statusCode,
+      data: Data(json.utf8),
+      gate: nil
+    )
   }
 
   func setClientsJSON(_ json: String, statusCode: Int = 200) {
@@ -1462,17 +1534,11 @@ private actor DownloadTaskURLProtocolStub {
       throw URLError(.badURL)
     }
 
-    // `/download/` 返回 403 时 APIService 会先探测 `/user/current`；返回与
-    // configureManageUser(userId: 0) 一致的用户，让 403 作为权限结果回到 ViewModel。
+    // `/download/` 返回 403 时 APIService 会先探测 `/user/current`。默认返回
+    // 一个关闭 manage.downloading 的 manage 用户，让 403 成为已确认的业务拒绝；
+    // 需要模拟“认证状态无法确认”的用例可覆盖这个响应。
     if components.path == "/api/v1/user/current" {
-      return DownloadTaskHTTPStubResponse(
-        statusCode: 200,
-        data: Data(
-          #"{"id":0,"name":"download-manager","is_superuser":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":true}}"#
-            .utf8
-        ),
-        gate: nil
-      )
+      return currentUserResponse
     }
 
     if components.path == "/api/v1/download/clients" {

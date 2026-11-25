@@ -252,8 +252,57 @@ extension SystemSessionBehaviorTests {
     do {
       _ = try await service.fetchStorage()
       XCTFail("Expected the original forbidden response")
+    } catch APIError.confirmedForbidden(let statusCode, _) {
+      XCTAssertEqual(statusCode, 403)
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+
+    XCTAssertEqual(service.token, "valid-token")
+    XCTAssertNil(service.loginDraft)
+    let paths = await SessionRefreshURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
+  }
+
+  func testAmbiguousCurrentUserProbeForbiddenStaysAuthenticationChallenge() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setUnauthorizedPath(
+      "/api/v1/dashboard/storage",
+      statusCode: 403
+    )
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(
+      statusCode: 403,
+      json: #"{"detail":"无法识别的认证响应"}"#
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let user = Token(
+      access_token: "valid-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true, "search": true, "subscribe": false, "manage": false],
+      user_id: 1,
+      user_name: "token-only-user",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: user.access_token,
+      currentUser: user
+    )
+
+    do {
+      _ = try await service.fetchStorage()
+      XCTFail("Expected an unresolved authentication challenge")
     } catch APIError.authenticationChallenge(let statusCode, _) {
       XCTAssertEqual(statusCode, 403)
+    } catch APIError.confirmedForbidden {
+      XCTFail("无法确认认证状态的 403 不能当成业务权限拒绝")
     } catch {
       XCTFail("Unexpected error: \(error)")
     }

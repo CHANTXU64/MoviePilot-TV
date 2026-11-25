@@ -482,7 +482,8 @@ private extension Error {
   var isBackendCompatibilityPermissionDenied: Bool {
     if let apiError = self as? APIError {
       switch apiError {
-      case .unauthorized, .authenticationChallenge, .credentialsRejected, .mfaUnsupported:
+      case .unauthorized, .authenticationChallenge, .confirmedForbidden, .credentialsRejected,
+        .mfaUnsupported:
         return true
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")

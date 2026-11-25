@@ -442,6 +442,7 @@ class TransferHistoryViewModel: ObservableObject {
     else { return .cancelled }
     do {
       let currentItemsByID = try await fetchTransferHistoryForMutationValidation(
+        expectedItems: expectedItems,
         sourceSession: sourceSession
       )
       guard apiService.isSessionUnchanged(from: sourceSession) else { return .cancelled }
@@ -459,14 +460,19 @@ class TransferHistoryViewModel: ObservableObject {
     }
   }
 
-  /// 用正数分页取整理记录的完整快照，避免后端对 count<=0 直接返回 422。
+  /// 只为待操作记录取当前指纹；找到全部目标即停，避免无意义扫描整张表。
+  /// 分页只用于定位目标，不把多页结果拼成“完整快照”。
   private func fetchTransferHistoryForMutationValidation(
+    expectedItems: [TransferHistory],
     sourceSession: APIServiceSessionSnapshot
   ) async throws -> [Int: TransferHistory] {
+    let targetIDs = Set(expectedItems.map(\.id))
+    var remainingIDs = targetIDs
+    var itemsByID: [Int: TransferHistory] = [:]
+    var seenIDs = Set<Int>()
+    var expectedTotal: Int?
     var page = 1
     var maxPages = 1
-    var itemsByID: [Int: TransferHistory] = [:]
-    var total = 0
 
     while page <= maxPages {
       let response = try await apiService.fetchTransferHistory(
@@ -478,20 +484,40 @@ class TransferHistoryViewModel: ObservableObject {
         throw CancellationError()
       }
 
-      total = response.total
-      for item in response.list {
-        itemsByID[item.id] = item
+      if let expectedTotal, response.total != expectedTotal {
+        throw TransferHistoryMutationValidationError.incompletePagination
+      }
+      if expectedTotal == nil {
+        expectedTotal = response.total
+        maxPages = max(
+          1,
+          (response.total + mutationValidationPageSize - 1) / mutationValidationPageSize + 1
+        )
       }
 
-      if response.list.isEmpty || itemsByID.count >= total {
+      for item in response.list {
+        guard seenIDs.insert(item.id).inserted else {
+          throw TransferHistoryMutationValidationError.incompletePagination
+        }
+        if remainingIDs.remove(item.id) != nil {
+          itemsByID[item.id] = item
+        }
+      }
+
+      if remainingIDs.isEmpty {
         return itemsByID
       }
+      if response.list.isEmpty {
+        if seenIDs.count >= (expectedTotal ?? 0) {
+          return itemsByID
+        }
+        throw TransferHistoryMutationValidationError.incompletePagination
+      }
 
-      // 按 total 推导页数，额外留一页应对分页期间插入导致的目标后移。
-      maxPages = max(
-        1,
-        (total + mutationValidationPageSize - 1) / mutationValidationPageSize + 1
-      )
+      // 已按 total 看完全部记录，目标仍不在其中：交给上层按“记录已变化”处理。
+      if let expectedTotal, seenIDs.count >= expectedTotal {
+        return itemsByID
+      }
       page += 1
     }
 

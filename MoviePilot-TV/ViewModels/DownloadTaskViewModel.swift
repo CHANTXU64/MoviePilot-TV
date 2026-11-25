@@ -245,7 +245,7 @@ class DownloadTaskViewModel: ObservableObject {
   private static func isDownloadPermissionDenied(_ error: Error) -> Bool {
     guard let apiError = error as? APIError else { return false }
     switch apiError {
-    case .authenticationChallenge(let statusCode, _):
+    case .confirmedForbidden(let statusCode, _):
       return statusCode == 403
     case .serverMessage(let message):
       return APIService.httpStatusCode(fromServerMessage: message) == 403

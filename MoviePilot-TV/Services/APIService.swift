@@ -10,6 +10,8 @@ nonisolated enum APIError: Error {
   /// 502/503/504 可由反向代理在源站仍继续处理时返回，不是业务终态。
   case gatewayStatus(Int, String)
   case authenticationChallenge(statusCode: Int, message: String?)
+  /// `/user/current` 已确认 token 有效后返回的业务 403；不是会话失效。
+  case confirmedForbidden(statusCode: Int, message: String?)
   case credentialsRejected
   case mfaUnsupported
   case unauthorized
@@ -29,7 +31,8 @@ extension APIError: LocalizedError {
       return "响应解析失败"
     case .serverMessage(let message), .gatewayStatus(_, let message):
       return message
-    case .authenticationChallenge(let statusCode, let message):
+    case .authenticationChallenge(let statusCode, let message),
+      .confirmedForbidden(let statusCode, let message):
       return trimmedNonEmpty([message]) ?? "HTTP \(statusCode)"
     case .credentialsRejected:
       return "用户名或密码错误"
@@ -1275,7 +1278,11 @@ class APIService: ObservableObject {
         if recoveredUser != currentUser {
           applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
         }
-        // `/user/current` 成功证明 token 仍有效，原响应只能按业务权限错误处理。
+        // `/user/current` 成功证明 token 仍有效，403 只能是业务权限拒绝；
+        // 401 仍按认证挑战保留，避免把未知端点行为误判成权限结论。
+        if statusCode == 403 {
+          throw APIError.confirmedForbidden(statusCode: statusCode, message: message)
+        }
         throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
       case .rejected:
         break

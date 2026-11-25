@@ -699,6 +699,293 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertNil(viewModel.mutationRetryMessage)
   }
 
+  func testMutationValidationStopsAfterTargetFoundOnFirstPage() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":10,"title":"History","type":"电影","src":"/downloads/movie.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"History","type":"电影","src":"/downloads/movie.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":100}"#
+          .utf8
+      )
+    ])
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    await viewModel.deleteHistory(
+      item: target,
+      deleteSource: true,
+      deleteDest: true,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertEqual(historyRequestCounts, [100], "找到目标后不应继续扫描后续页")
+    XCTAssertNil(viewModel.mutationRetryMessage)
+  }
+
+  func testMutationValidationRejectsEmptyPageBeforeAllTargetsFound() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+      2: Data(#"{"list":[],"total":2}"#.utf8),
+    ])
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    await viewModel.deleteHistory(
+      item: target,
+      deleteSource: true,
+      deleteDest: true,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 0)
+    XCTAssertEqual(historyRequestCounts, [100, 100])
+    XCTAssertEqual(
+      viewModel.mutationRetryMessage,
+      "服务器记录有未知变化，请重试。"
+    )
+  }
+
+  func testMutationValidationRejectsTotalChangeAcrossPages() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+      2: Data(
+        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":3}"#
+          .utf8
+      ),
+    ])
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    await viewModel.deleteHistory(
+      item: target,
+      deleteSource: true,
+      deleteDest: true,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 0)
+    XCTAssertEqual(historyRequestCounts, [100, 100])
+    XCTAssertEqual(
+      viewModel.mutationRetryMessage,
+      "服务器记录有未知变化，请重试。"
+    )
+  }
+
+  func testMutationValidationRejectsDuplicateRecordAcrossPages() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+      2: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+    ])
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    await viewModel.deleteHistory(
+      item: target,
+      deleteSource: true,
+      deleteDest: true,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 0)
+    XCTAssertEqual(historyRequestCounts, [100, 100])
+    XCTAssertEqual(
+      viewModel.mutationRetryMessage,
+      "服务器记录有未知变化，请重试。"
+    )
+  }
+
+  func testMutationValidationStopsWhenSessionChangesMidPagination() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: nil
+    )
+    let gate = TransferHistoryAsyncGate()
+    await TransferHistoryURLProtocol.stub.setHistoryGate(gate)
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
+      1: Data(
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+          .utf8
+      ),
+      2: Data(
+        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":2}"#
+          .utf8
+      ),
+    ])
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let target = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(
+        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+          .utf8
+      )
+    )
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.items = [target]
+    let deleteTask = Task { @MainActor in
+      await viewModel.deleteHistory(
+        item: target,
+        deleteSource: true,
+        deleteDest: true,
+        sourceSession: viewModel.captureMutationSession()
+      )
+    }
+    defer { deleteTask.cancel() }
+
+    try await withTransferHistoryTimeout("mutation validation request to start") {
+      await TransferHistoryURLProtocol.stub.waitForRequest(path: "/api/v1/history/transfer")
+    }
+
+    let replacement = Token(
+      access_token: "transfer-manager-replacement",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.manage.rawValue: true],
+      user_id: 2,
+      user_name: "transfer-manager-replacement",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://transfer-history-tests.local",
+      token: replacement.access_token,
+      currentUser: replacement
+    )
+    await gate.open()
+    try await withTransferHistoryTimeout("mutation validation to stop") {
+      await deleteTask.value
+    }
+
+    let deleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    let historyRequestCounts =
+      await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
+    XCTAssertEqual(deleteRequestCount, 0)
+    XCTAssertEqual(historyRequestCounts, [100], "会话已切换，不应继续请求第二页")
+    XCTAssertFalse(
+      viewModel.items.isEmpty,
+      "取消的旧会话校验不应清空或改写当前列表"
+    )
+  }
+
   func testBatchDeleteDoesNotPreflightWhenSessionChangesBeforeTaskStarts() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
