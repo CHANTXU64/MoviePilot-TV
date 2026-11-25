@@ -1157,11 +1157,131 @@ final class DownloadTaskViewModelTests: XCTestCase {
     """
   }
 
+  func testForbiddenDownloadListShowsPermissionStateAndRetriesOnReentry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let previousSettings = service.settings
+    defer { service.settings = previousSettings }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      "[]",
+      forClient: "qbittorrent",
+      statusCode: 403
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    service.tokenForTesting = "download-task-tests"
+    configureManageUser(service, userId: 0)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.11")
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertTrue(viewModel.downloadsPermissionDenied)
+    XCTAssertTrue(viewModel.downloads.isEmpty)
+    XCTAssertNil(viewModel.pendingLoadState)
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.clients.map(\.name), ["qbittorrent"])
+
+    let requestCountAfterForbidden = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterForbidden, 1)
+
+    await viewModel.loadDownloads()
+    let requestCountAfterPolling = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterPolling, 1, "权限拒绝后轮询不应继续请求 /download/")
+
+    viewModel.setPresentationActive(false)
+    viewModel.setPresentationActive(true)
+    XCTAssertFalse(viewModel.downloadsPermissionDenied)
+
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON("[]", forClient: "qbittorrent")
+    await viewModel.loadDownloads()
+
+    XCTAssertFalse(viewModel.downloadsPermissionDenied)
+    XCTAssertEqual(viewModel.loadedClient, "qbittorrent")
+    let requestCountAfterReentry = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterReentry, 2)
+  }
+
+  func testForbiddenDownloadListOnOlderBackendKeepsRetryBehavior() async throws {
+    try await assertForbiddenDownloadFallsBackToRetry(backendVersion: "v3.2.10")
+  }
+
+  func testForbiddenDownloadListWithoutBackendVersionKeepsRetryBehavior() async throws {
+    try await assertForbiddenDownloadFallsBackToRetry(backendVersion: nil)
+  }
+
+  func testDownloadPermissionStateRequiresBackendVersion() {
+    XCTAssertFalse(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: nil))
+    XCTAssertFalse(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "v3.2.10"))
+    XCTAssertFalse(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "v3.2.10-1"))
+    XCTAssertFalse(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "garbage"))
+    XCTAssertTrue(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "v3.2.11"))
+    XCTAssertTrue(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "v3.2.11-1"))
+    XCTAssertTrue(DownloadTaskViewModel.supportsDownloadPermissionState(backendVersion: "v3.3.0"))
+  }
+
+  private func assertForbiddenDownloadFallsBackToRetry(backendVersion: String?) async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    let previousSettings = service.settings
+    defer {
+      snapshot.restore(to: service)
+      service.settings = previousSettings
+    }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      "[]",
+      forClient: "qbittorrent",
+      statusCode: 403
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    service.tokenForTesting = "download-task-tests"
+    configureManageUser(service, userId: 0)
+    service.settings = backendVersion.map { GlobalSettings(BACKEND_VERSION: $0) }
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertFalse(viewModel.downloadsPermissionDenied)
+    XCTAssertEqual(viewModel.downloadsLoadFailedClient, "qbittorrent")
+    XCTAssertEqual(viewModel.pendingLoadState, .failed)
+
+    let requestCountAfterForbidden = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterForbidden, 1)
+
+    await viewModel.loadDownloads()
+    let requestCountAfterRetry = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "qbittorrent")
+    XCTAssertEqual(requestCountAfterRetry, 2, "门禁不通过时 403 仍按原有失败路径重试")
+    XCTAssertFalse(viewModel.downloadsPermissionDenied)
+  }
+
   private func decodeDownloads(_ json: String) throws -> [DownloadingInfo] {
     try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
 
-  private func configureManageUser(_ service: APIService, superUser: Bool = false) {
+  private func configureManageUser(
+    _ service: APIService,
+    superUser: Bool = false,
+    userId: Int? = nil
+  ) {
     service.currentUserForTesting = Token(
       access_token: "download-task-tests",
       token_type: "bearer",
@@ -1172,6 +1292,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
         UserPermissionKey.subscribe.rawValue: false,
         UserPermissionKey.manage.rawValue: true,
       ],
+      user_id: userId,
       user_name: "download-manager",
       avatar: nil
     )
@@ -1339,6 +1460,19 @@ private actor DownloadTaskURLProtocolStub {
       let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else {
       throw URLError(.badURL)
+    }
+
+    // `/download/` 返回 403 时 APIService 会先探测 `/user/current`；返回与
+    // configureManageUser(userId: 0) 一致的用户，让 403 作为权限结果回到 ViewModel。
+    if components.path == "/api/v1/user/current" {
+      return DownloadTaskHTTPStubResponse(
+        statusCode: 200,
+        data: Data(
+          #"{"id":0,"name":"download-manager","is_superuser":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":true}}"#
+            .utf8
+        ),
+        gate: nil
+      )
     }
 
     if components.path == "/api/v1/download/clients" {

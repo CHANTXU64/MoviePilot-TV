@@ -23,7 +23,7 @@ struct DownloadTaskView: View {
         Spacer()
 
         HStack(spacing: 20) {
-          if viewModel.clients.count > 1 {
+          if !viewModel.downloadsPermissionDenied && viewModel.clients.count > 1 {
             Picker("下载器", selection: $viewModel.selectedClient) {
               ForEach(viewModel.clients, id: \.name) { client in
                 Text("下载器：" + client.name).tag(client.name)
@@ -44,7 +44,13 @@ struct DownloadTaskView: View {
       .focusSection()
 
       if isExpanded {
-        if viewModel.downloads.isEmpty && viewModel.clientsLoadFailed {
+        if viewModel.downloadsPermissionDenied {
+          Text("当前账号无下载管理权限\n请联系管理员在 MoviePilot 后台开启")
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.center)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else if viewModel.downloads.isEmpty && viewModel.clientsLoadFailed {
           Text("下载器加载失败，正在自动重试")
             .foregroundColor(.secondary)
             .padding()
