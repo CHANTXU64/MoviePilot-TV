@@ -4,13 +4,10 @@
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v1.0.0--beta-blue?style=flat-square" alt="release"></a>
   <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.9-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
-  <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-CC0--1.0-blue.svg?style=flat-square" alt="License"></a>
-  <a href="https://github.com/CHANTXU64/MoviePilot-TV/issues"><img src="https://img.shields.io/github/issues/CHANTXU64/MoviePilot-TV?style=flat-square" alt="GitHub issues"></a>
 </p>
 
-基于 Swift 和 SwiftUI 开发的 **MoviePilot** Apple TV 原生客户端。为大屏幕和 Siri Remote 遥控器交互而设计。
+**MoviePilot-TV** 是独立开发的 [MoviePilot](https://github.com/jxxghp/MoviePilot) Apple TV 原生客户端。你可以在电视上找片、管理订阅，也可以播放 Emby 媒体库中的电影和剧集。
 
 ## 界面预览
 
@@ -31,17 +28,16 @@
 
 ## 核心特性
 
-专为大屏幕和家庭观影设计，提供从浏览、搜索到订阅的完整闭环体验。
-
-- **为家庭设计**: 聚焦核心观影功能，摒弃复杂的管理员后台设置，交互简洁，适合所有家庭成员。
-- **原生沉浸体验**: 基于 Swift & SwiftUI 原生开发，遵循 tvOS 设计规范，提供流畅的动效和沉浸式体验。
-- **Siri Remote 支持**: 可通过 Siri Remote 直观操作，支持长按海报进行订阅、搜索等快捷操作。
-- **无缝浏览**: 通过详情页预加载和持久化登录，消除等待，实现无缝切换和快速访问。
+- **tvOS 原生设计与 Siri Remote**。大屏布局、焦点反馈和播放操作参考 Apple TV App，按 tvOS 人机界面指南（HIG）打磨。
+- **找片和订阅**。在电视上浏览推荐、搜索资源、管理订阅和查看下载进度。也可以从 Apple TV 主屏推荐直接打开影片详情。
+- **播放媒体库**。在 App 内播放 Emby 媒体库中的电影和剧集，从「继续观看」接着播。
+- **流畅浏览**。针对页面浏览优化了响应速度与内存占用。
 
 ## ⚠️ 兼容性与已知问题
 
 - **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
 - **MoviePilot 版本**: 最低兼容 MoviePilot **v2.15.6**，具体见[已验证的兼容版本](docs/backend-version-compatibility.md#已登记版本)。
+- **Emby 应用内播放**需要 MoviePilot **v3.2.6 或更高版本**和 MoviePilot 管理员账号，并在 MoviePilot 中配置 Apple TV 能访问的 Emby 服务器。
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准，通常不会额外兜底修复。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
 - **密码安全**: 请勿将 MoviePilot 密码与其他服务的密码设为相同值。Apple 钥匙串不可用时，本 App 会自动降级为**明文持久化密码**；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。
