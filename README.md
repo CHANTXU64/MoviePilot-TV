@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v1.0.0--beta-blue?style=flat-square" alt="release"></a>
-  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.13-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
+  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.2.14-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-CC0--1.0-blue.svg?style=flat-square" alt="License"></a>
 </p>

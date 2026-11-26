@@ -103,12 +103,22 @@
 
 ### 媒体服务器流式播放与搜索
 
-- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）；`v3.2.10` 又新增 `GET /mediaserver/browse`、`/filters`、`/detail`、`/seasons`、`/season-episodes` 和 `POST /mediaserver/progress`，并扩展 `/mediaserver/search` 的媒体类型、服务器和媒体库过滤；`v3.2.13` 给 `stream-info` 增加无凭据 STRM 直链 `strm_url` 和媒体源 `direct_url`。
-- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。`v3.2.10` 之后 Web 已有完整的媒体服务器浏览/筛选/详情入口，但 TV 的媒体库以 TMDB/订阅身份和现有「最近添加/继续观看」为主，再接一套媒体服务器导航会与现有内容身份、焦点和播放器路径并行，当前没有必须补的用户场景。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest`、`/mediaserver/playing` 和 `/mediaserver/play` 路径未受影响。
+- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）；`v3.2.10` 又新增 `GET /mediaserver/browse`、`/filters`、`/detail`、`/seasons`、`/season-episodes` 和 `POST /mediaserver/progress`，并扩展 `/mediaserver/search` 的媒体类型、服务器和媒体库过滤；`v3.2.13` 给 `stream-info` 增加无凭据 STRM 直链 `strm_url` 和媒体源 `direct_url`；`v3.2.14` 新增 `/mediaserver/account-bindings`，`stream-info` 增加播放路由、播放会话和进度同步字段，`/stream` 接受 HEAD，`/progress` 增加会话事件。
+- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`v3.2.14` 的账号绑定和实时会话同步同样服务于 MP 代理播放，TV 没有对应需求。`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。`v3.2.10` 之后 Web 已有完整的媒体服务器浏览/筛选/详情入口，但 TV 的媒体库以 TMDB/订阅身份和现有「最近添加/继续观看」为主，再接一套媒体服务器导航会与现有内容身份、焦点和播放器路径并行，当前没有必须补的用户场景。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest`、`/mediaserver/playing` 和 `/mediaserver/play` 路径未受影响。
 - 可评估方向：
   - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search`/`browse` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。`episode-metadata` 只有在未来出现「媒体库搜索直接选集」的大屏入口时再评估，不单独立项。
-  - `v3.2.10` 的 `browse`/`filters`/`detail`/`seasons`/`season-episodes`/`progress` 属于该版本起的新行为，若未来接入必须按 `>= v3.2.10` 门禁；`strm_url`/`direct_url` 属于 `v3.2.13` 起的新行为，必须单独按 `>= v3.2.13` 门禁；现有 `stream*` 仍按 `>= v3.2.7`，`episode-metadata` 仍按 `>= v3.2.8`。低版本、版本读不出或无法解析时保留现有路径，不能把新增字段当必填。
-  - STRM 直链只作为现有播放器起播/直连优化的候选，不改变 TV 直连 Emby/Jellyfin/Plex 的主路径；浏览/详情入口若要跟进，先评估它是否会和订阅媒体库、TMDB 详情页形成重复入口，再决定是否只做只读浏览。
+  - `v3.2.10` 的 `browse`/`filters`/`detail`/`seasons`/`season-episodes`/`progress` 属于该版本起的新行为，若未来接入必须按 `>= v3.2.10` 门禁；`strm_url`/`direct_url` 属于 `v3.2.13` 起的新行为，必须单独按 `>= v3.2.13` 门禁；`playback_routes`/`play_session_id`/`progress_sync_mode` 和 `/mediaserver/account-bindings` 属于 `v3.2.14` 起的新行为，若未来接入必须单独按 `>= v3.2.14` 门禁；现有 `stream*` 仍按 `>= v3.2.7`，`episode-metadata` 仍按 `>= v3.2.8`。低版本、版本读不出或无法解析时保留现有路径，不能把新增字段当必填。
+  - STRM 直链只作为现有播放器起播/直连优化的候选，不改变 TV 直连 Emby/Jellyfin/Plex 的主路径；浏览/详情入口若要跟进，先评估它是否会与订阅媒体库、TMDB 详情页形成重复入口，再决定是否只做只读浏览。
+
+### 弹幕播放
+
+- 来源：MoviePilot Backend `v3.2.14` 新增 `/danmaku/status`、`/danmaku/match`、`/danmaku/search`、`/danmaku/bangumi/{anime_id}`、`/danmaku/comments/{episode_id}`、手动绑定和缓存清理接口；`stream-info` 同时增加 `danmaku_enabled`。这些接口主要面向原生客户端，配套 Web v3.2.14 没有弹幕播放页。
+- 用户可见场景：播放动漫时在画面上叠加弹幕评论，提供开关；匹配失败、未配置弹幕源或后端低于 v3.2.14 时保持普通播放。
+- 当前判断：TV 播放器没有弹幕层，不属于兼容必修；大屏播放动漫时有明确使用场景，列为功能候选。
+- 可评估方向：
+  - 先做只读播放：`/danmaku/match` 按 TMDB/季/集匹配，`/danmaku/comments/{episode_id}` 拉取评论；必须按 `>= v3.2.14` 门禁，低于该版本或版本读不出时不请求，播放器照常工作。
+  - 弹幕渲染要评估 AetherEngine/AVPlayer 叠加层、字幕遮挡、暂停/拖动、大量弹幕性能和遥控器关闭入口。
+  - `/danmaku/config` 管理端、手动绑定纠偏和缓存清理属于 Web/后台配置，不搬进 TV。
 
 ## 暂不作为 TV 功能待办
 
