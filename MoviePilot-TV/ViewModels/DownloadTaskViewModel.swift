@@ -14,6 +14,8 @@ class DownloadTaskViewModel: ObservableObject {
   @Published private(set) var clientsLoadFailed = false
   /// 第一次结果之前任务列表请求失败的下载器。绑定下载器：切到别的下载器后不沿用失败文字。
   @Published private(set) var downloadsLoadFailedClient: String?
+  /// `/download/` 返回 403：当前账号没有下载管理权限。保留区块，只显示权限提示并停止重试。
+  @Published private(set) var downloadsPermissionDenied = false
   @Published var errorMessage: String?
 
   var canOperateDownloads: Bool {
@@ -30,6 +32,17 @@ class DownloadTaskViewModel: ObservableObject {
 
   private static let pollingFailureNotificationThreshold = 5
 
+  /// 下载管理权限的 403 语义从 v3.2.11 起才成立：此前 `/download/` 只要求全局 manage，
+  /// 读到 403 不能说明 `manage.downloading` 被关闭。
+  nonisolated static let downloadPermissionMinimumBackendVersion = "v3.2.11"
+
+  nonisolated static func supportsDownloadPermissionState(backendVersion: String?) -> Bool {
+    BackendVersionGate.isAvailable(
+      since: downloadPermissionMinimumBackendVersion,
+      backendVersion: backendVersion
+    )
+  }
+
   init(apiService: APIService = .shared) {
     self.apiService = apiService
   }
@@ -44,7 +57,9 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   var pendingLoadState: PendingLoadState? {
-    guard apiService.canAccess(.manage), !clientsLoadFailed else { return nil }
+    guard apiService.canAccess(.manage), !clientsLoadFailed, !downloadsPermissionDenied else {
+      return nil
+    }
     if hasLoadedClients && selectedClient.isEmpty { return nil }
     guard !canOperateDownloads else { return nil }
     return downloadsLoadFailedClient == selectedClient ? .failed : .loading
@@ -54,6 +69,10 @@ class DownloadTaskViewModel: ObservableObject {
   func setPresentationActive(_ isActive: Bool) {
     guard isPresentationActive != isActive else { return }
     isPresentationActive = isActive
+    if isActive {
+      // 重新进入状态页时再试一次；管理员可能已经补开下载管理权限。
+      downloadsPermissionDenied = false
+    }
     presentationGeneration &+= 1
     downloadLoadGeneration &+= 1
   }
@@ -119,6 +138,7 @@ class DownloadTaskViewModel: ObservableObject {
       clearForRestrictedUser()
       return
     }
+    guard !downloadsPermissionDenied else { return }
     await loadClientsIfNeeded()
     guard isPresentationActive,
       currentPresentationGeneration == presentationGeneration,
@@ -175,6 +195,23 @@ class DownloadTaskViewModel: ObservableObject {
     } catch is CancellationError {
       return
     } catch {
+      if Self.supportsDownloadPermissionState(
+        backendVersion: apiService.settings?.BACKEND_VERSION
+      ), Self.isDownloadPermissionDenied(error) {
+        guard isPresentationActive,
+          currentPresentationGeneration == presentationGeneration,
+          !Task.isCancelled,
+          selectedClient == clientName,
+          currentGeneration == downloadLoadGeneration
+        else { return }
+        downloadsPermissionDenied = true
+        downloadLoadGeneration += 1
+        downloadsLoadFailedClient = nil
+        consecutiveDownloadsFailures = 0
+        downloads = []
+        loadedClient = ""
+        return
+      }
       // 和成功路径同一套校验：切换下载器或有更新的请求后，旧请求的失败既不显示到当前下载器上，
       // 也不计入连续失败次数。
       guard isPresentationActive,
@@ -197,11 +234,25 @@ class DownloadTaskViewModel: ObservableObject {
     downloadLoadGeneration += 1
     hasLoadedClients = false
     clientsLoadFailed = false
+    downloadsPermissionDenied = false
     downloadsLoadFailedClient = nil
     clients = []
     selectedClient = ""
     downloads = []
     loadedClient = ""
+  }
+
+  private static func isDownloadPermissionDenied(_ error: Error) -> Bool {
+    guard let apiError = error as? APIError else { return false }
+    switch apiError {
+    case .confirmedForbidden(let statusCode, let message):
+      // `/user/current` 成功只证明 token 仍有效；反代/WAF 也可能单独拦截 `/download/`。
+      // 只有 MoviePilot 下载接口的官方拒绝文案才能进入权限提示。
+      guard statusCode == 403, let message else { return false }
+      return message.trimmingCharacters(in: .whitespacesAndNewlines) == "用户权限不足"
+    default:
+      return false
+    }
   }
 
   private func reportPollingFailureIfNeeded(

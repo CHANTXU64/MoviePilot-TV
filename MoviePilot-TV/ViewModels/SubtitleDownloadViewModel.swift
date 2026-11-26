@@ -222,8 +222,8 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
 
   private static func serverFinished(_ error: Error) -> Bool {
     switch error as? APIError {
-    case .serverMessage, .authenticationChallenge, .unauthorized, .credentialsRejected,
-      .decodingError, .mfaUnsupported:
+    case .serverMessage, .authenticationChallenge, .confirmedForbidden, .unauthorized,
+      .credentialsRejected, .decodingError, .mfaUnsupported:
       return true
     case .gatewayStatus, .networkError, .invalidURL, .backendVersionUnavailable, .unknown, .none:
       return false

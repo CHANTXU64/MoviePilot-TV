@@ -34,12 +34,12 @@
 
 ### 通知中心与通知历史
 
-- 来源：MoviePilot Web / Backend `v2.13.6 -> v2.13.14` 强化通知中心、通知历史和未读提示。
-- 当前判断：TV 端已有本地错误通知机制，未实现完整通知中心。
+- 来源：MoviePilot Web / Backend `v2.13.6 -> v2.13.14` 强化通知中心、通知历史和未读提示；`v3.2.11` 的 `POST /message/web` 从仅超级用户改为绑定真实登录用户，`GET /message/web` 在 v3.2.10 已只依赖 token；`v3.2.12` 新增 `GET /message/history`（旧 `GET /message/web` 保留为同行为兼容入口）。
+- 当前判断：TV 端已有本地错误通知机制，未实现完整通知中心；TV 尚未调用 `/message/*`，不构成当前兼容必修。
 - 可评估方向：
-  - 是否需要一个只读通知列表，展示后台任务、订阅、下载结果。
-  - 是否需要未读角标或系统页入口。
-  - 是否避免把后台管理消息流直接搬到 TV 首屏。
+  - 是否需要一个只读通知列表，展示后台任务、订阅、下载结果；`/message/history` 同时返回接收消息和发送通知，展示时要区分系统通知与用户消息。
+  - 是否需要未读角标或系统页入口；该接口本身不提供未读字段，未读状态必须另找后端字段，不能从列表内容推断。
+  - 若接入，按 `>= v3.2.12` 门禁；低于该版本没有 `/message/history`，旧 `GET /message/web` 虽可 token 读取，但不提供 history 的接收+发送合并语义，不能当成同义替代路径。避免把后台管理消息流直接搬到 TV 首屏。
 
 ### 下载任务高级字段与控制
 
@@ -94,20 +94,21 @@
 
 ### 订阅日历与特殊季显示
 
-- 来源：Web 在订阅日历、特殊季标签、订阅进度展示上有持续优化。
-- 当前判断：目前不是 TV 端兼容阻断；订阅核心契约仍由 `docs/subscription-compatibility-checklist.md` 维护。
+- 来源：Web 在订阅日历、特殊季标签、订阅进度展示上有持续优化；`v3.2.12` 给 `CalendarSubscription` 增加可选 `start_episode`，并把 `completed_episode` 的派生计算改为把起始集之前的集数视为无需下载，不再重复计入缺集（同时影响订阅列表和 `/subscribe/calendar` 的响应值）。
+- 当前判断：目前不是 TV 端兼容阻断；订阅核心契约仍由 `docs/subscription-compatibility-checklist.md` 维护。TV 没有日历视图，订阅卡片上的 `completed_episode` 是原值透传，v3.2.12 只是让该值更准确。
 - 可评估方向：
-  - 是否增加 TV 端订阅日历视图。
-  - 是否改进第 0 季、特别篇、特殊季标签显示。
-  - 是否在订阅卡片上展示更细的入库/缺失进度说明。
+  - 是否增加 TV 端订阅日历视图。若跟进，必须用 `start_episode` 过滤起始集之前的日期和集号，并按 `>= v3.2.12` 门禁；低于该版本没有该字段，不能自行从 `total_episode`/`lack_episode` 反推。
+  - 是否改进第 0 季、特别篇、特殊季标签显示。特殊季仍按现有订阅身份和快照展示，不能因 `completed_episode` 的计算变化改写取消、写回或搜索逻辑。
+  - 是否在订阅卡片上展示更细的入库/缺失进度说明；展示前要区分 `total_episode`、`lack_episode` 和 `completed_episode` 的口径，避免把后端派生值反写回订阅。
 
 ### 媒体服务器流式播放与搜索
 
-- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）。
-- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest` 路径没有受影响；在真实后端与上游 Web 的调用方式稳定前，不做大屏入口或播放器改造。
+- 来源：MoviePilot Backend `v3.2.7` 新增 `POST /mediaserver/stream-ticket`、`GET /mediaserver/search`、`GET /mediaserver/stream-info`、`POST /mediaserver/stream-info/music`、`GET /mediaserver/stream`、`/stream-subtitle`、`/stream-lyrics` 与 `/mediaserver/episodes*`；`v3.2.8` 的原生流改为优先代理媒体服务器上游，并新增 `GET /mediaserver/episode-metadata`（Web 媒体库搜索的选集弹层使用）；`v3.2.10` 又新增 `GET /mediaserver/browse`、`/filters`、`/detail`、`/seasons`、`/season-episodes` 和 `POST /mediaserver/progress`，并扩展 `/mediaserver/search` 的媒体类型、服务器和媒体库过滤；`v3.2.13` 给 `stream-info` 增加无凭据 STRM 直链 `strm_url` 和媒体源 `direct_url`。
+- 当前判断：仍不跟进。TV 播放器直连 Emby/Jellyfin/Plex，不经过后端的原生流代理，`/mediaserver/stream*` 对其没有收益；`episode-metadata` 与 TV 已有的 TMDB 季集、媒体服务器集标识重叠，不构成兼容缺口。`v3.2.10` 之后 Web 已有完整的媒体服务器浏览/筛选/详情入口，但 TV 的媒体库以 TMDB/订阅身份和现有「最近添加/继续观看」为主，再接一套媒体服务器导航会与现有内容身份、焦点和播放器路径并行，当前没有必须补的用户场景。TV 现有 `/mediaserver/exists`、`/mediaserver/notexists`、`/mediaserver/latest`、`/mediaserver/playing` 和 `/mediaserver/play` 路径未受影响。
 - 可评估方向：
-  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。`episode-metadata` 只有在未来出现「媒体库搜索直接选集」的大屏入口时再评估，不单独立项。
-  - `/stream-info`/`/stream` 等原生流端点属于 `v3.2.7` 起的新行为，若未来接入必须按 `>= v3.2.7` 门禁并保留现有路径回退；`/mediaserver/episode-metadata` 属于 `v3.2.8` 起的新行为，若未来接入必须单独按 `>= v3.2.8` 门禁。不要在本轮把它们写成 TV 已支持。
+  - 等上游接口和 Web 调用稳定后，再评估是否用 `/mediaserver/search`/`browse` 替代现有媒体库选择、用 `/stream-info`/`/stream` 接入原生播放器，以及 `/mediaserver/episodes*` 是否能替代 TV 当前的季集标识计算。`episode-metadata` 只有在未来出现「媒体库搜索直接选集」的大屏入口时再评估，不单独立项。
+  - `v3.2.10` 的 `browse`/`filters`/`detail`/`seasons`/`season-episodes`/`progress` 属于该版本起的新行为，若未来接入必须按 `>= v3.2.10` 门禁；`strm_url`/`direct_url` 属于 `v3.2.13` 起的新行为，必须单独按 `>= v3.2.13` 门禁；现有 `stream*` 仍按 `>= v3.2.7`，`episode-metadata` 仍按 `>= v3.2.8`。低版本、版本读不出或无法解析时保留现有路径，不能把新增字段当必填。
+  - STRM 直链只作为现有播放器起播/直连优化的候选，不改变 TV 直连 Emby/Jellyfin/Plex 的主路径；浏览/详情入口若要跟进，先评估它是否会和订阅媒体库、TMDB 详情页形成重复入口，再决定是否只做只读浏览。
 
 ## 暂不作为 TV 功能待办
 

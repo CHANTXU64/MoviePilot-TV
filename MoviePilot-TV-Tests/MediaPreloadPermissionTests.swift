@@ -463,7 +463,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
         media: MediaInfo(tmdb_id: 456, title: "Subscriber Movie", type: "电影")
       )
       XCTFail("Expected subscription status permission failure to be surfaced.")
-    } catch APIError.authenticationChallenge(let statusCode, _) {
+    } catch APIError.confirmedForbidden(let statusCode, _) {
       XCTAssertEqual(statusCode, 403)
     } catch {
       XCTFail("Unexpected error: \(error)")
@@ -523,7 +523,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
         mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
       )
       XCTFail("Expected season availability permission failure to surface")
-    } catch APIError.authenticationChallenge(let statusCode, _) {
+    } catch APIError.confirmedForbidden(let statusCode, _) {
       XCTAssertEqual(statusCode, 403)
     } catch {
       XCTFail("Unexpected error: \(error)")

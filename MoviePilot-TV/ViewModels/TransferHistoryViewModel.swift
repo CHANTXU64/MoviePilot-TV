@@ -8,6 +8,10 @@ private enum TransferHistoryMutationValidation: Equatable {
   case cancelled
 }
 
+private enum TransferHistoryMutationValidationError: Error {
+  case incompletePagination
+}
+
 @MainActor
 class TransferHistoryViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -57,6 +61,8 @@ class TransferHistoryViewModel: ObservableObject {
   private let apiService: APIService
   // 后端固定每页条数，供轮询游标推进/回退统一计算。
   private let pageSize = 20
+  // mutation 前取全表快照时使用的正数分页；v3.2.12 起后端拒绝 count<=0。
+  private let mutationValidationPageSize = 100
   // 与 Paginator threshold 保持一致，基于可见列表位置触发 loadMore。
   private let loadMoreThreshold = 8
   // Paginator 当前维护的分页数据层（按页追加）。
@@ -435,15 +441,11 @@ class TransferHistoryViewModel: ObservableObject {
       apiService.isSessionUnchanged(from: sourceSession)
     else { return .cancelled }
     do {
-      // 后端自 v2.15.1 起约定负 count 返回全表；只在 mutation 前使用一次。
-      let response = try await apiService.fetchTransferHistory(page: 1, count: -1, title: nil)
+      let currentItemsByID = try await fetchTransferHistoryForMutationValidation(
+        expectedItems: expectedItems,
+        sourceSession: sourceSession
+      )
       guard apiService.isSessionUnchanged(from: sourceSession) else { return .cancelled }
-
-      var currentItemsByID: [Int: TransferHistory] = [:]
-      currentItemsByID.reserveCapacity(response.list.count)
-      for item in response.list {
-        currentItemsByID[item.id] = item
-      }
 
       let allTargetsAreCurrent = expectedItems.allSatisfy { expectedItem in
         guard let currentItem = currentItemsByID[expectedItem.id] else { return false }
@@ -456,6 +458,70 @@ class TransferHistoryViewModel: ObservableObject {
       Logger.error("Failed to validate transfer history before mutation: \(error)")
       return .unavailable("服务器记录有未知变化，请重试。")
     }
+  }
+
+  /// 只为待操作记录取当前指纹；找到全部目标即停，避免无意义扫描整张表。
+  /// 分页只用于定位目标，不把多页结果拼成“完整快照”。
+  private func fetchTransferHistoryForMutationValidation(
+    expectedItems: [TransferHistory],
+    sourceSession: APIServiceSessionSnapshot
+  ) async throws -> [Int: TransferHistory] {
+    let targetIDs = Set(expectedItems.map(\.id))
+    var remainingIDs = targetIDs
+    var itemsByID: [Int: TransferHistory] = [:]
+    var seenIDs = Set<Int>()
+    var expectedTotal: Int?
+    var page = 1
+    var maxPages = 1
+
+    while page <= maxPages {
+      let response = try await apiService.fetchTransferHistory(
+        page: page,
+        count: mutationValidationPageSize,
+        title: nil
+      )
+      guard apiService.isSessionUnchanged(from: sourceSession), !Task.isCancelled else {
+        throw CancellationError()
+      }
+
+      if let expectedTotal, response.total != expectedTotal {
+        throw TransferHistoryMutationValidationError.incompletePagination
+      }
+      if expectedTotal == nil {
+        expectedTotal = response.total
+        maxPages = max(
+          1,
+          (response.total + mutationValidationPageSize - 1) / mutationValidationPageSize + 1
+        )
+      }
+
+      for item in response.list {
+        guard seenIDs.insert(item.id).inserted else {
+          throw TransferHistoryMutationValidationError.incompletePagination
+        }
+        if remainingIDs.remove(item.id) != nil {
+          itemsByID[item.id] = item
+        }
+      }
+
+      if remainingIDs.isEmpty {
+        return itemsByID
+      }
+      if response.list.isEmpty {
+        if seenIDs.count >= (expectedTotal ?? 0) {
+          return itemsByID
+        }
+        throw TransferHistoryMutationValidationError.incompletePagination
+      }
+
+      // 已按 total 看完全部记录，目标仍不在其中：交给上层按“记录已变化”处理。
+      if let expectedTotal, seenIDs.count >= expectedTotal {
+        return itemsByID
+      }
+      page += 1
+    }
+
+    throw TransferHistoryMutationValidationError.incompletePagination
   }
 
   private func validationFailureMessage(

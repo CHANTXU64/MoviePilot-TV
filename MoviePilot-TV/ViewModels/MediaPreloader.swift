@@ -442,8 +442,8 @@ class MediaPreloadTask: ObservableObject {
     case .serverMessage(let message):
       guard let status = APIService.httpStatusCode(fromServerMessage: message) else { return false }
       return status >= 500 || status == 408 || status == 429
-    case .invalidURL, .decodingError, .authenticationChallenge, .credentialsRejected,
-      .mfaUnsupported, .unauthorized, .backendVersionUnavailable, .unknown:
+    case .invalidURL, .decodingError, .authenticationChallenge, .confirmedForbidden,
+      .credentialsRejected, .mfaUnsupported, .unauthorized, .backendVersionUnavailable, .unknown:
       return false
     }
   }

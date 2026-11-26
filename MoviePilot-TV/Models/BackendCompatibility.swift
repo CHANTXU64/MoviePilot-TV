@@ -113,6 +113,10 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
       "v3.2.7",
       "v3.2.8",
       "v3.2.9",
+      "v3.2.10",
+      "v3.2.11",
+      "v3.2.12",
+      "v3.2.13",
     ].map { MoviePilotVersion($0)! }
   )
 }
