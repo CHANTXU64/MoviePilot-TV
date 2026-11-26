@@ -49,11 +49,11 @@ private func withTransferHistoryTimeout<T: Sendable>(
   }
 }
 
-private func transferHistoryListJSON(ids: ClosedRange<Int>) -> String {
+private func transferHistoryListJSON(ids: ClosedRange<Int>, total: Int? = nil) -> String {
   let items = ids.map { id in
     #"{"id":\#(id),"title":"记录\#(id)","type":"电影","status":true}"#
   }.joined(separator: ",")
-  return #"{"list":[\#(items)],"total":\#(ids.count)}"#
+  return #"{"list":[\#(items)],"total":\#(total ?? ids.count)}"#
 }
 
 @MainActor
@@ -667,17 +667,14 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let target = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(
-        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+        #"{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
           .utf8
       )
     )
     await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
-      1: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
-          .utf8
-      ),
+      1: Data(transferHistoryListJSON(ids: 1...100, total: 101).utf8),
       2: Data(
-        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":2}"#
+        #"{"list":[{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":101}"#
           .utf8
       ),
     ])
@@ -765,16 +762,13 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let target = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(
-        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+        #"{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
           .utf8
       )
     )
     await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
-      1: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
-          .utf8
-      ),
-      2: Data(#"{"list":[],"total":2}"#.utf8),
+      1: Data(transferHistoryListJSON(ids: 1...100, total: 101).utf8),
+      2: Data(#"{"list":[],"total":101}"#.utf8),
     ])
 
     let viewModel = TransferHistoryViewModel(apiService: service)
@@ -816,17 +810,14 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let target = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(
-        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+        #"{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
           .utf8
       )
     )
     await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
-      1: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
-          .utf8
-      ),
+      1: Data(transferHistoryListJSON(ids: 1...100, total: 101).utf8),
       2: Data(
-        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":3}"#
+        #"{"list":[{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":102}"#
           .utf8
       ),
     ])
@@ -870,17 +861,14 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let target = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(
-        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+        #"{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
           .utf8
       )
     )
     await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
-      1: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
-          .utf8
-      ),
+      1: Data(transferHistoryListJSON(ids: 1...100, total: 101).utf8),
       2: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
+        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":101}"#
           .utf8
       ),
     ])
@@ -921,12 +909,9 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let gate = TransferHistoryAsyncGate()
     await TransferHistoryURLProtocol.stub.setHistoryGate(gate)
     await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage([
-      1: Data(
-        #"{"list":[{"id":10,"title":"First","type":"电影","src":"/downloads/first.mkv","src_storage":"local","status":true,"date":"2026-08-11 09:00:00"}],"total":2}"#
-          .utf8
-      ),
+      1: Data(transferHistoryListJSON(ids: 1...100, total: 101).utf8),
       2: Data(
-        #"{"list":[{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":2}"#
+        #"{"list":[{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}],"total":101}"#
           .utf8
       ),
     ])
@@ -936,7 +921,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let target = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(
-        #"{"id":11,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
+        #"{"id":101,"title":"Later","type":"电影","src":"/downloads/later.mkv","src_storage":"local","status":true,"date":"2026-08-11 10:00:00"}"#
           .utf8
       )
     )
