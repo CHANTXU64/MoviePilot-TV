@@ -17,6 +17,22 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.99.1",
+      releaseDate: "2026-11-26",
+      compatibleMoviePilotVersion: "v3.2.14",
+      highlights: [
+        "兼容 MoviePilot 后端 v2.15.6 至 v3.2.14。",
+      ],
+      updates: [],
+      fixes: [
+        "修复进入媒体详情页时，标题和页面在加载过程中上移、跳动的问题。",
+        "修复在媒体详情页从顶部页签下移时，直接翻到第二页、看不到简介和操作按钮的问题。",
+        "修复没有下载管理权限时，下载页一直显示加载、不提示原因的问题（MoviePilot v3.2.11 及以上）。",
+        "修复在 MoviePilot v3.2.12 及以上删除整理记录或 AI 重新整理时报错的问题。",
+      ],
+      optimizations: []
+    ),
+    AppChangelogEntry(
       version: "v0.99.0",
       releaseDate: "2026-11-21",
       compatibleMoviePilotVersion: "v3.2.9",
