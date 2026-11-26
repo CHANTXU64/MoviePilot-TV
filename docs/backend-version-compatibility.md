@@ -47,6 +47,7 @@
 | v3.2.11 | b80965ef921534dc9a4e476c6a3a9a557111ba7c | v3.2.11 | 按真实登录用户收紧 WebAgent/Web 聊天权限；`/download/` 对仅有全局 `manage`、但没有 `manage.downloading`/`search.resource`/`subscribe` 的用户返回 403，`/history/download` 同步按权限收敛；`POST /message/web` 绑定真实用户；`GET /message/web` 仍只依赖 token。TV 从该版本起仅在 `/download/` 返回官方 `用户权限不足` 时显示无下载管理权限并停止轮询，其他 403 仍按普通失败重试（403 语义仅 v3.2.11+） |
 | v3.2.12 | 505dc910119bf931aad1d473d65d121ac32fa059 | v3.2.12 | 数据库历史/订阅/消息分页改为正整数校验，消息历史新增 `/message/history` 并保留 `/message/web` 兼容入口，日历增 `start_episode`，订阅完成集数计算修正，下载增 TMDB 身份转换与待确认受理，整理增名称/目录预览；TV 列表分页 page 从 1 开始，但整理记录 mutation 前校验由 `count=-1` 改为按目标正数分页定位（见下节），订阅/下载写回与返回字段未变 |
 | v3.2.13 | 0caa7fc3935d8b958a49b671bb06c4472f5f6e70 | v3.2.13 | `stream-info` 增无凭据 STRM 直链 `strm_url`/`direct_url`；修复目录整理字节统计、仅解析集数时的种子重试/告警、未上映缺集释放；TV 不调用 `stream-info`，已用播放/下载/整理请求与返回字段未变 |
+| v3.2.14 | d644a9e904893f243d347fb266054636f68d321d | v3.2.14 | 媒体服务器新增个人账号绑定、实时会话同步、直连路由和弹幕接口，`/stream` 支持 HEAD；下载待确认按同实例历史核验、一次性集数探测改为瞬时冷却、搜索跳过过期分页；订阅名称/类型校验增强。TV 已用 `/mediaserver/play/{itemid}`、下载、整理、订阅和搜索请求与返回字段未变，新接口无 TV 入口 |
 
 v3.2.10 的源码核对以当前 v3.2.9 标签 `b186df432` 为基准；表中 v3.2.9 的 `195747fae` 是首次登记时的标签提交，官方后来前移，差异见上文单集试看说明。
 
@@ -284,6 +285,19 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **TV 影响**：TV 不调用 `/mediaserver/stream-info`，现有应用内播放仍走 `/mediaserver/play/{itemid}` 和内容/字幕代理；新增字段不会被解码，旧路径不受影响。没有必须修，也没有新增版本门禁。
 - **Web 配套**：Web v3.2.13 只有版本号提交，没有页面行为变化。
 - **必须修与候选**：必须修 = 无。STRM 直链可作为后续播放优化候选，但本轮不接入。
+- **验证边界**：契约部分为源码对照，未运行真实后端兼容测试；未新增 TV 运行时代码。
+
+**登记验证**：在 tvOS 27.2 Simulator 上运行 `python3 scripts/test-tvos.py --runtime 27.2 --only-testing MoviePilot-TV-Tests/SystemVersionInfoTests`，`SystemVersionInfoTests` 10 个用例 0 失败。未运行 `--full` 三版本矩阵、未连真实后端、未做 UI 视觉验收。
+
+### v3.2.14 核对范围与边界
+
+对照官方后端 [v3.2.13 → v3.2.14](https://github.com/jxxghp/MoviePilot/compare/v3.2.13...v3.2.14) 及各标签 `version.py` 指定的 Web [v3.2.13 → v3.2.14](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.13...v3.2.14)。后端基准提交 `0caa7fc3935d8b958a49b671bb06c4472f5f6e70`，目标提交 `d644a9e904893f243d347fb266054636f68d321d`（31 个提交，含 2 个合并提交；`version.py` 同步到 `v3.2.14`）；Web 基准提交 `eb4ac5a9878b3875a31841fabb219b0a4949f02b`，目标提交 `98a71572f98858289459eabd37d543e73f9737d8`（8 个提交）。核对时点 2026-11-26。只新增目标精确版本 v3.2.14。
+
+- **接口与契约**：媒体服务器新增 `/mediaserver/account-bindings`，`stream-info` 增加可选的播放路由、播放会话和进度同步字段，`/mediaserver/progress` 增加 `started` 会话事件，`/mediaserver/stream` 接受 HEAD；新增 `/danmaku/*` 匹配、评论、绑定和缓存接口。TV 不调用这些端点，且新增 JSON 字段均为可选。`app/api/endpoints/download.py`、`history.py`、`media.py`、`system.py`、`user.py`、`login.py` 的 Diff 为空；下载待确认按同一下载器实例匹配历史、一次性集数探测失败改为瞬时冷却、搜索跳过过期分页和 Piggo 链接解析均在后端内部完成，不改变 TV 的请求或成功响应。
+- **订阅**：`POST/PUT /subscribe/` 对空白 `name` 和非法 `type` 增加明确校验，非法值返回 `success:false` 和中文错误，不再抛 500；TV 始终发送合法“电影/电视剧”类型，创建、编辑和错误展示路径不受影响，订阅 schema、媒体身份和写回契约未变。
+- **TV 影响**：TV 现有应用内播放仍走 `/mediaserver/play/{itemid}`，该路由及其响应未变；`/mediaserver/latest`、`/playing`、`/exists`、`/notexists`、`/clients`、`/download*`、`/history/*`、`/subscribe*`、`/search/title` 和 `/system/global` 的 TV 已用字段未变。没有必须修，也没有新增版本门禁。
+- **Web 配套**：Web v3.2.14 新增个人资料页媒体服务器账号绑定、插件独立联邦宿主、设置页 LLM 代理开关和移动端插件 SDK；这些页面 TV 不使用，不构成 TV 兼容问题。
+- **必须修与候选**：必须修 = 无。弹幕播放列为功能候选并写入 `docs/frontend-update-todo.md`；媒体服务器账号绑定、实时会话/直连路由、插件宿主、插件版本/hash 和 LLM 代理开关暂不跟进。
 - **验证边界**：契约部分为源码对照，未运行真实后端兼容测试；未新增 TV 运行时代码。
 
 **登记验证**：在 tvOS 27.2 Simulator 上运行 `python3 scripts/test-tvos.py --runtime 27.2 --only-testing MoviePilot-TV-Tests/SystemVersionInfoTests`，`SystemVersionInfoTests` 10 个用例 0 失败。未运行 `--full` 三版本矩阵、未连真实后端、未做 UI 视觉验收。
