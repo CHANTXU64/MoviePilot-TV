@@ -245,10 +245,11 @@ class DownloadTaskViewModel: ObservableObject {
   private static func isDownloadPermissionDenied(_ error: Error) -> Bool {
     guard let apiError = error as? APIError else { return false }
     switch apiError {
-    case .confirmedForbidden(let statusCode, _):
-      return statusCode == 403
-    case .serverMessage(let message):
-      return APIService.httpStatusCode(fromServerMessage: message) == 403
+    case .confirmedForbidden(let statusCode, let message):
+      // `/user/current` 成功只证明 token 仍有效；反代/WAF 也可能单独拦截 `/download/`。
+      // 只有 MoviePilot 下载接口的官方拒绝文案才能进入权限提示。
+      guard statusCode == 403, let message else { return false }
+      return message.trimmingCharacters(in: .whitespacesAndNewlines) == "用户权限不足"
     default:
       return false
     }
