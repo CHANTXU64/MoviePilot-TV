@@ -3,6 +3,14 @@ import SwiftUI
 /// 长按菜单里「详情」之外的另一个详情入口：默认打开 TMDB 时给原来源页，
 /// 否则沿用原来的 TMDB 详情页。按解析后的主来源判断，插件条目不受辅助豆瓣 ID 影响。
 nonisolated enum MediaDetailMenuPolicy {
+  /// 快捷订阅与默认详情页使用同一个目标：已有后端确认的 TMDB 目标时不再读原来源预载。
+  static func subscriptionTarget(
+    for item: MediaInfo,
+    confirmedTarget: MediaInfo?
+  ) -> MediaInfo {
+    confirmedTarget ?? item
+  }
+
   static func alternateDetailSourceTitle(
     for item: MediaInfo,
     defaultOpenTMDBDetail: Bool
@@ -41,6 +49,15 @@ struct MediaContextMenuItems: View {
   private var alternateDetailSourceTitle: String? {
     MediaDetailMenuPolicy.alternateDetailSourceTitle(
       for: item, defaultOpenTMDBDetail: usesDefaultTMDBDetail)
+  }
+
+  private var confirmedTMDBTarget: MediaInfo? {
+    APIService.shared.mediaPreloader.confirmedTMDBTarget(for: item)
+  }
+
+  private var subscribeTarget: MediaInfo {
+    MediaDetailMenuPolicy.subscriptionTarget(
+      for: item, confirmedTarget: confirmedTMDBTarget)
   }
 
   var body: some View {
@@ -113,26 +130,29 @@ struct MediaContextMenuItems: View {
       }
 
       // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
-      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态
-      let preloadedSubscribed = APIService.shared.mediaPreloader.peekTask(for: item)?.isSubscribed
+      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态。
+      // 映射已切到 TMDB 目标时，订阅状态和操作目标都必须跟随目标，不能读已释放的原来源任务。
+      let subscribeItem = subscribeTarget
+      let preloadedSubscribed = APIService.shared.mediaPreloader
+        .peekTask(for: subscribeItem)?.isSubscribed
 
       if canSubscribeMedia, item.type != "音乐" {
         Button {
           if let onSubscribe = onSubscribe {
-            onSubscribe(item)
+            onSubscribe(subscribeItem)
           } else {
             subscriptionHandler.handleSubscribe(
-              item,
+              subscribeItem,
               expectedSubscribed: preloadedSubscribed == true
             )
           }
         } label: {
-          if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
+          if subscribeItem.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
             Label("已订阅", systemImage: AppSymbol.subscribed)
           } else {
             Label(
-              item.canDirectlySubscribe ? "订阅" : "分季订阅",
-              systemImage: item.canDirectlySubscribe ? AppSymbol.subscribe : AppSymbol.chooseSeasons)
+              subscribeItem.canDirectlySubscribe ? "订阅" : "分季订阅",
+              systemImage: subscribeItem.canDirectlySubscribe ? AppSymbol.subscribe : AppSymbol.chooseSeasons)
           }
         }
       }

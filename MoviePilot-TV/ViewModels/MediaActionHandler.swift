@@ -24,6 +24,12 @@ nonisolated enum TMDBDetailOpenPolicy {
     case openSource
   }
 
+  /// 条目带来源季号时，只有后端确认了 TMDB 季的目标才能用；否则回原来源页，不替用户猜一季。
+  static func targetKeepsConfirmedSeason(_ target: MediaInfo, for item: MediaInfo) -> Bool {
+    guard item.type == "电视剧", let season = item.season, season >= 0 else { return true }
+    return target.tmdbSeasonHint != nil
+  }
+
   static func decision(
     for item: MediaInfo,
     isEnabled: Bool,
@@ -151,7 +157,7 @@ class MediaActionHandler: ObservableObject {
     case .openTMDB(let tmdbId):
       // 焦点预载已经切到确认过的 TMDB 目标时直接复用，包括映射给出的季号。
       if let target = apiService.mediaPreloader.confirmedTMDBTarget(for: item),
-        Self.targetKeepsConfirmedSeason(target, for: item)
+        TMDBDetailOpenPolicy.targetKeepsConfirmedSeason(target, for: item)
       {
         return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
       }
@@ -176,7 +182,7 @@ class MediaActionHandler: ObservableObject {
 
     case .recognize:
       if let target = apiService.mediaPreloader.confirmedTMDBTarget(for: item),
-        Self.targetKeepsConfirmedSeason(target, for: item)
+        TMDBDetailOpenPolicy.targetKeepsConfirmedSeason(target, for: item)
       {
         return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
       }
@@ -186,7 +192,7 @@ class MediaActionHandler: ObservableObject {
         coordinator.isCurrent(sourceToken)
       else { return nil }
       // 原来源页保留「TMDB详情页」入口：后端没确认到目标时用户仍可手动识别。
-      if let target, Self.targetKeepsConfirmedSeason(target, for: item) {
+      if let target, TMDBDetailOpenPolicy.targetKeepsConfirmedSeason(target, for: item) {
         return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
       }
       return pushIfCurrent(item, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
@@ -225,12 +231,6 @@ class MediaActionHandler: ObservableObject {
       group.cancelAll()
       return target
     }
-  }
-
-  /// 条目带来源季号时，只有后端确认了 TMDB 季的目标才能用；否则回原来源页，不替用户猜一季。
-  private static func targetKeepsConfirmedSeason(_ target: MediaInfo, for item: MediaInfo) -> Bool {
-    guard item.type == "电视剧", let season = item.season, season >= 0 else { return true }
-    return target.tmdbSeasonHint != nil
   }
 
   /// 默认入口启用时，TMDB 主身份的剧集把卡片季号当作已确认的 TMDB 季交给剧集行；
