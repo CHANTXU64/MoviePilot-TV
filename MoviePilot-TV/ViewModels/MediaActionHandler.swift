@@ -149,13 +149,14 @@ class MediaActionHandler: ObservableObject {
       return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
 
     case .openTMDB(let tmdbId):
+      // 焦点预载已经切到确认过的 TMDB 目标时直接复用，包括映射给出的季号。
+      if let target = apiService.mediaPreloader.confirmedTMDBTarget(for: item),
+        Self.targetKeepsConfirmedSeason(target, for: item)
+      {
+        return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+      }
       // 来源季号不能直接当成 TMDB 季：先让后端确认；确认不到就回原来源页，避免打开另一季。
       if item.type == "电视剧", let season = item.season, season >= 0 {
-        if let target = apiService.mediaPreloader.peekTask(for: item)?.backendConfirmedTMDBTarget,
-          target.tmdbSeasonHint != nil
-        {
-          return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
-        }
         let target = await resolveConfirmedTMDBTarget(
           for: item, in: coordinator, attemptID: attemptID)
         guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot),
@@ -174,7 +175,7 @@ class MediaActionHandler: ObservableObject {
       return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
 
     case .recognize:
-      if let target = apiService.mediaPreloader.peekTask(for: item)?.backendConfirmedTMDBTarget,
+      if let target = apiService.mediaPreloader.confirmedTMDBTarget(for: item),
         Self.targetKeepsConfirmedSeason(target, for: item)
       {
         return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)

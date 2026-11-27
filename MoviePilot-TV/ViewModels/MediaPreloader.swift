@@ -708,6 +708,15 @@ class MediaPreloadTask: ObservableObject {
         apiService: apiService
       ) {
         self.tmdbResolution = target
+        // 默认详情入口启用时，命中共享映射就把焦点候选切到 TMDB 目标，避免同时预载两份完整详情。
+        let candidate = self.partialMedia
+        if TMDBDetailOpenPolicy.decision(
+          for: candidate,
+          isEnabled: SystemViewModel.shouldDefaultOpenTMDBDetail,
+          hasRecognitionReporting: apiService.supportsTMDBRecognitionReporting
+        ) != .openSource {
+          apiService.mediaPreloader.prepareTMDBTarget(target.target, for: candidate)
+        }
         return
       }
     } catch is CancellationError {
@@ -939,6 +948,14 @@ class MediaPreloader: ObservableObject {
   private var suppressedFocusCandidateKeys: [UUID: String] = [:]
   /// 详情页附带预载（如 TMDB 跳转目标），不占用焦点 candidateKey。
   private var auxiliaryPreloads: [UUID: Set<String>] = [:]
+  /// 焦点预载命中共享映射后，当前候选会从原来源切到 TMDB 目标；原来源任务随之释放，
+  /// 这个关系仍要留给点击使用，避免再查一次映射。
+  private struct ConfirmedTMDBTarget {
+    let sourceKey: String
+    let target: MediaInfo
+  }
+  private var confirmedTargetsBySourceKey: [String: ConfirmedTMDBTarget] = [:]
+  private var confirmedSourceKeyByTargetKey: [String: String] = [:]
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
@@ -1028,6 +1045,37 @@ class MediaPreloader: ObservableObject {
     return task
   }
 
+  /// 焦点预载命中共享映射时，把当前候选从原来源切到 TMDB 目标：先释放原来源的详情预载，
+  /// 再预载目标详情，避免同时加载两份完整详情。只有当前焦点候选才切换。
+  func prepareTMDBTarget(_ target: MediaInfo, for source: MediaInfo) {
+    let sourceKey = source.id
+    let targetKey = target.id
+    guard sourceKey != targetKey, candidateKey == sourceKey else { return }
+
+    if let previous = confirmedTargetsBySourceKey[sourceKey] {
+      confirmedSourceKeyByTargetKey.removeValue(forKey: previous.target.id)
+    }
+    // 两个来源指向同一目标时，只保留当前焦点来源的关系。
+    if let previousSourceKey = confirmedSourceKeyByTargetKey[targetKey] {
+      confirmedTargetsBySourceKey.removeValue(forKey: previousSourceKey)
+    }
+    confirmedTargetsBySourceKey[sourceKey] = ConfirmedTMDBTarget(
+      sourceKey: sourceKey, target: target)
+    confirmedSourceKeyByTargetKey[targetKey] = sourceKey
+
+    let stackID = candidateStackID ?? Self.legacyNavigationOwner
+    replaceCandidate(with: targetKey, stackID: stackID)
+    _ = preload(for: target)
+  }
+
+  /// 点击默认详情入口时读取：优先当前预载任务，其次焦点阶段已确认并切换过的目标。
+  func confirmedTMDBTarget(for source: MediaInfo) -> MediaInfo? {
+    if let target = cache[source.id]?.backendConfirmedTMDBTarget {
+      return target
+    }
+    return confirmedTargetsBySourceKey[source.id]?.target
+  }
+
   func isFocusCandidate(_ key: String) -> Bool {
     candidateKey == key
   }
@@ -1063,6 +1111,7 @@ class MediaPreloader: ObservableObject {
     if candidateStackID == stackID, let key = candidateKey {
       candidateKey = nil
       candidateStackID = nil
+      forgetConfirmedTarget(releasedTargetKey: key)
       releaseTask(forKey: key, fallbackMedia: cache[key]?.partialMedia, size: UIScreen.main.bounds.size)
     }
   }
@@ -1112,6 +1161,7 @@ class MediaPreloader: ObservableObject {
     candidateKey = nil
     candidateStackID = nil
     if let previousCandidate, previousCandidate != key {
+      forgetConfirmedTarget(releasedTargetKey: previousCandidate)
       releaseTask(
         forKey: previousCandidate,
         fallbackMedia: cache[previousCandidate]?.partialMedia,
@@ -1202,6 +1252,8 @@ class MediaPreloader: ObservableObject {
     presentedHeroKeyByOwner.removeAll()
     presentedHeroDetailByOwner.removeAll()
     auxiliaryPreloads.removeAll()
+    confirmedTargetsBySourceKey.removeAll()
+    confirmedSourceKeyByTargetKey.removeAll()
     suppressedFocusCandidateKeys.removeAll()
   }
 
@@ -1245,12 +1297,22 @@ class MediaPreloader: ObservableObject {
     candidateKey = navigationOwners[key] == nil ? key : nil
     candidateStackID = candidateKey == nil ? nil : stackID
     if let previousKey {
+      forgetConfirmedTarget(releasedTargetKey: previousKey)
       releaseTask(
         forKey: previousKey,
         fallbackMedia: cache[previousKey]?.partialMedia,
         size: UIScreen.main.bounds.size
       )
     }
+  }
+
+  private func forgetConfirmedTarget(releasedTargetKey: String) {
+    guard let sourceKey = confirmedSourceKeyByTargetKey.removeValue(
+      forKey: releasedTargetKey),
+      let confirmed = confirmedTargetsBySourceKey[sourceKey],
+      confirmed.target.id == releasedTargetKey
+    else { return }
+    confirmedTargetsBySourceKey.removeValue(forKey: sourceKey)
   }
 
   private func releaseAuxiliaryPreloads(

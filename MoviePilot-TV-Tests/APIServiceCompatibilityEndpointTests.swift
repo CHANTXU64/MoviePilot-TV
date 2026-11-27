@@ -4200,6 +4200,122 @@ final class MediaMappingTests: XCTestCase {
     await matchGate.open()
   }
 
+  /// 焦点命中共享映射时，预载候选从原来源切到 TMDB 目标，只保留目标详情预载。
+  func testFocusPreloadSwitchesCandidateToConfirmedTMDBTarget() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    await stub.setDetailLoadResponse(
+      Data(#"{"tmdb_id":456,"source":"themoviedb","title":"目标电影","type":"电影"}"#.utf8),
+      path: "/api/v1/media/456")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let source = MediaInfo(
+      douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+
+    XCTAssertNotNil(preloader.preloadFocusedCandidateIfNeeded(for: source))
+    await waitUntil(timeout: 3) {
+      preloader.confirmedTMDBTarget(for: source) != nil
+    }
+    let confirmed = try XCTUnwrap(preloader.confirmedTMDBTarget(for: source))
+    await waitUntil(timeout: 3) { preloader.isFocusCandidate(confirmed.id) }
+
+    XCTAssertEqual(confirmed.tmdb_id, 456)
+    XCTAssertNil(preloader.peekTask(for: source), "原来源详情预载应释放")
+    XCTAssertNotNil(preloader.peekTask(for: confirmed))
+    await waitUntil(timeout: 3) {
+      await stub.requestPaths().contains("/api/v1/media/456")
+    }
+  }
+
+  /// 焦点移走后释放已切换的 TMDB 目标，并清掉源到目标的临时关系。
+  func testFocusMoveReleasesConfirmedTargetPreload() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let source = MediaInfo(
+      douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let other = MediaInfo(
+      douban_id: "999", source: "douban", title: "另一部电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+
+    XCTAssertNotNil(preloader.preloadFocusedCandidateIfNeeded(for: source))
+    await waitUntil(timeout: 3) {
+      preloader.confirmedTMDBTarget(for: source) != nil
+    }
+    let confirmed = try XCTUnwrap(preloader.confirmedTMDBTarget(for: source))
+    await waitUntil(timeout: 3) { preloader.isFocusCandidate(confirmed.id) }
+
+    XCTAssertNotNil(preloader.preloadFocusedCandidateIfNeeded(for: other))
+    XCTAssertFalse(preloader.isFocusCandidate(confirmed.id))
+    XCTAssertNil(preloader.peekTask(for: confirmed))
+    XCTAssertNil(preloader.confirmedTMDBTarget(for: source))
+  }
+
+  /// 焦点已经预载好 TMDB 目标时，点击直接复用同一个预载任务。
+  func testDefaultDetailOpenReusesConfirmedTargetPreload() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let source = MediaInfo(
+      douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    XCTAssertNotNil(preloader.preloadFocusedCandidateIfNeeded(for: source))
+    await waitUntil(timeout: 3) {
+      preloader.confirmedTMDBTarget(for: source) != nil
+    }
+    let confirmed = try XCTUnwrap(preloader.confirmedTMDBTarget(for: source))
+    await waitUntil(timeout: 3) { preloader.isFocusCandidate(confirmed.id) }
+    let preloadedTask = try XCTUnwrap(preloader.peekTask(for: confirmed))
+
+    let opened = await MediaActionHandler(apiService: service).openMediaDetail(
+      source, in: coordinator, sourceToken: coordinator.sourceToken())
+    let entry = try XCTUnwrap(opened)
+    guard case .media(let routeTarget) = entry.route else {
+      return XCTFail("应打开 TMDB 详情页")
+    }
+    XCTAssertEqual(routeTarget.tmdb_id, 456)
+
+    let navigationTask = try XCTUnwrap(coordinator.preloadTask(for: entry))
+    XCTAssertTrue(navigationTask === preloadedTask)
+  }
+
   /// 只改本用例的目标设置，结束后恢复，避免影响同一进程里的其他用例。
   private func overrideDefaultOpenTMDBDetail(_ enabled: Bool) -> () -> Void {
     let key = "defaultOpenTMDBDetail"
