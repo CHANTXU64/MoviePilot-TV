@@ -9,22 +9,238 @@ struct TMDBTargetResolution {
   var isNameRecognized = false
 }
 
+/// 默认详情入口的目标选择。只在共享映射与按需识别/上报 API 可用（后端 v3.2.9 起），
+/// 且条目解析后的主来源是豆瓣、Bangumi、AniList 时改道；
+/// 合集、音乐、主来源是 TMDB 或插件等其他来源的条目保持原样。
+nonisolated enum TMDBDetailOpenPolicy {
+  private static let reroutablePrimarySources: Set<String> = ["douban", "bangumi", "anilist"]
+
+  enum Decision: Equatable {
+    /// 条目自己带着可用的 TMDB 编号，直接打开，不再识别。
+    case openTMDB(Int)
+    /// 先按后端共享映射/按需查找确认 TMDB。
+    case recognize
+    /// 打开原条目。
+    case openSource
+  }
+
+  static func decision(
+    for item: MediaInfo,
+    isEnabled: Bool,
+    hasRecognitionReporting: Bool
+  ) -> Decision {
+    // 默认打开 TMDB 详情要求共享映射和能把识别结果写回共享表的按需识别 API。
+    // 低于 v3.2.9、版本读不出或无法解析时不启用，避免为了跳转退回名称识别去直查 TMDB。
+    guard isEnabled, hasRecognitionReporting, item.shouldPreloadDetail else { return .openSource }
+    // 只按解析后的主来源改道：插件条目即使带辅助豆瓣 ID 也留在自己的详情页。
+    guard let primarySource = item.identity?.source,
+      reroutablePrimarySources.contains(primarySource),
+      item.type != "音乐"
+    else { return .openSource }
+    if let tmdbId = MediaIdentifier.validNumericIdentifier(item.tmdb_id) {
+      return .openTMDB(tmdbId)
+    }
+    return .recognize
+  }
+}
+
 @MainActor
 class MediaActionHandler: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
-  private let apiService: APIService
+  /// 默认打开详情时等待后端确认 TMDB 目标的上限；超过就打开原来源详情页。
+  nonisolated static let defaultOpenRecognitionTimeout: Duration = .seconds(10)
 
-  init(apiService: APIService = .shared) {
+  /// 一次按导航栈发起的默认详情打开。新点击取代旧等待，不同栈互不阻塞。
+  private struct OpenAttempt {
+    let id: UUID
+    let task: Task<ImageNavigationEntry?, Never>
+  }
+
+  private let apiService: APIService
+  private let openRecognitionTimeout: Duration
+  private var openAttempts: [UUID: OpenAttempt] = [:]
+
+  init(
+    apiService: APIService = .shared,
+    openRecognitionTimeout: Duration = MediaActionHandler.defaultOpenRecognitionTimeout
+  ) {
     self.apiService = apiService
+    self.openRecognitionTimeout = openRecognitionTimeout
   }
 
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
+  /// 默认详情入口正在等待后端确认 TMDB 目标（可能多个导航栈同时等待）。
+  @Published private(set) var isOpeningDefaultDetail = false
+  private var defaultDetailWaitCount = 0
 
   func cancelPresentation() {
     showTMDBNotFoundAlert = false
+  }
+
+  /// 打开媒体详情的默认入口：豆瓣、Bangumi、AniList 条目先请后端确认 TMDB 目标（最多等
+  /// `openRecognitionTimeout`），确认到就打开 TMDB 详情页；确认不到、失败或超时就打开原来源详情页。
+  /// 默认入口只接受条目自带的 TMDB 编号或后端确认的共享映射/按需查找，不用名称识别猜测。
+  /// 需要后端的共享 TMDB 映射与按需识别/上报能力（v3.2.9 起）；
+  /// 设置关闭、能力不足、合集、音乐和主来源不是这些站点的条目仍直接打开原条目。
+  @discardableResult
+  func openMediaDetail(
+    _ item: MediaInfo,
+    in coordinator: ImageNavigationCoordinator,
+    loadingPosterURL: URL? = nil
+  ) async -> ImageNavigationEntry? {
+    let coordinatorID = coordinator.id
+    // 新点击立即取代同一导航栈里还在等待的旧动作；旧结果由 sourceToken 丢弃。
+    openAttempts[coordinatorID]?.task.cancel()
+
+    let sourceToken = coordinator.sourceToken()
+    let attemptID = UUID()
+    let task = Task<ImageNavigationEntry?, Never> { @MainActor [weak self] in
+      guard let self else { return nil }
+      return await self.performOpen(
+        item,
+        in: coordinator,
+        sourceToken: sourceToken,
+        loadingPosterURL: loadingPosterURL
+      )
+    }
+    // 来源页离开、切标签或栈失效时，结束还在等待的回调；不再让进度提示留在新页面上。
+    let observation = coordinator.objectWillChange.sink { [weak coordinator] _ in
+      Task { @MainActor in
+        guard let coordinator, !coordinator.isCurrent(sourceToken) else { return }
+        task.cancel()
+      }
+    }
+    openAttempts[coordinatorID] = OpenAttempt(id: attemptID, task: task)
+    let entry = await task.value
+    observation.cancel()
+    if openAttempts[coordinatorID]?.id == attemptID {
+      openAttempts[coordinatorID] = nil
+    }
+    return entry
+  }
+
+  private func performOpen(
+    _ item: MediaInfo,
+    in coordinator: ImageNavigationCoordinator,
+    sourceToken: ImageNavigationSourceToken,
+    loadingPosterURL: URL?
+  ) async -> ImageNavigationEntry? {
+    // 同栈后一次点击会取消前一次的内层任务；被取消的任务不得再抢先入栈。
+    guard !Task.isCancelled, coordinator.isCurrent(sourceToken) else { return nil }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let posterURL = loadingPosterURL ?? item.imageURLs.poster
+
+    let isDefaultOpenEnabled = SystemViewModel.shouldDefaultOpenTMDBDetail
+    let hasRecognitionReporting = apiService.supportsTMDBRecognitionReporting
+    switch TMDBDetailOpenPolicy.decision(
+      for: item,
+      isEnabled: isDefaultOpenEnabled,
+      hasRecognitionReporting: hasRecognitionReporting
+    ) {
+    case .openSource:
+      let target = Self.sourceRouteTarget(
+        for: item, isDefaultOpenActive: isDefaultOpenEnabled && hasRecognitionReporting)
+      return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+
+    case .openTMDB(let tmdbId):
+      // 来源季号不能直接当成 TMDB 季：先让后端确认；确认不到就回原来源页，避免打开另一季。
+      if let season = item.season, season >= 0 {
+        if let target = apiService.mediaPreloader.peekTask(for: item)?.backendConfirmedTMDBTarget,
+          target.tmdbSeasonHint != nil
+        {
+          return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+        }
+        let target = await resolveConfirmedTMDBTarget(for: item)
+        guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot),
+          coordinator.isCurrent(sourceToken)
+        else { return nil }
+        // 关系确认了但没确认季号时也回原来源页，不替用户猜一季。
+        if let target, target.tmdbSeasonHint != nil {
+          return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+        }
+        return pushIfCurrent(item, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+      }
+      let target = Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
+      return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+
+    case .recognize:
+      if let target = apiService.mediaPreloader.peekTask(for: item)?.backendConfirmedTMDBTarget,
+        Self.targetKeepsConfirmedSeason(target, for: item)
+      {
+        return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+      }
+      let target = await resolveConfirmedTMDBTarget(for: item)
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot),
+        coordinator.isCurrent(sourceToken)
+      else { return nil }
+      // 原来源页保留「TMDB详情页」入口：后端没确认到目标时用户仍可手动识别。
+      if let target, Self.targetKeepsConfirmedSeason(target, for: item) {
+        return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+      }
+      return pushIfCurrent(item, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
+    }
+  }
+
+  /// 所有默认入口的入栈都经过这里：任务已被后一次点击取消时直接放弃。
+  private func pushIfCurrent(
+    _ target: MediaInfo,
+    posterURL: URL?,
+    sourceToken: ImageNavigationSourceToken,
+    in coordinator: ImageNavigationCoordinator
+  ) -> ImageNavigationEntry? {
+    guard !Task.isCancelled else { return nil }
+    return coordinator.push(
+      target, loadingPosterURL: posterURL, ifCurrent: sourceToken)
+  }
+
+  /// 只向后端要确认过的 TMDB 目标，最多等 `openRecognitionTimeout`；不在这里做名称识别。
+  private func resolveConfirmedTMDBTarget(for item: MediaInfo) async -> MediaInfo? {
+    beginDefaultDetailWait()
+    defer { endDefaultDetailWait() }
+    return await withTaskGroup(of: MediaInfo?.self) { group in
+      group.addTask {
+        (try? await Self.mappedTMDBTarget(for: item, apiService: self.apiService))?.target
+      }
+      group.addTask {
+        try? await Task.sleep(for: self.openRecognitionTimeout)
+        return nil
+      }
+      let target = await group.next() ?? nil
+      group.cancelAll()
+      return target
+    }
+  }
+
+  private func beginDefaultDetailWait() {
+    defaultDetailWaitCount += 1
+    if !isOpeningDefaultDetail { isOpeningDefaultDetail = true }
+  }
+
+  private func endDefaultDetailWait() {
+    defaultDetailWaitCount = max(0, defaultDetailWaitCount - 1)
+    if defaultDetailWaitCount == 0 { isOpeningDefaultDetail = false }
+  }
+
+  /// 条目带来源季号时，只有后端确认了 TMDB 季的目标才能用；否则回原来源页，不替用户猜一季。
+  private static func targetKeepsConfirmedSeason(_ target: MediaInfo, for item: MediaInfo) -> Bool {
+    guard let season = item.season, season >= 0 else { return true }
+    return target.tmdbSeasonHint != nil
+  }
+
+  /// 默认入口启用时，TMDB 主身份的剧集把卡片季号当作已确认的 TMDB 季交给剧集行；
+  /// 其他主来源或功能关闭时原样返回，保持关闭后的旧行为。
+  private static func sourceRouteTarget(
+    for item: MediaInfo, isDefaultOpenActive: Bool
+  ) -> MediaInfo {
+    guard isDefaultOpenActive, item.identity?.source == "themoviedb", item.type == "电视剧",
+      item.tmdbSeasonHint == nil, let season = item.season, season >= 0
+    else { return item }
+    var target = item
+    target.tmdbSeasonHint = season
+    return target
   }
 
   func searchResourcesTarget(
@@ -264,6 +480,8 @@ class MediaActionHandler: ObservableObject {
     let identity: MediaIdentity
     let rawType: String
     let mediaType: String
+    /// 请求时带的来源季号；映射必须回显它，否则可能是整剧关系，不能拿来给分季卡片选季。
+    let season: Int?
   }
 
   private static func mappingRequest(
@@ -283,7 +501,8 @@ class MediaActionHandler: ObservableObject {
     return MappingRequest(
       identity: MediaIdentity(source: source, mediaId: mediaId),
       rawType: rawType,
-      mediaType: mediaType)
+      mediaType: mediaType,
+      season: item.season)
   }
 
   private static func mappingTMDBTarget(
@@ -295,6 +514,7 @@ class MediaActionHandler: ObservableObject {
     guard mapping.media_source == request.identity.source,
       mapping.media_id == request.identity.mediaId,
       mapping.type == request.mediaType,
+      mapping.season == request.season,
       mapping.tmdb_id > 0,
       mapping.tmdb_type == "movie" || mapping.tmdb_type == "tv"
     else {

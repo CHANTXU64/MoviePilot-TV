@@ -31,8 +31,14 @@ struct MediaContextMenuItems: View {
     }
 
     Button {
-      // 点击"详情"时立即触发预加载
-      navigationCoordinator.push(item)
+      // 按默认详情来源打开：豆瓣、Bangumi、AniList 条目先识别 TMDB，识别不到再打开原来源页。
+      Task { @MainActor in
+        await mediaActionHandler.openMediaDetail(
+          item,
+          in: navigationCoordinator,
+          loadingPosterURL: item.imageURLs.poster
+        )
+      }
     } label: {
       Label("详情", systemImage: AppSymbol.details)
     }

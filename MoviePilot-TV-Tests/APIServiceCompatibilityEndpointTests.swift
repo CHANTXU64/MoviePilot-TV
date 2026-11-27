@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 
 @testable import MoviePilot_TV
 
@@ -2409,6 +2410,19 @@ final class MediaMappingTests: XCTestCase {
     try configure(service, backendVersion: backendVersion, currentUser: subscriber)
   }
 
+  private func configureSearcher(_ service: APIService, backendVersion: String) throws {
+    let searcher = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["search": true],
+      user_id: 43,
+      user_name: "searcher",
+      avatar: nil
+    )
+    try configure(service, backendVersion: backendVersion, currentUser: searcher)
+  }
+
   func testFetchMediaMappingDecodesHitAndSendsContractQuery() async throws {
     installStub()
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -3662,6 +3676,455 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertFalse(paths.contains("/api/v1/subscribe/media/1136767"))
     let methods = await stub.requestMethods()
     XCTAssertFalse(methods.contains("DELETE"))
+  }
+
+  /// 默认详情入口：映射命中时直接打开 TMDB 详情页，原来源身份不进入跳转目标；
+  /// 映射端点只要求已登录用户，没有 search 权限也能打开。
+  func testDefaultDetailOpenUsesMappedTMDBTarget() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试电影", type: "电影")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("默认入口应打开媒体详情") }
+
+    XCTAssertEqual(target.tmdb_id, 456)
+    XCTAssertEqual(target.type, "电影")
+    XCTAssertEqual(target.source, "tmdb")
+    XCTAssertNil(target.douban_id)
+    XCTAssertEqual(coordinator.topEntryID, entry?.id)
+    let paths = await stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/media/mapping"))
+    XCTAssertFalse(paths.contains("/api/v1/media/search"))
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  /// 映射和按需查找都没有结果时，正常打开原来源详情页；名称识别桩会命中另一部作品，默认入口不得使用它。
+  func testDefaultDetailOpenFallsBackWhenBackendFindsNothing() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+    let handler = MediaActionHandler(apiService: service)
+
+    let entry = await handler.openMediaDetail(item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdb_id)
+    XCTAssertFalse(handler.showTMDBNotFoundAlert)
+    let paths = await stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/media/mapping/match"))
+    XCTAssertFalse(paths.contains("/api/v1/media/search"))
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  /// 识别超过等待上限时不再等，直接打开原来源详情页。
+  func testDefaultDetailOpenFallsBackAfterRecognitionTimeout() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(nil, waitFor: matchGate)
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+    let handler = MediaActionHandler(
+      apiService: service, openRecognitionTimeout: .milliseconds(60))
+
+    let started = ContinuousClock.now
+    let entry = await handler.openMediaDetail(item, in: coordinator, loadingPosterURL: nil)
+    let elapsed = ContinuousClock.now - started
+    defer { Task { await matchGate.open() } }
+
+    XCTAssertLessThan(elapsed, .seconds(2), "超时后必须立即回退，不能等 60 秒的查找")
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdb_id)
+  }
+
+  /// 后端只有共享映射、没有按需识别/上报 API（v3.2.8）时默认跳转整体不启用，
+  /// 直接打开原来源页，不退回名称识别去直查 TMDB。
+  func testDefaultDetailOpenRequiresRecognitionReportingCapability() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.8")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    // 不带标题：源页预载即使启动也不会走名称识别，便于断言这次打开没有识别请求。
+    let item = MediaInfo(douban_id: "123", source: "douban", type: "电视剧")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let started = ContinuousClock.now
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let elapsed = ContinuousClock.now - started
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应打开原来源详情页") }
+
+    XCTAssertLessThan(elapsed, .milliseconds(500))
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdb_id)
+    let paths = await stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/media/mapping/match"))
+    XCTAssertFalse(paths.contains("/api/v1/media/search"))
+    XCTAssertFalse(paths.contains("/api/v1/media/recognize"))
+  }
+
+  /// TMDB 主身份的剧集卡片把季号当作已确认的 TMDB 季交给剧集行。
+  func testDefaultDetailOpenKeepsTMDBPrimarySeasonHint() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      tmdb_id: 456, source: "themoviedb", title: "测试剧", type: "电视剧", season: 2)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
+
+    XCTAssertEqual(target.tmdb_id, 456)
+    XCTAssertEqual(target.tmdbSeasonHint, 2)
+    XCTAssertEqual(
+      MediaDetailEpisodeSeasons.navigationSeason(for: target, routeMedia: target), 2)
+  }
+
+  /// 非 TMDB 主来源带辅助 TMDB ID 和季号时，只有映射确认的 TMDB 季才交给剧集行。
+  func testDefaultDetailOpenUsesConfirmedTMDBSeasonForAuxiliaryID() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv","tmdb_season":3}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      tmdb_id: 456, douban_id: "123", source: "douban", media_id: "123",
+      title: "测试剧", type: "电视剧", season: 2)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
+
+    XCTAssertEqual(target.tmdb_id, 456)
+    XCTAssertEqual(target.tmdbSeasonHint, 3)
+    XCTAssertEqual(
+      MediaDetailEpisodeSeasons.navigationSeason(for: target, routeMedia: target), 3)
+  }
+
+  /// 辅助 TMDB ID 的来源季号确认不到时回原来源页，不把来源季号当成 TMDB 季。
+  func testDefaultDetailOpenFallsBackWhenAuxiliarySeasonIsUnconfirmed() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      tmdb_id: 456, douban_id: "123", source: "douban", media_id: "123",
+      title: "测试剧", type: "电视剧", season: 2)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdbSeasonHint)
+  }
+
+  /// 映射确认了 TMDB 关系但没给季号时，仍回原来源页，不把卡片季号当成 TMDB 季。
+  func testDefaultDetailOpenFallsBackWhenAuxiliaryMappingHasNoSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      tmdb_id: 456, douban_id: "123", source: "douban", media_id: "123",
+      title: "测试剧", type: "电视剧", season: 2)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdbSeasonHint)
+  }
+
+  /// 没有辅助 TMDB ID 的分季条目也只在映射确认 TMDB 季后才打开 TMDB。
+  func testDefaultDetailOpenFallsBackWhenMappingSeasonIsUnconfirmed() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":2,"tmdb_id":456,"tmdb_type":"tv"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", media_id: "123",
+      title: "测试剧", type: "电视剧", season: 2)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, loadingPosterURL: nil)
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+
+    XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+    XCTAssertNil(target.tmdbSeasonHint)
+  }
+
+  /// 映射没有回显请求的来源季时，即使给了 TMDB 季也不能拿来给分季卡片选季。
+  func testDefaultDetailOpenRejectsMappingWithoutRequestedSourceSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      tmdb_id: 456, douban_id: "123", source: "douban", media_id: "123",
+      title: "测试剧", type: "电视剧", season: 2)
+    let payloads = [
+      #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","tmdb_id":456,"tmdb_type":"tv","tmdb_season":1}}"#,
+      #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"tv","season":1,"tmdb_id":456,"tmdb_type":"tv","tmdb_season":1}}"#,
+    ]
+
+    for payload in payloads {
+      await stub.reset()
+      await stub.setMediaMappingResponse(Data(payload.utf8))
+      let coordinator = ImageNavigationCoordinator(apiService: service)
+      coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+      let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+        item, in: coordinator, loadingPosterURL: nil)
+      let route = try XCTUnwrap(entry?.route)
+      coordinator.retire()
+      guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
+
+      XCTAssertEqual(target.apiMediaId, item.apiMediaId)
+      XCTAssertNil(target.tmdbSeasonHint)
+    }
+  }
+
+  /// 同栈连续两次点击：第二次取消第一次后，第一次不得抢先入栈。
+  func testSecondSameStackClickWinsOverCancelledFirst() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configure(service, backendVersion: "v3.2.9")
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let itemA = MediaInfo(
+      tmdb_id: 111, douban_id: "111", source: "douban", media_id: "111",
+      title: "A", type: "电影")
+    let itemB = MediaInfo(
+      tmdb_id: 222, douban_id: "222", source: "douban", media_id: "222",
+      title: "B", type: "电影")
+    let handler = MediaActionHandler(apiService: service)
+
+    for _ in 0..<20 {
+      let coordinator = ImageNavigationCoordinator(apiService: service)
+      coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+      let first = Task { await handler.openMediaDetail(itemA, in: coordinator) }
+      let second = Task { await handler.openMediaDetail(itemB, in: coordinator) }
+      let firstEntry = await first.value
+      let secondEntry = await second.value
+      coordinator.retire()
+
+      XCTAssertNil(firstEntry)
+      let route = try XCTUnwrap(secondEntry?.route)
+      guard case .media(let target) = route else { return XCTFail("第二次点击应打开 B") }
+      XCTAssertEqual(target.tmdb_id, 222)
+    }
+  }
+
+  /// 一个导航栈的慢识别不能吞掉另一个栈的详情点击。
+  func testDefaultDetailOpenOnAnotherStackIsNotBlockedBySlowRecognition() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(nil, waitFor: matchGate)
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let slowItem = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let fastItem = MediaInfo(
+      tmdb_id: 999, douban_id: "999", source: "douban", media_id: "999",
+      title: "测试电影", type: "电影")
+    let coordinatorA = ImageNavigationCoordinator(apiService: service)
+    let coordinatorB = ImageNavigationCoordinator(apiService: service)
+    coordinatorA.setStackPresentation(isSelected: true, scenePhase: .active)
+    coordinatorB.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer {
+      coordinatorA.retire()
+      coordinatorB.retire()
+      Task { await matchGate.open() }
+    }
+    let handler = MediaActionHandler(apiService: service)
+
+    let slowTask = Task { await handler.openMediaDetail(slowItem, in: coordinatorA) }
+    await waitUntil(timeout: 3) {
+      await stub.requestPaths().contains("/api/v1/media/mapping/match")
+    }
+    let started = ContinuousClock.now
+    let entry = await handler.openMediaDetail(fastItem, in: coordinatorB)
+    let elapsed = ContinuousClock.now - started
+
+    XCTAssertLessThan(elapsed, .seconds(1))
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
+    XCTAssertEqual(target.tmdb_id, 999)
+
+    slowTask.cancel()
+    coordinatorA.retire()
+    await matchGate.open()
+    _ = await slowTask.value
+  }
+
+  /// 来源导航栈离开时立即结束等待，不把进度提示留到识别返回。
+  func testDefaultDetailOpenStopsWaitingWhenSourceLeaves() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(nil, waitFor: matchGate)
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer {
+      coordinator.retire()
+      Task { await matchGate.open() }
+    }
+    let handler = MediaActionHandler(apiService: service)
+
+    let openTask = Task { await handler.openMediaDetail(item, in: coordinator) }
+    await waitUntil(timeout: 3) {
+      await stub.requestPaths().contains("/api/v1/media/mapping/match")
+    }
+    let started = ContinuousClock.now
+    coordinator.retire()
+    _ = await openTask.value
+    let elapsed = ContinuousClock.now - started
+
+    XCTAssertLessThan(elapsed, .seconds(1))
+    XCTAssertNil(coordinator.topEntryID)
+    await matchGate.open()
+  }
+
+  /// 只改本用例的目标设置，结束后恢复，避免影响同一进程里的其他用例。
+  private func overrideDefaultOpenTMDBDetail(_ enabled: Bool) -> () -> Void {
+    let key = "defaultOpenTMDBDetail"
+    let original = UserDefaults.standard.object(forKey: key)
+    UserDefaults.standard.set(enabled, forKey: key)
+    return {
+      if let original {
+        UserDefaults.standard.set(original, forKey: key)
+      } else {
+        UserDefaults.standard.removeObject(forKey: key)
+      }
+    }
   }
 
   private func waitUntil(

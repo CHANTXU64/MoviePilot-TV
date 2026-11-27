@@ -11,7 +11,7 @@ struct MediaActionModifier: ViewModifier {
         Text("未识别到此媒体的TMDB信息")
       }
       .overlay {
-        if handler.isRecognizingTmdb {
+        if handler.isRecognizingTmdb || handler.isOpeningDefaultDetail {
           BlockingProgressOverlay(text: "正在识别媒体信息…")
         }
       }

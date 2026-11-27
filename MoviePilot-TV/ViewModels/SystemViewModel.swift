@@ -56,6 +56,7 @@ class SystemViewModel: ObservableObject {
   // MARK: - 详情页设置
 
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
+  private static let defaultOpenTMDBDetailKey = "defaultOpenTMDBDetail"
   private static let preloadTMDBDetailsKey = "preloadTMDBDetails"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
   private static let homeMediaTapPlaysInAppKey = "homeMediaTapPlaysInApp"
@@ -64,6 +65,14 @@ class SystemViewModel: ObservableObject {
   @Published var waitMediaDetailBackgroundImage: Bool = true {
     didSet {
       UserDefaults.standard.set(waitMediaDetailBackgroundImage, forKey: Self.waitMediaDetailBackgroundImageKey)
+    }
+  }
+
+  /// 打开豆瓣/Bangumi/AniList 条目时是否先识别 TMDB 并打开 TMDB 详情页；识别不到或超过等待时间再打开原来源详情页。
+  /// 只在后端共享映射与按需识别/上报 API 可用（v3.2.9 起且版本可解析）时显示和生效。默认开启。
+  @Published var defaultOpenTMDBDetail: Bool = true {
+    didSet {
+      UserDefaults.standard.set(defaultOpenTMDBDetail, forKey: Self.defaultOpenTMDBDetailKey)
     }
   }
 
@@ -274,6 +283,7 @@ class SystemViewModel: ObservableObject {
   init(apiService: APIService = .shared) {
     self.apiService = apiService
     waitMediaDetailBackgroundImage = Self.shouldWaitMediaDetailBackgroundImage
+    defaultOpenTMDBDetail = Self.shouldDefaultOpenTMDBDetail
     preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     homeMediaTapPlaysInApp = Self.shouldPlayHomeMediaInApp
@@ -520,6 +530,14 @@ class SystemViewModel: ObservableObject {
       return true
     }
     return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
+  }
+
+  /// 豆瓣/Bangumi/AniList 条目是否默认先识别 TMDB 并打开 TMDB 详情页。
+  static var shouldDefaultOpenTMDBDetail: Bool {
+    guard UserDefaults.standard.object(forKey: defaultOpenTMDBDetailKey) != nil else {
+      return true
+    }
+    return UserDefaults.standard.bool(forKey: defaultOpenTMDBDetailKey)
   }
 
   static var shouldPreloadTMDBDetails: Bool {

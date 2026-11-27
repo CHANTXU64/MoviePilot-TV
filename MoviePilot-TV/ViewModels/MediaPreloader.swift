@@ -198,6 +198,11 @@ class MediaPreloadTask: ObservableObject {
   @Published var tmdbId: Int?
   /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
   var tmdbTarget: MediaInfo? { tmdbResolution?.target }
+  /// 后端确认过的 TMDB 目标；名称识别猜出的不算。默认详情入口只接受这个。
+  var backendConfirmedTMDBTarget: MediaInfo? {
+    guard let resolution = tmdbResolution, !resolution.isNameRecognized else { return nil }
+    return resolution.target
+  }
   @Published private var tmdbResolution: TMDBTargetResolution?
   @Published var isTmdbRecognitionFinished = false
   /// 打开详情后才做的 TMDB 识别（按需查找，没找到再按名称识别）还没结束。

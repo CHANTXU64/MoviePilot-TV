@@ -162,6 +162,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   let loadMoreThreshold: Int
   let loadsImages: Bool
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
   @State private var preloadDebouncer = GridPreloadDebouncer()
@@ -412,7 +413,13 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       onShareTapped?(share)
     } else {
       preloadDebouncer.cancel(itemID: item.id, listIdentity: listIdentity)
-      navigationCoordinator.push(item)
+      Task { @MainActor in
+        await mediaActionHandler.openMediaDetail(
+          item,
+          in: navigationCoordinator,
+          loadingPosterURL: item.imageURLs.poster
+        )
+      }
     }
   }
 

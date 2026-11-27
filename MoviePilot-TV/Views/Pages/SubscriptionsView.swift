@@ -10,6 +10,7 @@ struct SubscriptionsView: View {
 
   @State private var selectedSubscribe: Subscribe?
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   init(isSelected: Bool = true, viewModel: SubscriptionsViewModel? = nil) {
     self.isSelected = isSelected
@@ -131,10 +132,13 @@ struct SubscriptionsView: View {
   private func navigateToDetail(for subscribe: Subscribe) {
     // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
     // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
-    navigationCoordinator.push(
-      subscribe.navigationMediaInfo(),
-      loadingPosterURL: subscribe.imageURLs.poster
-    )
+    Task { @MainActor in
+      await mediaActionHandler.openMediaDetail(
+        subscribe.navigationMediaInfo(),
+        in: navigationCoordinator,
+        loadingPosterURL: subscribe.imageURLs.poster
+      )
+    }
   }
 
   private func updateStackForeground() {

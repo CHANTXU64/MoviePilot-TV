@@ -830,7 +830,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
     XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
-    XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
+    XCTAssertTrue(menuSource.contains("mediaActionHandler.openMediaDetail("))
+    XCTAssertTrue(menuSource.contains("in: navigationCoordinator"))
     XCTAssertFalse(detailSource.contains("navigationPath.count"))
     XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseAfterNavigationStarts"))
     XCTAssertFalse(menuSource.contains("onDidNavigate"))
