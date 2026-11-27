@@ -3700,7 +3700,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("默认入口应打开媒体详情") }
 
@@ -3732,7 +3732,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
     let handler = MediaActionHandler(apiService: service)
 
-    let entry = await handler.openMediaDetail(item, in: coordinator, loadingPosterURL: nil)
+    let entry = await handler.openMediaDetail(item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
 
@@ -3766,7 +3766,7 @@ final class MediaMappingTests: XCTestCase {
       apiService: service, openRecognitionTimeout: .milliseconds(60))
 
     let started = ContinuousClock.now
-    let entry = await handler.openMediaDetail(item, in: coordinator, loadingPosterURL: nil)
+    let entry = await handler.openMediaDetail(item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let elapsed = ContinuousClock.now - started
     defer { Task { await matchGate.open() } }
 
@@ -3797,7 +3797,7 @@ final class MediaMappingTests: XCTestCase {
 
     let started = ContinuousClock.now
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let elapsed = ContinuousClock.now - started
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应打开原来源详情页") }
@@ -3828,7 +3828,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
 
@@ -3861,7 +3861,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
 
@@ -3869,6 +3869,37 @@ final class MediaMappingTests: XCTestCase {
     XCTAssertEqual(target.tmdbSeasonHint, 3)
     XCTAssertEqual(
       MediaDetailEpisodeSeasons.navigationSeason(for: target, routeMedia: target), 3)
+  }
+
+  /// 电影条目带 season 0 时，API 会归一化为 nil；客户端不能要求映射回显 0。
+  func testMovieSeasonZeroUsesNormalizedMappingSeason() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(
+      douban_id: "123", source: "douban", media_id: "123",
+      title: "测试电影", type: "电影", season: 0)
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer { coordinator.retire() }
+
+    let entry = await MediaActionHandler(apiService: service).openMediaDetail(
+      item, in: coordinator, sourceToken: coordinator.sourceToken())
+    let route = try XCTUnwrap(entry?.route)
+    guard case .media(let target) = route else { return XCTFail("应打开 TMDB 详情页") }
+
+    XCTAssertEqual(target.tmdb_id, 456)
+    XCTAssertEqual(target.type, "电影")
   }
 
   /// 辅助 TMDB ID 的来源季号确认不到时回原来源页，不把来源季号当成 TMDB 季。
@@ -3890,7 +3921,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
 
@@ -3921,7 +3952,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
 
@@ -3952,7 +3983,7 @@ final class MediaMappingTests: XCTestCase {
     defer { coordinator.retire() }
 
     let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-      item, in: coordinator, loadingPosterURL: nil)
+      item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
     let route = try XCTUnwrap(entry?.route)
     guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
 
@@ -3985,7 +4016,7 @@ final class MediaMappingTests: XCTestCase {
       let coordinator = ImageNavigationCoordinator(apiService: service)
       coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
       let entry = await MediaActionHandler(apiService: service).openMediaDetail(
-        item, in: coordinator, loadingPosterURL: nil)
+        item, in: coordinator, sourceToken: coordinator.sourceToken(), loadingPosterURL: nil)
       let route = try XCTUnwrap(entry?.route)
       coordinator.retire()
       guard case .media(let target) = route else { return XCTFail("应回退到原来源详情页") }
@@ -4017,8 +4048,16 @@ final class MediaMappingTests: XCTestCase {
     for _ in 0..<20 {
       let coordinator = ImageNavigationCoordinator(apiService: service)
       coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
-      let first = Task { await handler.openMediaDetail(itemA, in: coordinator) }
-      let second = Task { await handler.openMediaDetail(itemB, in: coordinator) }
+      let firstToken = coordinator.sourceToken()
+      let secondToken = coordinator.sourceToken()
+      let first = Task {
+        await handler.openMediaDetail(
+          itemA, in: coordinator, sourceToken: firstToken)
+      }
+      let second = Task {
+        await handler.openMediaDetail(
+          itemB, in: coordinator, sourceToken: secondToken)
+      }
       let firstEntry = await first.value
       let secondEntry = await second.value
       coordinator.retire()
@@ -4058,12 +4097,19 @@ final class MediaMappingTests: XCTestCase {
     }
     let handler = MediaActionHandler(apiService: service)
 
-    let slowTask = Task { await handler.openMediaDetail(slowItem, in: coordinatorA) }
+    let slowToken = coordinatorA.sourceToken()
+    let slowTask = Task {
+      await handler.openMediaDetail(
+        slowItem, in: coordinatorA, sourceToken: slowToken)
+    }
     await waitUntil(timeout: 3) {
       await stub.requestPaths().contains("/api/v1/media/mapping/match")
     }
+    XCTAssertTrue(coordinatorA.isPreparingMediaDetail)
+    XCTAssertFalse(coordinatorB.isPreparingMediaDetail)
     let started = ContinuousClock.now
-    let entry = await handler.openMediaDetail(fastItem, in: coordinatorB)
+    let entry = await handler.openMediaDetail(
+      fastItem, in: coordinatorB, sourceToken: coordinatorB.sourceToken())
     let elapsed = ContinuousClock.now - started
 
     XCTAssertLessThan(elapsed, .seconds(1))
@@ -4075,6 +4121,7 @@ final class MediaMappingTests: XCTestCase {
     coordinatorA.retire()
     await matchGate.open()
     _ = await slowTask.value
+    XCTAssertFalse(coordinatorA.isPreparingMediaDetail)
   }
 
   /// 来源导航栈离开时立即结束等待，不把进度提示留到识别返回。
@@ -4099,7 +4146,10 @@ final class MediaMappingTests: XCTestCase {
     }
     let handler = MediaActionHandler(apiService: service)
 
-    let openTask = Task { await handler.openMediaDetail(item, in: coordinator) }
+    let openToken = coordinator.sourceToken()
+    let openTask = Task {
+      await handler.openMediaDetail(item, in: coordinator, sourceToken: openToken)
+    }
     await waitUntil(timeout: 3) {
       await stub.requestPaths().contains("/api/v1/media/mapping/match")
     }
@@ -4109,6 +4159,43 @@ final class MediaMappingTests: XCTestCase {
     let elapsed = ContinuousClock.now - started
 
     XCTAssertLessThan(elapsed, .seconds(1))
+    XCTAssertNil(coordinator.topEntryID)
+    await matchGate.open()
+  }
+
+  /// 外层任务被取消时，内层等待和遮罩要跟着结束。
+  func testCancellingCallerStopsDefaultDetailWait() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSearcher(service, backendVersion: "v3.2.9")
+    let matchGate = CompatibilityEndpointAsyncGate()
+    await stub.setMediaMappingMatchResponse(nil, waitFor: matchGate)
+    let restoreSetting = overrideDefaultOpenTMDBDetail(true)
+    defer { restoreSetting() }
+    let item = MediaInfo(douban_id: "123", source: "douban", title: "测试剧", type: "电视剧")
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    defer {
+      coordinator.retire()
+      Task { await matchGate.open() }
+    }
+    let handler = MediaActionHandler(apiService: service)
+    let token = coordinator.sourceToken()
+    let openTask = Task {
+      await handler.openMediaDetail(item, in: coordinator, sourceToken: token)
+    }
+    await waitUntil(timeout: 3) {
+      await stub.requestPaths().contains("/api/v1/media/mapping/match")
+    }
+    XCTAssertTrue(coordinator.isPreparingMediaDetail)
+
+    openTask.cancel()
+    _ = await openTask.value
+    XCTAssertFalse(coordinator.isPreparingMediaDetail)
     XCTAssertNil(coordinator.topEntryID)
     await matchGate.open()
   }

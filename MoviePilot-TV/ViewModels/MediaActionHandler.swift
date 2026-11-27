@@ -72,9 +72,6 @@ class MediaActionHandler: ObservableObject {
 
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
-  /// 默认详情入口正在等待后端确认 TMDB 目标（可能多个导航栈同时等待）。
-  @Published private(set) var isOpeningDefaultDetail = false
-  private var defaultDetailWaitCount = 0
 
   func cancelPresentation() {
     showTMDBNotFoundAlert = false
@@ -89,13 +86,13 @@ class MediaActionHandler: ObservableObject {
   func openMediaDetail(
     _ item: MediaInfo,
     in coordinator: ImageNavigationCoordinator,
+    sourceToken: ImageNavigationSourceToken,
     loadingPosterURL: URL? = nil
   ) async -> ImageNavigationEntry? {
     let coordinatorID = coordinator.id
     // 新点击立即取代同一导航栈里还在等待的旧动作；旧结果由 sourceToken 丢弃。
     openAttempts[coordinatorID]?.task.cancel()
 
-    let sourceToken = coordinator.sourceToken()
     let attemptID = UUID()
     let task = Task<ImageNavigationEntry?, Never> { @MainActor [weak self] in
       guard let self else { return nil }
@@ -103,6 +100,7 @@ class MediaActionHandler: ObservableObject {
         item,
         in: coordinator,
         sourceToken: sourceToken,
+        attemptID: attemptID,
         loadingPosterURL: loadingPosterURL
       )
     }
@@ -114,7 +112,11 @@ class MediaActionHandler: ObservableObject {
       }
     }
     openAttempts[coordinatorID] = OpenAttempt(id: attemptID, task: task)
-    let entry = await task.value
+    let entry = await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      task.cancel()
+    }
     observation.cancel()
     if openAttempts[coordinatorID]?.id == attemptID {
       openAttempts[coordinatorID] = nil
@@ -126,6 +128,7 @@ class MediaActionHandler: ObservableObject {
     _ item: MediaInfo,
     in coordinator: ImageNavigationCoordinator,
     sourceToken: ImageNavigationSourceToken,
+    attemptID: UUID,
     loadingPosterURL: URL?
   ) async -> ImageNavigationEntry? {
     // 同栈后一次点击会取消前一次的内层任务；被取消的任务不得再抢先入栈。
@@ -147,13 +150,14 @@ class MediaActionHandler: ObservableObject {
 
     case .openTMDB(let tmdbId):
       // 来源季号不能直接当成 TMDB 季：先让后端确认；确认不到就回原来源页，避免打开另一季。
-      if let season = item.season, season >= 0 {
+      if item.type == "电视剧", let season = item.season, season >= 0 {
         if let target = apiService.mediaPreloader.peekTask(for: item)?.backendConfirmedTMDBTarget,
           target.tmdbSeasonHint != nil
         {
           return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
         }
-        let target = await resolveConfirmedTMDBTarget(for: item)
+        let target = await resolveConfirmedTMDBTarget(
+          for: item, in: coordinator, attemptID: attemptID)
         guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot),
           coordinator.isCurrent(sourceToken)
         else { return nil }
@@ -163,7 +167,10 @@ class MediaActionHandler: ObservableObject {
         }
         return pushIfCurrent(item, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
       }
-      let target = Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
+      // 电影没有 TMDB 季；条目上残留的季号不能带进 TMDB 目标。
+      let target = Self.tmdbJumpTarget(
+        for: item, tmdbId: tmdbId,
+        season: item.type == "电视剧" ? nil : .some(nil))
       return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
 
     case .recognize:
@@ -172,7 +179,8 @@ class MediaActionHandler: ObservableObject {
       {
         return pushIfCurrent(target, posterURL: posterURL, sourceToken: sourceToken, in: coordinator)
       }
-      let target = await resolveConfirmedTMDBTarget(for: item)
+      let target = await resolveConfirmedTMDBTarget(
+          for: item, in: coordinator, attemptID: attemptID)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot),
         coordinator.isCurrent(sourceToken)
       else { return nil }
@@ -197,9 +205,13 @@ class MediaActionHandler: ObservableObject {
   }
 
   /// 只向后端要确认过的 TMDB 目标，最多等 `openRecognitionTimeout`；不在这里做名称识别。
-  private func resolveConfirmedTMDBTarget(for item: MediaInfo) async -> MediaInfo? {
-    beginDefaultDetailWait()
-    defer { endDefaultDetailWait() }
+  private func resolveConfirmedTMDBTarget(
+    for item: MediaInfo,
+    in coordinator: ImageNavigationCoordinator,
+    attemptID: UUID
+  ) async -> MediaInfo? {
+    coordinator.beginPreparingMediaDetail(attemptID: attemptID)
+    defer { coordinator.endPreparingMediaDetail(attemptID: attemptID) }
     return await withTaskGroup(of: MediaInfo?.self) { group in
       group.addTask {
         (try? await Self.mappedTMDBTarget(for: item, apiService: self.apiService))?.target
@@ -214,19 +226,9 @@ class MediaActionHandler: ObservableObject {
     }
   }
 
-  private func beginDefaultDetailWait() {
-    defaultDetailWaitCount += 1
-    if !isOpeningDefaultDetail { isOpeningDefaultDetail = true }
-  }
-
-  private func endDefaultDetailWait() {
-    defaultDetailWaitCount = max(0, defaultDetailWaitCount - 1)
-    if defaultDetailWaitCount == 0 { isOpeningDefaultDetail = false }
-  }
-
   /// 条目带来源季号时，只有后端确认了 TMDB 季的目标才能用；否则回原来源页，不替用户猜一季。
   private static func targetKeepsConfirmedSeason(_ target: MediaInfo, for item: MediaInfo) -> Bool {
-    guard let season = item.season, season >= 0 else { return true }
+    guard item.type == "电视剧", let season = item.season, season >= 0 else { return true }
     return target.tmdbSeasonHint != nil
   }
 
@@ -502,7 +504,7 @@ class MediaActionHandler: ObservableObject {
       identity: MediaIdentity(source: source, mediaId: mediaId),
       rawType: rawType,
       mediaType: mediaType,
-      season: item.season)
+      season: mediaType == "tv" ? item.season : nil)
   }
 
   private static func mappingTMDBTarget(

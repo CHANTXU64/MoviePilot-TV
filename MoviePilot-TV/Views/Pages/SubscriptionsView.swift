@@ -67,6 +67,7 @@ struct SubscriptionsView: View {
         }
       }
       .pageLoadingOverlay(viewModel.showsLoadingPlaceholder)
+      .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
       .task(id: isSelected) {
         // 成为当前 Tab 时加载，之后每 10 秒刷新一次，跟上下载进度和状态变化。切走时任务取消，轮询不再在后台空转。
         guard isSelected else { return }
@@ -132,10 +133,12 @@ struct SubscriptionsView: View {
   private func navigateToDetail(for subscribe: Subscribe) {
     // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
     // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
+    let sourceToken = navigationCoordinator.sourceToken()
     Task { @MainActor in
       await mediaActionHandler.openMediaDetail(
         subscribe.navigationMediaInfo(),
         in: navigationCoordinator,
+        sourceToken: sourceToken,
         loadingPosterURL: subscribe.imageURLs.poster
       )
     }

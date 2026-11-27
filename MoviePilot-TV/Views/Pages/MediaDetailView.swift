@@ -934,10 +934,12 @@ struct MediaDetailView: View {
   }
 
   private func navigateToMediaFromSecondPage(_ media: MediaInfo) {
+    let sourceToken = navigationCoordinator.sourceToken()
     Task { @MainActor in
       await mediaActionHandler.openMediaDetail(
         media,
         in: navigationCoordinator,
+        sourceToken: sourceToken,
         loadingPosterURL: media.imageURLs.poster
       )
     }

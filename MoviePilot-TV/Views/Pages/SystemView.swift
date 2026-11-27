@@ -1330,7 +1330,7 @@ struct SystemView: View {
       case .preloadTMDBDetails:
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .defaultOpenTMDBDetail:
-        return "打开豆瓣、Bangumi 或 AniList 条目时，先识别对应 TMDB 条目并打开 TMDB 详情页；10 秒内没有结果或识别失败时打开原来源详情页。（只影响 TV 端）"
+        return "打开豆瓣、Bangumi 或 AniList 条目时，先识别对应 TMDB 条目并打开 TMDB 详情页；10 秒内没有结果或识别失败时打开原来源详情页。长按卡片可选择原来源详情页。（只影响 TV 端）"
       case .mediaSourceSelection:
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:

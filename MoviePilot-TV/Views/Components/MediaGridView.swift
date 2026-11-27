@@ -413,10 +413,12 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       onShareTapped?(share)
     } else {
       preloadDebouncer.cancel(itemID: item.id, listIdentity: listIdentity)
+      let sourceToken = navigationCoordinator.sourceToken()
       Task { @MainActor in
         await mediaActionHandler.openMediaDetail(
           item,
           in: navigationCoordinator,
+          sourceToken: sourceToken,
           loadingPosterURL: item.imageURLs.poster
         )
       }

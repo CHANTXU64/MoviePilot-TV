@@ -115,6 +115,7 @@ private struct RecommendRootContent: View {
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
+    .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
     .onAppear { viewModel.reloadLocalConfig() }
     .task(id: isSelected) {
       guard isSelected else { return }
