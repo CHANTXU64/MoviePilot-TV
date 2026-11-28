@@ -207,7 +207,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         subscriptionsSource,
         [
           "private func navigateToDetail(for subscribe: Subscribe)",
-          "navigationCoordinator.push(",
+          "mediaActionHandler.openMediaDetail(",
           "subscribe.navigationMediaInfo()",
           "loadingPosterURL: subscribe.imageURLs.poster",
         ]

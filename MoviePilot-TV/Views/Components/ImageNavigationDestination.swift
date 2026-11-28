@@ -83,6 +83,7 @@ struct ImageNavigationDestination: View {
       onContentFocus: { topShelfPresentation.didPresent(entry.id) },
       action: {}
     ))
+    .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
     // 每次外部入口都有独立的详情状态与 appearance，重复同一卡片也重新交接焦点。
     .id(entry.id)
   }

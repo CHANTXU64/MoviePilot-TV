@@ -483,6 +483,17 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
   }
 
+  /// 订阅列表的电影/电视剧和试看菜单都要保留记录来源的直接详情入口。
+  func testSubscriptionMenusKeepOriginalSourceEntry() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
+
+    XCTAssertTrue(source.contains("private func navigateToSourceDetail"))
+    XCTAssertTrue(source.contains("onViewSourceDetail: navigateToSourceDetail"))
+    XCTAssertEqual(source.components(separatedBy: "if let sourceDetailTitle").count - 1, 2)
+    XCTAssertTrue(source.contains("navigationCoordinator.push("))
+    XCTAssertTrue(source.contains("subscribe.navigationMediaInfo()"))
+  }
+
   @MainActor
   func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
     let subscriptionsSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscriptionsView.swift")
@@ -830,7 +841,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
     XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
-    XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
+    XCTAssertTrue(menuSource.contains("mediaActionHandler.openMediaDetail("))
+    XCTAssertTrue(menuSource.contains("in: navigationCoordinator"))
     XCTAssertFalse(detailSource.contains("navigationPath.count"))
     XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseAfterNavigationStarts"))
     XCTAssertFalse(menuSource.contains("onDidNavigate"))

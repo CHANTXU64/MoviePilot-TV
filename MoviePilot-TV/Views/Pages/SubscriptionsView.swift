@@ -10,6 +10,7 @@ struct SubscriptionsView: View {
 
   @State private var selectedSubscribe: Subscribe?
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   init(isSelected: Bool = true, viewModel: SubscriptionsViewModel? = nil) {
     self.isSelected = isSelected
@@ -47,7 +48,8 @@ struct SubscriptionsView: View {
                 loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
+                onViewDetail: navigateToDetail,
+                onViewSourceDetail: navigateToSourceDetail
               )
             }
 
@@ -59,13 +61,15 @@ struct SubscriptionsView: View {
                 loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
+                onViewDetail: navigateToDetail,
+                onViewSourceDetail: navigateToSourceDetail
               )
             }
           }
         }
       }
       .pageLoadingOverlay(viewModel.showsLoadingPlaceholder)
+      .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
       .task(id: isSelected) {
         // 成为当前 Tab 时加载，之后每 10 秒刷新一次，跟上下载进度和状态变化。切走时任务取消，轮询不再在后台空转。
         guard isSelected else { return }
@@ -131,6 +135,19 @@ struct SubscriptionsView: View {
   private func navigateToDetail(for subscribe: Subscribe) {
     // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
     // 必须显式携带订阅海报，否则冷加载阶段详情背景没有海报兜底。
+    let sourceToken = navigationCoordinator.sourceToken()
+    Task { @MainActor in
+      await mediaActionHandler.openMediaDetail(
+        subscribe.navigationMediaInfo(),
+        in: navigationCoordinator,
+        sourceToken: sourceToken,
+        loadingPosterURL: subscribe.imageURLs.poster
+      )
+    }
+  }
+
+  /// 订阅记录保留了自己的来源身份；长按菜单用它直接打开原来源详情，不受默认 TMDB 跳转影响。
+  private func navigateToSourceDetail(for subscribe: Subscribe) {
     navigationCoordinator.push(
       subscribe.navigationMediaInfo(),
       loadingPosterURL: subscribe.imageURLs.poster
@@ -160,6 +177,7 @@ private struct SubscribeSectionView: View {
   @ObservedObject var viewModel: SubscriptionsViewModel
   let onEdit: (Subscribe) -> Void
   let onViewDetail: (Subscribe) -> Void
+  let onViewSourceDetail: (Subscribe) -> Void
 
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
@@ -210,7 +228,8 @@ private struct SubscribeSectionView: View {
               viewModel: viewModel,
               trials: viewModel.episodeTrials,
               onEdit: { onEdit(item) },
-              onViewDetail: { onViewDetail(item) }
+              onViewDetail: { onViewDetail(item) },
+              onViewSourceDetail: { onViewSourceDetail(item) }
             )
             .focused($focusedItemId, equals: SubscribeFocusID.value(for: item.id))
           }
@@ -238,6 +257,7 @@ private struct SubscribeItemView: View {
   let trials: EpisodeTrialService
   let onEdit: () -> Void
   let onViewDetail: () -> Void
+  let onViewSourceDetail: () -> Void
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var showUnsubscribeConfirm = false
   @State private var showsEpisodeTrialNotice = false
@@ -245,7 +265,8 @@ private struct SubscribeItemView: View {
 
   init(
     item: Subscribe, loadsImage: Bool, viewModel: SubscriptionsViewModel, trials: EpisodeTrialService,
-    onEdit: @escaping () -> Void, onViewDetail: @escaping () -> Void
+    onEdit: @escaping () -> Void, onViewDetail: @escaping () -> Void,
+    onViewSourceDetail: @escaping () -> Void
   ) {
     self.item = item
     self.loadsImage = loadsImage
@@ -253,7 +274,16 @@ private struct SubscribeItemView: View {
     self.trials = trials
     self.onEdit = onEdit
     self.onViewDetail = onViewDetail
+    self.onViewSourceDetail = onViewSourceDetail
     _trialHolds = State(initialValue: EpisodeTrialHold.holds(in: trials.credentials))
+  }
+
+  private var sourceDetailTitle: String? {
+    guard SystemViewModel.shouldDefaultOpenTMDBDetail,
+      APIService.shared.supportsTMDBRecognitionReporting
+    else { return nil }
+    return MediaDetailMenuPolicy.alternateDetailSourceTitle(
+      for: item.navigationMediaInfo(), defaultOpenTMDBDetail: true)
   }
 
   var body: some View {
@@ -287,6 +317,13 @@ private struct SubscribeItemView: View {
           onViewDetail()
         } label: {
           Label("详情", systemImage: AppSymbol.details)
+        }
+        if let sourceDetailTitle {
+          Button {
+            onViewSourceDetail()
+          } label: {
+            Label(sourceDetailTitle, systemImage: AppSymbol.details)
+          }
         }
         if viewModel.canCancelEpisodeTrial, !isCancellingTrial {
           Button(role: .destructive) {
@@ -346,6 +383,14 @@ private struct SubscribeItemView: View {
       onViewDetail()
     } label: {
       Label("详情", systemImage: AppSymbol.details)
+    }
+
+    if let sourceDetailTitle {
+      Button {
+        onViewSourceDetail()
+      } label: {
+        Label(sourceDetailTitle, systemImage: AppSymbol.details)
+      }
     }
 
     // 3. 搜索订阅

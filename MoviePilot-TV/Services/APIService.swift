@@ -445,14 +445,30 @@ class APIService: ObservableObject {
   /// 初始值按“版本未读到”处理：读请求带 v2 兜底，订阅写回和按媒体删除订阅由协议实现拒绝，等设置到达后再操作。
   private var backendEndpoints: any BackendEndpointBuilding = UnresolvedBackendEndpoints()
 
+  /// 非 TMDB 来源的共享映射起始版本；默认打开 TMDB 详情也以此能力为前提。
+  nonisolated static let sharedMediaMappingMinimumVersion = "v3.2.7"
+
+  /// 共享映射未命中后的按需识别/上报 API 起始版本。
+  nonisolated static let mediaMappingMatchMinimumVersion = "v3.2.9"
+
   /// 非 TMDB 来源的共享映射从后端 v3.2.7 起才可用；版本读不出时按不可用处理。
   var supportsSharedMediaMapping: Bool {
-    BackendVersionGate.isAvailable(since: "v3.2.7", backendVersion: settings?.BACKEND_VERSION)
+    BackendVersionGate.isAvailable(
+      since: Self.sharedMediaMappingMinimumVersion,
+      backendVersion: settings?.BACKEND_VERSION)
   }
 
   /// 共享映射未命中后的按需查找从后端 v3.2.9 起才可用；版本读不出时按不可用处理。
   var supportsMediaMappingMatch: Bool {
-    BackendVersionGate.isAvailable(since: "v3.2.9", backendVersion: settings?.BACKEND_VERSION)
+    BackendVersionGate.isAvailable(
+      since: Self.mediaMappingMatchMinimumVersion,
+      backendVersion: settings?.BACKEND_VERSION)
+  }
+
+  /// 默认打开 TMDB 详情要求共享映射与按需识别/上报 API 同时可用（v3.2.9 起）：
+  /// 映射未命中时由后端识别并尽力写回共享表，避免退回名称识别直查 TMDB。
+  var supportsTMDBRecognitionReporting: Bool {
+    supportsSharedMediaMapping && supportsMediaMappingMatch
   }
 
   var imageConfigurationIdentity: String {

@@ -1145,8 +1145,21 @@ class MediaDetailViewModel: ObservableObject {
   func prepareHeaderUnsubscribeConfirmation() async throws -> UnsubscribeConfirmation? {
     let snapshot = apiService.sessionSnapshot()
     let detail = self.detail
-    if let target = preloadTask?.mappedMovieTarget(for: detail) {
-      // 媒体级 DELETE 不区分电影与剧集，确认时冻结实际订阅记录。
+    let mappedTarget = preloadTask?.mappedMovieTarget(for: detail)
+    if apiService.normalizeMediaType(detail.type ?? "") == "movie" {
+      // 媒体级 DELETE 不区分电影与剧集，确认时冻结实际电影订阅记录；
+      // 来源页有映射时同时查来源与 TMDB 目标，TMDB 详情页至少查目标自身。
+      let id = try await apiService.fetchExactMovieSubscriptionID(
+        for: detail, mappedTo: mappedTarget ?? detail)
+      try apiService.validateSessionSnapshot(snapshot)
+      guard let id else { return nil }
+      return UnsubscribeConfirmation(
+        message: SubscriptionCancelConfirmation.headerMessage(for: detail),
+        subscriptionID: id,
+        snapshot: snapshot
+      )
+    }
+    if let target = mappedTarget {
       let id = try await apiService.fetchExactMovieSubscriptionID(for: detail, mappedTo: target)
       try apiService.validateSessionSnapshot(snapshot)
       guard let id else { return nil }

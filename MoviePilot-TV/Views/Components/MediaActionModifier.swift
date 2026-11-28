@@ -22,4 +22,13 @@ extension View {
   func mediaActionAlerts() -> some View {
     modifier(MediaActionModifier())
   }
+
+  /// 默认详情入口的等待遮罩只挂在发起等待的导航栈上，不能由根视图全局显示。
+  func mediaDetailPreparingOverlay(isPreparing: Bool) -> some View {
+    overlay {
+      if isPreparing {
+        BlockingProgressOverlay(text: "正在识别媒体信息…")
+      }
+    }
+  }
 }

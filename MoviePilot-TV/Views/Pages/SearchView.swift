@@ -237,6 +237,7 @@ struct SearchView: View {
         subscriptionHandler = SubscriptionHandler()
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler)
+      .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
 
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
@@ -430,6 +431,7 @@ private struct ResultRow: View {
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   @FocusState private var focusedItemId: MediaInfo.ID?
   @State private var imageAnchorId: MediaInfo.ID?
@@ -474,7 +476,15 @@ private struct ResultRow: View {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  navigationCoordinator.push(item)
+                  let sourceToken = navigationCoordinator.sourceToken()
+                  Task { @MainActor in
+                    await mediaActionHandler.openMediaDetail(
+                      item,
+                      in: navigationCoordinator,
+                      sourceToken: sourceToken,
+                      loadingPosterURL: item.imageURLs.poster
+                    )
+                  }
                 }
               }
             )
@@ -611,6 +621,7 @@ private struct BestResultRow: View {
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @FocusState private var focusedItemId: String?
   @State private var imageAnchorId: String?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
@@ -663,7 +674,15 @@ private struct BestResultRow: View {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    navigationCoordinator.push(media)
+                    let sourceToken = navigationCoordinator.sourceToken()
+                    Task { @MainActor in
+                      await mediaActionHandler.openMediaDetail(
+                        media,
+                        in: navigationCoordinator,
+                        sourceToken: sourceToken,
+                        loadingPosterURL: media.imageURLs.poster
+                      )
+                    }
                   }
                 }
               )

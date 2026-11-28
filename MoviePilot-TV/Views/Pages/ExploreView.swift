@@ -81,6 +81,7 @@ private struct ExploreRootContent: View {
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
+    .mediaDetailPreparingOverlay(isPreparing: navigationCoordinator.isPreparingMediaDetail)
     .task(id: isSelected) {
       guard isSelected else { return }
       await viewModel.refreshSources()

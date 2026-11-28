@@ -392,6 +392,27 @@ struct SystemView: View {
       }
 
       section("详情页") {
+        if apiService.supportsTMDBRecognitionReporting {
+          Toggle(
+            "默认打开 TMDB 详情",
+            isOn: Binding(
+              get: { viewModel.defaultOpenTMDBDetail },
+              set: { viewModel.defaultOpenTMDBDetail = $0 }
+            )
+          )
+          .font(.body.bold())
+          .focused($focusedItem, equals: .defaultOpenTMDBDetail)
+        } else {
+          HStack {
+            Text("默认打开 TMDB 详情")
+              .font(.body.bold())
+            Spacer()
+            Text("需要 MoviePilot \(APIService.mediaMappingMatchMinimumVersion)")
+              .font(.body.bold())
+              .foregroundStyle(.secondary)
+          }
+        }
+
         Toggle(
           "预加载 TMDB 详情",
           isOn: Binding(
@@ -1308,6 +1329,8 @@ struct SystemView: View {
         return memoryOptimizationDescription
       case .preloadTMDBDetails:
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+      case .defaultOpenTMDBDetail:
+        return "打开豆瓣、Bangumi 或 AniList 条目时，先识别对应 TMDB 条目并打开 TMDB 详情页；10 秒内没有结果或识别失败时打开原来源详情页。长按卡片可选择原来源详情页。（只影响 TV 端）"
       case .mediaSourceSelection:
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:
@@ -1535,6 +1558,7 @@ enum SystemSettingsFocus: Hashable {
   case homeMediaTapPlaysInApp
   case playbackSettings
   case inAppPlayback
+  case defaultOpenTMDBDetail
   case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter

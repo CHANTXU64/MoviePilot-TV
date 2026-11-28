@@ -198,6 +198,11 @@ class MediaPreloadTask: ObservableObject {
   @Published var tmdbId: Int?
   /// TMDB 跳转和目标详情预载使用的完整目标，保留独立的类型和季号。
   var tmdbTarget: MediaInfo? { tmdbResolution?.target }
+  /// 后端确认过的 TMDB 目标；名称识别猜出的不算。默认详情入口只接受这个。
+  var backendConfirmedTMDBTarget: MediaInfo? {
+    guard let resolution = tmdbResolution, !resolution.isNameRecognized else { return nil }
+    return resolution.target
+  }
   @Published private var tmdbResolution: TMDBTargetResolution?
   @Published var isTmdbRecognitionFinished = false
   /// 打开详情后才做的 TMDB 识别（按需查找，没找到再按名称识别）还没结束。
@@ -703,6 +708,17 @@ class MediaPreloadTask: ObservableObject {
         apiService: apiService
       ) {
         self.tmdbResolution = target
+        // 默认详情入口启用时，命中共享映射就把焦点候选切到 TMDB 目标，避免同时预载两份完整详情。
+        let candidate = self.partialMedia
+        if TMDBDetailOpenPolicy.decision(
+          for: candidate,
+          isEnabled: SystemViewModel.shouldDefaultOpenTMDBDetail,
+          hasRecognitionReporting: apiService.supportsTMDBRecognitionReporting
+        ) != .openSource,
+          TMDBDetailOpenPolicy.targetKeepsConfirmedSeason(target.target, for: candidate)
+        {
+          apiService.mediaPreloader.prepareTMDBTarget(target.target, for: candidate)
+        }
         return
       }
     } catch is CancellationError {
@@ -934,6 +950,13 @@ class MediaPreloader: ObservableObject {
   private var suppressedFocusCandidateKeys: [UUID: String] = [:]
   /// 详情页附带预载（如 TMDB 跳转目标），不占用焦点 candidateKey。
   private var auxiliaryPreloads: [UUID: Set<String>] = [:]
+  /// 焦点预载命中共享映射后，当前候选会从原来源切到 TMDB 目标；原来源任务随之释放，
+  /// 这个关系只跟随当前焦点候选，切换候选、入栈接管或释放时清掉。
+  private struct ConfirmedCandidateTarget {
+    let sourceKey: String
+    let target: MediaInfo
+  }
+  private var confirmedCandidateTarget: ConfirmedCandidateTarget?
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
@@ -1023,6 +1046,40 @@ class MediaPreloader: ObservableObject {
     return task
   }
 
+  /// 焦点预载命中共享映射时，把当前候选从原来源切到 TMDB 目标：先释放原来源的详情预载，
+  /// 再预载目标详情，避免同时加载两份完整详情。只有当前焦点候选才切换。
+  func prepareTMDBTarget(_ target: MediaInfo, for source: MediaInfo) {
+    let sourceKey = source.id
+    // 目标已被另一个导航栈持有：不切焦点候选，避免释放原来源预载后记录一条没有候选的关系。
+    guard sourceKey != target.id, candidateKey == sourceKey,
+      navigationOwners[target.id] == nil
+    else { return }
+
+    confirmedCandidateTarget = nil
+    let stackID = candidateStackID ?? Self.legacyNavigationOwner
+    replaceCandidate(with: target.id, stackID: stackID)
+    guard candidateKey == target.id else { return }
+    confirmedCandidateTarget = ConfirmedCandidateTarget(sourceKey: sourceKey, target: target)
+    _ = preload(for: target)
+  }
+
+  /// 点击默认详情入口时读取：优先当前预载任务，其次当前焦点候选的临时确认关系。
+  func confirmedTMDBTarget(for source: MediaInfo) -> MediaInfo? {
+    if let target = cache[source.id]?.backendConfirmedTMDBTarget {
+      return target
+    }
+    return switchedTMDBTarget(for: source)
+  }
+
+  /// 只有焦点预载真的把候选切到了 TMDB 目标时才返回；只查到共享映射不算。
+  /// 快捷订阅等“跟随当前预载目标”的入口用这个判断，避免读了映射却用未预载的目标。
+  func switchedTMDBTarget(for source: MediaInfo) -> MediaInfo? {
+    guard let confirmed = confirmedCandidateTarget, confirmed.sourceKey == source.id else {
+      return nil
+    }
+    return confirmed.target
+  }
+
   func isFocusCandidate(_ key: String) -> Bool {
     candidateKey == key
   }
@@ -1058,6 +1115,7 @@ class MediaPreloader: ObservableObject {
     if candidateStackID == stackID, let key = candidateKey {
       candidateKey = nil
       candidateStackID = nil
+      confirmedCandidateTarget = nil
       releaseTask(forKey: key, fallbackMedia: cache[key]?.partialMedia, size: UIScreen.main.bounds.size)
     }
   }
@@ -1106,6 +1164,7 @@ class MediaPreloader: ObservableObject {
     let previousCandidate = candidateKey
     candidateKey = nil
     candidateStackID = nil
+    confirmedCandidateTarget = nil
     if let previousCandidate, previousCandidate != key {
       releaseTask(
         forKey: previousCandidate,
@@ -1135,6 +1194,11 @@ class MediaPreloader: ObservableObject {
     setHeroPresented(false, for: media, owner: owner, size: size, imageCache: imageCache)
     unpin(key: key, owner: owner)
     suppressedFocusCandidateKeys[stackID] = key
+    if let confirmed = confirmedCandidateTarget,
+      confirmed.target.id == key || confirmed.sourceKey == key
+    {
+      confirmedCandidateTarget = nil
+    }
     releaseAuxiliaryPreloads(ownedBy: owner, size: size, imageCache: imageCache)
     releaseTask(forKey: key, fallbackMedia: media, size: size, imageCache: imageCache)
   }
@@ -1197,6 +1261,7 @@ class MediaPreloader: ObservableObject {
     presentedHeroKeyByOwner.removeAll()
     presentedHeroDetailByOwner.removeAll()
     auxiliaryPreloads.removeAll()
+    confirmedCandidateTarget = nil
     suppressedFocusCandidateKeys.removeAll()
   }
 
@@ -1239,6 +1304,7 @@ class MediaPreloader: ObservableObject {
     let previousKey = candidateKey
     candidateKey = navigationOwners[key] == nil ? key : nil
     candidateStackID = candidateKey == nil ? nil : stackID
+    confirmedCandidateTarget = nil
     if let previousKey {
       releaseTask(
         forKey: previousKey,
@@ -1247,6 +1313,7 @@ class MediaPreloader: ObservableObject {
       )
     }
   }
+
 
   private func releaseAuxiliaryPreloads(
     ownedBy owner: UUID,

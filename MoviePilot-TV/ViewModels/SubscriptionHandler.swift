@@ -61,7 +61,13 @@ class SubscriptionHandler: ObservableObject {
     }.store(in: &cancellables)
   }
 
-  func handleSubscribe(_ item: MediaInfo, expectedSubscribed: Bool) {
+  /// `movieMappingSource` 仅在快捷菜单把豆瓣/Bangumi/AniList 电影映射到 TMDB 目标时传入：
+  /// 取消订阅时必须用这一对来源冻结精确电影记录，不能发媒体级 DELETE。
+  func handleSubscribe(
+    _ item: MediaInfo,
+    expectedSubscribed: Bool,
+    movieMappingSource: MediaInfo? = nil
+  ) {
     guard apiService.canAccess(.subscribe) else { return }
     guard !item.isCollection, item.type != "音乐" else { return }
 
@@ -84,7 +90,8 @@ class SubscriptionHandler: ObservableObject {
 
           if latestSubscribed {
             guard
-              let target = try await deletionTargetLookup(for: item)
+              let target = try await deletionTargetLookup(
+                for: item, movieMappingSource: movieMappingSource)
             else {
               guard apiService.isSessionUnchanged(from: snapshot) else { return }
               // 元数据状态查询能跨来源确认“已订阅”，但 DELETE 仍要求精确来源身份。
@@ -347,11 +354,24 @@ class SubscriptionHandler: ObservableObject {
 
   /// 只回答能否取得可安全执行 DELETE 的精确来源目标，不承担订阅状态判断。
   /// 名称识别猜出的编号不参与：按它做媒体级 DELETE 可能删掉同名的另一部或同号的剧集。
-  private func deletionTargetLookup(for item: MediaInfo) async throws -> UnsubscribeTarget? {
-    if let target = mediaPreloader.peekTask(for: item)?
-      .mappedMovieTarget(for: subscriptionStatusMedia(for: item))
-    {
-      let id = try await apiService.fetchExactMovieSubscriptionID(for: item, mappedTo: target)
+  private func deletionTargetLookup(
+    for item: MediaInfo,
+    movieMappingSource: MediaInfo?
+  ) async throws -> UnsubscribeTarget? {
+    if apiService.normalizeMediaType(item.type ?? "") == "movie" {
+      // 电影与剧集共用数字 ID，媒体级 DELETE 会连带删除同号剧集。
+      // 映射目标必须用（来源, 目标）冻结精确电影记录；冻结不到就不删。
+      if let movieMappingSource {
+        // 菜单按 TMDB 目标显示状态；确认时必须先冻结同一目标的记录，
+        // 避免原来源与目标各有一条订阅时删到原来源那条。
+        let id = try await apiService.fetchExactMovieSubscriptionID(
+          for: item, mappedTo: movieMappingSource)
+        return id.map(UnsubscribeTarget.subscription)
+      }
+      let mapped = mediaPreloader.peekTask(for: item)?
+        .mappedMovieTarget(for: subscriptionStatusMedia(for: item))
+      let id = try await apiService.fetchExactMovieSubscriptionID(
+        for: item, mappedTo: mapped ?? item)
       return id.map(UnsubscribeTarget.subscription)
     }
     return try await apiService.fetchSubscriptionLookup(

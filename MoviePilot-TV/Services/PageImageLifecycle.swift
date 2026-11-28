@@ -367,6 +367,9 @@ final class ImageNavigationCoordinator: ObservableObject {
   private var isRetired = false
   private var retainsImagesForSceneReturn = false
   @Published private(set) var isStackInteractive = false
+  /// 本导航栈正在等待默认详情入口确认 TMDB；只影响这一栈的遮罩，不跟其他 Tab 共用。
+  @Published private(set) var preparingDetailAttemptID: UUID?
+  var isPreparingMediaDetail: Bool { preparingDetailAttemptID != nil }
   private var navigationRevision: UInt = 0
   private let apiService: APIService
   private let injectedMediaPreloader: MediaPreloader?
@@ -564,6 +567,15 @@ final class ImageNavigationCoordinator: ObservableObject {
   private func cancelStackForegroundRelease() {
     stackForegroundReleaseTask?.cancel()
     stackForegroundReleaseTask = nil
+  }
+
+  func beginPreparingMediaDetail(attemptID: UUID) {
+    preparingDetailAttemptID = attemptID
+  }
+
+  func endPreparingMediaDetail(attemptID: UUID) {
+    guard preparingDetailAttemptID == attemptID else { return }
+    preparingDetailAttemptID = nil
   }
 
   func sourceToken() -> ImageNavigationSourceToken {
