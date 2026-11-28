@@ -405,6 +405,63 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertNil(lookupQueries.last?["mtype"])
   }
 
+  /// 原来源和 TMDB 各有一条电影订阅时，快捷菜单按 TMDB 显示，取消也必须删 TMDB 那条。
+  func testMappedQuickCancelPrefersTargetRecordWhenBothSourcesSubscribed() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/456",
+      json: #"{"id":701,"name":"目标电影","type":"电影","tmdbid":456,"media_source":"themoviedb","media_id":"456"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/123",
+      json: #"{"id":702,"name":"来源电影","type":"电影","doubanid":"123","media_source":"douban","media_id":"123"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "DELETE", path: "/api/v1/subscribe/701",
+      json: #"{"success":true}"#)
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "DELETE", path: "/api/v1/subscribe/702",
+      json: #"{"success":true}"#)
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let source = MediaInfo(
+      douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let target = MediaInfo(
+      tmdb_id: 456, source: "themoviedb", title: "来源电影", type: "电影")
+
+    let handler = SubscriptionHandler(apiService: service)
+    handler.handleSubscribe(
+      target, expectedSubscribed: true, movieMappingSource: source)
+    try await waitUntil("mapped unsubscribe confirmation appears") {
+      handler.unsubscribeConfirmationMessage != nil
+    }
+    handler.confirmUnsubscribe()
+    try await waitUntil("target subscription record is deleted") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "DELETE", path: "/api/v1/subscribe/701") == 1
+    }
+
+    let targetDeletes = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/701")
+    let sourceDeletes = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/702")
+    XCTAssertEqual(targetDeletes, 1)
+    XCTAssertEqual(sourceDeletes, 0)
+    let sourceLookups = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/subscribe/media/123")
+    XCTAssertEqual(sourceLookups, 0, "目标记录已定位，不应再查原来源记录")
+  }
+
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }

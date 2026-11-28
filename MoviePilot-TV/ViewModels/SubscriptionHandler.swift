@@ -361,12 +361,17 @@ class SubscriptionHandler: ObservableObject {
     if apiService.normalizeMediaType(item.type ?? "") == "movie" {
       // 电影与剧集共用数字 ID，媒体级 DELETE 会连带删除同号剧集。
       // 映射目标必须用（来源, 目标）冻结精确电影记录；冻结不到就不删。
+      if let movieMappingSource {
+        // 菜单按 TMDB 目标显示状态；确认时必须先冻结同一目标的记录，
+        // 避免原来源与目标各有一条订阅时删到原来源那条。
+        let id = try await apiService.fetchExactMovieSubscriptionID(
+          for: item, mappedTo: movieMappingSource)
+        return id.map(UnsubscribeTarget.subscription)
+      }
       let mapped = mediaPreloader.peekTask(for: item)?
         .mappedMovieTarget(for: subscriptionStatusMedia(for: item))
-      let source = movieMappingSource ?? item
-      let target = movieMappingSource != nil ? item : (mapped ?? item)
       let id = try await apiService.fetchExactMovieSubscriptionID(
-        for: source, mappedTo: target)
+        for: item, mappedTo: mapped ?? item)
       return id.map(UnsubscribeTarget.subscription)
     }
     return try await apiService.fetchSubscriptionLookup(
