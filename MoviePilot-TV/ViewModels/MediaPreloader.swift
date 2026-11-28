@@ -1064,6 +1064,12 @@ class MediaPreloader: ObservableObject {
     if let target = cache[source.id]?.backendConfirmedTMDBTarget {
       return target
     }
+    return switchedTMDBTarget(for: source)
+  }
+
+  /// 只有焦点预载真的把候选切到了 TMDB 目标时才返回；只查到共享映射不算。
+  /// 快捷订阅等“跟随当前预载目标”的入口用这个判断，避免读了映射却用未预载的目标。
+  func switchedTMDBTarget(for source: MediaInfo) -> MediaInfo? {
     guard let confirmed = confirmedCandidateTarget, confirmed.sourceKey == source.id else {
       return nil
     }

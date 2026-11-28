@@ -4413,14 +4413,62 @@ final class MediaMappingTests: XCTestCase {
       preloader.confirmedTMDBTarget(for: source) != nil
     }
     let confirmed = try XCTUnwrap(preloader.confirmedTMDBTarget(for: source))
+    let switched = try XCTUnwrap(preloader.switchedTMDBTarget(for: source))
+    XCTAssertEqual(switched.id, confirmed.id)
     let targetTask = try XCTUnwrap(preloader.peekTask(for: confirmed))
     targetTask.isSubscribed = true
 
     let subscribeItem = MediaDetailMenuPolicy.subscriptionTarget(
-      for: source, confirmedTarget: confirmed)
+      for: source, confirmedTarget: switched)
     XCTAssertEqual(subscribeItem.apiMediaId, confirmed.apiMediaId)
     XCTAssertEqual(preloader.peekTask(for: subscribeItem)?.isSubscribed, true)
     XCTAssertNil(preloader.peekTask(for: source))
+  }
+
+  /// 关闭默认跳转时只查到映射、不切预载候选；快捷订阅继续用原来源和原来源订阅状态。
+  func testQuickSubscribeKeepsSourceTargetWhenDefaultOpenDisabled() async throws {
+    installStub()
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let stub = CompatibilityEndpointURLProtocol.stub
+    await stub.reset()
+
+    let service = APIService.isolatedTestingInstance()
+    try configureSubscriber(service, backendVersion: "v3.2.9")
+    await stub.setMediaMappingResponse(
+      Data(
+        #"{"success":true,"data":{"media_source":"douban","media_id":"123","type":"movie","tmdb_id":456,"tmdb_type":"movie"}}"#
+          .utf8))
+    await stub.setSubscriptionLookupResponse(
+      Data(#"{"id":701,"type":"电影","media_source":"douban","media_id":"123"}"#.utf8))
+    let restoreSetting = overrideDefaultOpenTMDBDetail(false)
+    defer { restoreSetting() }
+    let source = MediaInfo(
+      douban_id: "123", source: "douban", title: "来源电影", type: "电影")
+    let preloader = service.mediaPreloader
+    defer { preloader.tearDown() }
+
+    XCTAssertNotNil(preloader.preloadFocusedCandidateIfNeeded(for: source))
+    await waitUntil(timeout: 3) {
+      preloader.peekTask(for: source)?.backendConfirmedTMDBTarget != nil
+    }
+    XCTAssertNil(
+      preloader.switchedTMDBTarget(for: source),
+      "关闭默认跳转时只查映射，不应切 TMDB 候选")
+    let sourceTask = try XCTUnwrap(preloader.peekTask(for: source))
+    sourceTask.isSubscribed = true
+
+    let subscribeItem = MediaDetailMenuPolicy.subscriptionTarget(
+      for: source, confirmedTarget: preloader.switchedTMDBTarget(for: source))
+    XCTAssertEqual(subscribeItem.apiMediaId, source.apiMediaId)
+    XCTAssertEqual(preloader.peekTask(for: subscribeItem)?.isSubscribed, true)
+
+    let handler = SubscriptionHandler(apiService: service)
+    handler.handleSubscribe(subscribeItem, expectedSubscribed: true)
+    await waitUntil(timeout: 3) {
+      handler.unsubscribeConfirmationMessage != nil || !handler.notificationMessage.isEmpty
+    }
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertNotNil(handler.unsubscribeConfirmationMessage)
   }
 
   /// 只改本用例的目标设置，结束后恢复，避免影响同一进程里的其他用例。

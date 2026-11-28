@@ -51,13 +51,13 @@ struct MediaContextMenuItems: View {
       for: item, defaultOpenTMDBDetail: usesDefaultTMDBDetail)
   }
 
-  private var confirmedTMDBTarget: MediaInfo? {
-    APIService.shared.mediaPreloader.confirmedTMDBTarget(for: item)
+  private var switchedTMDBTarget: MediaInfo? {
+    APIService.shared.mediaPreloader.switchedTMDBTarget(for: item)
   }
 
   private var subscribeTarget: MediaInfo {
     MediaDetailMenuPolicy.subscriptionTarget(
-      for: item, confirmedTarget: confirmedTMDBTarget)
+      for: item, confirmedTarget: switchedTMDBTarget)
   }
 
   var body: some View {
