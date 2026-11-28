@@ -1050,11 +1050,15 @@ class MediaPreloader: ObservableObject {
   /// 再预载目标详情，避免同时加载两份完整详情。只有当前焦点候选才切换。
   func prepareTMDBTarget(_ target: MediaInfo, for source: MediaInfo) {
     let sourceKey = source.id
-    guard sourceKey != target.id, candidateKey == sourceKey else { return }
+    // 目标已被另一个导航栈持有：不切焦点候选，避免释放原来源预载后记录一条没有候选的关系。
+    guard sourceKey != target.id, candidateKey == sourceKey,
+      navigationOwners[target.id] == nil
+    else { return }
 
     confirmedCandidateTarget = nil
     let stackID = candidateStackID ?? Self.legacyNavigationOwner
     replaceCandidate(with: target.id, stackID: stackID)
+    guard candidateKey == target.id else { return }
     confirmedCandidateTarget = ConfirmedCandidateTarget(sourceKey: sourceKey, target: target)
     _ = preload(for: target)
   }

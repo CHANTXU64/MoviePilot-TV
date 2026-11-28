@@ -133,6 +133,7 @@ struct MediaContextMenuItems: View {
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态。
       // 映射已切到 TMDB 目标时，订阅状态和操作目标都必须跟随目标，不能读已释放的原来源任务。
       let subscribeItem = subscribeTarget
+      let mappingSource = switchedTMDBTarget != nil ? item : nil
       let preloadedSubscribed = APIService.shared.mediaPreloader
         .peekTask(for: subscribeItem)?.isSubscribed
 
@@ -143,7 +144,8 @@ struct MediaContextMenuItems: View {
           } else {
             subscriptionHandler.handleSubscribe(
               subscribeItem,
-              expectedSubscribed: preloadedSubscribed == true
+              expectedSubscribed: preloadedSubscribed == true,
+              movieMappingSource: mappingSource
             )
           }
         } label: {

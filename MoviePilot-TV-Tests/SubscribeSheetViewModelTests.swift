@@ -325,8 +325,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     XCTAssertTrue(lookupQueries.allSatisfy { $0["media_source"] == "douban" })
     XCTAssertTrue(
-      lookupQueries.contains { $0["year"] == nil && $0["mtype"] == nil },
-      "回归用例必须实际经过关闭元数据回退的精确删除定位"
+      lookupQueries.contains { $0["year"] == nil && $0["mtype"] == "电影" },
+      "精确删除定位应使用电影类型但关闭年份元数据回退"
     )
   }
 
@@ -348,12 +348,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/media/998907",
-      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影","year":"2026"}"#
+      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"纪录片","year":"2026"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/subscribe/media/998907",
-      json: #"{"id":998907,"name":"统一身份取消订阅","type":"电影","tmdbid":998907,"media_source":"thetvdb","media_id":"778902"}"#
+      json: #"{"id":998907,"name":"统一身份取消订阅","type":"纪录片","tmdbid":998907,"media_source":"thetvdb","media_id":"778902"}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
@@ -361,7 +361,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let media = MediaInfo(
       tmdb_id: 998_907,
       title: "统一身份取消订阅",
-      type: "电影",
+      type: "纪录片",
       year: "2026"
     )
     let preloadTask = preloader.preload(for: media)
@@ -396,8 +396,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/media/998907"
     )
     XCTAssertTrue(
-      lookupQueries.contains { $0["year"] == "2026" && $0["mtype"] == "电影" },
-      "常规订阅状态预载必须继续携带视频元数据兜底参数"
+      lookupQueries.contains { $0["year"] == nil && $0["mtype"] == nil },
+      "纪录片不携带视频年份/类型兜底参数"
     )
     XCTAssertEqual(lookupQueries.last?["media_source"], "themoviedb")
     XCTAssertEqual(lookupQueries.last?["title"], "统一身份取消订阅")
@@ -423,11 +423,16 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/subscribe/media/998904",
-      json: #"{"id":998904,"name":"取消失败","type":"电影","tmdbid":998904}"#
+      json: #"{"id":998904,"name":"取消失败","type":"电影","tmdbid":998904,"media_source":"themoviedb","media_id":"998904"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "DELETE",
       path: "/api/v1/subscribe/media/998904",
+      json: #"{"success":false,"message":"后端拒绝取消"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "DELETE",
+      path: "/api/v1/subscribe/998904",
       json: #"{"success":false,"message":"后端拒绝取消"}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -449,7 +454,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     handler.confirmUnsubscribe()
     try await waitUntil("unsubscribe failure appears") {
       handler.notificationType == .error
-        && handler.notificationMessage == "《取消失败》取消订阅失败：后端拒绝取消"
+        && handler.notificationMessage == "《取消失败》取消订阅失败。"
     }
 
     XCTAssertEqual(preloadTask.isSubscribed, true)
